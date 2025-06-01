@@ -71,7 +71,19 @@ export function CompanyForm({ company, onClose, onSuccess }: CompanyFormProps) {
       onSuccess();
     } catch (error: any) {
       console.error('Failed to save company:', error);
-      alert(error.response?.data?.detail || 'Failed to save company');
+      let errorMessage = 'Failed to save company';
+      
+      if (error.response?.status === 403) {
+        errorMessage = 'You do not have permission to create or edit companies. Please contact your administrator to request the necessary permissions.';
+      } else if (error.response?.status === 404) {
+        errorMessage = 'The company was not found. It may have been deleted.';
+      } else if (error.response?.data?.detail) {
+        errorMessage = error.response.data.detail;
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
+      
+      alert(errorMessage);
     } finally {
       setIsLoading(false);
     }

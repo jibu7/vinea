@@ -3,6 +3,7 @@ from app.models.company import Company
 from app.models.user import User, user_roles
 from app.models.role import Role
 from app.models.accounting_period import AccountingPeriod
+from app.models.gl import GLAccount, GLTransaction
 
 __all__ = [
     "BaseModel",
@@ -10,5 +11,7 @@ __all__ = [
     "User",
     "user_roles",
     "Role",
-    "AccountingPeriod"
+    "AccountingPeriod",
+    "GLAccount",
+    "GLTransaction"
 ]

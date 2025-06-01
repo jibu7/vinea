@@ -1,10 +1,25 @@
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Any
 from jose import jwt, JWTError
-from passlib.context import CryptContext
 from app.core.config import settings
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# Fix bcrypt compatibility issue
+try:
+    import bcrypt
+    # Check if bcrypt has the old interface
+    if not hasattr(bcrypt, '__about__'):
+        bcrypt.__about__ = type('obj', (object,), {'__version__': bcrypt.__version__})
+except ImportError:
+    pass
+
+from passlib.context import CryptContext
+
+pwd_context = CryptContext(
+    schemes=["bcrypt"], 
+    deprecated="auto",
+    bcrypt__rounds=12,
+    bcrypt__ident="2b"
+)
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Verify a plain password against a hashed password"""

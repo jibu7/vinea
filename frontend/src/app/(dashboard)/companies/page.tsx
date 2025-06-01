@@ -27,11 +27,28 @@ export default function CompaniesPage() {
   const fetchCompanies = async () => {
     try {
       setIsLoading(true);
+      console.log('Fetching companies...');
       const response = await api.get('/api/companies');
-      setCompanies(response.data.items);
-      setTotal(response.data.total);
+      console.log('Companies response:', response.data);
+      
+      // Handle both paginated and direct array responses
+      if (Array.isArray(response.data)) {
+        setCompanies(response.data);
+        setTotal(response.data.length);
+        console.log('Loaded companies (array):', response.data.length);
+      } else if (response.data.items) {
+        setCompanies(response.data.items);
+        setTotal(response.data.total);
+        console.log('Loaded companies (paginated):', response.data.total);
+      } else {
+        console.error('Unexpected response format:', response.data);
+        setCompanies([]);
+        setTotal(0);
+      }
     } catch (error) {
       console.error('Failed to fetch companies:', error);
+      setCompanies([]);
+      setTotal(0);
     } finally {
       setIsLoading(false);
     }
@@ -147,7 +164,10 @@ export default function CompaniesPage() {
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
                       <button
-                        onClick={() => setEditingCompany(company)}
+                        onClick={() => {
+                          console.log('Editing company:', company);
+                          setEditingCompany(company);
+                        }}
                         className="text-indigo-600 hover:text-indigo-900 mr-3"
                       >
                         <Edit className="h-4 w-4" />

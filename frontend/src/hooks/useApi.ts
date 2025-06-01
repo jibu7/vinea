@@ -1,10 +1,6 @@
 import axios, { AxiosInstance } from 'axios';
-import { useAuth } from '@/contexts/AuthContext';
-import { useEffect } from 'react';
 
 export function useApi(): AxiosInstance {
-  const { logout } = useAuth();
-
   const api = axios.create({
     baseURL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000',
     withCredentials: true,
@@ -17,6 +13,9 @@ export function useApi(): AxiosInstance {
       const token = localStorage.getItem('access_token');
       if (token) {
         config.headers.Authorization = `Bearer ${token}`;
+        console.log('Adding auth token to request:', config.url);
+      } else {
+        console.warn('No auth token found for request:', config.url);
       }
       return config;
     },
@@ -31,7 +30,9 @@ export function useApi(): AxiosInstance {
     (error) => {
       if (error.response?.status === 401) {
         // Token expired or invalid
-        logout();
+        // Clear token and redirect to login
+        localStorage.removeItem('access_token');
+        window.location.href = '/login';
       }
       return Promise.reject(error);
     }
