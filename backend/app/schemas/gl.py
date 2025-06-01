@@ -13,7 +13,7 @@ class GLAccountBase(BaseModel):
     is_system_account: bool = False
 
 class GLAccountCreate(GLAccountBase):
-    company_id: int # Should be set from current user or context, not direct input ideally
+    pass  # company_id should be set from current user context, not direct input
 
 class GLAccountUpdate(GLAccountBase):
     account_code: Optional[Annotated[str, Field(max_length=20)]] = None

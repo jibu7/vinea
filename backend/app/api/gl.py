@@ -271,12 +271,19 @@ async def delete_gl_account(
     trans_count_result = await db.execute(trans_check_stmt)
     trans_count = trans_count_result.scalar()
     
-    if trans_count > 0:
-        # Soft delete - just mark as inactive
+    # Check if account has child accounts
+    child_check_stmt = select(func.count(GLAccount.id)).where(
+        GLAccount.parent_account_id == account_id
+    )
+    child_count_result = await db.execute(child_check_stmt)
+    child_count = child_count_result.scalar()
+    
+    if trans_count > 0 or child_count > 0:
+        # Soft delete - just mark as inactive if has transactions or child accounts
         db_account.is_active = False
         await db.commit()
     else:
-        # Hard delete if no transactions
+        # Hard delete only if no transactions and no child accounts
         await db.delete(db_account)
         await db.commit()
     

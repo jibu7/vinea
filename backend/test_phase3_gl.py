@@ -48,7 +48,7 @@ class GLTester:
         """Authenticate and get token"""
         print(f"\n{Colors.BLUE}=== Authentication ==={Colors.RESET}")
         
-        response = await self.client.post("/auth/login/", data={
+        response = await self.client.post("/auth/login", json={
             "username": TEST_USERNAME,
             "password": TEST_PASSWORD
         })
@@ -70,15 +70,15 @@ class GLTester:
         print(f"\n{Colors.BLUE}=== Chart of Accounts Tests ==={Colors.RESET}")
         
         # Test 1: Create GL Account
+        timestamp = datetime.now().strftime("%H%M%S")
         account_data = {
-            "account_code": "1000",
+            "account_code": f"1000-{timestamp}",
             "account_name": "Cash and Bank",
             "account_type": "ASSET",
-            "is_active": True,
-            "company_id": self.company_id
+            "is_active": True
         }
         
-        response = await self.client.post("/gl/accounts/", json=account_data)
+        response = await self.client.post("/gl/accounts", json=account_data)
         if response.status_code == 201:
             account = response.json()
             self.created_accounts.append(account["id"])
@@ -89,15 +89,14 @@ class GLTester:
             
         # Test 2: Create child account (hierarchy test)
         child_account_data = {
-            "account_code": "1010",
+            "account_code": f"1010-{timestamp}",
             "account_name": "Petty Cash",
             "account_type": "ASSET",
             "parent_account_id": account["id"],
-            "is_active": True,
-            "company_id": self.company_id
+            "is_active": True
         }
         
-        response = await self.client.post("/gl/accounts/", json=child_account_data)
+        response = await self.client.post("/gl/accounts", json=child_account_data)
         if response.status_code == 201:
             child_account = response.json()
             self.created_accounts.append(child_account["id"])
@@ -106,7 +105,7 @@ class GLTester:
             self.print_result("Create Child Account", False, f"Status: {response.status_code}")
             
         # Test 3: List GL Accounts
-        response = await self.client.get("/gl/accounts/")
+        response = await self.client.get("/gl/accounts")
         if response.status_code == 200:
             accounts = response.json()
             self.print_result("List GL Accounts", True, f"Total accounts: {len(accounts)}")
@@ -114,7 +113,7 @@ class GLTester:
             self.print_result("List GL Accounts", False, f"Status: {response.status_code}")
             
         # Test 4: Get single account
-        response = await self.client.get(f"/gl/accounts/{account['id']}/")
+        response = await self.client.get(f"/gl/accounts/{account['id']}")
         self.print_result("Get GL Account", response.status_code == 200, 
                          f"Account: {response.json()['account_code'] if response.status_code == 200 else 'Failed'}")
         
@@ -123,24 +122,23 @@ class GLTester:
             "account_name": "Cash and Bank Accounts",
             "is_active": True
         }
-        response = await self.client.put(f"/gl/accounts/{account['id']}/", json=update_data)
+        response = await self.client.put(f"/gl/accounts/{account['id']}", json=update_data)
         self.print_result("Update GL Account", response.status_code == 200,
                          f"Updated name: {response.json()['account_name'] if response.status_code == 200 else 'Failed'}")
         
         # Create more accounts for journal entries
-        expense_account = await self._create_account("5000", "Office Expenses", "EXPENSE")
-        income_account = await self._create_account("4000", "Sales Revenue", "INCOME")
+        expense_account = await self._create_account(f"5000-{timestamp}", "Office Expenses", "EXPENSE")
+        income_account = await self._create_account(f"4000-{timestamp}", "Sales Revenue", "INCOME")
         
         return account["id"], expense_account, income_account
         
     async def _create_account(self, code: str, name: str, account_type: str) -> Optional[int]:
         """Helper to create an account"""
-        response = await self.client.post("/gl/accounts/", json={
+        response = await self.client.post("/gl/accounts", json={
             "account_code": code,
             "account_name": name,
             "account_type": account_type,
-            "is_active": True,
-            "company_id": self.company_id
+            "is_active": True
         })
         if response.status_code == 201:
             account_id = response.json()["id"]
@@ -174,7 +172,7 @@ class GLTester:
             ]
         }
         
-        response = await self.client.post("/gl/journal-entries/", json=journal_data)
+        response = await self.client.post("/gl/journal-entries", json=journal_data)
         if response.status_code == 201:
             transactions = response.json()
             self.created_journal_entries.append(journal_data["journal_entry_id"])
@@ -204,13 +202,13 @@ class GLTester:
             ]
         }
         
-        response = await self.client.post("/gl/journal-entries/", json=unbalanced_data)
+        response = await self.client.post("/gl/journal-entries", json=unbalanced_data)
         self.print_result("Reject Unbalanced Entry", response.status_code == 400,
                          f"Correctly rejected: {'Debits must equal credits' in response.text if response.status_code == 400 else 'Failed'}")
         
         # Test 3: Reverse journal entry
         response = await self.client.post(
-            f"/gl/journal-entries/{journal_data['journal_entry_id']}/reverse/",
+            f"/gl/journal-entries/{journal_data['journal_entry_id']}/reverse",
             json={
                 "reversal_date": date.today().isoformat(),
                 "reversal_reference": "REV-001"
@@ -224,7 +222,7 @@ class GLTester:
         print(f"\n{Colors.BLUE}=== GL Reports Tests ==={Colors.RESET}")
         
         # Test 1: Trial Balance
-        response = await self.client.get("/gl/reports/trial-balance/", params={
+        response = await self.client.get("/gl/reports/trial-balance", params={
             "report_date": date.today().isoformat()
         })
         if response.status_code == 200:
@@ -238,7 +236,7 @@ class GLTester:
             self.print_result("Trial Balance Report", False, f"Status: {response.status_code}")
             
         # Test 2: GL Detail Report
-        response = await self.client.get("/gl/reports/gl-detail/", params={
+        response = await self.client.get("/gl/reports/gl-detail", params={
             "account_id": account_id,
             "start_date": date(date.today().year, 1, 1).isoformat(),
             "end_date": date.today().isoformat()
@@ -250,7 +248,7 @@ class GLTester:
             self.print_result("GL Detail Report", False, f"Status: {response.status_code}")
             
         # Test 3: Export functionality
-        response = await self.client.get("/gl/reports/trial-balance/export/", params={
+        response = await self.client.get("/gl/reports/trial-balance/export", params={
             "report_date": date.today().isoformat(),
             "format": "csv"
         })
@@ -264,7 +262,7 @@ class GLTester:
         if self.created_accounts:
             # Try to delete account with transactions (should soft delete)
             account_id = self.created_accounts[0]
-            response = await self.client.delete(f"/gl/accounts/{account_id}/")
+            response = await self.client.delete(f"/gl/accounts/{account_id}")
             self.print_result("Soft Delete Account", response.status_code == 204,
                             "Account marked as inactive due to transactions")
             
