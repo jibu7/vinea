@@ -59,7 +59,17 @@ const navigationItems: NavItem[] = [
       { name: 'AR Reports', href: '/ar/reports', icon: BarChart3 },
     ],
   },
-  { name: 'Accounts Payable', href: '/ap', icon: ShoppingCart },
+  {
+    name: 'Accounts Payable',
+    href: '/ap',
+    icon: ShoppingCart,
+    subItems: [
+      { name: 'Suppliers', href: '/suppliers', icon: Users },
+      { name: 'AP Transactions', href: '/ap', icon: FileText },
+      { name: 'Transaction Types', href: '/ap/transaction-types', icon: Settings },
+      { name: 'AP Reports', href: '/ap/reports', icon: BarChart3 },
+    ],
+  },
   { name: 'Inventory', href: '/inventory', icon: Package },
   { name: 'Order Entry', href: '/oe', icon: ShoppingCart },
 ];
