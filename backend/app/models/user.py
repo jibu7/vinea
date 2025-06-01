@@ -24,6 +24,7 @@ class User(BaseModel):
     last_name = Column(String(100))
     company_id = Column(Integer, ForeignKey('companies.id', ondelete='CASCADE'))
     is_active = Column(Boolean, default=True)
+    is_superuser = Column(Boolean, default=False)
     last_login = Column(DateTime(timezone=True))
     
     # Relationships

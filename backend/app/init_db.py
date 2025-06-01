@@ -45,7 +45,8 @@ async def create_initial_data():
                 first_name="System",
                 last_name="Administrator",
                 company_id=company.id,
-                is_active=True
+                is_active=True,
+                is_superuser=True
             )
             db.add(admin_user)
             await db.commit()

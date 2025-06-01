@@ -2,6 +2,7 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 from typing import Optional
 
 from app.core.database import get_db
@@ -33,9 +34,11 @@ async def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
     
-    # Get user from database
+    # Get user from database with roles eagerly loaded
     result = await db.execute(
-        select(User).where(User.id == int(user_id))
+        select(User)
+        .options(selectinload(User.roles))
+        .where(User.id == int(user_id))
     )
     user = result.scalar_one_or_none()
     
@@ -63,11 +66,30 @@ async def get_current_active_user(
     return current_user
 
 def require_permission(module: str, action: str):
-    """Permission checker decorator"""
+    """Permission checker decorator (REQ-SYS-RBAC-003)"""
     async def permission_checker(
         current_user: User = Depends(get_current_active_user)
-    ):
-        # TODO: Implement permission checking logic once roles are fully set up
-        # For now, allow all authenticated users
+    ) -> bool:
+        # Build the permission string
+        required_permission = f"{module}.{action}"
+        
+        # Check if user has a superuser attribute (optional)
+        if hasattr(current_user, 'is_superuser') and current_user.is_superuser:
+            return True
+        
+        # Collect all permissions from user's roles
+        user_permissions = []
+        for role in current_user.roles:
+            if role.permissions:
+                user_permissions.extend(role.permissions)
+        
+        # Check if user has the required permission
+        if required_permission not in user_permissions:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Permission denied. Required: {required_permission}"
+            )
+        
         return True
+    
     return permission_checker 

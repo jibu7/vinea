@@ -13,19 +13,23 @@ import {
   ShoppingCart, 
   Package,
   Settings,
-  LogOut
+  LogOut,
+  Shield,
+  Calendar
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const navigationItems = [
   { name: 'Dashboard', href: '/dashboard', icon: Home },
-  { name: 'Users', href: '/dashboard/users', icon: Users },
-  { name: 'Companies', href: '/dashboard/companies', icon: Building2 },
-  { name: 'General Ledger', href: '/dashboard/gl', icon: BookOpen },
-  { name: 'Accounts Receivable', href: '/dashboard/ar', icon: DollarSign },
-  { name: 'Accounts Payable', href: '/dashboard/ap', icon: ShoppingCart },
-  { name: 'Inventory', href: '/dashboard/inventory', icon: Package },
-  { name: 'Order Entry', href: '/dashboard/oe', icon: ShoppingCart },
+  { name: 'Users', href: '/users', icon: Users },
+  { name: 'Roles', href: '/roles', icon: Shield },
+  { name: 'Companies', href: '/companies', icon: Building2 },
+  { name: 'Accounting Periods', href: '/accounting-periods', icon: Calendar },
+  { name: 'General Ledger', href: '/gl', icon: BookOpen },
+  { name: 'Accounts Receivable', href: '/ar', icon: DollarSign },
+  { name: 'Accounts Payable', href: '/ap', icon: ShoppingCart },
+  { name: 'Inventory', href: '/inventory', icon: Package },
+  { name: 'Order Entry', href: '/oe', icon: ShoppingCart },
 ];
 
 export default function DashboardLayout({

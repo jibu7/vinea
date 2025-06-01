@@ -35,11 +35,13 @@ class UserUpdate(BaseModel):
     last_name: Optional[str] = Field(None, max_length=100)
     company_id: Optional[int] = None
     is_active: Optional[bool] = None
+    is_superuser: Optional[bool] = None
 
 class UserResponse(UserBase):
     """User response schema"""
     id: int
     is_active: bool
+    is_superuser: bool
     last_login: Optional[datetime]
     created_at: datetime
     updated_at: datetime
