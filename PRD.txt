@@ -1,0 +1,579 @@
+organise the following PRD in series of commands i can give to AI to corehent answer: (
+Okay, let's create a comprehensive Product Requirements Document (PRD) outline for your "vinea" web-based Sage Evolution clone, with a strong focus on the Inventory, Sales (Order Entry), and Accounting (GL, AR, AP) modules.
+
+This PRD is designed to guide your development process for an initial phase (MVP) focusing on these core areas. It assumes you are building a multi-user web application using your chosen tech stack (React/Next.js frontend, FastAPI backend, PostgreSQL database).
+
+Product Requirements Document (PRD): vinea Core ERP
+
+Document Version: 1.0
+Date: [Insert Date]
+Authors: [Your Name(s)]
+Project Phase: MVP (Minimum Viable Product) - Focusing on Core Modules
+
+Introduction
+
+1.1 Project Name: vinea
+
+1.2 Product Description: vinea is a web-based business management application designed to provide core ERP functionality, inspired by Sage Evolution's established workflows. It aims to offer a user-friendly, scalable solution for Small to Medium Businesses (SMBs).
+
+1.3 Purpose of this Document: This document defines the requirements for the initial phase of the vinea project, focusing on the foundational Accounting, Inventory, and Sales (Order Entry) modules. It outlines the goals, scope, user stories, and functional/non-functional requirements to guide the development team.
+
+1.4 Alignment with Sage Evolution Documentation: This PRD draws heavily on the provided Sage Evolution System Requirements, Installation Guide, User Guide Table of Contents, Software License Agreement, and Data Protection documents to understand core functionalities and workflows. It does not aim to replicate Sage's specific UI or underlying code, but rather to build equivalent functionality in a web environment.
+
+Goals
+
+2.1 Primary Goal: To develop a stable and functional web application providing core business management capabilities for SMBs.
+
+2.2 Key Objectives:
+
+Enable users to manage their financial records through General Ledger, Accounts Receivable, and Accounts Payable.
+
+Provide comprehensive tracking and management of inventory items.
+
+Facilitate the core sales and purchasing processes through Order Entry documents.
+
+Ensure data integrity and flow between the interconnected modules (Inventory, OE, AR, AP, GL).
+
+Implement a robust and flexible role-based access control system.
+
+Adhere to key data protection principles, including secure access and logging, as inspired by the Sage Data Protection document.
+
+Deliver a responsive and intuitive web user interface accessible from modern browsers.
+
+Target Audience
+
+Small to Medium Businesses requiring integrated accounting and inventory management.
+
+Users in roles such as:
+
+Company Administrators / System Managers
+
+Accountants / Bookkeepers
+
+Sales Personnel
+
+Purchasing Personnel
+
+Warehouse Staff
+
+General Clerks entering data.
+
+Scope
+
+4.1 In Scope for MVP:
+
+System Core:
+
+User/Agent Management (Create, Edit, Assign Roles)
+
+Role-Based Access Control (RBAC) at the Module/Functionality Level (inspired by Sage's Agent Groups and Access Control concepts)
+
+Company Setup & Configuration (Basic company details, connection to database)
+
+Accounting Periods Management (Define periods, Open/Close periods)
+
+Basic System Configuration Defaults (e.g., Numbering for documents/accounts)
+
+Master File Management (Create, Edit, Basic Inquiry/Listing) for Accounts, Customers, Suppliers, Inventory Items, Transaction Types, Accounting Periods, User Roles.
+
+Basic Reporting framework and generation (listing and summary reports for in-scope modules).
+
+General Ledger (GL):
+
+Chart of Accounts Management (Create, Edit, Define Account Types - Assets, Liabilities, Equity, Income, Expense)
+
+Manual Journal Entry Processing (Create, Post, Link to Accounts, Date, Reference)
+
+Basic GL Reports (Trial Balance, Account Listing)
+
+Accounts Receivable (AR):
+
+Customer Master File Management (Basic details - Name, Address, Contact, Terms, Ageing)
+
+Transaction Types Configuration (Define AR transaction types, link to GL Accounts)
+
+Transaction Processing (Posting customer invoices/credit notes/payments, capturing Date, Reference, Amount, Account) - Note: Initial focus is on manual posting or linked from OE, not necessarily complex batch import.
+
+Transaction Allocation (Allocate payments/credits to invoices)
+
+Ageing Periods Definition & Calculation
+
+Basic AR Reports (Customer Ageing, Customer Listing, Transaction Listing)
+
+Accounts Payable (AP):
+
+Supplier Master File Management (Basic details - Name, Address, Contact, Terms, Ageing)
+
+Transaction Types Configuration (Define AP transaction types, link to GL Accounts)
+
+Transaction Processing (Posting supplier invoices/credit notes/payments, capturing Date, Reference, Amount, Account) - Note: Initial focus is on manual posting or linked from OE, not necessarily complex batch import.
+
+Transaction Allocation (Allocate payments/credits to invoices)
+
+Ageing Periods Definition & Calculation (Can share setup with AR where applicable)
+
+Basic AP Reports (Supplier Ageing, Supplier Listing, Transaction Listing)
+
+Inventory:
+
+Inventory Item Master File Management (Create, Edit, Item Type - Stock/Service, Costing Method - Weighted Average, Pricing, Units of Measure, Quantity Tracking - Single Location)
+
+Transaction Types Configuration (Define Inventory transaction types - e.g., Adjustments, link to GL Accounts)
+
+Transaction Processing (Manual Adjustments - Quantity and Value)
+
+Basic Inventory Reports (Inventory Item Listing, Stock Quantity Report)
+
+Order Entry (OE) - Linking Sales & Purchasing:
+
+Document Types Configuration (Define Sales Order, Purchase Order, Goods Received Voucher (GRV), Invoice, Credit Note document types, link to Inventory/AR/AP Transaction Types)
+
+Sales Document Processing (Create Sales Order, Convert Sales Order to Invoice)
+
+Purchasing Document Processing (Create Purchase Order, Record GRV, Record Supplier Invoice from GRV)
+
+Document Details (Line items with Quantity, Item, Price, Discount, link to Customer/Supplier)
+
+Basic OE Reports (Sales Order Listing, Purchase Order Listing, GRV Listing)
+
+4.2 Out of Scope for MVP:
+
+Multi-Currency functionality
+
+Multi-Warehousing functionality
+
+Point of Sale (POS) module
+
+Pricing Matrix module (beyond basic item pricing)
+
+Serial Number Tracking module
+
+Bill of Materials (BOM) module
+
+European Union / Intrastat module
+
+Contact Management module
+
+Fixed Assets module
+
+Bank Manager module (Integration with banks)
+
+System Audit Manager module (Detailed audit logging beyond basic security/entry logs)
+
+Voucher Management module (Internal approval workflows)
+
+Debtors Manager module (Collections workflow, Email/SMS reminders)
+
+Sage Intelligence Reporting Clone (Full BI suite)
+
+Complex batch imports (e.g., price updates from file)
+
+Advanced system features (e.g., Custom Fields, API/SDK for third-party integration, Mobile Sales specific UI/features)
+
+Automated data migration tools from other systems.
+
+User Stories / Use Cases
+
+5.1 As an Administrator, I want to:
+
+Set up my company's basic details so they appear on documents.
+
+Define my financial year and accounting periods so I can control transaction dates.
+
+Create different user roles (e.g., Accountant, Salesperson) with specific permissions so I can control who can access what.
+
+Add new users (Agents) and assign them roles so my team can access the system.
+
+Define standard transaction types for GL, AR, AP, Inventory, and OE so transaction processing is standardized.
+
+Configure numbering sequences for documents and accounts so they are automatically assigned unique IDs.
+
+Set up default settings for modules (e.g., default terms, default transaction types) so data entry is faster.
+
+Define my Chart of Accounts structure so I can track my finances.
+
+Set up customer and supplier terms and ageing periods so I can manage receivables and payables.
+
+Create new inventory items with costs, pricing, and units of measure so I can track my stock.
+
+5.2 As an Accountant, I want to:
+
+Post manual journal entries so I can record non-operational financial transactions.
+
+View a Trial Balance report so I can check the summary of all accounts.
+
+Process customer payments and allocate them to open invoices so I can manage cash flow.
+
+Process supplier payments and allocate them to open invoices so I can manage payables.
+
+View customer and supplier ageing reports so I can see outstanding balances by age.
+
+Close accounting periods so transactions cannot be posted in the past.
+
+5.3 As a Salesperson, I want to:
+
+Create a new customer so I can record their details.
+
+Create a Sales Order for a customer, selecting inventory items and specifying quantities and prices.
+
+Convert a Sales Order into an Invoice so I can bill the customer.
+
+View a customer's outstanding balance and transaction history.
+
+View inventory stock levels so I know if items are available.
+
+5.4 As a Purchasing Personnel, I want to:
+
+Create a new supplier so I can record their details.
+
+Create a Purchase Order for a supplier, selecting inventory items and specifying quantities and prices.
+
+Record a Goods Received Voucher (GRV) when I receive items from a supplier.
+
+Record a Supplier Invoice, linking it to a GRV, so I can process payment.
+
+View a supplier's outstanding balance and transaction history.
+
+5.5 As Warehouse Staff, I want to:
+
+View inventory stock levels for specific items.
+
+Record inventory adjustments (increase/decrease) for stock takes or damage.
+
+Functional Requirements
+
+(Detailed requirements broken down by module and feature.)
+
+6.1 System Core:
+
+6.1.1 User Management:
+
+REQ-SYS-UM-001: The system MUST allow administrators to create new user accounts with unique usernames and passwords.
+
+REQ-SYS-UM-002: The system MUST allow administrators to edit existing user account details.
+
+REQ-SYS-UM-003: The system MUST allow administrators to assign one or more roles to a user account.
+
+REQ-SYS-UM-004: The system MUST support secure password storage (hashing).
+
+REQ-SYS-UM-005: The system SHOULD enforce strong password complexity rules (as per Sage doc Annex 1 "Entry control").
+
+6.1.2 Role-Based Access Control (RBAC):
+
+REQ-SYS-RBAC-001: The system MUST allow administrators to create and define user roles.
+
+REQ-SYS-RBAC-002: The system MUST allow administrators to grant or deny permissions for specific modules or functionalities to a role (e.g., "GL: Post Journal Entry", "AR: Create Customer", "Inventory: View Item List").
+
+REQ-SYS-RBAC-003: The system MUST enforce assigned permissions, restricting user access to unauthorized functions.
+
+6.1.3 Company Setup:
+
+REQ-SYS-COMP-001: The system MUST allow initial creation and connection to a PostgreSQL database.
+
+REQ-SYS-COMP-002: The system MUST allow users to log in and select a company database.
+
+REQ-SYS-COMP-003: The system MUST allow administrators to enter/edit basic company details (Name, Address, Contact Info).
+
+6.1.4 Accounting Periods:
+
+REQ-SYS-PERIOD-001: The system MUST allow administrators to define the financial year and subsequent accounting periods.
+
+REQ-SYS-PERIOD-002: The system MUST allow administrators to open and close accounting periods.
+
+REQ-SYS-PERIOD-003: The system MUST prevent transaction posting into closed accounting periods.
+
+6.1.5 Configuration & Defaults:
+
+REQ-SYS-CONFIG-001: The system MUST allow configuration of default numbering series for key entities (Accounts, Customers, Suppliers, Inventory Items, OE Documents) (Inspired by Sage OE Defaults).
+
+REQ-SYS-CONFIG-002: The system MUST allow configuration of default transaction types for OE document types (Sales Order, Purchase Order, GRV, Invoice, Credit Note).
+
+REQ-SYS-CONFIG-003: The system MUST allow configuration of default terms for Customers and Suppliers.
+
+6.1.6 Master File Management:
+
+REQ-SYS-MF-001: The system MUST provide interfaces for creating, viewing, and editing records for in-scope master files (Accounts, Customers, Suppliers, Inventory Items, Transaction Types, Roles, Accounting Periods).
+
+REQ-SYS-MF-002: The system MUST provide list views for master files with basic search, filter, and sort capabilities (Inspired by Sage's "Working with Records" grid).
+
+6.1.7 Reporting Framework:
+
+REQ-SYS-REPORT-001: The system MUST provide a mechanism to generate reports based on defined criteria.
+
+REQ-SYS-REPORT-002: The system MUST allow filtering reports by date range, specific master file records (e.g., customer, item), and transaction types.
+
+REQ-SYS-REPORT-003: The system MUST allow exporting reports to a common format (e.g., CSV, basic Excel).
+
+6.2 General Ledger (GL):
+
+6.2.1 Chart of Accounts:
+
+REQ-GL-COA-001: The system MUST allow creating, editing, and deleting GL accounts.
+
+REQ-GL-COA-002: The system MUST support different account types (Assets, Liabilities, Equity, Income, Expense) and link them to financial statement categories.
+
+REQ-GL-COA-003: The system SHOULD support account grouping/hierarchies for reporting.
+
+6.2.2 Journal Entry Processing:
+
+REQ-GL-JE-001: The system MUST allow creating multi-line journal entries with date, reference, account, debit/credit amounts, and description.
+
+REQ-GL-JE-002: The system MUST enforce that total debits equal total credits before posting a journal entry.
+
+REQ-GL-JE-003: The system MUST post journal entries, updating account balances and recording the transaction.
+
+6.2.3 GL Reporting:
+
+REQ-GL-REPORT-001: The system MUST generate a Trial Balance report for a selected period.
+
+REQ-GL-REPORT-002: The system MUST generate a GL Detail report showing all transactions for selected accounts within a period.
+
+6.3 Accounts Receivable (AR):
+
+6.3.1 Customer Master:
+
+REQ-AR-CUST-001: The system MUST allow creating and editing customer records with details like Name, Address, Contact Info, Default Terms, Ageing Settings.
+
+REQ-AR-CUST-002: The system MUST track customer balances.
+
+6.3.2 AR Transaction Types:
+
+REQ-AR-TT-001: The system MUST allow defining AR transaction types (e.g., Invoice, Credit Note, Receipt) and link them to specific GL accounts (e.g., AR Control Account, Sales Income).
+
+REQ-AR-TT-002: The system MUST allow marking transaction types as affecting debit or credit balances.
+
+6.3.3 AR Transaction Processing:
+
+REQ-AR-TP-001: The system MUST allow processing customer transactions (invoices, credit notes, receipts) manually or linked from OE.
+
+REQ-AR-TP-002: The system MUST post AR transactions, updating customer balances and posting to linked GL accounts.
+
+6.3.4 Transaction Allocation:
+
+REQ-AR-ALLOC-001: The system MUST allow users to allocate customer payments and credit notes to open invoices.
+
+REQ-AR-ALLOC-002: The system MUST update the status of invoices and allocation records upon successful allocation.
+
+6.3.5 Ageing:
+
+REQ-AR-AGE-001: The system MUST calculate customer ageing based on defined periods (e.g., Current, 30 Days, 60 Days).
+
+6.3.6 AR Reporting:
+
+REQ-AR-REPORT-001: The system MUST generate a Customer Ageing report.
+
+REQ-AR-REPORT-002: The system MUST generate a Customer Listing report.
+
+REQ-AR-REPORT-003: The system MUST generate a Customer Transaction Listing report.
+
+6.4 Accounts Payable (AP):
+
+6.4.1 Supplier Master:
+
+REQ-AP-SUPP-001: The system MUST allow creating and editing supplier records with details like Name, Address, Contact Info, Default Terms, Ageing.
+
+REQ-AP-SUPP-002: The system MUST track supplier balances.
+
+6.4.2 AP Transaction Types:
+
+REQ-AP-TT-001: The system MUST allow defining AP transaction types (e.g., Supplier Invoice, Credit Note, Payment) and link them to specific GL accounts (e.g., AP Control Account, Expense Accounts).
+
+REQ-AP-TT-002: The system MUST allow marking transaction types as affecting debit or credit balances.
+
+6.4.3 AP Transaction Processing:
+
+REQ-AP-TP-001: The system MUST allow processing supplier transactions (invoices, credit notes, payments) manually or linked from OE/GRV.
+
+REQ-AP-TP-002: The system MUST post AP transactions, updating supplier balances and posting to linked GL accounts.
+
+6.4.4 Transaction Allocation:
+
+REQ-AP-ALLOC-001: The system MUST allow users to allocate supplier payments and credit notes to open invoices.
+
+REQ-AP-ALLOC-002: The system MUST update the status of invoices and allocation records upon successful allocation.
+
+6.4.5 Ageing:
+
+REQ-AP-AGE-001: The system MUST calculate supplier ageing based on defined periods.
+
+6.4.6 AP Reporting:
+
+REQ-AP-REPORT-001: The system MUST generate a Supplier Ageing report.
+
+REQ-AP-REPORT-002: The system MUST generate a Supplier Listing report.
+
+REQ-AP-REPORT-003: The system MUST generate a Supplier Transaction Listing report.
+
+6.5 Inventory:
+
+6.5.1 Inventory Item Master:
+
+REQ-INV-ITEM-001: The system MUST allow creating and editing inventory item records with details like Code, Description, Item Type (Stock/Service), Units of Measure, Costing Method (Weighted Average), Selling Prices.
+
+REQ-INV-ITEM-002: The system MUST track inventory quantities for stock items (at a single default location for MVP).
+
+6.5.2 Inventory Transaction Types:
+
+REQ-INV-TT-001: The system MUST allow defining Inventory transaction types (e.g., Adjustment Increase, Adjustment Decrease) and link them to specific GL accounts (e.g., Inventory Asset Account, Cost of Sales/Adjustment Account).
+
+6.5.3 Inventory Processing:
+
+REQ-INV-PROC-001: The system MUST allow processing inventory adjustments (increase/decrease quantity and update inventory value based on costing method).
+
+REQ-INV-PROC-002: The system MUST post inventory transactions, updating item quantities and posting to linked GL accounts.
+
+6.5.4 Inventory Reporting:
+
+REQ-INV-REPORT-001: The system MUST generate an Inventory Item Listing report.
+
+REQ-INV-REPORT-002: The system MUST generate a Stock Quantity report showing current quantities for stock items.
+
+6.6 Order Entry (OE):
+
+6.6.1 OE Document Types:
+
+REQ-OE-DT-001: The system MUST allow defining OE document types (Sales Order, Purchase Order, GRV, Invoice, Credit Note).
+
+REQ-OE-DT-002: The system MUST link OE document types to relevant Inventory/AR/AP transaction types for posting.
+
+6.6.2 Sales Order Processing:
+
+REQ-OE-SO-001: The system MUST allow creating Sales Orders for customers, adding line items with inventory items/services, quantities, and prices.
+
+REQ-OE-SO-002: The system MUST calculate line totals and document totals for Sales Orders.
+
+REQ-OE-SO-003: The system MUST allow converting a Sales Order into an Invoice, automatically populating invoice details from the order.
+
+6.6.3 Purchasing Order Processing:
+
+REQ-OE-PO-001: The system MUST allow creating Purchase Orders for suppliers, adding line items with inventory items/services, quantities, and prices.
+
+REQ-OE-PO-002: The system MUST calculate line totals and document totals for Purchase Orders.
+
+REQ-OE-PO-003: The system MUST allow recording a GRV against a Purchase Order, capturing received quantities.
+
+REQ-OE-PO-004: The system MUST allow recording a Supplier Invoice against a GRV, automatically populating invoice details.
+
+6.6.4 OE Reporting:
+
+REQ-OE-REPORT-001: The system MUST generate a Sales Order Listing report.
+
+REQ-OE-REPORT-002: The system MUST generate a Purchase Order Listing report.
+
+REQ-OE-REPORT-003: The system MUST generate a GRV Listing report.
+
+6.7 Cross-Module Integration:
+
+REQ-CROSS-001: Posting an AR Invoice linked from a Sales Order MUST update the customer balance and post to relevant GL accounts via the linked AR transaction type.
+
+REQ-CROSS-002: Posting an AR Receipt MUST update the customer balance and post to relevant GL accounts via the linked AR transaction type.
+
+REQ-CROSS-003: Posting an AP Supplier Invoice linked from a GRV MUST update the supplier balance and post to relevant GL accounts via the linked AP transaction type.
+
+REQ-CROSS-004: Posting an AP Payment MUST update the supplier balance and post to relevant GL accounts via the linked AP transaction type.
+
+REQ-CROSS-005: Recording a GRV MUST update the quantity on hand for the received inventory items.
+
+REQ-CROSS-006: Posting an Inventory Adjustment MUST update the quantity on hand and post to relevant GL accounts.
+
+Non-Functional Requirements
+
+7.1 Performance:
+
+NFR-PERF-001: Page load times SHOULD be within 3 seconds under normal network conditions.
+
+NFR-PERF-002: Transaction processing (posting) SHOULD complete within 5 seconds for typical transactions.
+
+NFR-PERF-003: Report generation for basic reports SHOULD complete within 15 seconds for datasets up to [Define expected max data volume, e.g., 10,000 transactions].
+
+7.2 Security:
+
+NFR-SEC-001: The application MUST enforce RBAC on all backend API endpoints.
+
+NFR-SEC-002: All user activity (login, logout, create/edit/delete records, post transactions) MUST be logged with timestamp and user identifier (Inspired by Sage doc Annex 1 "Entry control").
+
+NFR-SEC-003: All sensitive data (passwords, financial data) MUST be stored securely (hashing for passwords, encryption at rest for database).
+
+NFR-SEC-004: All communication between the frontend and backend MUST use HTTPS.
+
+NFR-SEC-005: Access to the database MUST be restricted to the backend application only.
+
+NFR-SEC-006: Implement necessary measures to handle personal data in compliance with relevant data protection laws (e.g., GDPR), including allowing editing/removal where applicable (Inspired by Sage Data Protection doc).
+
+7.3 Usability:
+
+NFR-USABILITY-001: The user interface MUST be intuitive and easy to navigate for users familiar with business applications.
+
+NFR-USABILITY-002: The application MUST be responsive, adapting to different screen sizes (desktops, tablets, laptops - inspired by Sage doc note on DPI for laptops).
+
+NFR-USABILITY-003: Data entry forms SHOULD provide clear validation and feedback to the user.
+
+7.4 Reliability:
+
+NFR-RELIABILITY-001: The application SHOULD aim for an uptime of 99.5% or higher.
+
+NFR-RELIABILITY-002: Database backup procedures MUST be defined and implemented.
+
+7.5 Scalability:
+
+NFR-SCALABILITY-001: The architecture should be designed to support scaling the database (PostgreSQL) and backend (FastAPI) independently to handle increased load.
+
+7.6 Compatibility:
+
+NFR-COMPAT-001: The application MUST be compatible with the latest versions of major web browsers (Chrome, Firefox, Edge, Safari).
+
+Design / Technical Considerations
+
+8.1 Stack: React/Next.js (Frontend), FastAPI (Backend), PostgreSQL (Database).
+
+8.2 ORM: Use SQLAlchemy or a similar ORM for database interactions.
+
+8.3 API Design: Design a RESTful API with clear endpoints for each resource and action. Use FastAPI's type hinting and OpenAPI generation for documentation.
+
+8.4 Frontend Architecture: Utilize Next.js features for routing, server-side rendering (SSR) or static site generation (SSG) where beneficial for performance. Use TypeScript for type safety.
+
+8.5 Styling: Implement styling using Tailwind CSS.
+
+8.6 Authentication: Implement token-based authentication (e.g., JWT) managed by the backend.
+
+8.7 Background Jobs: Consider using a task queue (like Celery with FastAPI) for potentially long-running or asynchronous tasks in future phases (e.g., bulk imports, complex reports).
+
+8.8 Database Schema: Design the PostgreSQL schema based on the identified entities and their relationships, prioritizing data integrity. Use appropriate data types for financial values (e.g., DECIMAL or NUMERIC).
+
+Open Questions / Future Considerations
+
+Exact format and required data fields for all in-scope reports need detailed specification.
+
+Precision requirements for currency and quantities.
+
+Handling of tax calculations (VAT/GST) – will this be a configuration or hardcoded based on region?
+
+Specific import/export needs for master data or transactions?
+
+Requirements for data archiving or purging?
+
+Should the system handle multi-location inventory tracking in a later phase?
+
+Is there a need for multi-company support within a single installation?
+
+Detailed requirements for user interface interactions and workflows.
+
+Appendices
+
+10.1 Glossary: Definition of terms used (ERP, GL, AR, AP, OE, GRV, RBAC, Agent, Transaction Type, etc.)
+
+10.2 References:
+
+Link to Sage Evolution System Requirements Document
+
+Link to Sage Evolution Installation Guide
+
+Link to Sage Evolution User Guide (if available, otherwise reference TOC sections used)
+
+Link to Sage Evolution Software License Agreement
+
+Link to Sage Evolution Data Protection Document
+
+Links to documentation for chosen tech stack components (FastAPI, PostgreSQL, React, Next.js, SQLAlchemy, etc.)
+
+This outline provides a solid starting point. As you move through development, you will need to flesh out the functional requirements (Section 6) with much more detail, potentially creating separate requirement documents or user stories for each specific screen or workflow. The user stories (Section 5) help ensure the requirements are tied back to actual user needs. Remember to revisit and update this PRD as your project evolves.)
