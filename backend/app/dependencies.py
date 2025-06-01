@@ -69,13 +69,13 @@ def require_permission(module: str, action: str):
     """Permission checker decorator (REQ-SYS-RBAC-003)"""
     async def permission_checker(
         current_user: User = Depends(get_current_active_user)
-    ) -> bool:
+    ) -> User:
         # Build the permission string
         required_permission = f"{module}.{action}"
         
         # Check if user has a superuser attribute (optional)
         if hasattr(current_user, 'is_superuser') and current_user.is_superuser:
-            return True
+            return current_user
         
         # Collect all permissions from user's roles
         user_permissions = []
@@ -90,6 +90,6 @@ def require_permission(module: str, action: str):
                 detail=f"Permission denied. Required: {required_permission}"
             )
         
-        return True
+        return current_user
     
     return permission_checker 

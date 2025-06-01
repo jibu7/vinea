@@ -12,6 +12,7 @@ from app.models.supplier import Supplier
 from app.models.ap_transaction_type import APTransactionType
 from app.models.ap_transaction import APTransaction
 from app.models.ap_allocation import APAllocation
+from app.models.inventory import InventoryItem, InventoryTransactionType, InventoryTransaction, ItemType, CostingMethod
 
 __all__ = [
     "BaseModel",
@@ -29,5 +30,10 @@ __all__ = [
     "Supplier",
     "APTransactionType",
     "APTransaction",
-    "APAllocation"
+    "APAllocation",
+    "InventoryItem",
+    "InventoryTransactionType",
+    "InventoryTransaction",
+    "ItemType",
+    "CostingMethod"
 ]
