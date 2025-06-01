@@ -15,3 +15,4 @@ class Company(BaseModel):
     users = relationship("User", back_populates="company", cascade="all, delete-orphan")
     roles = relationship("Role", back_populates="company", cascade="all, delete-orphan")
     accounting_periods = relationship("AccountingPeriod", back_populates="company", cascade="all, delete-orphan")
+    customers = relationship("Customer", back_populates="company", cascade="all, delete-orphan")

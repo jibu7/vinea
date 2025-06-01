@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 
 from app.core.config import settings
 from app.core.database import engine, Base
-from app.api import auth, users, companies, roles, accounting_periods, gl
+from app.api import auth, users, companies, roles, accounting_periods, gl, customers, ar
 
 # Create tables on startup
 @asynccontextmanager
@@ -64,6 +64,16 @@ app.include_router(
     gl.router, 
     prefix=f"{settings.API_PREFIX}/gl", 
     tags=["General Ledger"]
+)
+app.include_router(
+    customers.router, 
+    prefix=f"{settings.API_PREFIX}/customers", 
+    tags=["Customers"]
+)
+app.include_router(
+    ar.router, 
+    prefix=f"{settings.API_PREFIX}/ar", 
+    tags=["Accounts Receivable"]
 )
 
 # Root endpoint

@@ -1,8 +1,8 @@
 from decimal import Decimal
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
-from datetime import date
+from datetime import date, datetime
 
 from app.models import GLAccount, GLTransaction, AccountingPeriod
 from app.schemas.gl import JournalEntryCreate, JournalEntryLineCreate
@@ -137,4 +137,51 @@ class GLService:
         """Generate a unique journal entry ID"""
         from datetime import datetime
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-        return f"{prefix}-{timestamp}" 
+        return f"{prefix}-{timestamp}"
+    
+    @staticmethod
+    async def create_journal_entry(
+        db: AsyncSession,
+        company_id: int,
+        transaction_date: date,
+        reference: str,
+        description: str,
+        entries: List[Dict[str, Any]],
+        source_module: Optional[str] = None,
+        source_document_id: Optional[int] = None,
+        period_id: Optional[int] = None,
+        posted_by: Optional[int] = None
+    ) -> str:
+        """Create GL journal entries from other modules"""
+        # Generate journal entry ID
+        journal_entry_id = GLService.generate_journal_entry_id(
+            prefix=f"JE-{source_module}" if source_module else "JE"
+        )
+        
+        # Create GL transactions for each entry
+        for entry in entries:
+            gl_transaction = GLTransaction(
+                company_id=company_id,
+                journal_entry_id=journal_entry_id,
+                account_id=entry['account_id'],
+                transaction_date=transaction_date,
+                period_id=period_id,
+                description=entry.get('description', description),
+                debit_amount=entry.get('debit_amount', Decimal('0')),
+                credit_amount=entry.get('credit_amount', Decimal('0')),
+                reference=reference,
+                source_module=source_module,
+                source_document_id=source_document_id,
+                posted_by_user_id=posted_by,
+                is_reversed=False
+            )
+            db.add(gl_transaction)
+            
+            # Update account balance
+            account = await db.get(GLAccount, entry['account_id'])
+            if account:
+                balance_change = entry.get('debit_amount', Decimal('0')) - entry.get('credit_amount', Decimal('0'))
+                account.current_balance += balance_change
+        
+        # Don't commit here - let the calling function handle the transaction
+        return journal_entry_id 

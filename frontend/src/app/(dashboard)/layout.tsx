@@ -18,7 +18,10 @@ import {
   Shield,
   Calendar,
   ChevronDown,
-  ChevronRight
+  ChevronRight,
+  FileText,
+  CreditCard,
+  BarChart3
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -45,7 +48,17 @@ const navigationItems: NavItem[] = [
       { name: 'GL Reports', href: '/gl/reports', icon: ChevronRight },
     ],
   },
-  { name: 'Accounts Receivable', href: '/ar', icon: DollarSign },
+  {
+    name: 'Accounts Receivable',
+    href: '/ar',
+    icon: DollarSign,
+    subItems: [
+      { name: 'Customers', href: '/customers', icon: Users },
+      { name: 'AR Transactions', href: '/ar', icon: FileText },
+      { name: 'Transaction Types', href: '/ar/transaction-types', icon: Settings },
+      { name: 'AR Reports', href: '/ar/reports', icon: BarChart3 },
+    ],
+  },
   { name: 'Accounts Payable', href: '/ap', icon: ShoppingCart },
   { name: 'Inventory', href: '/inventory', icon: Package },
   { name: 'Order Entry', href: '/oe', icon: ShoppingCart },

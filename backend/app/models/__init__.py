@@ -1,17 +1,25 @@
 from app.models.base import BaseModel
+from app.models.user import User
 from app.models.company import Company
-from app.models.user import User, user_roles
 from app.models.role import Role
 from app.models.accounting_period import AccountingPeriod
-from app.models.gl import GLAccount, GLTransaction
+from app.models.gl import GLAccount, GLTransaction, TransactionType
+from app.models.customer import Customer
+from app.models.ar_transaction_type import ARTransactionType
+from app.models.ar_transaction import ARTransaction
+from app.models.ar_allocation import ARAllocation
 
 __all__ = [
     "BaseModel",
-    "Company",
     "User",
-    "user_roles",
+    "Company",
     "Role",
     "AccountingPeriod",
     "GLAccount",
-    "GLTransaction"
+    "GLTransaction",
+    "TransactionType",
+    "Customer",
+    "ARTransactionType",
+    "ARTransaction",
+    "ARAllocation"
 ]

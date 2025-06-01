@@ -6,6 +6,18 @@ from .accounting_period import AccountingPeriod
 from .user import User
 from .company import Company
 
+class TransactionType(BaseModel):
+    """GL Transaction Type model for categorizing GL transactions"""
+    __tablename__ = "gl_transaction_types"
+    
+    company_id = Column(Integer, ForeignKey("companies.id", ondelete="CASCADE"), nullable=False)
+    code = Column(String(20), nullable=False)
+    name = Column(String(100), nullable=False)
+    description = Column(String(255), nullable=True)
+    is_active = Column(Boolean, default=True, nullable=False)
+    
+    company = relationship("Company")
+
 class GLAccount(BaseModel):
     __tablename__ = "gl_accounts"
 
