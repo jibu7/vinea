@@ -11,5 +11,6 @@ from . import ar
 from . import suppliers
 from . import ap
 from . import inventory
+from . import oe
 
-__all__ = ["auth", "users", "companies", "roles", "accounting_periods", "gl", "customers", "ar", "suppliers", "ap", "inventory"]
+__all__ = ["auth", "users", "companies", "roles", "accounting_periods", "gl", "customers", "ar", "suppliers", "ap", "inventory", "oe"]

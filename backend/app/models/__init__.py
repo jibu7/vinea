@@ -13,6 +13,10 @@ from app.models.ap_transaction_type import APTransactionType
 from app.models.ap_transaction import APTransaction
 from app.models.ap_allocation import APAllocation
 from app.models.inventory import InventoryItem, InventoryTransactionType, InventoryTransaction, ItemType, CostingMethod
+from app.models.oe_document_type import OEDocumentType
+from app.models.sales_order import SalesOrder, SalesOrderLine
+from app.models.purchase_order import PurchaseOrder, PurchaseOrderLine
+from app.models.grv import GoodsReceivedVoucher, GRVLine
 
 __all__ = [
     "BaseModel",
@@ -35,5 +39,12 @@ __all__ = [
     "InventoryTransactionType",
     "InventoryTransaction",
     "ItemType",
-    "CostingMethod"
+    "CostingMethod",
+    "OEDocumentType",
+    "SalesOrder",
+    "SalesOrderLine",
+    "PurchaseOrder",
+    "PurchaseOrderLine",
+    "GoodsReceivedVoucher",
+    "GRVLine"
 ]
