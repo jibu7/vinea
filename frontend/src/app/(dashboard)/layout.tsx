@@ -61,11 +61,10 @@ const getNavigationStructure = (): NavSection[] => [
         href: '/maintenance/system',
         icon: Settings,
         subItems: [
-          { name: 'Company Setup', href: '/maintenance/system/companies', icon: Building2, permission: PERMISSIONS.SYSTEM.COMPANY_SETUP },
+          { name: 'Company Setup', href: '/maintenance/system/company-setup', icon: Building2, permission: PERMISSIONS.SYSTEM.COMPANY_SETUP },
           { name: 'User Management', href: '/maintenance/system/users', icon: Users, permission: PERMISSIONS.SYSTEM.USER_MANAGEMENT },
           { name: 'Roles & Permissions', href: '/maintenance/system/roles', icon: Shield, permission: PERMISSIONS.SYSTEM.ROLE_MANAGEMENT },
           { name: 'Accounting Periods', href: '/maintenance/system/accounting-periods', icon: Calendar, permission: PERMISSIONS.SYSTEM.ACCOUNTING_PERIODS },
-          { name: 'System Configuration', href: '/maintenance/system/config', icon: UserCog, permission: PERMISSIONS.SYSTEM.SYSTEM_CONFIG },
         ],
       },
       {
@@ -73,7 +72,7 @@ const getNavigationStructure = (): NavSection[] => [
         href: '/maintenance/gl',
         icon: BookOpen,
         subItems: [
-          { name: 'Chart of Accounts', href: '/maintenance/gl/accounts', icon: FolderOpen, permission: PERMISSIONS.GL.SETUP.CHART_OF_ACCOUNTS },
+          { name: 'Chart of Accounts', href: '/maintenance/gl/chart-of-accounts', icon: FolderOpen, permission: PERMISSIONS.GL.SETUP.CHART_OF_ACCOUNTS },
           { name: 'GL Transaction Types', href: '/maintenance/gl/transaction-types', icon: Settings, permission: PERMISSIONS.GL.SETUP.TRANSACTION_TYPES },
         ],
       },
@@ -123,7 +122,7 @@ const getNavigationStructure = (): NavSection[] => [
         href: '/transactions/gl',
         icon: BookOpen,
         subItems: [
-          { name: 'Manual Journal Entry', href: '/transactions/gl/journal-entries', icon: FileText, permission: PERMISSIONS.GL.TRANSACTIONS.JOURNAL_ENTRIES },
+          { name: 'Manual Journal Entry', href: '/transactions/gl/journal-entry', icon: FileText, permission: PERMISSIONS.GL.TRANSACTIONS.JOURNAL_ENTRIES },
         ],
       },
       {
