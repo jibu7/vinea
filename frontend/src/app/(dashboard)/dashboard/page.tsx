@@ -1,7 +1,8 @@
 'use client';
 
 import { useAuth } from '@/contexts/AuthContext';
-import { Users, Building2, BookOpen, DollarSign } from 'lucide-react';
+import { Users, Building2, BookOpen, DollarSign, Wrench, ArrowUpDown, PieChart } from 'lucide-react';
+import Link from 'next/link';
 
 export default function DashboardPage() {
   const { user } = useAuth();
@@ -11,6 +12,30 @@ export default function DashboardPage() {
     { name: 'Companies', value: '1', icon: Building2, color: 'bg-green-500' },
     { name: 'GL Accounts', value: '0', icon: BookOpen, color: 'bg-purple-500' },
     { name: 'Outstanding AR', value: '$0.00', icon: DollarSign, color: 'bg-yellow-500' },
+  ];
+
+  const quickActions = [
+    {
+      title: 'Maintenance',
+      description: 'Manage master data and system setup',
+      icon: Wrench,
+      href: '/maintenance',
+      color: 'bg-blue-500'
+    },
+    {
+      title: 'Transactions',
+      description: 'Process daily operational transactions',
+      icon: ArrowUpDown,
+      href: '/transactions',
+      color: 'bg-green-500'
+    },
+    {
+      title: 'Reports',
+      description: 'Generate business reports and analytics',
+      icon: PieChart,
+      href: '/reports',
+      color: 'bg-purple-500'
+    },
   ];
 
   return (
@@ -43,6 +68,31 @@ export default function DashboardPage() {
             </div>
           );
         })}
+      </div>
+
+      {/* Quick Actions for Three-Tier Navigation */}
+      <div className="mb-8">
+        <h2 className="text-xl font-semibold text-gray-900 mb-4">Quick Actions</h2>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          {quickActions.map((action) => {
+            const Icon = action.icon;
+            return (
+              <Link key={action.title} href={action.href}>
+                <div className="bg-white p-6 rounded-lg shadow hover:shadow-lg transition-shadow cursor-pointer">
+                  <div className="flex items-center mb-4">
+                    <div className={`${action.color} p-3 rounded-lg`}>
+                      <Icon className="h-8 w-8 text-white" />
+                    </div>
+                    <h3 className="text-lg font-semibold text-gray-900 ml-4">
+                      {action.title}
+                    </h3>
+                  </div>
+                  <p className="text-gray-600">{action.description}</p>
+                </div>
+              </Link>
+            );
+          })}
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
