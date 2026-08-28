@@ -1,0 +1,6 @@
+# Normalize line endings — protects the repo when touched from Windows
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.ico binary
+*.zip binary
