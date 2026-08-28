@@ -1,0 +1,35 @@
+name: CI
+on:
+  push: { branches: [main] }
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env: { POSTGRES_USER: vinea, POSTGRES_PASSWORD: vinea, POSTGRES_DB: vinea }
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U vinea" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgresql+psycopg://vinea:vinea@localhost:5432/vinea
+    defaults: { run: { working-directory: backend } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - run: uv run ruff check .
+      - run: uv run pytest -q
+      - run: uv run alembic upgrade head   # migration-from-zero gate
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: frontend } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npm install --no-audit --no-fund
+      - run: npm run build
