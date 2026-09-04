@@ -130,9 +130,21 @@ def verify_period_balances(db: Session, company_id: int) -> list[Drift]:
     """Every cached cell must equal the recomputation and vice versa. Returns the drift
     list — empty means the cache is provably in sync."""
     expected = recompute(db, company_id)
+    # Plain rows, not ORM entities: the identity map must not hide what is actually stored.
     cached = {
         (row.period_id, row.gl_account_id, row.branch_id, row.currency_id): row
-        for row in db.scalars(select(PeriodBalance).where(PeriodBalance.company_id == company_id))
+        for row in db.execute(
+            select(
+                PeriodBalance.period_id,
+                PeriodBalance.gl_account_id,
+                PeriodBalance.branch_id,
+                PeriodBalance.currency_id,
+                PeriodBalance.debit_amount,
+                PeriodBalance.credit_amount,
+                PeriodBalance.debit_base,
+                PeriodBalance.credit_base,
+            ).where(PeriodBalance.company_id == company_id)
+        ).all()
     }
     drift: list[Drift] = []
     for key in sorted(set(expected) | set(cached)):
