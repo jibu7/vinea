@@ -1,13 +1,11 @@
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, Request, Response, status
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import AuthContext, get_auth_context
 from app.core.errors import AuthenticationError
-from app.db import get_db, platform_scope
-from app.models.company import Company
+from app.db import get_db
 from app.schemas.auth import (
     CompanySummary,
     EmailVerificationConfirm,
@@ -128,14 +126,7 @@ def switch_company(
 @router.get("/me")
 def me(auth: AuthContext = Depends(get_auth_context), db: Session = Depends(get_db)) -> MeResponse:
     memberships = auth_service.active_memberships(db, auth.user.id)
-    with platform_scope(db):
-        names = dict(
-            db.execute(
-                select(Company.id, Company.name).where(
-                    Company.id.in_([m.company_id for m in memberships] or [0])
-                )
-            ).all()
-        )
+    names = auth_service.company_names(db, [m.company_id for m in memberships])
     return MeResponse(
         user_id=auth.user.id,
         email=auth.user.email,

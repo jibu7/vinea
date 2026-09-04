@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, Query, Request, Response, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import AuthContext, get_platform_admin
-from app.db import get_db, platform_scope
+from app.db import get_db
 from app.models.company import CompanyStatus
 from app.schemas.auth import SessionResponse
 from app.schemas.common import Page
@@ -108,7 +108,6 @@ def get_tenant(
     _admin: AuthContext = Depends(get_platform_admin),
     db: Session = Depends(get_db),
 ) -> TenantRead:
-    with platform_scope(db):
-        company = operator_service.get_tenant(db, company_id)
-        counts = operator_service.member_counts(db, [company.id])
+    company = operator_service.get_tenant(db, company_id)
+    counts = operator_service.member_counts(db, [company.id])
     return _tenant_read(company, counts[company.id])

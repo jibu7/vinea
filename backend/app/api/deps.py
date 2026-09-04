@@ -9,7 +9,7 @@ from starlette.requests import Request
 
 from app.core.errors import AuthenticationError, PermissionDeniedError
 from app.core.permissions import ALL_PERMISSIONS
-from app.db import get_db, platform_scope, set_actor, set_tenant
+from app.db import get_db, set_actor, set_tenant
 from app.models.company import Company
 from app.models.membership import CompanyMembership, MembershipStatus
 from app.models.user import User
@@ -48,8 +48,7 @@ def get_auth_context(
         raise AuthenticationError("Authentication required")
     payload = auth_service.decode_access_token(token)
 
-    with platform_scope(db):
-        user = db.get(User, int(payload["sub"]))
+    user = auth_service.load_user(db, int(payload["sub"]))
     if user is None or not user.is_active:
         raise AuthenticationError("This account is disabled", code="account_disabled")
     set_actor(db, user.id)
@@ -74,8 +73,10 @@ def get_auth_context(
             impersonated_by=int(impersonated_by),
         )
 
-    with platform_scope(db):
-        membership = db.get(CompanyMembership, int(payload["mid"])) if payload.get("mid") else None
+    membership_id = payload.get("mid")
+    membership = (
+        auth_service.load_membership(db, int(membership_id)) if membership_id else None
+    )
     if (
         membership is None
         or membership.user_id != user.id

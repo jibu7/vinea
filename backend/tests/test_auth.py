@@ -2,7 +2,8 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.user import RefreshToken
+from app.core.security import REFRESH_TOKEN_TYPE, decode_token, hash_opaque_token
+from app.models.user import RefreshToken, UserToken
 from app.services import email as email_service
 from app.services.auth import ACCESS_COOKIE, REFRESH_COOKIE
 
@@ -180,3 +181,34 @@ def test_signup_enforces_a_password_policy(client: TestClient) -> None:
     assert response.status_code == 422
     assert response.json()["code"] == "validation_error"
     assert "password" in response.json()["field_errors"]
+
+
+def test_refresh_tokens_are_stored_hashed(client: TestClient, db: Session) -> None:
+    client.post("/api/v1/auth/signup", json=SIGNUP)
+    cookie = client.cookies[REFRESH_COOKIE]
+    jti = decode_token(cookie, REFRESH_TOKEN_TYPE)["jti"]
+
+    stored = db.scalars(select(RefreshToken)).one()
+
+    assert stored.token_hash == hash_opaque_token(jti)
+    assert len(stored.token_hash) == 64
+    # Neither the cookie nor its jti is recoverable from the row.
+    assert stored.token_hash not in (cookie, jti)
+    assert jti not in stored.token_hash
+    assert not any(
+        cookie in str(value) for value in stored.__dict__.values() if isinstance(value, str)
+    )
+
+
+def test_out_of_band_tokens_are_stored_hashed(client: TestClient, db: Session) -> None:
+    client.post("/api/v1/auth/signup", json=SIGNUP)
+    client.post("/api/v1/auth/password-reset/request", json={"email": SIGNUP["email"]})
+    plaintext = [message.context["token"] for message in email_service.outbox]
+
+    stored = db.scalars(select(UserToken)).all()
+
+    assert len(stored) == 2  # email verification + password reset
+    assert {token.token_hash for token in stored} == {
+        hash_opaque_token(token) for token in plaintext
+    }
+    assert not {token.token_hash for token in stored} & set(plaintext)

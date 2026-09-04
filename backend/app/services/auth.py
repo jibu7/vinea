@@ -103,6 +103,26 @@ def load_company(db: Session, company_id: int) -> Company:
     return company
 
 
+def load_user(db: Session, user_id: int) -> User | None:
+    with platform_scope(db):
+        return db.get(User, user_id)
+
+
+def load_membership(db: Session, membership_id: int) -> CompanyMembership | None:
+    with platform_scope(db):
+        return db.get(CompanyMembership, membership_id)
+
+
+def company_names(db: Session, company_ids: list[int]) -> dict[int, str]:
+    if not company_ids:
+        return {}
+    with platform_scope(db):
+        rows = db.execute(
+            select(Company.id, Company.name).where(Company.id.in_(company_ids))
+        ).all()
+    return dict(rows)
+
+
 def assert_company_usable(company: Company) -> None:
     if company.status != CompanyStatus.ACTIVE:
         raise AuthenticationError(

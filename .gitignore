@@ -12,3 +12,7 @@ dist/
 .DS_Store
 *.log
 uv.lock.tmp
+# Local Postgres data directories (rootless dev instances)
+vinea-pgdata/
+vinea-pgdata
+pgdata/
