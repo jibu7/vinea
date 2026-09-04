@@ -23,6 +23,7 @@ jobs:
       - run: uv run ruff check .
       - run: uv run pytest -q
       - run: uv run alembic upgrade head   # migration-from-zero gate
+      - run: uv run alembic check          # models and migrations must not drift apart
 
   frontend:
     runs-on: ubuntu-latest
