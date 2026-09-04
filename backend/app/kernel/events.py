@@ -24,6 +24,8 @@ class LineSpec:
     gl_account_id: int | None = None  # explicit override — first link of the chain
     currency_id: int | None = None  # None → company base currency
     exchange_rate: Decimal | None = None  # None → dated rate from exchange_rates
+    # Reversals only: reuse the frozen base amount rather than re-converting.
+    base_amount: Decimal | None = None
     branch_id: int | None = None  # None → event branch → main branch
     project_id: int | None = None
     partner_type: str | None = None

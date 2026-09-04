@@ -364,6 +364,14 @@ def _resolve_lines(
             base=ctx.base,
             rate=spec.exchange_rate,
         )
+        if spec.base_amount is not None:
+            if not isinstance(event, ReversalRequested):
+                raise PostingError(
+                    "base_amount can only be supplied by a reversal", code="base_amount_override"
+                )
+            converted = Converted(
+                amount=converted.amount, base_amount=spec.base_amount, rate=converted.rate
+            )
         resolved.append(
             ResolvedLine(
                 gl_account_id=account.id,
@@ -514,6 +522,7 @@ def _reversal_specs(original: JournalEntry) -> list[LineSpec]:
     return [
         LineSpec(
             amount=-line.amount,
+            base_amount=-line.base_amount,
             gl_account_id=line.gl_account_id,
             currency_id=line.currency_id,
             exchange_rate=line.exchange_rate,
