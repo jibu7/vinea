@@ -10,6 +10,9 @@ dependencies = [
   "alembic>=1.13",
   "psycopg[binary]>=3.2",
   "pydantic-settings>=2.4",
+  "pyjwt>=2.9",
+  "argon2-cffi>=23.1",
+  "email-validator>=2.2",
 ]
 
 [dependency-groups]
@@ -19,6 +22,17 @@ dev = ["pytest>=8", "httpx>=0.27", "ruff>=0.6"]
 line-length = 100
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's dependency-injection idiom is `param: T = Depends(...)`.
+extend-immutable-calls = [
+  "fastapi.Depends",
+  "fastapi.Query",
+  "fastapi.Path",
+  "fastapi.Body",
+  "fastapi.Header",
+  "fastapi.Cookie",
+  "app.core.permissions.require",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

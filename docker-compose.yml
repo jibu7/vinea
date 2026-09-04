@@ -20,6 +20,8 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://vinea:vinea@db:5432/vinea
       REDIS_URL: redis://redis:6379/0
+      JWT_SECRET: dev-only-insecure-secret-change-me
+      COOKIE_SECURE: "false"
     volumes: ["./backend:/app"]
     ports: ["8000:8000"]
     depends_on: { db: { condition: service_healthy } }

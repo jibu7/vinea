@@ -1,7 +1,9 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.v1 import api_router
 from app.config import settings
+from app.core.errors import install_error_handlers
 
 
 def create_app() -> FastAPI:
@@ -13,6 +15,8 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    install_error_handlers(app)
+    app.include_router(api_router)
 
     @app.get("/health")
     def health() -> dict[str, str]:
