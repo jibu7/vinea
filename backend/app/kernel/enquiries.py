@@ -52,17 +52,6 @@ class TrialBalance:
         return self.total_debit == self.total_credit
 
 
-def _posted_lines(company_id: int) -> Select:
-    return (
-        select(JournalLine)
-        .join(JournalEntry, JournalEntry.id == JournalLine.entry_id)
-        .where(
-            JournalLine.company_id == company_id,
-            JournalEntry.status == JournalStatus.POSTED,
-        )
-    )
-
-
 def trial_balance(
     db: Session,
     company_id: int,
