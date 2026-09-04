@@ -69,9 +69,7 @@ def login(
     db: Session = Depends(get_db),
 ) -> SessionResponse:
     user = auth_service.authenticate(db, email=payload.email, password=payload.password)
-    membership = auth_service.select_membership(
-        db, user_id=user.id, company_id=payload.company_id
-    )
+    membership = auth_service.select_membership(db, user_id=user.id, company_id=payload.company_id)
     if membership is not None:
         auth_service.assert_company_usable(auth_service.load_company(db, membership.company_id))
     session = auth_service.issue_session(db, user=user, membership=membership, request=request)
@@ -116,9 +114,7 @@ def switch_company(
         raise AuthenticationError("No active membership for this company", code="no_membership")
     auth_service.assert_company_usable(auth_service.load_company(db, membership.company_id))
     auth_service.revoke_session(db, refresh_token=request.cookies.get(auth_service.REFRESH_COOKIE))
-    session = auth_service.issue_session(
-        db, user=auth.user, membership=membership, request=request
-    )
+    session = auth_service.issue_session(db, user=auth.user, membership=membership, request=request)
     db.commit()
     return _session_response(response, session)
 
@@ -161,9 +157,7 @@ def request_password_reset(
 def confirm_password_reset(
     payload: PasswordResetConfirm, response: Response, db: Session = Depends(get_db)
 ) -> None:
-    auth_service.confirm_password_reset(
-        db, token=payload.token, new_password=payload.new_password
-    )
+    auth_service.confirm_password_reset(db, token=payload.token, new_password=payload.new_password)
     db.commit()
     auth_service.clear_auth_cookies(response)
 

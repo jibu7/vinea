@@ -117,9 +117,7 @@ def company_names(db: Session, company_ids: list[int]) -> dict[int, str]:
     if not company_ids:
         return {}
     with platform_scope(db):
-        rows = db.execute(
-            select(Company.id, Company.name).where(Company.id.in_(company_ids))
-        ).all()
+        rows = db.execute(select(Company.id, Company.name).where(Company.id.in_(company_ids))).all()
     return dict(rows)
 
 

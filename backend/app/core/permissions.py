@@ -38,6 +38,10 @@ GL_SETUP_MANAGE = "gl:setup_manage"
 GL_JOURNAL_POST = "gl:journal_post"
 GL_REPORTS_VIEW = "gl:reports_view"
 
+# Projects — a costing dimension shared by GL, AR/AP, inventory and order entry (D8)
+PROJECTS_READ = "projects:read"
+PROJECTS_MANAGE = "projects:manage"
+
 # Accounts Receivable
 AR_SETUP_MANAGE = "ar:setup_manage"
 AR_TRANSACTIONS_POST = "ar:transactions_post"
@@ -114,6 +118,8 @@ ALL_PERMISSIONS: tuple[str, ...] = (
     GL_SETUP_MANAGE,
     GL_JOURNAL_POST,
     GL_REPORTS_VIEW,
+    PROJECTS_READ,
+    PROJECTS_MANAGE,
     AR_SETUP_MANAGE,
     AR_TRANSACTIONS_POST,
     AR_REPORTS_VIEW,
@@ -173,6 +179,8 @@ SYSTEM_ROLES: tuple[dict[str, object], ...] = (
             GL_SETUP_MANAGE,
             GL_JOURNAL_POST,
             GL_REPORTS_VIEW,
+            PROJECTS_READ,
+            PROJECTS_MANAGE,
             AR_TRANSACTIONS_POST,
             AR_REPORTS_VIEW,
             AP_TRANSACTIONS_POST,
@@ -189,6 +197,7 @@ SYSTEM_ROLES: tuple[dict[str, object], ...] = (
             AR_SETUP_MANAGE,
             AR_TRANSACTIONS_POST,
             AR_REPORTS_VIEW,
+            PROJECTS_READ,
             OE_SALES_ORDERS_MANAGE,
             OE_REPORTS_VIEW,
         ],
@@ -202,6 +211,7 @@ SYSTEM_ROLES: tuple[dict[str, object], ...] = (
             GL_REPORTS_VIEW,
             AR_REPORTS_VIEW,
             AP_REPORTS_VIEW,
+            PROJECTS_READ,
         ],
     },
 )

@@ -46,8 +46,7 @@ def test_only_sanctioned_modules_open_platform_scope() -> None:
 
     unexpected = sorted(callers - set(SANCTIONED_CALLERS))
     assert unexpected == [], (
-        "platform_scope() bypasses tenant isolation; new call sites need review: "
-        f"{unexpected}"
+        f"platform_scope() bypasses tenant isolation; new call sites need review: {unexpected}"
     )
 
 

@@ -67,9 +67,7 @@ def invite_member(
     db.add(membership)
     db.flush()
     for role in roles:
-        db.add(
-            MembershipRole(company_id=company.id, membership_id=membership.id, role_id=role.id)
-        )
+        db.add(MembershipRole(company_id=company.id, membership_id=membership.id, role_id=role.id))
 
     record_audit(
         db,

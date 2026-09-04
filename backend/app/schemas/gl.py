@@ -81,7 +81,10 @@ class ExchangeRateRead(ApiModel):
 
 
 class JournalLineIn(BaseModel):
-    gl_account_id: int
+    """Give `gl_account_id`, or a `transaction_type` whose default account resolves it."""
+
+    gl_account_id: int | None = None
+    transaction_type: str | None = Field(default=None, max_length=30)
     debit: NonNegativeMoney = Decimal(0)
     credit: NonNegativeMoney = Decimal(0)
     currency_id: int | None = None
@@ -99,6 +102,8 @@ class JournalLineIn(BaseModel):
     def _one_side(self) -> "JournalLineIn":
         if (self.debit > 0) == (self.credit > 0):
             raise ValueError("exactly one of debit or credit must be greater than zero")
+        if self.gl_account_id is None and self.transaction_type is None:
+            raise ValueError("give gl_account_id or transaction_type")
         return self
 
     @property
@@ -114,7 +119,8 @@ class JournalEntryCreate(BaseModel):
 
 
 class CashbookLineIn(BaseModel):
-    gl_account_id: int
+    gl_account_id: int | None = None
+    transaction_type: str | None = Field(default=None, max_length=30)
     amount: PositiveMoney
     tax_code_id: int | None = None
     tax_inclusive: bool = True
@@ -123,6 +129,12 @@ class CashbookLineIn(BaseModel):
     partner_type: str | None = Field(default=None, max_length=20)
     partner_id: int | None = None
     description: str | None = Field(default=None, max_length=500)
+
+    @model_validator(mode="after")
+    def _account_given(self) -> "CashbookLineIn":
+        if self.gl_account_id is None and self.transaction_type is None:
+            raise ValueError("give gl_account_id or transaction_type")
+        return self
 
 
 class CashbookEntryCreate(BaseModel):
@@ -279,3 +291,47 @@ class PeriodBalanceDriftRead(BaseModel):
     field: str
     cached: Decimal
     recomputed: Decimal
+
+
+# --- Masters: projects & transaction types ------------------------------------------------
+
+
+class ProjectCreate(BaseModel):
+    code: str = Field(min_length=1, max_length=20)
+    name: str = Field(min_length=1, max_length=200)
+
+
+class ProjectUpdate(BaseModel):
+    code: str | None = Field(default=None, min_length=1, max_length=20)
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    is_active: bool | None = None
+
+
+class ProjectRead(ApiModel):
+    id: int
+    code: str
+    name: str
+    is_active: bool
+
+
+class TransactionTypeCreate(BaseModel):
+    module: str = Field(default="gl", min_length=2, max_length=10)
+    code: str = Field(min_length=1, max_length=30)
+    name: str = Field(min_length=1, max_length=200)
+    default_gl_account_id: int | None = None
+
+
+class TransactionTypeUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    default_gl_account_id: int | None = None
+    clear_default_account: bool = False
+    is_active: bool | None = None
+
+
+class TransactionTypeRead(ApiModel):
+    id: int
+    module: str
+    code: str
+    name: str
+    default_gl_account_id: int | None
+    is_active: bool

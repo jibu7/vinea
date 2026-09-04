@@ -44,6 +44,7 @@ TABLES_IN_TRUNCATION_ORDER = (
     "document_sequences",
     "exchange_rates",
     "projects",
+    "gl_transaction_types",
     "gl_settings",
     "audit_log",
     "membership_roles",

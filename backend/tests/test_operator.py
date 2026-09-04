@@ -70,10 +70,13 @@ def test_suspending_a_tenant_locks_its_users_out(
     assert reactivated.status_code == 200
     assert reactivated.json()["status"] == "active"
     assert reactivated.json()["suspension_reason"] is None
-    assert owner.post(
-        "/api/v1/auth/login",
-        json={"email": first.user.email, "password": "correct horse battery staple"},
-    ).status_code == 200
+    assert (
+        owner.post(
+            "/api/v1/auth/login",
+            json={"email": first.user.email, "password": "correct horse battery staple"},
+        ).status_code
+        == 200
+    )
 
 
 def test_impersonation_grants_tenant_access_and_is_audited(
@@ -94,9 +97,7 @@ def test_impersonation_grants_tenant_access_and_is_audited(
     assert operator.get("/api/v1/invitations").status_code == 200
 
     set_tenant(db, first.company.id)
-    entries = db.scalars(
-        select(AuditLog).where(AuditLog.action == "operator.impersonate")
-    ).all()
+    entries = db.scalars(select(AuditLog).where(AuditLog.action == "operator.impersonate")).all()
     assert len(entries) == 1
     assert entries[0].company_id == first.company.id
     assert entries[0].actor_user_id == platform_admin.id
@@ -117,16 +118,12 @@ def test_suspension_is_audited(
     )
 
     set_tenant(db, first.company.id)
-    entry = db.scalars(
-        select(AuditLog).where(AuditLog.action == "operator.tenant_suspended")
-    ).one()
+    entry = db.scalars(select(AuditLog).where(AuditLog.action == "operator.tenant_suspended")).one()
     assert entry.after == {"status": "suspended", "suspension_reason": "Non-payment"}
     assert entry.actor_email == platform_admin.email
 
 
-def test_unknown_tenant_returns_the_error_envelope(
-    client: TestClient, platform_admin
-) -> None:
+def test_unknown_tenant_returns_the_error_envelope(client: TestClient, platform_admin) -> None:
     operator = _as_operator(client, platform_admin)
 
     response = operator.get("/api/v1/operator/tenants/999999")

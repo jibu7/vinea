@@ -4,7 +4,14 @@ from app.models.audit import AuditLog
 from app.models.company import Branch, Company, CompanyStatus
 from app.models.currency import Currency, ExchangeRate
 from app.models.fiscal import AccountingPeriod, FiscalYear, PeriodStatus
-from app.models.gl import AccountClass, ControlType, GLAccount, GLSettings, Project
+from app.models.gl import (
+    AccountClass,
+    ControlType,
+    GLAccount,
+    GLSettings,
+    GLTransactionType,
+    Project,
+)
 from app.models.journal import (
     DocumentSequence,
     JournalEntry,
@@ -32,6 +39,7 @@ __all__ = [
     "FiscalYear",
     "GLAccount",
     "GLSettings",
+    "GLTransactionType",
     "JournalEntry",
     "JournalLine",
     "JournalStatus",

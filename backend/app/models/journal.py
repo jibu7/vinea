@@ -97,6 +97,9 @@ class JournalEntry(AuditedMixin, CompanyScopedMixin, Base):
     reverses_entry_id: Mapped[int | None] = mapped_column(BigInteger)
     reversal_reason: Mapped[str | None] = mapped_column(String(500))
     idempotency_key: Mapped[str | None] = mapped_column(String(64))
+    # Fingerprint of the request that produced this entry; replaying a key with a different
+    # payload is a client bug, not a retry.
+    idempotency_hash: Mapped[str | None] = mapped_column(String(64))
 
     lines: Mapped[list["JournalLine"]] = relationship(
         back_populates="entry", order_by="JournalLine.line_no"

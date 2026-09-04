@@ -77,9 +77,7 @@ def test_me_requires_a_session(client: TestClient) -> None:
     assert response.json()["code"] == "unauthenticated"
 
 
-def test_refresh_rotates_the_token_and_the_old_one_dies(
-    client: TestClient, db: Session
-) -> None:
+def test_refresh_rotates_the_token_and_the_old_one_dies(client: TestClient, db: Session) -> None:
     client.post("/api/v1/auth/signup", json=SIGNUP)
     original_refresh = client.cookies[REFRESH_COOKIE]
 
@@ -110,9 +108,7 @@ def test_password_reset_round_trip(client: TestClient) -> None:
     client.cookies.clear()
     email_service.outbox.clear()
 
-    requested = client.post(
-        "/api/v1/auth/password-reset/request", json={"email": SIGNUP["email"]}
-    )
+    requested = client.post("/api/v1/auth/password-reset/request", json={"email": SIGNUP["email"]})
     assert requested.status_code == 202
     token = email_service.outbox[-1].context["token"]
 

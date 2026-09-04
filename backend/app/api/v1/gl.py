@@ -3,8 +3,10 @@ enquiries, periods and year-end. Routers hold no business logic — everything p
 `app.kernel`."""
 
 from datetime import date
+from hashlib import sha256
 
 from fastapi import APIRouter, Depends, Header, Query, Request, Response, status
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
@@ -13,7 +15,7 @@ from app.core import permissions
 from app.core.errors import NotFoundError
 from app.db import get_db
 from app.kernel import accounts as accounts_service
-from app.kernel import balances, enquiries, posting, year_end
+from app.kernel import balances, enquiries, masters, posting, year_end
 from app.kernel import periods as periods_service
 from app.kernel.errors import LedgerStateError
 from app.kernel.events import (
@@ -46,8 +48,14 @@ from app.schemas.gl import (
     JournalEntrySummary,
     PeriodBalanceDriftRead,
     PeriodRead,
+    ProjectCreate,
+    ProjectRead,
+    ProjectUpdate,
     ReasonBody,
     ReversalCreate,
+    TransactionTypeCreate,
+    TransactionTypeRead,
+    TransactionTypeUpdate,
     TrialBalanceRead,
     TrialBalanceRowRead,
 )
@@ -60,6 +68,11 @@ IdempotencyKey = Header(
     max_length=64,
     description="Client-generated key; replaying it returns the original entry (ADR-11).",
 )
+
+
+def _fingerprint(kind: str, payload: BaseModel) -> str:
+    """Identifies the *request*, so the same key sent with a different body is caught."""
+    return sha256(f"{kind}:{payload.model_dump_json()}".encode()).hexdigest()
 
 
 def _entry_read(db: Session, entry: JournalEntry) -> JournalEntryRead:
@@ -230,7 +243,8 @@ def create_journal_entry(
     auth: AuthContext = permissions.require(permissions.GL_JOURNAL_POST),
     db: Session = Depends(get_db),
 ) -> JournalEntryRead:
-    existing = posting.find_by_idempotency_key(db, auth.company_id, idempotency_key)
+    request_hash = _fingerprint("journal-entry", payload)
+    existing = posting.replay(db, auth.company_id, idempotency_key, request_hash)
     if existing is not None:
         return _posted_response(db, response, existing, replayed=True)
     event = ManualJournal(
@@ -238,10 +252,12 @@ def create_journal_entry(
         description=payload.description,
         branch_id=payload.branch_id,
         idempotency_key=idempotency_key,
+        idempotency_hash=request_hash,
         lines=tuple(
             LineSpec(
                 amount=line.signed_amount,
                 gl_account_id=line.gl_account_id,
+                transaction_type=line.transaction_type,
                 currency_id=line.currency_id,
                 exchange_rate=line.exchange_rate,
                 branch_id=line.branch_id,
@@ -269,7 +285,8 @@ def create_cashbook_entry(
     auth: AuthContext = permissions.require(permissions.GL_JOURNAL_POST),
     db: Session = Depends(get_db),
 ) -> JournalEntryRead:
-    existing = posting.find_by_idempotency_key(db, auth.company_id, idempotency_key)
+    request_hash = _fingerprint("cashbook-entry", payload)
+    existing = posting.replay(db, auth.company_id, idempotency_key, request_hash)
     if existing is not None:
         return _posted_response(db, response, existing, replayed=True)
     event = CashbookEntry(
@@ -277,6 +294,7 @@ def create_cashbook_entry(
         description=payload.description,
         branch_id=payload.branch_id,
         idempotency_key=idempotency_key,
+        idempotency_hash=request_hash,
         cash_account_id=payload.cash_account_id,
         kind=CashbookKind(payload.kind),
         currency_id=payload.currency_id,
@@ -285,6 +303,7 @@ def create_cashbook_entry(
         lines=tuple(
             CashbookLineSpec(
                 gl_account_id=line.gl_account_id,
+                transaction_type=line.transaction_type,
                 amount=line.amount,
                 tax_code_id=line.tax_code_id,
                 tax_inclusive=line.tax_inclusive,
@@ -344,7 +363,8 @@ def reverse_journal_entry(
     auth: AuthContext = permissions.require(permissions.GL_JOURNAL_POST),
     db: Session = Depends(get_db),
 ) -> JournalEntryRead:
-    existing = posting.find_by_idempotency_key(db, auth.company_id, idempotency_key)
+    request_hash = _fingerprint(f"reverse:{entry_id}", payload)
+    existing = posting.replay(db, auth.company_id, idempotency_key, request_hash)
     if existing is not None:
         return _posted_response(db, response, existing, replayed=True)
     entry = posting.reverse(
@@ -355,6 +375,7 @@ def reverse_journal_entry(
         reason=payload.reason,
         actor=auth.user,
         idempotency_key=idempotency_key,
+        idempotency_hash=request_hash,
     )
     return _posted_response(db, response, entry, replayed=False)
 
@@ -575,3 +596,130 @@ def reopen_period(
     period = periods_service.get_period(db, auth.company_id, period_id)
     target = PeriodStatus.OPEN if period.status == PeriodStatus.CLOSED else PeriodStatus.CLOSED
     return _transition(db, auth, request, period_id, target, payload.reason)
+
+
+# --- Transaction types (determination-chain defaults) ---------------------------------------
+
+
+@router.get("/transaction-types")
+def list_transaction_types(
+    module: str | None = None,
+    include_inactive: bool = False,
+    auth: AuthContext = permissions.require(permissions.GL_REPORTS_VIEW),
+    db: Session = Depends(get_db),
+) -> list[TransactionTypeRead]:
+    rows = masters.list_transaction_types(
+        db, auth.company_id, module=module, include_inactive=include_inactive
+    )
+    return [TransactionTypeRead.model_validate(row) for row in rows]
+
+
+@router.post("/transaction-types", status_code=status.HTTP_201_CREATED)
+def create_transaction_type(
+    payload: TransactionTypeCreate,
+    request: Request,
+    auth: AuthContext = permissions.require(permissions.GL_SETUP_MANAGE),
+    db: Session = Depends(get_db),
+) -> TransactionTypeRead:
+    row = masters.create_transaction_type(
+        db,
+        auth.company_id,
+        module=payload.module,
+        code=payload.code,
+        name=payload.name,
+        default_gl_account_id=payload.default_gl_account_id,
+        actor=auth.user,
+        request=request,
+    )
+    db.commit()
+    return TransactionTypeRead.model_validate(row)
+
+
+@router.patch("/transaction-types/{type_id}")
+def update_transaction_type(
+    type_id: int,
+    payload: TransactionTypeUpdate,
+    request: Request,
+    auth: AuthContext = permissions.require(permissions.GL_SETUP_MANAGE),
+    db: Session = Depends(get_db),
+) -> TransactionTypeRead:
+    transaction_type = masters.get_transaction_type(db, auth.company_id, type_id)
+    default_account: int | None | object = ...
+    if payload.clear_default_account:
+        default_account = None
+    elif payload.default_gl_account_id is not None:
+        default_account = payload.default_gl_account_id
+    masters.update_transaction_type(
+        db,
+        transaction_type,
+        name=payload.name,
+        default_gl_account_id=default_account,
+        is_active=payload.is_active,
+        actor=auth.user,
+        request=request,
+    )
+    db.commit()
+    return TransactionTypeRead.model_validate(transaction_type)
+
+
+# --- Projects (costing dimension, D8) --------------------------------------------------------
+
+
+@router.get("/projects")
+def list_projects(
+    include_inactive: bool = False,
+    auth: AuthContext = permissions.require(permissions.PROJECTS_READ),
+    db: Session = Depends(get_db),
+) -> list[ProjectRead]:
+    rows = masters.list_projects(db, auth.company_id, include_inactive=include_inactive)
+    return [ProjectRead.model_validate(row) for row in rows]
+
+
+@router.post("/projects", status_code=status.HTTP_201_CREATED)
+def create_project(
+    payload: ProjectCreate,
+    request: Request,
+    auth: AuthContext = permissions.require(permissions.PROJECTS_MANAGE),
+    db: Session = Depends(get_db),
+) -> ProjectRead:
+    project = masters.create_project(
+        db,
+        auth.company_id,
+        code=payload.code,
+        name=payload.name,
+        actor=auth.user,
+        request=request,
+    )
+    db.commit()
+    return ProjectRead.model_validate(project)
+
+
+@router.get("/projects/{project_id}")
+def get_project(
+    project_id: int,
+    auth: AuthContext = permissions.require(permissions.PROJECTS_READ),
+    db: Session = Depends(get_db),
+) -> ProjectRead:
+    return ProjectRead.model_validate(masters.get_project(db, auth.company_id, project_id))
+
+
+@router.patch("/projects/{project_id}")
+def update_project(
+    project_id: int,
+    payload: ProjectUpdate,
+    request: Request,
+    auth: AuthContext = permissions.require(permissions.PROJECTS_MANAGE),
+    db: Session = Depends(get_db),
+) -> ProjectRead:
+    project = masters.get_project(db, auth.company_id, project_id)
+    masters.update_project(
+        db,
+        project,
+        code=payload.code,
+        name=payload.name,
+        is_active=payload.is_active,
+        actor=auth.user,
+        request=request,
+    )
+    db.commit()
+    return ProjectRead.model_validate(project)

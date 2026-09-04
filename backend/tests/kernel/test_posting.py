@@ -9,7 +9,7 @@ import pytest
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
-from app.kernel import posting
+from app.kernel import masters, posting
 from app.kernel.balances import verify_period_balances
 from app.kernel.enquiries import account_transactions, trial_balance
 from app.kernel.errors import LedgerStateError, PostingError
@@ -23,7 +23,12 @@ from app.kernel.events import (
     PeriodClosed,
     ReversalRequested,
 )
-from app.kernel.posting import _check_required_dimensions, resolve_account
+from app.kernel.posting import (
+    RETAINED_EARNINGS_KEY,
+    _check_required_dimensions,
+    _transaction_type_default,
+    resolve_account,
+)
 from app.models.currency import ExchangeRate
 from app.models.fiscal import PeriodStatus
 from app.models.gl import ControlType, GLAccount
@@ -325,9 +330,126 @@ def test_account_determination_chain(db: Session, ledger: Ledger) -> None:
     with pytest.raises(PostingError) as excinfo:
         resolve_account(db, ledger.company_id, LineSpec(amount=Decimal(1)), event)
     assert excinfo.value.code == "account_undetermined"
+
+    # 4th link: a transaction type's default account, scoped to the event's module.
+    masters.create_transaction_type(
+        db,
+        ledger.company_id,
+        module="gl",
+        code="BANK-CHARGES",
+        name="Bank charges",
+        default_gl_account_id=ledger.acct("6700"),
+        actor=ledger.owner,
+    )
+    masters.create_transaction_type(
+        db,
+        ledger.company_id,
+        module="ar",
+        code="BANK-CHARGES",
+        name="Same code, other module",
+        default_gl_account_id=ledger.acct("6900"),
+        actor=ledger.owner,
+    )
+    db.flush()
+    by_type = LineSpec(amount=Decimal(1), transaction_type="BANK-CHARGES")
+    assert resolve_account(db, ledger.company_id, by_type, event) == ledger.acct("6700")
+    # An explicit account still wins over the transaction type (link 1 beats link 4).
+    override = LineSpec(amount=Decimal(1), gl_account_id=42, transaction_type="BANK-CHARGES")
+    assert resolve_account(db, ledger.company_id, override, event) == 42
+
+    # 5th link: module defaults — only the year-end close uses one in P2.
     close = PeriodClosed(fiscal_year_id=ledger.fiscal_year.id, entry_date=MARCH)
-    spec = LineSpec(amount=Decimal(1), transaction_type="retained_earnings")
+    spec = LineSpec(amount=Decimal(1), transaction_type=RETAINED_EARNINGS_KEY)
     assert resolve_account(db, ledger.company_id, spec, close) == ledger.acct("3200")
+    # …and the sentinel is not resolvable as a user transaction type.
+    assert _transaction_type_default(db, ledger.company_id, spec, event) is None
+    with pytest.raises(LedgerStateError) as state:
+        masters.create_transaction_type(
+            db,
+            ledger.company_id,
+            module="gl",
+            code=RETAINED_EARNINGS_KEY,
+            name="reserved",
+            actor=ledger.owner,
+        )
+    assert state.value.code == "reserved_transaction_type_code"
+    db.rollback()
+
+
+def test_posting_through_a_transaction_type(db: Session, ledger: Ledger) -> None:
+    masters.create_transaction_type(
+        db,
+        ledger.company_id,
+        module="gl",
+        code="BANK-CHARGES",
+        name="Bank charges",
+        default_gl_account_id=ledger.acct("6700"),
+        actor=ledger.owner,
+    )
+    db.flush()
+    entry = posting.post(
+        db,
+        ManualJournal(
+            entry_date=MARCH,
+            description="monthly bank charges",
+            lines=(
+                LineSpec(amount=Decimal(2500), transaction_type="BANK-CHARGES"),
+                LineSpec(amount=Decimal(-2500), gl_account_id=ledger.acct("2300")),
+            ),
+        ),
+        company_id=ledger.company_id,
+        actor=ledger.owner,
+    )
+    db.commit()
+
+    assert entry is not None
+    assert _lines(db, entry)[0].gl_account_id == ledger.acct("6700")
+    assert_ledger_invariants(db, ledger.company_id)
+
+
+def test_transaction_type_default_must_be_postable(db: Session, ledger: Ledger) -> None:
+    with pytest.raises(LedgerStateError) as excinfo:
+        masters.create_transaction_type(
+            db,
+            ledger.company_id,
+            module="gl",
+            code="HEADER",
+            name="points at a header account",
+            default_gl_account_id=ledger.acct("6000"),
+            actor=ledger.owner,
+        )
+    assert excinfo.value.code == "account_not_postable"
+    db.rollback()
+
+
+def test_inactive_transaction_type_stops_resolving(db: Session, ledger: Ledger) -> None:
+    transaction_type = masters.create_transaction_type(
+        db,
+        ledger.company_id,
+        module="gl",
+        code="RETIRED",
+        name="Retired type",
+        default_gl_account_id=ledger.acct("6700"),
+        actor=ledger.owner,
+    )
+    masters.update_transaction_type(db, transaction_type, is_active=False, actor=ledger.owner)
+    db.flush()
+    with pytest.raises(PostingError) as excinfo:
+        posting.post(
+            db,
+            ManualJournal(
+                entry_date=MARCH,
+                description="x",
+                lines=(
+                    LineSpec(amount=Decimal(10), transaction_type="RETIRED"),
+                    LineSpec(amount=Decimal(-10), gl_account_id=ledger.acct("2300")),
+                ),
+            ),
+            company_id=ledger.company_id,
+            actor=ledger.owner,
+        )
+    assert excinfo.value.code == "account_undetermined"
+    db.rollback()
 
 
 # --- cashbook -------------------------------------------------------------------------------

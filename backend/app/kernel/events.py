@@ -44,6 +44,8 @@ class LineSpec:
 class PostingEvent:
     event_type: ClassVar[str]
     doc_type: ClassVar[str]
+    # Owning module; scopes transaction-type lookups in the determination chain.
+    module: ClassVar[str] = "gl"
 
     entry_date: date
     description: str
@@ -51,6 +53,9 @@ class PostingEvent:
     source_doc_type: str | None = None
     source_doc_id: int | None = None
     idempotency_key: str | None = None
+    # Fingerprint of the originating request; set by the API so a key replayed with a
+    # different payload is rejected instead of silently returning the first entry.
+    idempotency_hash: str | None = None
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -71,8 +76,9 @@ class CashbookLineSpec:
     """One counterpart line; `amount` is positive. With a tax code the engine splits it into
     a net line (carrying the tax dimension) and a tax line on the tax code's GL account."""
 
-    gl_account_id: int
     amount: Decimal
+    gl_account_id: int | None = None
+    transaction_type: str | None = None
     tax_code_id: int | None = None
     tax_inclusive: bool = True
     branch_id: int | None = None
@@ -135,54 +141,63 @@ class _StubEvent(PostingEvent):
 class InvoicePosted(_StubEvent):
     event_type: ClassVar[str] = "invoice_posted"
     doc_type: ClassVar[str] = "INV"
+    module: ClassVar[str] = "ar"
 
 
 @dataclass(frozen=True, kw_only=True)
 class CreditNotePosted(_StubEvent):
     event_type: ClassVar[str] = "credit_note_posted"
     doc_type: ClassVar[str] = "CN"
+    module: ClassVar[str] = "ar"
 
 
 @dataclass(frozen=True, kw_only=True)
 class ReceiptPosted(_StubEvent):
     event_type: ClassVar[str] = "receipt_posted"
     doc_type: ClassVar[str] = "RCT"
+    module: ClassVar[str] = "ar"
 
 
 @dataclass(frozen=True, kw_only=True)
 class PaymentPosted(_StubEvent):
     event_type: ClassVar[str] = "payment_posted"
     doc_type: ClassVar[str] = "PAY"
+    module: ClassVar[str] = "ap"
 
 
 @dataclass(frozen=True, kw_only=True)
 class GoodsReceived(_StubEvent):
     event_type: ClassVar[str] = "goods_received"
     doc_type: ClassVar[str] = "GRN"
+    module: ClassVar[str] = "oe"
 
 
 @dataclass(frozen=True, kw_only=True)
 class SupplierInvoiceMatched(_StubEvent):
     event_type: ClassVar[str] = "supplier_invoice_matched"
     doc_type: ClassVar[str] = "SINV"
+    module: ClassVar[str] = "ap"
 
 
 @dataclass(frozen=True, kw_only=True)
 class StockAdjusted(_StubEvent):
     event_type: ClassVar[str] = "stock_adjusted"
     doc_type: ClassVar[str] = "ADJ"
+    module: ClassVar[str] = "inv"
 
 
 @dataclass(frozen=True, kw_only=True)
 class StockTransferred(_StubEvent):
     event_type: ClassVar[str] = "stock_transferred"
     doc_type: ClassVar[str] = "TRF"
+    module: ClassVar[str] = "inv"
 
 
 @dataclass(frozen=True, kw_only=True)
 class StockSold(_StubEvent):
     event_type: ClassVar[str] = "stock_sold"
     doc_type: ClassVar[str] = "COGS"
+    module: ClassVar[str] = "inv"
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -195,15 +210,18 @@ class FxRevalued(_StubEvent):
 class DepreciationPosted(_StubEvent):
     event_type: ClassVar[str] = "depreciation_posted"
     doc_type: ClassVar[str] = "DEP"
+    module: ClassVar[str] = "fa"
 
 
 @dataclass(frozen=True, kw_only=True)
 class ManufactureCompleted(_StubEvent):
     event_type: ClassVar[str] = "manufacture_completed"
     doc_type: ClassVar[str] = "MFG"
+    module: ClassVar[str] = "bom"
 
 
 @dataclass(frozen=True, kw_only=True)
 class PosSaleCompleted(_StubEvent):
     event_type: ClassVar[str] = "pos_sale_completed"
     doc_type: ClassVar[str] = "POS"
+    module: ClassVar[str] = "pos"

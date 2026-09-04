@@ -35,9 +35,7 @@ class AuthContext:
         return self.impersonated_by is not None
 
 
-def get_auth_context(
-    request: Request, db: Session = Depends(get_db)
-) -> AuthContext:
+def get_auth_context(request: Request, db: Session = Depends(get_db)) -> AuthContext:
     """Authenticate the caller and bind the session to their tenant.
 
     Everything after this point runs with `app.company_id` set, so a query that forgets
@@ -74,9 +72,7 @@ def get_auth_context(
         )
 
     membership_id = payload.get("mid")
-    membership = (
-        auth_service.load_membership(db, int(membership_id)) if membership_id else None
-    )
+    membership = auth_service.load_membership(db, int(membership_id)) if membership_id else None
     if (
         membership is None
         or membership.user_id != user.id

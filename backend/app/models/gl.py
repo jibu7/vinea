@@ -113,3 +113,31 @@ class Project(AuditedMixin, CompanyScopedMixin, Base):
     code: Mapped[str] = mapped_column(String(20), nullable=False)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+
+class GLTransactionType(AuditedMixin, CompanyScopedMixin, Base):
+    """The 4th link of the account-determination chain (ADR-05): a named transaction type
+    with a default contra account. One table serves every module (`module` discriminator),
+    so AR/AP/Inventory/OE types in later phases are rows, not new tables."""
+
+    __tablename__ = "gl_transaction_types"
+    __table_args__ = (
+        UniqueConstraint(
+            "company_id", "module", "code", name="uq_gl_transaction_types_company_module_code"
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "default_gl_account_id"],
+            ["gl_accounts.company_id", "gl_accounts.id"],
+            name="fk_gl_transaction_types_default_gl_account",
+            ondelete="RESTRICT",
+        ),
+        # `__`-prefixed keys are reserved for kernel sentinels (e.g. the year-end close).
+        CheckConstraint("code NOT LIKE '\\_\\_%'", name="code_not_reserved"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    module: Mapped[str] = mapped_column(String(10), nullable=False, default="gl")
+    code: Mapped[str] = mapped_column(String(30), nullable=False)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    default_gl_account_id: Mapped[int | None] = mapped_column(BigInteger)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)

@@ -50,6 +50,7 @@ from app.models.gl import (
     ControlType,
     GLAccount,
     GLSettings,
+    GLTransactionType,
     Project,
 )
 from app.models.journal import JournalEntry, JournalLine, JournalStatus
@@ -57,6 +58,9 @@ from app.models.user import User
 
 IDEMPOTENCY_INDEX = "uq_journal_entries_company_idempotency_key"
 REVERSAL_INDEX = "uq_journal_entries_reverses_entry_id"
+
+# `__`-prefixed transaction-type keys are kernel sentinels; the DB refuses them as user codes.
+RETAINED_EARNINGS_KEY = "__retained_earnings"
 
 # Manual journals may not touch module-owned accounts; the cashbook owns bank/cash and may
 # post bank↔bank transfers, but never the AR/AP/inventory subledger controls.
@@ -88,15 +92,25 @@ def _item_default(db: Session, company_id: int, spec: LineSpec, event: PostingEv
 def _transaction_type_default(
     db: Session, company_id: int, spec: LineSpec, event: PostingEvent
 ) -> int | None:
-    """P4: per-module transaction types with default contra accounts."""
-    return None
+    """Named transaction types carry a default contra account. `module` follows the event's
+    owning module, so an AR type never resolves for a GL journal."""
+    if spec.transaction_type is None or spec.transaction_type.startswith("__"):
+        return None
+    return db.scalar(
+        select(GLTransactionType.default_gl_account_id).where(
+            GLTransactionType.company_id == company_id,
+            GLTransactionType.module == event.module,
+            GLTransactionType.code == spec.transaction_type,
+            GLTransactionType.is_active,
+        )
+    )
 
 
 def _module_default(
     db: Session, company_id: int, spec: LineSpec, event: PostingEvent
 ) -> int | None:
     """Last resort: `gl_settings`. Only the year-end close relies on it in P2."""
-    if isinstance(event, PeriodClosed) and spec.transaction_type == "retained_earnings":
+    if isinstance(event, PeriodClosed) and spec.transaction_type == RETAINED_EARNINGS_KEY:
         settings = gl_settings_for(db, company_id)
         return settings.retained_earnings_account_id
     return None
@@ -462,6 +476,7 @@ def _cashbook_specs(ctx: _Context, event: CashbookEntry) -> tuple[list[LineSpec]
             LineSpec(
                 amount=sign * net,
                 gl_account_id=line.gl_account_id,
+                transaction_type=line.transaction_type,
                 tax_code_id=line.tax_code_id,
                 tax_amount=sign * tax,
                 description=line.description,
@@ -587,7 +602,7 @@ def _period_close_specs(ctx: _Context, event: PeriodClosed) -> list[LineSpec]:
                 amount=total,
                 currency_id=ctx.base.id,
                 branch_id=branch_id,
-                transaction_type="retained_earnings",
+                transaction_type=RETAINED_EARNINGS_KEY,
                 description=f"Retained earnings {year.name}",
             )
         )
@@ -605,6 +620,24 @@ def find_by_idempotency_key(db: Session, company_id: int, key: str) -> JournalEn
     )
 
 
+def replay(
+    db: Session, company_id: int, key: str, request_hash: str | None = None
+) -> JournalEntry | None:
+    """Resolve an `Idempotency-Key` to its original entry. A key reused with a different
+    payload is a client bug — returning the first entry would silently drop the second
+    document, so it is refused."""
+    entry = find_by_idempotency_key(db, company_id, key)
+    if entry is None:
+        return None
+    if request_hash is not None and entry.idempotency_hash != request_hash:
+        raise LedgerStateError(
+            f"Idempotency-Key {key} was already used for a different request "
+            f"({entry.number}); use a new key",
+            code="idempotency_key_reused",
+        )
+    return entry
+
+
 def post(
     db: Session, event: PostingEvent, *, company_id: int, actor: User | None
 ) -> JournalEntry | None:
@@ -612,7 +645,7 @@ def post(
     before), or None when the event legitimately produces nothing (a year-end with no P&L
     movement). Never commits."""
     if event.idempotency_key:
-        existing = find_by_idempotency_key(db, company_id, event.idempotency_key)
+        existing = replay(db, company_id, event.idempotency_key, event.idempotency_hash)
         if existing is not None:
             return existing
 
@@ -697,6 +730,7 @@ def _write(
         reverses_entry_id=reverses_entry_id,
         reversal_reason=reversal_reason,
         idempotency_key=event.idempotency_key,
+        idempotency_hash=event.idempotency_hash,
     )
     db.add(entry)
     try:
@@ -768,6 +802,7 @@ def reverse(
     reason: str,
     actor: User | None,
     idempotency_key: str | None = None,
+    idempotency_hash: str | None = None,
 ) -> JournalEntry:
     """Produce the linked reversing entry (`reverses_entry_id`). Corrections are never
     edits (ADR-04)."""
@@ -778,6 +813,7 @@ def reverse(
             reason=reason,
             entry_date=on_date,
             idempotency_key=idempotency_key,
+            idempotency_hash=idempotency_hash,
         ),
         company_id=company_id,
         actor=actor,

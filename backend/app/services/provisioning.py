@@ -38,8 +38,7 @@ def issue_email_verification(db: Session, user: User) -> str:
             user_id=user.id,
             purpose=UserTokenPurpose.EMAIL_VERIFICATION,
             token_hash=hash_opaque_token(token),
-            expires_at=datetime.now(UTC)
-            + timedelta(hours=settings.email_verification_ttl_hours),
+            expires_at=datetime.now(UTC) + timedelta(hours=settings.email_verification_ttl_hours),
         )
     )
     email.send_email_verification(to=user.email, token=token)

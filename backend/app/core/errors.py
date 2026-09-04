@@ -79,6 +79,4 @@ def install_error_handlers(app: FastAPI) -> None:
             status.HTTP_404_NOT_FOUND: "not_found",
             status.HTTP_409_CONFLICT: "conflict",
         }.get(exc.status_code, "http_error")
-        return JSONResponse(
-            status_code=exc.status_code, content=_envelope(code, str(exc.detail))
-        )
+        return JSONResponse(status_code=exc.status_code, content=_envelope(code, str(exc.detail)))
