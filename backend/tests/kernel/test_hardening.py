@@ -55,6 +55,79 @@ def test_identical_payload_still_replays(api: Api) -> None:
     assert first.json()["id"] == second.json()["id"]
 
 
+def test_key_order_is_not_part_of_the_request_identity(api: Api) -> None:
+    """A client that re-serialises its retry must not be told it reused the key."""
+    body = {
+        "entry_date": f"{YEAR}-03-15",
+        "description": "Office supplies",
+        "lines": [
+            {"gl_account_id": api.accounts["6500"], "debit": "1000"},
+            {"gl_account_id": api.accounts["2300"], "credit": "1000"},
+        ],
+    }
+    reordered = {
+        "lines": [
+            {"debit": "1000", "gl_account_id": api.accounts["6500"]},
+            {"credit": "1000", "gl_account_id": api.accounts["2300"]},
+        ],
+        "description": "Office supplies",
+        "entry_date": f"{YEAR}-03-15",
+    }
+    headers = {"Idempotency-Key": "reorder"}
+
+    first = api.client.post("/api/v1/gl/journal-entries", json=body, headers=headers)
+    replay = api.client.post("/api/v1/gl/journal-entries", json=reordered, headers=headers)
+
+    assert first.status_code == 201, first.text
+    assert replay.status_code == 200, replay.text
+    assert replay.json()["id"] == first.json()["id"]
+
+
+def test_equivalent_amount_and_date_spellings_still_replay(api: Api) -> None:
+    """`1000.00` is the same money as `1000`; trailing zeros are not a new document."""
+    headers = {"Idempotency-Key": "spelling"}
+    first = api.client.post(
+        "/api/v1/gl/journal-entries",
+        json={
+            "entry_date": f"{YEAR}-03-15",
+            "description": "Office supplies",
+            "lines": [
+                {"gl_account_id": api.accounts["6500"], "debit": "1000"},
+                {"gl_account_id": api.accounts["2300"], "credit": "1000"},
+            ],
+        },
+        headers=headers,
+    )
+    replay = api.client.post(
+        "/api/v1/gl/journal-entries",
+        json={
+            "entry_date": f"{YEAR}-03-15",
+            "description": "Office supplies",
+            "lines": [
+                {"gl_account_id": api.accounts["6500"], "debit": "1000.00"},
+                {"gl_account_id": api.accounts["2300"], "credit": "1000.000"},
+            ],
+        },
+        headers=headers,
+    )
+
+    assert (first.status_code, replay.status_code) == (201, 200)
+    assert replay.json()["id"] == first.json()["id"]
+
+
+def test_a_genuinely_different_amount_is_still_caught(api: Api) -> None:
+    """The canonical form must not blunt the check it exists to support."""
+    api.post_je("sharp")
+    changed = api.post_je(
+        "sharp",
+        lines=[
+            {"gl_account_id": api.accounts["6500"], "debit": "1000.01"},
+            {"gl_account_id": api.accounts["2300"], "credit": "1000.01"},
+        ],
+    )
+    assert changed.status_code == 409 and changed.json()["code"] == "idempotency_key_reused"
+
+
 def test_fingerprint_is_scoped_per_endpoint(api: Api) -> None:
     api.post_je("shared-key")
     cashbook = api.client.post(

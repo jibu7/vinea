@@ -2,7 +2,9 @@
 enquiries, periods and year-end. Routers hold no business logic — everything posts through
 `app.kernel`."""
 
+import json
 from datetime import date
+from decimal import Decimal
 from hashlib import sha256
 
 from fastapi import APIRouter, Depends, Header, Query, Request, Response, status
@@ -70,9 +72,23 @@ IdempotencyKey = Header(
 )
 
 
+def _canonical(value: object) -> str:
+    """Cosmetic differences must not look like a different request: `1000` and `1000.00`
+    are the same amount, and `2026-03-15` the same date, however the client spelled them."""
+    if isinstance(value, Decimal):
+        return str(value.normalize())
+    if isinstance(value, date):
+        return value.isoformat()
+    raise TypeError(f"no canonical form for {type(value).__name__}")
+
+
 def _fingerprint(kind: str, payload: BaseModel) -> str:
-    """Identifies the *request*, so the same key sent with a different body is caught."""
-    return sha256(f"{kind}:{payload.model_dump_json()}".encode()).hexdigest()
+    """Identifies the *request*, so the same key sent with a different body is caught.
+    Key order (in the body or in the schema) is not part of the identity."""
+    body = json.dumps(
+        payload.model_dump(), sort_keys=True, separators=(",", ":"), default=_canonical
+    )
+    return sha256(f"{kind}:{body}".encode()).hexdigest()
 
 
 def _entry_read(db: Session, entry: JournalEntry) -> JournalEntryRead:
