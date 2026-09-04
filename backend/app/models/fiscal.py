@@ -1,7 +1,15 @@
 import enum
 from datetime import date
 
-from sqlalchemy import BigInteger, Date, ForeignKey, SmallInteger, String, UniqueConstraint
+from sqlalchemy import (
+    BigInteger,
+    Date,
+    ForeignKey,
+    ForeignKeyConstraint,
+    SmallInteger,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
@@ -19,11 +27,21 @@ period_status_type = pg_enum(PeriodStatus, "period_status")
 
 
 class FiscalYear(AuditedMixin, CompanyScopedMixin, Base):
-    """Fiscal calendars are per company (ADR-08). P1 seeds one year of monthly periods;
-    the Posting Engine enforces the statuses from P2."""
+    """Fiscal calendars are per company (ADR-08). A year is `open` while trading and
+    `locked` once `close_fiscal_year` has posted `closing_entry_id`; reopening reverses
+    that entry (see `app.kernel.periods`)."""
 
     __tablename__ = "fiscal_years"
-    __table_args__ = (UniqueConstraint("company_id", "name", name="uq_fiscal_years_company_name"),)
+    __table_args__ = (
+        UniqueConstraint("company_id", "name", name="uq_fiscal_years_company_name"),
+        ForeignKeyConstraint(
+            ["company_id", "closing_entry_id"],
+            ["journal_entries.company_id", "journal_entries.id"],
+            name="fk_fiscal_years_closing_entry",
+            ondelete="RESTRICT",
+            use_alter=True,
+        ),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     name: Mapped[str] = mapped_column(String(50), nullable=False)
@@ -32,11 +50,13 @@ class FiscalYear(AuditedMixin, CompanyScopedMixin, Base):
     status: Mapped[PeriodStatus] = mapped_column(
         period_status_type, nullable=False, default=PeriodStatus.OPEN
     )
+    closing_entry_id: Mapped[int | None] = mapped_column(BigInteger)
 
 
 class AccountingPeriod(AuditedMixin, CompanyScopedMixin, Base):
     __tablename__ = "accounting_periods"
     __table_args__ = (
+        UniqueConstraint("company_id", "id", name="uq_accounting_periods_company_id_id"),
         UniqueConstraint(
             "fiscal_year_id", "period_no", name="uq_accounting_periods_fiscal_year_period_no"
         ),

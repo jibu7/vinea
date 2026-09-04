@@ -38,6 +38,13 @@ from app.services import email as email_service  # noqa: E402
 from app.services.provisioning import ProvisionedTenant, provision_tenant  # noqa: E402
 
 TABLES_IN_TRUNCATION_ORDER = (
+    "period_balances",
+    "journal_lines",
+    "journal_entries",
+    "document_sequences",
+    "exchange_rates",
+    "projects",
+    "gl_settings",
     "audit_log",
     "membership_roles",
     "company_memberships",
@@ -45,6 +52,7 @@ TABLES_IN_TRUNCATION_ORDER = (
     "accounting_periods",
     "fiscal_years",
     "tax_codes",
+    "gl_accounts",
     "currencies",
     "branches",
     "refresh_tokens",

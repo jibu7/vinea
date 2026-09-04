@@ -25,6 +25,8 @@ ROLES_MANAGE_PERMISSIONS = "roles:manage_permissions"
 COMPANY_READ = "company:read"
 COMPANY_UPDATE = "company:update"
 ACCOUNTING_PERIODS_MANAGE = "accounting_periods:manage"
+# Reopening a closed period / fiscal year is audited and deliberately narrower (ADR-08).
+ACCOUNTING_PERIODS_REOPEN = "accounting_periods:reopen"
 
 # Common / maintenance
 COMMON_SETUP_CURRENCIES = "common:setup_currencies"
@@ -105,6 +107,7 @@ ALL_PERMISSIONS: tuple[str, ...] = (
     COMPANY_READ,
     COMPANY_UPDATE,
     ACCOUNTING_PERIODS_MANAGE,
+    ACCOUNTING_PERIODS_REOPEN,
     COMMON_SETUP_CURRENCIES,
     COMMON_SETUP_TAXES,
     COMMON_SETUP_BRANCHES,

@@ -45,7 +45,10 @@ class Company(AuditedMixin, Base):
 
 class Branch(AuditedMixin, CompanyScopedMixin, Base):
     __tablename__ = "branches"
-    __table_args__ = (UniqueConstraint("company_id", "code", name="uq_branches_company_code"),)
+    __table_args__ = (
+        UniqueConstraint("company_id", "id", name="uq_branches_company_id_id"),
+        UniqueConstraint("company_id", "code", name="uq_branches_company_code"),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     code: Mapped[str] = mapped_column(String(20), nullable=False)
