@@ -239,27 +239,6 @@ def test_control_accounts_demand_their_subledger_dimension() -> None:
     assert excinfo.value.code == "dimension_invalid"
 
 
-def test_entry_must_balance_in_base_currency_after_rounding(db: Session, ledger: Ledger) -> None:
-    """33.33 + 33.33 + 33.34 USD = 100 USD, but in RWF the rounded lines sum to 130 051 vs
-    130 050 — the classic FX rounding gap. The engine refuses and reports the difference."""
-    usd = ledger.cur("USD")
-    event = ManualJournal(
-        entry_date=MARCH,
-        description="fx rounding gap",
-        lines=(
-            LineSpec(amount=Decimal("33.33"), gl_account_id=ledger.acct("6500"), currency_id=usd),
-            LineSpec(amount=Decimal("33.33"), gl_account_id=ledger.acct("6500"), currency_id=usd),
-            LineSpec(amount=Decimal("33.34"), gl_account_id=ledger.acct("6500"), currency_id=usd),
-            LineSpec(amount=Decimal("-100.00"), gl_account_id=ledger.acct("2300"), currency_id=usd),
-        ),
-    )
-    with pytest.raises(PostingError) as excinfo:
-        posting.post(db, event, company_id=ledger.company_id, actor=ledger.owner)
-    assert excinfo.value.code == "unbalanced_entry"
-    assert "+1" in excinfo.value.message
-    db.rollback()
-
-
 @pytest.mark.parametrize(
     ("amount", "expected"),
     [(Decimal("10.5"), "amount_precision"), (Decimal(0), "zero_amount_line")],
@@ -283,7 +262,7 @@ def test_missing_exchange_rate_is_rejected(db: Session, ledger: Ledger) -> None:
             on=MARCH,
             currency="USD",
         )
-    assert excinfo.value.code == "no_exchange_rate"
+    assert excinfo.value.code == "missing_exchange_rate"
     db.rollback()
 
 

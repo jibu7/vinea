@@ -55,10 +55,12 @@ class GLAccountRead(ApiModel):
 
 class GLSettingsRead(ApiModel):
     retained_earnings_account_id: int | None
+    rounding_difference_account_id: int | None
 
 
 class GLSettingsUpdate(BaseModel):
-    retained_earnings_account_id: int
+    retained_earnings_account_id: int | None = None
+    rounding_difference_account_id: int | None = None
 
 
 # --- Exchange rates ----------------------------------------------------------------------
@@ -169,6 +171,7 @@ class JournalLineRead(ApiModel):
     base_amount: Decimal
     tax_code_id: int | None
     tax_amount: Decimal
+    is_rounding_line: bool
     description: str | None
     source_doc_type: str | None
     source_doc_id: int | None

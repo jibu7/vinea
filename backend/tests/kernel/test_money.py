@@ -135,7 +135,7 @@ def test_rate_resolution_by_effective_date(db: Session, ledger: Ledger) -> None:
     assert rate_on(db, ledger.currencies["EUR"], date(YEAR, 2, 1)) == EUR_RATE
     with pytest.raises(PostingError) as excinfo:
         rate_on(db, usd, date(YEAR - 1, 12, 31))
-    assert excinfo.value.code == "no_exchange_rate"
+    assert excinfo.value.code == "missing_exchange_rate"
 
 
 def test_explicit_rate_override_wins(db: Session, ledger: Ledger) -> None:

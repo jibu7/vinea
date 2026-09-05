@@ -201,17 +201,26 @@ def update_settings(
     db: Session = Depends(get_db),
 ) -> GLSettingsRead:
     settings: GLSettings = posting.gl_settings_for(db, auth.company_id)
-    account = accounts_service.get_account(
-        db, auth.company_id, payload.retained_earnings_account_id
-    )
-    if not account.is_postable or account.is_control or not account.is_active:
-        raise LedgerStateError(
-            "Retained earnings must be an active, postable, non-control account",
-            code="invalid_retained_earnings",
+    if payload.retained_earnings_account_id is not None:
+        settings.retained_earnings_account_id = _postable_account(
+            db, auth.company_id, payload.retained_earnings_account_id, "retained earnings"
         )
-    settings.retained_earnings_account_id = account.id
+    if payload.rounding_difference_account_id is not None:
+        settings.rounding_difference_account_id = _postable_account(
+            db, auth.company_id, payload.rounding_difference_account_id, "rounding difference"
+        )
     db.commit()
     return GLSettingsRead.model_validate(settings)
+
+
+def _postable_account(db: Session, company_id: int, account_id: int, label: str) -> int:
+    account = accounts_service.get_account(db, company_id, account_id)
+    if not account.is_postable or account.is_control or not account.is_active:
+        raise LedgerStateError(
+            f"The {label} account must be active, postable and not a control account",
+            code="invalid_gl_setting_account",
+        )
+    return account.id
 
 
 # --- Exchange rates ----------------------------------------------------------------------

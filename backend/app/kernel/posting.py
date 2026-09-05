@@ -10,6 +10,7 @@ zero in base currency after per-line rounding. The DB triggers from migration 00
 the structural rules, so a bug here cannot produce an unbalanced or back-dated entry.
 """
 
+from collections import defaultdict
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
@@ -31,10 +32,12 @@ from app.kernel.events import (
     ReversalRequested,
 )
 from app.kernel.money import (
+    ONE,
     ZERO,
     Converted,
     base_currency,
     is_rounded,
+    quantum,
     resolve_tax_code,
     split_tax,
     to_base,
@@ -163,6 +166,7 @@ class ResolvedLine:
     source_doc_type: str | None = None
     source_doc_id: int | None = None
     source_line_id: int | None = None
+    is_rounding_line: bool = False
 
 
 class _Context:
@@ -407,12 +411,58 @@ def _resolve_lines(
 
     difference = sum((line.converted.base_amount for line in resolved), ZERO)
     if difference != ZERO:
-        raise PostingError(
-            f"Entry does not balance in {ctx.base.code}: difference {difference:+f}",
-            code="unbalanced_entry",
-            field_errors={"lines": [f"base-currency difference {difference:+f}"]},
-        )
+        resolved.append(_rounding_line(ctx, event, resolved, difference))
     return resolved
+
+
+def _reject_unbalanced(base_code: str, difference: Decimal) -> PostingError:
+    return PostingError(
+        f"Entry does not balance in {base_code}: difference {difference:+f}",
+        code="unbalanced_entry",
+        field_errors={"lines": [f"base-currency difference {difference:+f}"]},
+    )
+
+
+def _rounding_line(
+    ctx: _Context, event: PostingEvent, resolved: list[ResolvedLine], difference: Decimal
+) -> ResolvedLine:
+    """Absorb a sub-unit residue left by per-line rounding (ADR-06).
+
+    Only legitimate when conversion actually happened and the entry is square in every
+    transaction currency: then the residue is an artefact of rounding each line, bounded by
+    half a minor unit per line. Anything else is a wrong number, not a rounding error, and
+    is rejected — the plug must never hide a real imbalance.
+    """
+    if all(line.currency_id == ctx.base.id for line in resolved):
+        raise _reject_unbalanced(ctx.base.code, difference)
+
+    per_currency: dict[int, Decimal] = defaultdict(lambda: ZERO)
+    for line in resolved:
+        per_currency[line.currency_id] += line.converted.amount
+    if any(total != ZERO for total in per_currency.values()):
+        raise _reject_unbalanced(ctx.base.code, difference)
+
+    tolerance = len(resolved) * quantum(ctx.base.decimal_places)
+    if abs(difference) > tolerance:
+        raise _reject_unbalanced(ctx.base.code, difference)
+
+    settings = gl_settings_for(ctx.db, ctx.company_id)
+    if settings.rounding_difference_account_id is None:
+        raise PostingError(
+            "Set the rounding difference account in GL settings before posting a "
+            "multi-currency entry that needs rounding",
+            code="rounding_account_unset",
+        )
+    account = ctx.account(settings.rounding_difference_account_id)
+    _check_account(account, event)
+    return ResolvedLine(
+        gl_account_id=account.id,
+        branch_id=ctx.branch(None, event.branch_id).id,
+        currency_id=ctx.base.id,
+        converted=Converted(amount=-difference, base_amount=-difference, rate=ONE),
+        description="Rounding difference",
+        is_rounding_line=True,
+    )
 
 
 # --- Event → line specs -----------------------------------------------------------------
@@ -520,6 +570,12 @@ def _load_reversible(
         raise LedgerStateError(
             "Year-end closing entries are reversed by reopening the fiscal year",
             code="use_fiscal_year_reopen",
+        )
+    if original.reverses_entry_id is not None and not allow_closing_entry:
+        raise LedgerStateError(
+            f"{original.number} is itself a reversal; re-post the entry instead of "
+            "reversing the reversal",
+            code="cannot_reverse_a_reversal",
         )
     already = db.scalar(
         select(JournalEntry.id).where(JournalEntry.reverses_entry_id == original.id)
@@ -702,6 +758,16 @@ def post(
     )
 
 
+def _set_posting_engine(db: Session, *, on: bool) -> None:
+    """Open (or shut) the window in which the journal accepts INSERTs. Transaction-local, so
+    an aborted posting cannot leave it open, and it is shut again immediately after the
+    writes so the rest of the caller's transaction stays guarded (ADR-05, migration 0004)."""
+    db.execute(
+        text("SELECT set_config('app.posting_engine', :value, true)"),
+        {"value": "on" if on else "off"},
+    )
+
+
 def _write(
     db: Session,
     ctx: _Context,
@@ -734,6 +800,7 @@ def _write(
     )
     db.add(entry)
     try:
+        _set_posting_engine(db, on=True)
         db.flush()
         journal_lines = [
             JournalLine(
@@ -752,6 +819,7 @@ def _write(
                 base_amount=line.converted.base_amount,
                 tax_code_id=line.tax_code_id,
                 tax_amount=line.tax_amount,
+                is_rounding_line=line.is_rounding_line,
                 description=line.description,
                 source_doc_type=line.source_doc_type,
                 source_doc_id=line.source_doc_id,
@@ -788,6 +856,8 @@ def _write(
         if translated is not None:
             raise translated from exc
         raise
+    else:
+        _set_posting_engine(db, on=False)
 
     balances.apply_lines(db, entry, journal_lines)
     return entry

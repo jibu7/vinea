@@ -77,7 +77,7 @@ def rate_on(db: Session, currency: Currency, on_date: date) -> Decimal:
     if rate is None:
         raise PostingError(
             f"No exchange rate for {currency.code} on or before {on_date.isoformat()}",
-            code="no_exchange_rate",
+            code="missing_exchange_rate",
             field_errors={"currency_id": ["no exchange rate effective on the entry date"]},
         )
     return rate

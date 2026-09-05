@@ -45,6 +45,12 @@ def _period_id(ledger: Ledger, on: date) -> int:
     return next(p.id for p in ledger.periods if p.start_date <= on <= p.end_date)
 
 
+def _as_engine(db: Session) -> None:
+    """Impersonate the Posting Engine for the current transaction. These tests target the
+    invariant triggers, so they have to get past the single-writer guard first (0004)."""
+    db.execute(text("SELECT set_config('app.posting_engine', 'on', true)"))
+
+
 def _insert_entry(
     db: Session,
     ledger: Ledger,
@@ -54,6 +60,7 @@ def _insert_entry(
     status: str = "draft",
     period_id: int | None = None,
 ) -> int:
+    _as_engine(db)
     return db.execute(
         INSERT_ENTRY,
         {
@@ -69,6 +76,7 @@ def _insert_entry(
 def _insert_line(
     db: Session, ledger: Ledger, entry_id: int, line_no: int, account_id: int, amount: Decimal
 ) -> None:
+    _as_engine(db)
     db.execute(
         INSERT_LINE,
         {

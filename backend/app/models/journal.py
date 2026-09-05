@@ -11,6 +11,7 @@ from decimal import Decimal
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     CheckConstraint,
     Date,
     DateTime,
@@ -172,6 +173,10 @@ class JournalLine(AuditedMixin, CompanyScopedMixin, Base):
     base_amount: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
     tax_code_id: Mapped[int | None] = mapped_column(BigInteger)
     tax_amount: Mapped[Decimal] = mapped_column(MONEY, nullable=False, default=Decimal(0))
+    # Set only by the Posting Engine, on the line it appends to absorb per-line FX rounding.
+    is_rounding_line: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
     description: Mapped[str | None] = mapped_column(String(500))
     source_doc_type: Mapped[str | None] = mapped_column(String(50))
     source_doc_id: Mapped[int | None] = mapped_column(BigInteger)

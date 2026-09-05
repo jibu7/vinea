@@ -175,9 +175,13 @@ def update_account(
             settings = db.scalar(
                 select(GLSettings).where(GLSettings.company_id == account.company_id)
             )
-            if settings is not None and settings.retained_earnings_account_id == account.id:
+            in_use = settings is not None and account.id in {
+                settings.retained_earnings_account_id,
+                settings.rounding_difference_account_id,
+            }
+            if in_use:
                 raise LedgerStateError(
-                    "The retained earnings account cannot be deactivated",
+                    "This account is referenced by GL settings and cannot be deactivated",
                     code="account_in_use",
                 )
         account.is_active = is_active

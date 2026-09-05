@@ -94,10 +94,18 @@ class GLSettings(AuditedMixin, CompanyScopedMixin, Base):
             name="fk_gl_settings_retained_earnings_account",
             ondelete="RESTRICT",
         ),
+        ForeignKeyConstraint(
+            ["company_id", "rounding_difference_account_id"],
+            ["gl_accounts.company_id", "gl_accounts.id"],
+            name="fk_gl_settings_rounding_difference_account",
+            ondelete="RESTRICT",
+        ),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     retained_earnings_account_id: Mapped[int | None] = mapped_column(BigInteger)
+    # Absorbs sub-unit differences left by per-line rounding on multi-currency entries.
+    rounding_difference_account_id: Mapped[int | None] = mapped_column(BigInteger)
 
 
 class Project(AuditedMixin, CompanyScopedMixin, Base):

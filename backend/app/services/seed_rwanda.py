@@ -32,6 +32,8 @@ SECONDARY_CURRENCIES = [
 ACCOUNT_VAT_INPUT = "1400"
 ACCOUNT_VAT_OUTPUT = "2200"
 ACCOUNT_RETAINED_EARNINGS = "3200"
+# Sub-unit residues from per-line FX rounding land with the exchange differences.
+ACCOUNT_ROUNDING_DIFFERENCE = "6950"
 
 RWANDA_TAX_CODES = [
     {
@@ -168,6 +170,7 @@ def seed_chart_of_accounts(db: Session, company: Company) -> dict[str, GLAccount
         GLSettings(
             company_id=company.id,
             retained_earnings_account_id=accounts[ACCOUNT_RETAINED_EARNINGS].id,
+            rounding_difference_account_id=accounts[ACCOUNT_ROUNDING_DIFFERENCE].id,
         )
     )
     db.flush()

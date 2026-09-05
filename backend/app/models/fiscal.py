@@ -9,7 +9,9 @@ from sqlalchemy import (
     SmallInteger,
     String,
     UniqueConstraint,
+    literal_column,
 )
+from sqlalchemy.dialects.postgresql import ExcludeConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
@@ -59,6 +61,14 @@ class AccountingPeriod(AuditedMixin, CompanyScopedMixin, Base):
         UniqueConstraint("company_id", "id", name="uq_accounting_periods_company_id_id"),
         UniqueConstraint(
             "fiscal_year_id", "period_no", name="uq_accounting_periods_fiscal_year_period_no"
+        ),
+        # Posting resolves a period from the entry date alone, so overlap would make that
+        # lookup ambiguous — the database refuses it outright (needs btree_gist).
+        ExcludeConstraint(
+            (literal_column("company_id"), "="),
+            (literal_column("daterange(start_date, end_date, '[]')"), "&&"),
+            name="ex_accounting_periods_no_overlap",
+            using="gist",
         ),
     )
 
