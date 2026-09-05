@@ -274,6 +274,7 @@ def test_4b_reversing_a_reversal_is_rejected(db: Session, ledger: Ledger) -> Non
 # --- 4c. Concurrency ---------------------------------------------------------------------------
 
 
+@pytest.mark.concurrency
 def test_4c_sequence_is_gapless_across_independent_connections(db: Session, ledger: Ledger) -> None:
     threads, per_thread = 8, 4
     barrier = threading.Barrier(threads)
@@ -308,6 +309,7 @@ def test_4c_sequence_is_gapless_across_independent_connections(db: Session, ledg
     assert sequence.next_number == total + 1
 
 
+@pytest.mark.concurrency
 def test_4c_opposite_account_order_does_not_deadlock(db: Session, ledger: Ledger) -> None:
     """`period_balances` cells are upserted in sorted key order; without that, these two
     postings would grab the same two rows in opposite order and one would be killed as a

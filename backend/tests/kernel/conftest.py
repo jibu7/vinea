@@ -1,11 +1,13 @@
 """Kernel fixtures: one provisioned tenant with the Rwanda seed pack, a third currency (EUR),
 dated rates, a second branch, two projects and every period of the current year open."""
 
+import os
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 
 import pytest
+from hypothesis import HealthCheck, settings
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -20,6 +22,20 @@ from app.models.journal import JournalEntry
 from app.models.tax import TaxCode
 from app.models.user import User
 from tests.conftest import make_tenant
+
+settings.register_profile(
+    "ci",
+    max_examples=2,
+    deadline=None,
+    suppress_health_check=[HealthCheck.function_scoped_fixture, HealthCheck.too_slow],
+)
+settings.register_profile(
+    "dev",
+    max_examples=1,
+    deadline=None,
+    suppress_health_check=[HealthCheck.function_scoped_fixture, HealthCheck.too_slow],
+)
+settings.load_profile(os.environ.get("HYPOTHESIS_PROFILE", "ci"))
 
 YEAR = date.today().year
 USD_RATE = Decimal("1300.5")

@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
 
+import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 from sqlalchemy.orm import Session
@@ -99,6 +100,7 @@ def _net_by_account(db: Session, ledger: Ledger, as_of: date) -> dict[int, Decim
     return {row.gl_account_id: row.net for row in report.rows if row.net != 0}
 
 
+@pytest.mark.slow
 @given(
     batch=st.lists(entries, min_size=100, max_size=120),
     to_reverse=st.lists(entries, min_size=5, max_size=15),

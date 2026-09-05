@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 from decimal import Decimal
 
+import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -24,6 +25,7 @@ def _session_for(company_id: int) -> Session:
     return session
 
 
+@pytest.mark.concurrency
 def test_claims_are_strictly_consecutive_under_concurrency(db: Session, ledger: Ledger) -> None:
     barrier = threading.Barrier(THREADS)
     results: list[int] = []
@@ -67,6 +69,7 @@ def test_rolled_back_claim_does_not_consume_a_number(db: Session, ledger: Ledger
     assert second.number == format_number("CB-", 1) == "CB-000001"
 
 
+@pytest.mark.concurrency
 def test_lazy_sequence_creation_is_race_safe(db: Session, ledger: Ledger) -> None:
     """Two sessions racing to create the same unseeded sequence must both end up claiming
     from one row (NULLS NOT DISTINCT + ON CONFLICT DO NOTHING)."""
@@ -110,6 +113,7 @@ def test_branch_sequence_is_used_when_present(db: Session, ledger: Ledger) -> No
     assert main_claim.number == "JE-000001"  # falls back to the company-wide sequence
     db.rollback()
 
+@pytest.mark.concurrency
 
 def test_concurrent_postings_stay_gapless_and_balanced(db: Session, ledger: Ledger) -> None:
     """The DoD parallelism test: threads post full entries simultaneously."""
