@@ -1,3 +1,23 @@
 @import "tailwindcss";
+@import "../styles/tokens.css";
 
-:root { --vinea-ink: #14231c; --vinea-leaf: #2f7a4d; }
+body {
+  background-color: var(--vinea-surface);
+  color: var(--vinea-ink);
+  font-family: var(--font-body-family, var(--font-body));
+}
+
+.font-display {
+  font-family: var(--font-display-family, var(--font-display));
+}
+
+::selection {
+  background: var(--vinea-brand-soft);
+  color: var(--vinea-brand-strong);
+}
+
+:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: var(--radius-control);
+}

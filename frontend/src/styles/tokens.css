@@ -1,0 +1,120 @@
+/**
+ * Vinea design tokens — hybrid direction (airy shell + dense work screens).
+ * Exposed as CSS custom properties so both Tailwind utilities (via @theme)
+ * and hand-written CSS can consume them. Light is default; dark via [data-theme="dark"].
+ * Dense-mode variables shrink rhythm for keyboard-first document workspaces.
+ */
+
+@theme {
+  --font-display: "Fraunces", ui-serif, Georgia, serif;
+  --font-body: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+
+  --color-surface: var(--vinea-surface);
+  --color-surface-raised: var(--vinea-surface-raised);
+  --color-surface-sunken: var(--vinea-surface-sunken);
+  --color-border: var(--vinea-border);
+  --color-border-strong: var(--vinea-border-strong);
+  --color-ink: var(--vinea-ink);
+  --color-ink-muted: var(--vinea-ink-muted);
+  --color-ink-subtle: var(--vinea-ink-subtle);
+
+  --color-brand: var(--vinea-brand);
+  --color-brand-strong: var(--vinea-brand-strong);
+  --color-brand-soft: var(--vinea-brand-soft);
+  --color-accent: var(--vinea-accent);
+
+  --color-success: var(--vinea-success);
+  --color-success-soft: var(--vinea-success-soft);
+  --color-warning: var(--vinea-warning);
+  --color-warning-soft: var(--vinea-warning-soft);
+  --color-danger: var(--vinea-danger);
+  --color-danger-soft: var(--vinea-danger-soft);
+  --color-info: var(--vinea-info);
+  --color-info-soft: var(--vinea-info-soft);
+
+  --shadow-color: 20 30% 8%;
+}
+
+:root {
+  color-scheme: light;
+
+  /* Surfaces */
+  --vinea-surface: #fbfaf7;
+  --vinea-surface-raised: #ffffff;
+  --vinea-surface-sunken: #f1efe9;
+  --vinea-border: #e4e0d6;
+  --vinea-border-strong: #cdc6b4;
+
+  /* Ink */
+  --vinea-ink: #191d1a;
+  --vinea-ink-muted: #565b52;
+  --vinea-ink-subtle: #8b9086;
+
+  /* Brand — vineyard leaf green with a warm harvest accent */
+  --vinea-brand: #2f7a4d;
+  --vinea-brand-strong: #205c39;
+  --vinea-brand-soft: #e3f1e7;
+  --vinea-accent: #b8752e;
+
+  /* Semantic */
+  --vinea-success: #2f7a4d;
+  --vinea-success-soft: #e3f1e7;
+  --vinea-warning: #b8752e;
+  --vinea-warning-soft: #fbead9;
+  --vinea-danger: #ae3939;
+  --vinea-danger-soft: #f8e4e2;
+  --vinea-info: #2f6f8f;
+  --vinea-info-soft: #e2eff5;
+
+  /* Rhythm (airy shell defaults) */
+  --space-row: 0.75rem;
+  --radius-control: 0.5rem;
+  --radius-card: 0.875rem;
+  --focus-ring: 0 0 0 2px var(--vinea-surface), 0 0 0 4px var(--vinea-brand);
+
+  /* Elevation */
+  --elevation-1: 0 1px 2px hsl(var(--shadow-color) / 0.08);
+  --elevation-2: 0 4px 12px hsl(var(--shadow-color) / 0.10);
+  --elevation-3: 0 12px 32px hsl(var(--shadow-color) / 0.16);
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --vinea-surface: #12160f;
+  --vinea-surface-raised: #191f19;
+  --vinea-surface-sunken: #0c0f0b;
+  --vinea-border: #2a3226;
+  --vinea-border-strong: #3d4838;
+
+  --vinea-ink: #f2f3ef;
+  --vinea-ink-muted: #b6bdb0;
+  --vinea-ink-subtle: #7d8578;
+
+  --vinea-brand: #58b37f;
+  --vinea-brand-strong: #7fcf9e;
+  --vinea-brand-soft: #1c3324;
+  --vinea-accent: #dd9b52;
+
+  --vinea-success: #58b37f;
+  --vinea-success-soft: #1c3324;
+  --vinea-warning: #dd9b52;
+  --vinea-warning-soft: #3a2c17;
+  --vinea-danger: #e2837f;
+  --vinea-danger-soft: #3a1e1c;
+  --vinea-info: #6fb2d4;
+  --vinea-info-soft: #16303c;
+
+  --shadow-color: 0 0% 0%;
+  --elevation-1: 0 1px 2px hsl(var(--shadow-color) / 0.4);
+  --elevation-2: 0 4px 14px hsl(var(--shadow-color) / 0.45);
+  --elevation-3: 0 16px 40px hsl(var(--shadow-color) / 0.55);
+}
+
+/* Dense mode: keyboard-first document workspaces (JE/cashbook line grids). */
+[data-density="dense"] {
+  --space-row: 0.375rem;
+  --radius-control: 0.25rem;
+  font-size: 0.8125rem;
+}

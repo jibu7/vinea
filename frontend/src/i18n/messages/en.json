@@ -1,0 +1,104 @@
+{
+  "app": {
+    "name": "Vinea ERP",
+    "tagline": "Cloud ERP for East African SMEs"
+  },
+  "nav": {
+    "administration": "Administration",
+    "maintenance": "Maintenance",
+    "transactions": "Transactions",
+    "enquiries": "Enquiries",
+    "reports": "Reports"
+  },
+  "common": {
+    "search": "Search",
+    "cancel": "Cancel",
+    "save": "Save",
+    "post": "Post",
+    "close": "Close",
+    "new": "New",
+    "edit": "Edit",
+    "delete": "Delete",
+    "loading": "Loading…",
+    "noResults": "No results",
+    "today": "Today",
+    "commandPalettePlaceholder": "Type a command or search…",
+    "switchCompany": "Switch company",
+    "toggleTheme": "Toggle theme"
+  },
+  "design": {
+    "title": "Design System",
+    "subtitle": "Primitives for the Vinea hybrid UI \u2014 airy shell, dense work screens.",
+    "buttons": "Buttons",
+    "inputs": "Inputs",
+    "select": "Select / combobox",
+    "chips": "Status chips",
+    "table": "Table",
+    "tabs": "Tabs",
+    "dialog": "Dialog",
+    "toast": "Toast",
+    "commandPalette": "Command palette",
+    "emptyState": "Empty state",
+    "dataGrid": "Dense data grid",
+    "money": "Money formatting",
+    "openDialog": "Open dialog",
+    "showToast": "Show toast",
+    "openPalette": "Open command palette (Ctrl+K)"
+  },
+  "status": {
+    "draft": "Draft",
+    "posted": "Posted",
+    "reversed": "Reversed",
+    "open": "Open",
+    "closed": "Closed",
+    "overdue": "Overdue",
+    "balanced": "Balanced",
+    "unbalanced": "Unbalanced"
+  },
+  "dashboard": {
+    "welcome": "Good morning, Aline",
+    "subtitle": "Here's how Rugari Wines is tracking this period.",
+    "kpi": {
+      "cashPosition": "Cash position",
+      "receivables": "Receivables",
+      "payables": "Payables",
+      "netIncome": "Net income (MTD)"
+    },
+    "recentActivity": "Recent activity",
+    "quickActions": "Quick actions",
+    "newJournal": "New journal entry",
+    "newCashbook": "New cashbook entry",
+    "viewTrialBalance": "View trial balance"
+  },
+  "workspace": {
+    "journalBatch": "Journal Batch",
+    "batchNumber": "Batch {number}",
+    "reference": "Reference",
+    "date": "Date",
+    "description": "Description",
+    "account": "Account",
+    "project": "Project",
+    "branch": "Branch",
+    "debit": "Debit",
+    "credit": "Credit",
+    "totalDebit": "Total debit",
+    "totalCredit": "Total credit",
+    "difference": "Difference",
+    "addLine": "Add line",
+    "post": "Post (Ctrl+Enter)",
+    "cancel": "Cancel (Esc)"
+  },
+  "pos": {
+    "title": "Till \u2014 Register 1",
+    "products": "Products",
+    "basket": "Basket",
+    "tender": "Tender",
+    "subtotal": "Subtotal",
+    "tax": "Tax",
+    "total": "Total",
+    "cash": "Cash",
+    "card": "Card",
+    "momo": "Mobile money",
+    "charge": "Charge"
+  }
+}

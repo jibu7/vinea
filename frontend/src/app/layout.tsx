@@ -1,5 +1,25 @@
 import type { Metadata } from "next";
+import { Fraunces, Inter, IBM_Plex_Mono } from "next/font/google";
+import { NextIntlClientProvider } from "next-intl";
 import "./globals.css";
+
+const display = Fraunces({
+  subsets: ["latin"],
+  variable: "--font-display-family",
+  weight: ["500", "600"],
+  style: ["normal", "italic"],
+});
+
+const body = Inter({
+  subsets: ["latin"],
+  variable: "--font-body-family",
+});
+
+const mono = IBM_Plex_Mono({
+  subsets: ["latin"],
+  weight: ["400", "500"],
+  variable: "--font-mono-family",
+});
 
 export const metadata: Metadata = {
   title: "Vinea ERP",
@@ -8,8 +28,10 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
-      <body className="min-h-screen bg-stone-50 text-[var(--vinea-ink)] antialiased">{children}</body>
+    <html lang="en" className={`${display.variable} ${body.variable} ${mono.variable}`}>
+      <body className="min-h-screen antialiased">
+        <NextIntlClientProvider>{children}</NextIntlClientProvider>
+      </body>
     </html>
   );
 }
