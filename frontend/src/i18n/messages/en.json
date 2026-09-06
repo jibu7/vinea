@@ -100,5 +100,38 @@
     "card": "Card",
     "momo": "Mobile money",
     "charge": "Charge"
+  },
+  "auth": {
+    "loginTitle": "Sign in to Vinea",
+    "loginSubtitle": "Cloud ERP for East African SMEs",
+    "email": "Email",
+    "password": "Password",
+    "signIn": "Sign in",
+    "signingIn": "Signing in\u2026",
+    "signOut": "Sign out"
+  },
+  "shell": {
+    "search": "Search",
+    "myDesktop": "My Desktop",
+    "administration": "Administration",
+    "usersAndMemberships": "Users & memberships",
+    "switchCompany": "Switch company",
+    "signedInAs": "Signed in as"
+  },
+  "errors": {
+    "unauthenticated": "Your session has expired. Please sign in again.",
+    "invalid_credentials": "That email or password isn't right.",
+    "account_disabled": "This account has been disabled.",
+    "no_membership": "You don't have access to that company.",
+    "company_required": "Select a company to continue.",
+    "permission_denied": "You don't have permission to do that.",
+    "validation_error": "Please check the highlighted fields.",
+    "unbalanced_entry": "Debits and credits must be equal before posting.",
+    "period_closed": "That accounting period is closed.",
+    "missing_exchange_rate": "No exchange rate found for that date.",
+    "idempotency_key_reused": "This document was already submitted with different details.",
+    "not_found": "That record could not be found.",
+    "conflict": "That change conflicts with existing data.",
+    "generic": "Something went wrong. Please try again."
   }
 }

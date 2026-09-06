@@ -44,7 +44,7 @@ export default function DashboardPrototype() {
           </ul>
         </div>
 
-        <ModuleNav />
+        <ModuleNav permissions={new Set(["common:setup_currencies", "common:setup_taxes", "gl:reports_view"])} />
       </aside>
 
       <div className="flex-1">

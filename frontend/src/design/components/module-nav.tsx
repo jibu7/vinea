@@ -17,6 +17,7 @@ export interface NavIntent {
 export interface NavModule {
   label: string;
   phase?: string; // whole module not live yet
+  permission?: string; // required to see a *live* module at all; ignored once phase-tagged
   intents: NavIntent[];
 }
 
@@ -28,14 +29,17 @@ export interface NavModule {
 export const navModules: NavModule[] = [
   {
     label: "Common",
+    permission: "common:setup_currencies",
     intents: [{ label: "Maintenance", items: [{ label: "Company details" }, { label: "Foreign currency" }] }],
   },
   {
     label: "Tax",
+    permission: "common:setup_taxes",
     intents: [{ label: "Maintenance", items: [{ label: "Tax types" }] }],
   },
   {
     label: "General Ledger",
+    permission: "gl:reports_view",
     intents: [
       {
         label: "Maintenance",
@@ -191,7 +195,10 @@ function ModuleNode({ module }: { module: NavModule }) {
 }
 
 /** Module-first explorer tree — mirrors the owner's Sage Evolution reference. */
-export function ModuleNav() {
+export function ModuleNav({ permissions }: { permissions: Set<string> }) {
+  const visibleModules = navModules.filter(
+    (module) => module.phase || !module.permission || permissions.has(module.permission),
+  );
   return (
     <nav className="space-y-3">
       <div className="flex items-center gap-1.5 rounded-[var(--radius-control)] px-2 py-1.5 text-sm font-medium text-[var(--vinea-ink)] hover:bg-[var(--vinea-surface-sunken)]">
@@ -199,10 +206,11 @@ export function ModuleNav() {
         My Desktop
       </div>
       <div className="space-y-0.5">
-        {navModules.map((module) => (
+        {visibleModules.map((module) => (
           <ModuleNode key={module.label} module={module} />
         ))}
       </div>
     </nav>
   );
 }
+
