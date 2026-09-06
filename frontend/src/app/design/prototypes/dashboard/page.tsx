@@ -1,16 +1,10 @@
 import Link from "next/link";
-import { LayoutGrid, Building2, Command as CommandIcon, Sun, ArrowUpRight, ArrowDownRight, FileText, Wallet } from "lucide-react";
+import { LayoutGrid, Building2, Command as CommandIcon, Sun, ArrowUpRight, ArrowDownRight, FileText, Wallet, ShieldCheck } from "lucide-react";
 import { Button } from "@/design/components/button";
 import { StatusChip } from "@/design/components/status-chip";
 import { Money } from "@/design/components/money";
+import { ModuleNav } from "@/design/components/module-nav";
 import { RWF } from "@/lib/format";
-
-const navGroups = [
-  { label: "Maintenance", items: ["Company", "General Ledger", "Tax types", "Foreign Currency"] },
-  { label: "Transactions", items: ["Journal batches", "Cashbook batches"] },
-  { label: "Enquiries", items: ["Account enquiry", "Trial balance enquiry"] },
-  { label: "Reports", items: ["Trial balance", "Chart of accounts"] },
-];
 
 const kpis = [
   { label: "Cash position", amount: 4250000, delta: "+3.2%", up: true },
@@ -29,31 +23,28 @@ const activity = [
 export default function DashboardPrototype() {
   return (
     <div className="flex min-h-screen" data-density="airy">
-      <aside className="hidden w-64 shrink-0 border-r border-[var(--vinea-border)] bg-[var(--vinea-surface-raised)] p-4 lg:block">
+      <aside className="hidden w-64 shrink-0 overflow-y-auto border-r border-[var(--vinea-border)] bg-[var(--vinea-surface-raised)] p-4 lg:block">
         <div className="mb-6 flex items-center gap-2 px-2">
           <div className="flex size-8 items-center justify-center rounded-[var(--radius-control)] bg-[var(--vinea-brand)] text-white">
             <LayoutGrid className="size-4" />
           </div>
           <span className="font-display text-lg font-semibold">Vinea</span>
         </div>
-        <nav className="space-y-5">
-          {navGroups.map((group) => (
-            <div key={group.label}>
-              <p className="px-2 text-xs font-medium uppercase tracking-wide text-[var(--vinea-ink-subtle)]">
-                {group.label}
-              </p>
-              <ul className="mt-1 space-y-0.5">
-                {group.items.map((item) => (
-                  <li key={item}>
-                    <span className="block cursor-pointer rounded-[var(--radius-control)] px-2 py-1.5 text-sm text-[var(--vinea-ink-muted)] hover:bg-[var(--vinea-surface-sunken)] hover:text-[var(--vinea-ink)]">
-                      {item}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ))}
-        </nav>
+
+        {/* Administration sits apart from the module tree — mirrors Sage's top-bar placement */}
+        <div className="mb-3 border-b border-[var(--vinea-border)] pb-3">
+          <span className="flex items-center gap-1.5 rounded-[var(--radius-control)] px-2 py-1.5 text-sm font-medium text-[var(--vinea-ink)] hover:bg-[var(--vinea-surface-sunken)]">
+            <ShieldCheck className="size-3.5 text-[var(--vinea-ink-subtle)]" />
+            Administration
+          </span>
+          <ul className="ml-5 mt-0.5">
+            <li className="cursor-pointer rounded-[var(--radius-control)] px-2 py-1 text-sm text-[var(--vinea-ink-muted)] hover:bg-[var(--vinea-surface-sunken)] hover:text-[var(--vinea-ink)]">
+              Users &amp; memberships
+            </li>
+          </ul>
+        </div>
+
+        <ModuleNav />
       </aside>
 
       <div className="flex-1">
