@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field, model_validator
 from app.models.fiscal import PeriodStatus
 from app.models.gl import AccountClass, ControlType
 from app.models.journal import JournalStatus
+from app.models.tax import TaxNature
 from app.schemas.common import ApiModel
 
 Money = Annotated[Decimal, Field(max_digits=20, decimal_places=6)]
@@ -338,3 +339,37 @@ class TransactionTypeRead(ApiModel):
     name: str
     default_gl_account_id: int | None
     is_active: bool
+
+
+# --- Masters: branches, tax codes, currencies (thin, read-only for now) -------------------
+
+
+class BranchRead(ApiModel):
+    id: int
+    code: str
+    name: str
+    is_main: bool
+    is_active: bool
+
+
+class TaxCodeRead(ApiModel):
+    id: int
+    code: str
+    name: str
+    nature: TaxNature
+    rate_pct: Decimal
+    gl_account_id: int | None
+    valid_from: date
+    valid_to: date | None
+    is_active: bool
+
+
+class CurrencyRead(ApiModel):
+    id: int
+    code: str
+    name: str
+    symbol: str | None
+    decimal_places: int
+    is_base: bool
+    is_active: bool
+

@@ -12,7 +12,10 @@ from starlette.requests import Request
 from app.core.errors import ConflictError, NotFoundError
 from app.kernel.accounts import get_account
 from app.kernel.errors import LedgerStateError
+from app.models.company import Branch
+from app.models.currency import Currency
 from app.models.gl import GLTransactionType, Project
+from app.models.tax import TaxCode
 from app.models.user import User
 from app.services.audit import record_audit
 
@@ -269,3 +272,31 @@ def update_transaction_type(
             request=request,
         )
     return transaction_type
+
+
+# --- Branches, tax codes, currencies (read-only; CRUD screens land with Maintenance, P3 step 4) ---
+
+
+def list_branches(db: Session, company_id: int, *, include_inactive: bool = False) -> list[Branch]:
+    statement = select(Branch).where(Branch.company_id == company_id)
+    if not include_inactive:
+        statement = statement.where(Branch.is_active)
+    return list(db.scalars(statement.order_by(Branch.code)))
+
+
+def list_tax_codes(
+    db: Session, company_id: int, *, include_inactive: bool = False
+) -> list[TaxCode]:
+    statement = select(TaxCode).where(TaxCode.company_id == company_id)
+    if not include_inactive:
+        statement = statement.where(TaxCode.is_active)
+    return list(db.scalars(statement.order_by(TaxCode.code)))
+
+
+def list_currencies(
+    db: Session, company_id: int, *, include_inactive: bool = False
+) -> list[Currency]:
+    statement = select(Currency).where(Currency.company_id == company_id)
+    if not include_inactive:
+        statement = statement.where(Currency.is_active)
+    return list(db.scalars(statement.order_by(Currency.code)))

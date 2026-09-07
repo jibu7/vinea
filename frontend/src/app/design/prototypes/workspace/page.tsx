@@ -7,7 +7,7 @@ import { Button } from "@/design/components/button";
 import { Input, Field } from "@/design/components/input";
 import { DatePicker } from "@/design/components/date-picker";
 import { StatusChip } from "@/design/components/status-chip";
-import { LineGrid, type LineGridRow } from "@/design/components/line-grid";
+import { LineGrid, emptyLineGridRow, type LineGridRow } from "@/design/components/line-grid";
 import { Money } from "@/design/components/money";
 import { CommandPalette, type CommandPaletteItem } from "@/design/components/command-palette";
 import { ThemeToggle } from "@/design/components/theme-toggle";
@@ -37,9 +37,9 @@ function toNumber(v: string) {
 export default function DocumentWorkspacePrototype() {
   const [date, setDate] = useState<Date>(new Date(2026, 8, 5));
   const [rows, setRows] = useState<LineGridRow[]>([
-    { id: "1", accountId: "6200", description: "September payroll — accrual", debit: "2400000", credit: "" },
-    { id: "2", accountId: "1000", description: "September payroll — accrual", debit: "", credit: "1900000" },
-    { id: "3", accountId: "5000", description: "PAYE withheld", debit: "", credit: "500000" },
+    emptyLineGridRow({ accountId: "6200", description: "September payroll — accrual", debit: "2400000" }),
+    emptyLineGridRow({ accountId: "1000", description: "September payroll — accrual", credit: "1900000" }),
+    emptyLineGridRow({ accountId: "5000", description: "PAYE withheld", credit: "500000" }),
   ]);
 
   const totals = useMemo(() => {
@@ -88,7 +88,7 @@ export default function DocumentWorkspacePrototype() {
             </Field>
           </div>
 
-          <LineGrid rows={rows} onRowsChange={setRows} accountOptions={accountOptions} />
+          <LineGrid mode="journal" rows={rows} onRowsChange={setRows} accountOptions={accountOptions} />
         </div>
       </main>
 

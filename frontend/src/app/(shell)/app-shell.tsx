@@ -53,10 +53,11 @@ export function AppShell({ me, children }: { me: MeResponse; children: React.Rea
         id: `${intent.label}-${item.module}-${item.label}`,
         label: item.label,
         group: intent.label,
-        onSelect: () =>
-          item.phase
-            ? toast.show({ title: item.label, description: `Landing in ${item.phase}`, tone: "neutral" })
-            : toast.show({ title: item.label, description: "Coming in a later step", tone: "neutral" }),
+        onSelect: () => {
+          if (item.href) return router.push(item.href);
+          if (item.phase) return toast.show({ title: item.label, description: `Landing in ${item.phase}`, tone: "neutral" });
+          toast.show({ title: item.label, description: "Coming in a later step", tone: "neutral" });
+        },
       })),
   );
 

@@ -516,3 +516,35 @@ def test_exchange_rates_endpoint(api: Api) -> None:
     )
     assert base.status_code == 409 and base.json()["code"] == "base_currency_rate"
     assert Decimal(rates[0]["rate"]) == Decimal("1300.5")
+
+
+def test_branches_tax_codes_currencies_are_listable(api: Api) -> None:
+    """Thin reads the document workspaces need for account/branch/tax/currency line cells."""
+    branches = api.client.get("/api/v1/gl/branches").json()
+    assert {b["code"] for b in branches} >= {"MAIN"}
+    assert next(b for b in branches if b["code"] == "MAIN")["is_main"] is True
+
+    tax_codes = api.client.get("/api/v1/gl/tax-codes").json()
+    assert {t["code"] for t in tax_codes} >= {"VAT-OUT-18", "VAT-IN-18", "VAT-EXEMPT", "VAT-ZERO"}
+    output = next(t for t in tax_codes if t["code"] == "VAT-OUT-18")
+    assert output["nature"] == "output" and Decimal(str(output["rate_pct"])) == Decimal("18")
+
+    currencies = api.client.get("/api/v1/gl/currencies").json()
+    by_code = {c["code"]: c for c in currencies}
+    assert by_code["RWF"]["is_base"] is True and by_code["RWF"]["decimal_places"] == 0
+    assert by_code["USD"]["is_base"] is False and by_code["USD"]["decimal_places"] == 2
+
+    # RLS still applies: a second tenant sees only its own rows.
+    other = TestClient(api.client.app)
+    other.post(
+        "/api/v1/auth/signup",
+        json={
+            "company_name": "Other Co",
+            "full_name": "Other Owner",
+            "email": "other@example.com",
+            "password": "correct horse battery staple",
+        },
+    )
+    other_branches = other.get("/api/v1/gl/branches").json()
+    assert {b["code"] for b in other_branches} >= {"MAIN"}
+    assert {b["id"] for b in other_branches}.isdisjoint({b["id"] for b in branches})

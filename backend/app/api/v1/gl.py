@@ -35,7 +35,9 @@ from app.schemas.common import Page
 from app.schemas.gl import (
     AccountTransactionRead,
     AccountTransactionsRead,
+    BranchRead,
     CashbookEntryCreate,
+    CurrencyRead,
     ExchangeRateCreate,
     ExchangeRateRead,
     FiscalYearCreate,
@@ -55,6 +57,7 @@ from app.schemas.gl import (
     ProjectUpdate,
     ReasonBody,
     ReversalCreate,
+    TaxCodeRead,
     TransactionTypeCreate,
     TransactionTypeRead,
     TransactionTypeUpdate,
@@ -255,6 +258,39 @@ def create_exchange_rate(
     )
     db.commit()
     return ExchangeRateRead.model_validate(row)
+
+
+# --- Branches, tax codes, currencies (thin reads; document workspaces need them for line cells) ---
+
+
+@router.get("/branches")
+def list_branches(
+    include_inactive: bool = False,
+    auth: AuthContext = permissions.require(permissions.GL_REPORTS_VIEW),
+    db: Session = Depends(get_db),
+) -> list[BranchRead]:
+    rows = masters.list_branches(db, auth.company_id, include_inactive=include_inactive)
+    return [BranchRead.model_validate(row) for row in rows]
+
+
+@router.get("/tax-codes")
+def list_tax_codes(
+    include_inactive: bool = False,
+    auth: AuthContext = permissions.require(permissions.GL_REPORTS_VIEW),
+    db: Session = Depends(get_db),
+) -> list[TaxCodeRead]:
+    rows = masters.list_tax_codes(db, auth.company_id, include_inactive=include_inactive)
+    return [TaxCodeRead.model_validate(row) for row in rows]
+
+
+@router.get("/currencies")
+def list_currencies(
+    include_inactive: bool = False,
+    auth: AuthContext = permissions.require(permissions.GL_REPORTS_VIEW),
+    db: Session = Depends(get_db),
+) -> list[CurrencyRead]:
+    rows = masters.list_currencies(db, auth.company_id, include_inactive=include_inactive)
+    return [CurrencyRead.model_validate(row) for row in rows]
 
 
 # --- Journal & cashbook entries ----------------------------------------------------------

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/cn";
 
@@ -13,6 +14,8 @@ export interface NavItem {
   permission?: string;
   /** Set when the screen belongs to a later phase — always rendered, disabled, tagged. */
   phase?: string;
+  /** Real route, once the screen exists; items without one fall back to a "coming soon" toast. */
+  href?: string;
 }
 
 export interface NavIntent {
@@ -53,8 +56,8 @@ export const navIntents: NavIntent[] = [
   {
     label: "Transactions",
     items: [
-      { label: "Journal batches", module: "General Ledger", permission: "gl:journal_post" },
-      { label: "Cashbook batches", module: "General Ledger", permission: "gl:journal_post" },
+      { label: "Journal batches", module: "General Ledger", permission: "gl:journal_post", href: "/gl/journal-batches/new" },
+      { label: "Cashbook batches", module: "General Ledger", permission: "gl:journal_post", href: "/gl/cashbook-batches/new" },
       { label: "Invoice", module: "Accounts Receivable", phase: "P4" },
       { label: "Credit note", module: "Accounts Receivable", phase: "P4" },
       { label: "Allocate", module: "Accounts Receivable", phase: "P4" },
@@ -138,18 +141,21 @@ function IntentNode({ intent, permissions }: { intent: NavIntent; permissions: S
               <ul className="space-y-0.5">
                 {items.map((item) => {
                   const disabled = !!item.phase;
+                  const itemClass = cn(
+                    "block flex-1 truncate rounded-[var(--radius-control)] px-2 py-1 text-sm",
+                    disabled
+                      ? "cursor-not-allowed text-[var(--vinea-ink-subtle)]"
+                      : "cursor-pointer text-[var(--vinea-ink-muted)] hover:bg-[var(--vinea-surface-sunken)] hover:text-[var(--vinea-ink)]",
+                  );
                   return (
                     <li key={item.label} className="flex items-center justify-between gap-2">
-                      <span
-                        className={cn(
-                          "block flex-1 truncate rounded-[var(--radius-control)] px-2 py-1 text-sm",
-                          disabled
-                            ? "cursor-not-allowed text-[var(--vinea-ink-subtle)]"
-                            : "cursor-pointer text-[var(--vinea-ink-muted)] hover:bg-[var(--vinea-surface-sunken)] hover:text-[var(--vinea-ink)]",
-                        )}
-                      >
-                        {item.label}
-                      </span>
+                      {!disabled && item.href ? (
+                        <Link href={item.href} className={itemClass}>
+                          {item.label}
+                        </Link>
+                      ) : (
+                        <span className={itemClass}>{item.label}</span>
+                      )}
                       {item.phase && (
                         <span className="mr-2 rounded-full bg-[var(--vinea-surface-sunken)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--vinea-ink-subtle)]">
                           {item.phase}

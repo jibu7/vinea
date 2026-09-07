@@ -81,11 +81,13 @@ export default function DashboardPage() {
         <div className="rounded-[var(--radius-card)] border border-[var(--vinea-border)] bg-[var(--vinea-surface-raised)] p-5">
           <h2 className="mb-4 font-display text-lg font-medium">Quick actions</h2>
           <div className="space-y-2">
-            <Link href="/design/prototypes/workspace">
+            <Link href="/gl/journal-batches/new">
               <Button variant="secondary" className="w-full justify-start"><Wallet className="size-4" /> New journal entry</Button>
             </Link>
-            <Button variant="secondary" className="w-full justify-start"><Wallet className="size-4" /> New cashbook entry</Button>
-            <Button variant="ghost" className="w-full justify-start">View trial balance</Button>
+            <Link href="/gl/cashbook-batches/new">
+              <Button variant="secondary" className="w-full justify-start"><Wallet className="size-4" /> New cashbook entry</Button>
+            </Link>
+            <Button variant="ghost" className="w-full justify-start" disabled>View trial balance</Button>
           </div>
         </div>
       </div>

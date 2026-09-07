@@ -14,7 +14,7 @@ import { Dialog, DialogTrigger, DialogContent } from "@/design/components/dialog
 import { useToast } from "@/design/components/toast";
 import { CommandPalette, type CommandPaletteItem } from "@/design/components/command-palette";
 import { EmptyState } from "@/design/components/empty-state";
-import { LineGrid, type LineGridRow } from "@/design/components/line-grid";
+import { LineGrid, emptyLineGridRow, type LineGridRow } from "@/design/components/line-grid";
 import { Money } from "@/design/components/money";
 import { ThemeToggle } from "@/design/components/theme-toggle";
 import { RWF, USD } from "@/lib/format";
@@ -40,8 +40,8 @@ function DesignPageInner() {
   const [comboAccount, setComboAccount] = useState("");
   const [date, setDate] = useState<Date | null>(null);
   const [rows, setRows] = useState<LineGridRow[]>([
-    { id: "1", accountId: "1000", description: "Cash sale — invoice 1042", debit: "150000", credit: "" },
-    { id: "2", accountId: "4000", description: "Cash sale — invoice 1042", debit: "", credit: "150000" },
+    emptyLineGridRow({ accountId: "1000", description: "Cash sale — invoice 1042", debit: "150000" }),
+    emptyLineGridRow({ accountId: "4000", description: "Cash sale — invoice 1042", credit: "150000" }),
   ]);
 
   return (
@@ -207,7 +207,7 @@ function DesignPageInner() {
       <section className="mb-12 space-y-4">
         <h2 className="font-display text-xl font-medium">Dense data grid</h2>
         <div data-density="dense">
-          <LineGrid rows={rows} onRowsChange={setRows} accountOptions={accountOptions} />
+          <LineGrid mode="journal" rows={rows} onRowsChange={setRows} accountOptions={accountOptions} />
         </div>
       </section>
 

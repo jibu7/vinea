@@ -14,12 +14,16 @@ export function Combobox({
   onValueChange,
   placeholder = "Search…",
   className,
+  onKeyDown,
+  onFocus,
 }: {
   options: SelectOption[];
   value?: string;
   onValueChange?: (value: string) => void;
   placeholder?: string;
   className?: string;
+  onKeyDown?: React.KeyboardEventHandler<HTMLButtonElement>;
+  onFocus?: React.FocusEventHandler<HTMLButtonElement>;
 }) {
   const [open, setOpen] = useState(false);
   const selected = options.find((o) => o.value === value);
@@ -29,6 +33,8 @@ export function Combobox({
       <PopoverPrimitive.Trigger asChild>
         <button
           type="button"
+          onKeyDown={onKeyDown}
+          onFocus={onFocus}
           className={cn(
             "flex h-10 w-full items-center justify-between gap-2 rounded-[var(--radius-control)]",
             "border border-[var(--vinea-border-strong)] bg-[var(--vinea-surface-raised)] px-3 text-left text-sm",
