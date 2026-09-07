@@ -60,7 +60,7 @@ export function CommandPalette({ items }: { items: CommandPaletteItem[] }) {
                 <CommandPrimitive.Group
                   key={group}
                   heading={group}
-                  className="px-1 py-1 text-xs font-medium uppercase tracking-wide text-[var(--vinea-ink-subtle)] [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1"
+                  className="px-1 py-1 text-sm [&_[cmdk-group-heading]]:block [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1 [&_[cmdk-group-heading]]:text-xs [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wide [&_[cmdk-group-heading]]:text-[var(--vinea-ink-subtle)]"
                 >
                   {items
                     .filter((i) => i.group === group)

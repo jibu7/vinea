@@ -1,10 +1,10 @@
 import { getRequestConfig } from "next-intl/server";
 
-/** Single locale at launch (en) — i18n plumbing is in from day 1 per the P3 plan. */
+/** Single locale at launch (en-GB — day/month/year dates match Rwanda convention). */
 export default getRequestConfig(async () => {
-  const locale = "en";
+  const locale = "en-GB";
   return {
     locale,
-    messages: (await import(`./messages/${locale}.json`)).default,
+    messages: (await import(`./messages/en.json`)).default,
   };
 });

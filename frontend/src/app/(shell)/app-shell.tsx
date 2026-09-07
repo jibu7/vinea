@@ -10,7 +10,7 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { useTranslations } from "next-intl";
-import { ModuleNav } from "@/design/components/module-nav";
+import { SidebarNav, navIntents } from "@/design/components/module-nav";
 import { ThemeToggle } from "@/design/components/theme-toggle";
 import { Button } from "@/design/components/button";
 import { CommandPalette, type CommandPaletteItem } from "@/design/components/command-palette";
@@ -45,19 +45,22 @@ export function AppShell({ me, children }: { me: MeResponse; children: React.Rea
     router.push("/login");
   }
 
+  // Ctrl+K must reach every screen, listed by intent — same data source as the sidebar tree.
+  const screenItems: CommandPaletteItem[] = navIntents.flatMap((intent) =>
+    intent.items
+      .filter((item) => item.phase || !item.permission || permissions.has(item.permission))
+      .map((item) => ({
+        id: `${intent.label}-${item.module}-${item.label}`,
+        label: item.label,
+        group: intent.label,
+        onSelect: () =>
+          item.phase
+            ? toast.show({ title: item.label, description: `Landing in ${item.phase}`, tone: "neutral" })
+            : toast.show({ title: item.label, description: "Coming in a later step", tone: "neutral" }),
+      })),
+  );
+
   const paletteItems: CommandPaletteItem[] = [
-    {
-      id: "new-je",
-      label: "New journal entry",
-      group: "Create",
-      onSelect: () => toast.show({ title: "Coming soon", description: "Journal batches land in a later step", tone: "neutral" }),
-    },
-    {
-      id: "new-cb",
-      label: "New cashbook entry",
-      group: "Create",
-      onSelect: () => toast.show({ title: "Coming soon", description: "Cashbook batches land in a later step", tone: "neutral" }),
-    },
     {
       id: "toggle-theme",
       label: "Toggle theme",
@@ -72,10 +75,11 @@ export function AppShell({ me, children }: { me: MeResponse; children: React.Rea
       .map((m) => ({
         id: `switch-${m.company_id}`,
         label: `Switch to ${m.company_name}`,
-        group: "Navigate",
+        group: "Preferences",
         onSelect: () => handleSwitchCompany(m.company_id),
       })),
-    { id: "sign-out", label: "Sign out", group: "Navigate", onSelect: handleLogout },
+    { id: "sign-out", label: "Sign out", group: "Preferences", onSelect: handleLogout },
+    ...screenItems,
   ];
 
   return (
@@ -104,7 +108,12 @@ export function AppShell({ me, children }: { me: MeResponse; children: React.Rea
           </div>
         )}
 
-        <ModuleNav permissions={permissions} />
+        <span className="mb-1 flex items-center gap-1.5 rounded-[var(--radius-control)] px-2 py-1.5 text-sm font-medium text-[var(--vinea-ink)] hover:bg-[var(--vinea-surface-sunken)]">
+          <LayoutGrid className="size-3.5 text-[var(--vinea-ink-subtle)]" />
+          {t("myDesktop")}
+        </span>
+
+        <SidebarNav permissions={permissions} />
       </aside>
 
       <div className="flex-1">

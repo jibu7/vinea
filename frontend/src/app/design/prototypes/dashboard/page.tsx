@@ -3,7 +3,7 @@ import { LayoutGrid, Building2, Command as CommandIcon, Sun, ArrowUpRight, Arrow
 import { Button } from "@/design/components/button";
 import { StatusChip } from "@/design/components/status-chip";
 import { Money } from "@/design/components/money";
-import { ModuleNav } from "@/design/components/module-nav";
+import { SidebarNav } from "@/design/components/module-nav";
 import { RWF } from "@/lib/format";
 
 const kpis = [
@@ -44,7 +44,26 @@ export default function DashboardPrototype() {
           </ul>
         </div>
 
-        <ModuleNav permissions={new Set(["common:setup_currencies", "common:setup_taxes", "gl:reports_view"])} />
+        <span className="mb-1 flex items-center gap-1.5 rounded-[var(--radius-control)] px-2 py-1.5 text-sm font-medium text-[var(--vinea-ink)] hover:bg-[var(--vinea-surface-sunken)]">
+          <LayoutGrid className="size-3.5 text-[var(--vinea-ink-subtle)]" />
+          My Desktop
+        </span>
+
+        <SidebarNav
+          permissions={
+            new Set([
+              "company:read",
+              "common:setup_currencies",
+              "common:setup_taxes",
+              "common:setup_branches",
+              "gl:setup_manage",
+              "gl:journal_post",
+              "gl:reports_view",
+              "reporting:trial_balance_view",
+              "projects:manage",
+            ])
+          }
+        />
       </aside>
 
       <div className="flex-1">

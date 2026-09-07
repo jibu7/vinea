@@ -5,6 +5,7 @@ import Link from "next/link";
 import { ArrowLeft, Command as CommandIcon } from "lucide-react";
 import { Button } from "@/design/components/button";
 import { Input, Field } from "@/design/components/input";
+import { DatePicker } from "@/design/components/date-picker";
 import { StatusChip } from "@/design/components/status-chip";
 import { LineGrid, type LineGridRow } from "@/design/components/line-grid";
 import { Money } from "@/design/components/money";
@@ -34,6 +35,7 @@ function toNumber(v: string) {
 }
 
 export default function DocumentWorkspacePrototype() {
+  const [date, setDate] = useState<Date>(new Date(2026, 8, 5));
   const [rows, setRows] = useState<LineGridRow[]>([
     { id: "1", accountId: "6200", description: "September payroll — accrual", debit: "2400000", credit: "" },
     { id: "2", accountId: "1000", description: "September payroll — accrual", debit: "", credit: "1900000" },
@@ -76,7 +78,7 @@ export default function DocumentWorkspacePrototype() {
         <div className="mx-auto max-w-4xl space-y-6">
           <div className="grid grid-cols-1 gap-4 rounded-[var(--radius-card)] border border-[var(--vinea-border)] bg-[var(--vinea-surface-raised)] p-5 sm:grid-cols-3">
             <Field label="Date">
-              <Input type="date" defaultValue="2026-09-05" />
+              <DatePicker value={date} onValueChange={setDate} />
             </Field>
             <Field label="Reference">
               <Input defaultValue="PAYROLL-SEP-26" />

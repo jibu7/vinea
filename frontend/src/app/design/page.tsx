@@ -6,6 +6,7 @@ import { Button } from "@/design/components/button";
 import { Input, Field } from "@/design/components/input";
 import { Select } from "@/design/components/select";
 import { Combobox } from "@/design/components/combobox";
+import { DatePicker } from "@/design/components/date-picker";
 import { StatusChip } from "@/design/components/status-chip";
 import { Table, THead, TBody, TR, TH, TD } from "@/design/components/table";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/design/components/tabs";
@@ -37,6 +38,7 @@ function DesignPageInner() {
   const toast = useToast();
   const [account, setAccount] = useState("");
   const [comboAccount, setComboAccount] = useState("");
+  const [date, setDate] = useState<Date | null>(null);
   const [rows, setRows] = useState<LineGridRow[]>([
     { id: "1", accountId: "1000", description: "Cash sale — invoice 1042", debit: "150000", credit: "" },
     { id: "2", accountId: "4000", description: "Cash sale — invoice 1042", debit: "", credit: "150000" },
@@ -88,6 +90,9 @@ function DesignPageInner() {
           </Field>
           <Field label="Account (typeahead combobox)">
             <Combobox options={accountOptions} value={comboAccount} onValueChange={setComboAccount} placeholder="Search accounts…" />
+          </Field>
+          <Field label="Date (dd/MM/yyyy)">
+            <DatePicker value={date} onValueChange={setDate} />
           </Field>
         </div>
       </section>

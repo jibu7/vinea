@@ -2,6 +2,7 @@ export * from "./button";
 export * from "./input";
 export * from "./select";
 export * from "./combobox";
+export * from "./date-picker";
 export * from "./status-chip";
 export * from "./table";
 export * from "./tabs";
