@@ -81,6 +81,42 @@ jobs:
           name: playwright-report
           path: frontend/playwright-report/
           retention-days: 7
+      - name: upload print-preview screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: print-preview-screenshots
+          path: frontend/screenshots/
+          retention-days: 7
+
+      # `make db-reset` (drop the dev Postgres volume, migrate, seed) only ever ran by hand
+      # before — exercise it here so a break in it (e.g. init-app-role.sql drifting from the
+      # RLS-enforced app role) fails CI instead of surfacing on someone's laptop. Re-running
+      # e2e:regression afterward is the actual proof the reset DB is back to seed state: it
+      # needs a real login and the seeded 6100 account, so it fails if either is missing.
+      - name: reset dev DB (make db-reset)
+        run: make db-reset
+        working-directory: .
+      - name: wait for backend and frontend after reset
+        run: |
+          for i in $(seq 1 60); do curl -sf http://localhost:8000/health && break; sleep 2; done
+          curl -sf http://localhost:8000/health
+          for i in $(seq 1 60); do curl -sf -o /dev/null http://localhost:3000/login && break; sleep 2; done
+          curl -sf -o /dev/null http://localhost:3000/login
+          # `make db-reset` recreates the frontend container, so `next dev`'s per-route compile
+          # cache (an anonymous volume, not persisted) is gone too — warm the routes
+          # e2e:regression hits next, same as the earlier "wait for backend and frontend" step,
+          # or its first navigation eats the compile cost against Playwright's fixed 30s
+          # waitForURL default instead of this loop's much longer budget.
+          for route in / /gl/journal-batches/new; do
+            curl -sf -o /dev/null "http://localhost:3000${route}" || true
+          done
+        working-directory: .
+      - name: confirm reset DB is back to seed state
+        run: npm run e2e:regression
+        env:
+          PLAYWRIGHT_BASE_URL: http://localhost:3000
+          PLAYWRIGHT_API_URL: http://localhost:8000
       - name: docker compose logs
         if: failure()
         run: docker compose logs --tail=200

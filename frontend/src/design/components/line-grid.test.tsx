@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { fireEvent, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { LineGrid, emptyLineGridRow, type LineGridRow } from "./line-grid";
 
@@ -80,5 +81,52 @@ describe("LineGrid keyboard model", () => {
     fireEvent.keyDown(input, { key: "Escape" });
 
     expect(descriptionInputs()[0].value).toBe("Steady");
+  });
+});
+
+// Regression for the FRw 1,000,065,000 incident: an amount cell swaps between a
+// comma-formatted display and raw digits on focus. The old code called .select() to
+// arm the overwrite synchronously inside onFocus, before that swap had committed to
+// the DOM, so it selected the stale formatted text; once React then swapped in the raw
+// value, the selection no longer covered the full field, and new input landed next to
+// a surviving fragment of the old value instead of replacing it (65,000 in becoming
+// 1,000,065,000). The fix (line-grid.tsx) moved the select() into a useEffect that
+// runs after the raw value has committed. Both tests below type via user.keyboard(),
+// which respects whatever selection is live in the DOM at the moment of typing —
+// user.clear() and user.type(element, text) each do their own selection handling
+// first, which would make the test pass regardless of whether the fix regresses
+// (verified: with the fix temporarily reverted, a clear()+type() version of this test
+// still passed). user.keyboard() is what actually exercises the fix.
+describe("LineGrid amount cell overwrite (FRw 1,000,065,000 regression)", () => {
+  it("replaces a stale formatted value instead of concatenating, on the very first focus", async () => {
+    const user = userEvent.setup();
+    render(<Harness initialRows={[emptyLineGridRow({ debit: "10000" })]} />);
+    const debitInput = screen.getByLabelText("Debit, row 1");
+    const descInput = screen.getByLabelText("Description, row 1");
+
+    expect(debitInput).toHaveValue("10,000");
+
+    await user.click(debitInput); // first-ever focus transition into this cell
+    await user.keyboard("65000");
+    await user.click(descInput); // blur -> reformats with thousand separators
+
+    expect(debitInput).toHaveValue("65,000");
+  });
+
+  it("replaces a stale value instead of concatenating, when typed over after a fresh focus", async () => {
+    const user = userEvent.setup();
+    render(<Harness initialRows={[emptyLineGridRow({ debit: "42000" })]} />);
+    const debitInput = screen.getByLabelText("Debit, row 1");
+    const descInput = screen.getByLabelText("Description, row 1");
+
+    await user.click(descInput); // focus elsewhere first, so the next click is a real transition
+    await user.click(debitInput); // fresh focus -> the post-render effect selects the raw value
+    // user.keyboard() types into whatever is currently focused and respects the live DOM
+    // selection; user.type(element, text) re-focuses/repositions the caret itself first, which
+    // would mask this regression by resetting the very selection the fix depends on.
+    await user.keyboard("65000");
+    await user.click(descInput); // blur -> reformats
+
+    expect(debitInput).toHaveValue("65,000");
   });
 });

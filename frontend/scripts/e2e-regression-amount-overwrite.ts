@@ -1,4 +1,5 @@
 import { chromium } from "@playwright/test";
+import { PASSWORD, PRIMARY_EMAIL, pickAccount } from "../e2e/support/fixtures";
 
 /**
  * Regression for the FRw 1,000,065,000 incident: a debit/credit/amount cell that already
@@ -7,30 +8,39 @@ import { chromium } from "@playwright/test";
  * a cell holding "10000" and filling "65000" produced "1000065000" (a literal string
  * concatenation of the two values), because the cell did not select its existing content on
  * focus. This script proves the fix for both automated fill() and real keystroke typing, and
- * never posts anything (so it leaves no journal entries behind).
+ * never posts anything (so it leaves no journal entries behind). It's also covered as a fast
+ * jsdom unit test (src/design/components/line-grid.test.tsx) that runs on every `npm run
+ * test`; this script additionally proves it end-to-end against a real browser and backend.
+ *
+ * BASE_URL/EMAIL/PASSWORD default to the same `seed_e2e.py` fixture the rest of the e2e suite
+ * uses, so this runs unattended in CI; override via env vars to point at a different stack.
  */
+const BASE_URL = process.env.PLAYWRIGHT_BASE_URL ?? "http://localhost:3000";
+const EMAIL = process.env.E2E_LOGIN_EMAIL ?? PRIMARY_EMAIL;
+const PASSWORD_ENV = process.env.E2E_LOGIN_PASSWORD ?? PASSWORD;
+
 async function main() {
   const browser = await chromium.launch();
-  const page = await (await browser.newContext({ viewport: { width: 1440, height: 900 } })).newPage();
+  const page = await (
+    await browser.newContext({ viewport: { width: 1440, height: 900 }, baseURL: BASE_URL })
+  ).newPage();
   page.on("pageerror", (err) => console.log("[pageerror]", err.message));
 
-  await page.goto("http://localhost:3000/", { waitUntil: "networkidle" });
-  await page.fill('input[type="email"]', "aline@rugariwines.rw");
-  await page.fill('input[type="password"]', "SuperSecret123!");
+  // `next dev`'s HMR websocket never idles, so `waitUntil: "networkidle"` hangs — go straight
+  // to /login (no client-side redirect to race) instead of relying on root `/` to redirect.
+  await page.goto("/login");
+  await page.fill('input[type="email"]', EMAIL);
+  await page.fill('input[type="password"]', PASSWORD_ENV);
   await page.click('button[type="submit"]');
-  await page.waitForURL("http://localhost:3000/");
+  await page.waitForURL("/");
   await page.waitForSelector("text=Good morning");
   console.log("login -> OK");
 
-  await page.goto("http://localhost:3000/gl/journal-batches/new", { waitUntil: "networkidle" });
+  await page.goto("/gl/journal-batches/new");
   await page.waitForSelector("text=Journal Batch");
 
   // Select an account on line 1 so the debit cell is a real, enabled input.
-  await page.locator("table tbody tr").nth(0).locator("button").first().click();
-  await page.keyboard.type("6100");
-  await page.waitForTimeout(300);
-  await page.keyboard.press("Enter");
-  await page.waitForTimeout(200);
+  await pickAccount(page, 0, "6100");
 
   const debitCell = page.locator("table tbody tr").nth(0).locator('input[placeholder="0"]').first();
   const descCell = page.locator("table tbody tr").nth(0).locator('input[placeholder="Line description"]');
