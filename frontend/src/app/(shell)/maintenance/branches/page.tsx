@@ -137,6 +137,7 @@ export default function BranchesPage() {
                         <button
                           type="button"
                           onClick={() => startEdit(b)}
+                          aria-label={`Edit ${b.name}`}
                           className="p-1 text-[var(--vinea-ink-subtle)] hover:text-[var(--vinea-ink)] rounded"
                         >
                           <Edit2 className="size-3.5" />

@@ -126,6 +126,7 @@ export default function ProjectsPage() {
                         <button
                           type="button"
                           onClick={() => startEdit(p)}
+                          aria-label={`Edit ${p.name}`}
                           className="p-1 text-[var(--vinea-ink-subtle)] hover:text-[var(--vinea-ink)] rounded"
                         >
                           <Edit2 className="size-3.5" />

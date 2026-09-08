@@ -203,6 +203,7 @@ export default function TaxTypesPage() {
                           <button
                             type="button"
                             onClick={() => startEdit(tc)}
+                            aria-label={`Edit ${tc.code}`}
                             className="p-1 text-[var(--vinea-ink-subtle)] hover:text-[var(--vinea-ink)] rounded"
                           >
                             <Edit2 className="size-3.5" />

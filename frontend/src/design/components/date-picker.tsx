@@ -75,13 +75,13 @@ export function DatePicker({
           className="z-50 w-72 rounded-[var(--radius-control)] border border-[var(--vinea-border)] bg-[var(--vinea-surface-raised)] p-3 shadow-[var(--elevation-2)]"
         >
           <div className="mb-2 flex items-center justify-between">
-            <button type="button" onClick={() => changeMonth(-1)} className="rounded-[var(--radius-control)] p-1 hover:bg-[var(--vinea-surface-sunken)]">
+            <button type="button" onClick={() => changeMonth(-1)} aria-label="Previous month" className="rounded-[var(--radius-control)] p-1 hover:bg-[var(--vinea-surface-sunken)]">
               <ChevronLeft className="size-4" />
             </button>
             <span className="text-sm font-medium">
               {cursor.toLocaleString("en-GB", { month: "long" })} {year}
             </span>
-            <button type="button" onClick={() => changeMonth(1)} className="rounded-[var(--radius-control)] p-1 hover:bg-[var(--vinea-surface-sunken)]">
+            <button type="button" onClick={() => changeMonth(1)} aria-label="Next month" className="rounded-[var(--radius-control)] p-1 hover:bg-[var(--vinea-surface-sunken)]">
               <ChevronRight className="size-4" />
             </button>
           </div>
