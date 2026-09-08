@@ -174,6 +174,7 @@ export default function ChartOfAccountsPage() {
               <button
                 type="button"
                 onClick={() => toggleCollapse(acc.id)}
+                aria-label={isNodeCollapsed ? `Expand ${acc.name}` : `Collapse ${acc.name}`}
                 className="rounded p-0.5 text-[var(--vinea-ink-subtle)] hover:bg-[var(--vinea-surface-sunken)] hover:text-[var(--vinea-ink)]"
               >
                 {isNodeCollapsed ? (
