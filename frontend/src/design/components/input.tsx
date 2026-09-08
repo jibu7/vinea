@@ -1,6 +1,14 @@
 "use client";
 
-import { type InputHTMLAttributes, type LabelHTMLAttributes, createContext, forwardRef, useContext, useId } from "react";
+import {
+  type InputHTMLAttributes,
+  type LabelHTMLAttributes,
+  type ReactNode,
+  createContext,
+  forwardRef,
+  useContext,
+  useId,
+} from "react";
 import { cn } from "@/lib/cn";
 
 /** Set by `Field`, read by its labelable descendants (`Input`, `Combobox`, `DatePicker`) so
@@ -13,10 +21,11 @@ export function useFieldLabelId(): string | undefined {
 export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement>>(
   ({ className, ...props }, ref) => {
     const labelId = useFieldLabelId();
+    const hasOwnAccessibleName = props["aria-label"] != null || props["aria-labelledby"] != null;
     return (
       <input
         ref={ref}
-        aria-labelledby={labelId}
+        aria-labelledby={hasOwnAccessibleName ? undefined : labelId}
         className={cn(
           "h-10 w-full rounded-[var(--radius-control)] border border-[var(--vinea-border-strong)]",
           "bg-[var(--vinea-surface-raised)] px-3 text-sm text-[var(--vinea-ink)]",
@@ -55,7 +64,7 @@ export function Field({
   label: string;
   error?: string;
   className?: string;
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   const labelId = useId();
   return (

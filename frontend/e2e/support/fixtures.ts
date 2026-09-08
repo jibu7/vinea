@@ -26,13 +26,18 @@ export async function login(page: Page, email: string = PRIMARY_EMAIL): Promise<
   await page.waitForSelector("text=Good morning");
 }
 
-/** Fills the account combobox in a LineGrid row via its typeahead, by account code. */
+/** Fills the account combobox in a LineGrid row via its typeahead, by account code. `cmdk`
+ * (the combobox's internal list) marks its own DOM nodes with `cmdk-input`/`cmdk-item`
+ * attributes, so wait on those instead of sleeping — this is only one field, but combobox
+ * cells throughout the app share the same underlying `Combobox` component and DOM shape. */
 export async function pickAccount(page: Page, rowIndex: number, code: string): Promise<void> {
   await page.locator("table tbody tr").nth(rowIndex).locator("button").first().click();
+  const searchInput = page.locator("[cmdk-input]");
+  await searchInput.waitFor({ state: "visible" });
   await page.keyboard.type(code);
-  await page.waitForTimeout(250);
+  await page.locator("[cmdk-item]").first().waitFor({ state: "visible" });
   await page.keyboard.press("Enter");
-  await page.waitForTimeout(150);
+  await searchInput.waitFor({ state: "hidden" });
 }
 
 /** Resolves a GL account id by code through the API — used where a test drives the API

@@ -1,3 +1,4 @@
+import { webcrypto } from "node:crypto";
 import "@testing-library/jest-dom/vitest";
 
 // Date-formatting tests assert on calendar dates; pin the runner's zone so they don't
@@ -7,7 +8,6 @@ process.env.TZ = "UTC";
 // jsdom ships getRandomValues but not randomUUID on older/leaner builds; the
 // design system (e.g. LineGrid rows) relies on crypto.randomUUID() at module load time.
 if (typeof globalThis.crypto === "undefined" || typeof globalThis.crypto.randomUUID !== "function") {
-  const { webcrypto } = await import("node:crypto");
   Object.defineProperty(globalThis, "crypto", { value: webcrypto, configurable: true });
 }
 
