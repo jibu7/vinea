@@ -15,7 +15,10 @@ export const DEBIT_ACCOUNT_CODE = "6100"; // Salaries & Wages
 export const CREDIT_ACCOUNT_CODE = "2300"; // Accrued Expenses
 
 export async function login(page: Page, email: string = PRIMARY_EMAIL): Promise<void> {
-  await page.goto("/", { waitUntil: "networkidle" });
+  // `next dev`'s HMR websocket never idles, so `waitUntil: "networkidle"` here hangs to the
+  // navigation timeout — go straight to /login (no client-side redirect to race) and let
+  // page.fill's own auto-wait cover hydration instead.
+  await page.goto("/login");
   await page.fill('input[type="email"]', email);
   await page.fill('input[type="password"]', PASSWORD);
   await page.click('button[type="submit"]');

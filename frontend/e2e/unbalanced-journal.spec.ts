@@ -4,7 +4,7 @@ import { DEBIT_ACCOUNT_CODE, PRIMARY_EMAIL, login, pickAccount } from "./support
 test.describe("journal batch: unbalanced entries are blocked", () => {
   test("Post stays disabled while the two lines don't balance", async ({ page }) => {
     await login(page, PRIMARY_EMAIL);
-    await page.goto("/gl/journal-batches/new", { waitUntil: "networkidle" });
+    await page.goto("/gl/journal-batches/new");
     await page.waitForSelector("text=Journal Batch");
     await page.fill('input[placeholder="September payroll accrual"]', `E2E unbalanced ${Date.now()}`);
 

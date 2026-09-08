@@ -20,7 +20,7 @@ test.describe("journal batch: login, switch company, post, enquire", () => {
 
     // --- create + post a balanced two-line journal ------------------------------------
     const description = `E2E balanced journal ${Date.now()}`;
-    await page.goto("/gl/journal-batches/new", { waitUntil: "networkidle" });
+    await page.goto("/gl/journal-batches/new");
     await page.waitForSelector("text=Journal Batch");
     await page.fill('input[placeholder="September payroll accrual"]', description);
 
@@ -38,7 +38,7 @@ test.describe("journal batch: login, switch company, post, enquire", () => {
     await page.waitForSelector("text=Posted");
 
     // --- entry visible in account enquiry ----------------------------------------------
-    await page.goto("/gl/enquiries/account", { waitUntil: "networkidle" });
+    await page.goto("/gl/enquiries/account");
     await page.getByRole("button", { name: "Choose an account…" }).click();
     await page.keyboard.type(DEBIT_ACCOUNT_CODE);
     await page.waitForTimeout(250);
@@ -47,7 +47,7 @@ test.describe("journal batch: login, switch company, post, enquire", () => {
     await expect(page.locator(`table tbody tr:has-text("${description}")`)).toBeVisible({ timeout: 10_000 });
 
     // --- trial balance foots ------------------------------------------------------------
-    await page.goto("/gl/enquiries/trial-balance", { waitUntil: "networkidle" });
+    await page.goto("/gl/enquiries/trial-balance");
     await page.waitForSelector("text=Trial Balance Enquiry");
     await expect(page.getByText("Balanced (foots)")).toBeVisible();
   });

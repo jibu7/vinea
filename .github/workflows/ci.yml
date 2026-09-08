@@ -60,6 +60,11 @@ jobs:
           curl -sf http://localhost:8000/health
           for i in $(seq 1 60); do curl -sf -o /dev/null http://localhost:3000/login && break; sleep 2; done
           curl -sf -o /dev/null http://localhost:3000/login
+          # `next dev` compiles each route on its first hit — front-load that cost here,
+          # outside any single Playwright test's timeout budget.
+          for route in / /gl/journal-batches/new /gl/enquiries/account /gl/enquiries/trial-balance /maintenance/chart-of-accounts; do
+            curl -sf -o /dev/null "http://localhost:3000${route}" || true
+          done
         working-directory: .
       - name: seed e2e fixtures
         run: docker compose exec -T backend uv run python -m app.scripts.seed_e2e

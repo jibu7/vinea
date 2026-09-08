@@ -16,7 +16,7 @@ async function openJanuary15th(page: import("@playwright/test").Page): Promise<v
 test.describe("posting into a closed period", () => {
   test("shows the inline period-closed error instead of posting", async ({ page }) => {
     await login(page, PRIMARY_EMAIL);
-    await page.goto("/gl/journal-batches/new", { waitUntil: "networkidle" });
+    await page.goto("/gl/journal-batches/new");
     await page.waitForSelector("text=Journal Batch");
     await page.fill('input[placeholder="September payroll accrual"]', `E2E closed period ${Date.now()}`);
 

@@ -13,7 +13,9 @@ export default defineConfig({
   retries: process.env.CI ? 1 : 0,
   workers: 1,
   reporter: process.env.CI ? [["list"], ["html", { open: "never" }]] : "list",
-  timeout: 30_000,
+  // `next dev`'s on-demand compilation means a route's very first hit in the container's
+  // lifetime can be slow on a loaded CI runner; give tests headroom beyond that first compile.
+  timeout: 45_000,
   expect: { timeout: 10_000 },
   use: {
     baseURL: process.env.PLAYWRIGHT_BASE_URL ?? "http://localhost:3000",
