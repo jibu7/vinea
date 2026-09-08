@@ -103,6 +103,14 @@ jobs:
           curl -sf http://localhost:8000/health
           for i in $(seq 1 60); do curl -sf -o /dev/null http://localhost:3000/login && break; sleep 2; done
           curl -sf -o /dev/null http://localhost:3000/login
+          # `make db-reset` recreates the frontend container, so `next dev`'s per-route compile
+          # cache (an anonymous volume, not persisted) is gone too — warm the routes
+          # e2e:regression hits next, same as the earlier "wait for backend and frontend" step,
+          # or its first navigation eats the compile cost against Playwright's fixed 30s
+          # waitForURL default instead of this loop's much longer budget.
+          for route in / /gl/journal-batches/new; do
+            curl -sf -o /dev/null "http://localhost:3000${route}" || true
+          done
         working-directory: .
       - name: confirm reset DB is back to seed state
         run: npm run e2e:regression
