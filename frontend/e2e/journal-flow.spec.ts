@@ -2,7 +2,6 @@ import { expect, test } from "@playwright/test";
 import {
   CREDIT_ACCOUNT_CODE,
   DEBIT_ACCOUNT_CODE,
-  PRIMARY_COMPANY,
   PRIMARY_EMAIL,
   SECONDARY_COMPANY,
   login,
@@ -13,10 +12,14 @@ test.describe("journal batch: login, switch company, post, enquire", () => {
   test("switches company, posts a balanced journal, and it foots the trial balance", async ({ page }) => {
     await login(page, PRIMARY_EMAIL);
 
-    // --- switch company ---------------------------------------------------------------
-    await page.getByRole("button", { name: PRIMARY_COMPANY }).click();
+    // --- switch company -----------------------------------------------------------------
+    // The primary e2e user has two memberships on purpose (for this test), so login doesn't
+    // auto-select one (auth_service.select_membership only auto-picks when there's exactly
+    // one) — the header shows "Select company" until the user picks. The switcher button is
+    // the first button in the header regardless of which label it's currently showing.
+    await page.locator("header button").first().click();
     await page.getByRole("button", { name: SECONDARY_COMPANY }).click();
-    await expect(page.getByRole("button", { name: SECONDARY_COMPANY })).toBeVisible();
+    await expect(page.locator("header button").first()).toHaveText(SECONDARY_COMPANY);
 
     // --- create + post a balanced two-line journal ------------------------------------
     const description = `E2E balanced journal ${Date.now()}`;

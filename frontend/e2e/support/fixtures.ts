@@ -46,12 +46,49 @@ export async function pickAccount(page: Page, rowIndex: number, code: string): P
   await searchInput.waitFor({ state: "hidden" });
 }
 
+export interface FetchResult {
+  status: number;
+  ok: boolean;
+  json: unknown;
+}
+
+/** Drives the API from *inside* the page via its own `fetch`, instead of `page.request` — the
+ * latter has its own cookie jar synced from the browser context, but a real login redirect
+ * (POST /auth/login sets cookies via the page's own `fetch`) didn't reliably show up there in
+ * practice (GET /gl/accounts came back 401 immediately after a login that had already rendered
+ * "Good morning"). Running fetch through `page.evaluate` uses the exact mechanism the app's own
+ * code already relies on (`credentials: "include"`), so it can't diverge from it. */
+export async function pageFetch(
+  page: Page,
+  path: string,
+  init: { method?: string; body?: unknown; headers?: Record<string, string> } = {},
+): Promise<FetchResult> {
+  return page.evaluate(
+    async ({ url, method, body, headers }) => {
+      const res = await fetch(url, {
+        method,
+        credentials: "include",
+        headers: body !== undefined ? { "Content-Type": "application/json", ...headers } : headers,
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+      });
+      const json = await res.json().catch(() => null);
+      return { status: res.status, ok: res.ok, json };
+    },
+    {
+      url: `${API_BASE}${path}`,
+      method: init.method ?? "GET",
+      body: init.body,
+      headers: init.headers ?? {},
+    },
+  );
+}
+
 /** Resolves a GL account id by code through the API — used where a test drives the API
  * directly (e.g. the idempotency replay check) rather than the LineGrid combobox. */
 export async function accountIdByCode(page: Page, code: string): Promise<number> {
-  const res = await page.request.get(`${API_BASE}/gl/accounts`);
-  if (!res.ok()) throw new Error(`GET /gl/accounts failed: ${res.status()}`);
-  const accounts: Array<{ id: number; code: string }> = await res.json();
+  const res = await pageFetch(page, "/gl/accounts");
+  if (!res.ok) throw new Error(`GET /gl/accounts failed: ${res.status}`);
+  const accounts = res.json as Array<{ id: number; code: string }>;
   const account = accounts.find((a) => a.code === code);
   if (!account) throw new Error(`No seeded account with code ${code}`);
   return account.id;

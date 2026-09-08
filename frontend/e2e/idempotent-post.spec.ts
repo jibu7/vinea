@@ -1,11 +1,11 @@
 import { expect, test } from "@playwright/test";
 import {
-  API_BASE,
   CREDIT_ACCOUNT_CODE,
   DEBIT_ACCOUNT_CODE,
   PRIMARY_EMAIL,
   accountIdByCode,
   login,
+  pageFetch,
 } from "./support/fixtures";
 
 /**
@@ -13,8 +13,8 @@ import {
  * as the `Idempotency-Key` (frontend/src/app/(shell)/gl/journal-batches/new/page.tsx), so a
  * retried post — network hiccup, doubled click — replays instead of duplicating. Exercising
  * a *retry* means resending the exact same request, which the UI itself won't do once it has
- * navigated away on success — so this drives the API directly with page.request, which shares
- * the authenticated session's cookies with the browser context.
+ * navigated away on success — so this drives the API directly via the page's own `fetch`
+ * (see `pageFetch`), reusing the authenticated session's cookies exactly as the app does.
  */
 test.describe("journal posting is idempotent on retry", () => {
   test("resending the same Idempotency-Key + body replays the original entry", async ({ page }) => {
@@ -32,32 +32,33 @@ test.describe("journal posting is idempotent on retry", () => {
       ],
     };
 
-    const first = await page.request.post(`${API_BASE}/gl/journal-entries`, {
-      data: body,
+    const first = await pageFetch(page, "/gl/journal-entries", {
+      method: "POST",
+      body,
       headers: { "Idempotency-Key": idempotencyKey },
     });
-    expect(first.status()).toBe(201);
-    const firstEntry = await first.json();
+    expect(first.status).toBe(201);
+    const firstEntry = first.json as { id: number; number: string };
 
-    const second = await page.request.post(`${API_BASE}/gl/journal-entries`, {
-      data: body,
+    const second = await pageFetch(page, "/gl/journal-entries", {
+      method: "POST",
+      body,
       headers: { "Idempotency-Key": idempotencyKey },
     });
-    expect(second.status()).toBe(200); // replay, not a new document
-    const secondEntry = await second.json();
+    expect(second.status).toBe(200); // replay, not a new document
+    const secondEntry = second.json as { id: number; number: string };
 
     expect(secondEntry.id).toBe(firstEntry.id);
     expect(secondEntry.number).toBe(firstEntry.number);
 
     // And it shows up exactly once, not twice, in that account's transactions.
-    const list = await page.request.get(
-      `${API_BASE}/gl/accounts/${debitAccountId}/transactions?date_from=${body.entry_date}&date_to=${body.entry_date}`,
+    const list = await pageFetch(
+      page,
+      `/gl/accounts/${debitAccountId}/transactions?date_from=${body.entry_date}&date_to=${body.entry_date}`,
     );
-    expect(list.ok()).toBe(true);
-    const { items } = await list.json();
-    const matches = (items as Array<{ description?: string }>).filter(
-      (item) => item.description === body.description,
-    );
+    expect(list.ok).toBe(true);
+    const { items } = list.json as { items: Array<{ description?: string }> };
+    const matches = items.filter((item) => item.description === body.description);
     expect(matches).toHaveLength(1);
   });
 
@@ -67,8 +68,9 @@ test.describe("journal posting is idempotent on retry", () => {
     const creditAccountId = await accountIdByCode(page, CREDIT_ACCOUNT_CODE);
     const idempotencyKey = `e2e-idempotency-conflict-${Date.now()}`;
 
-    const first = await page.request.post(`${API_BASE}/gl/journal-entries`, {
-      data: {
+    const first = await pageFetch(page, "/gl/journal-entries", {
+      method: "POST",
+      body: {
         entry_date: new Date().toISOString().slice(0, 10),
         description: `E2E idempotency conflict A ${idempotencyKey}`,
         lines: [
@@ -78,10 +80,11 @@ test.describe("journal posting is idempotent on retry", () => {
       },
       headers: { "Idempotency-Key": idempotencyKey },
     });
-    expect(first.status()).toBe(201);
+    expect(first.status).toBe(201);
 
-    const second = await page.request.post(`${API_BASE}/gl/journal-entries`, {
-      data: {
+    const second = await pageFetch(page, "/gl/journal-entries", {
+      method: "POST",
+      body: {
         entry_date: new Date().toISOString().slice(0, 10),
         description: `E2E idempotency conflict B ${idempotencyKey}`,
         lines: [
@@ -91,8 +94,8 @@ test.describe("journal posting is idempotent on retry", () => {
       },
       headers: { "Idempotency-Key": idempotencyKey },
     });
-    expect(second.status()).toBe(409);
-    const error = await second.json();
+    expect(second.status).toBe(409);
+    const error = second.json as { code: string };
     expect(error.code).toBe("idempotency_key_reused");
   });
 });
