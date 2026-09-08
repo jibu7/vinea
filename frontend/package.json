@@ -10,7 +10,9 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "e2e": "playwright test"
+    "e2e": "playwright test && npm run e2e:regression && npm run e2e:print-preview",
+    "e2e:regression": "tsx scripts/e2e-regression-amount-overwrite.ts",
+    "e2e:print-preview": "tsx scripts/e2e-print-preview.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.9.1",
@@ -48,6 +50,7 @@
     "eslint-config-next": "^15.4.0",
     "jsdom": "^30.0.1",
     "tailwindcss": "^4.1.0",
+    "tsx": "^4.23.13",
     "typescript": "^5",
     "vitest": "^5.0.0"
   }
