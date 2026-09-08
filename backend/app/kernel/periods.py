@@ -113,7 +113,7 @@ def transition_period(
     period: AccountingPeriod,
     target: PeriodStatus,
     *,
-    actor: User | None,
+    actor: User,
     reason: str | None = None,
     request: Request | None = None,
     allow_locked_year: bool = False,
@@ -146,8 +146,8 @@ def transition_period(
         entity_id=period.id,
         before={"status": before},
         after={"status": target.value, "reason": reason},
-        actor_user_id=actor.id if actor else None,
-        actor_email=actor.email if actor else None,
+        actor_user_id=actor.id,
+        actor_email=actor.email,
         request=request,
     )
     db.flush()

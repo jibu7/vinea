@@ -3,8 +3,9 @@ Accounts" = changing `code` with history intact, recorded in `audit_log`)."""
 
 from dataclasses import dataclass
 from datetime import date
+from decimal import Decimal
 
-from sqlalchemy import exists, select
+from sqlalchemy import exists, func, select
 from sqlalchemy.orm import Session
 from starlette.requests import Request
 
@@ -12,7 +13,7 @@ from app.core.errors import ConflictError, NotFoundError
 from app.kernel.errors import LedgerStateError
 from app.models.currency import Currency, ExchangeRate
 from app.models.gl import AccountClass, ControlType, GLAccount, GLSettings
-from app.models.journal import JournalLine
+from app.models.journal import JournalEntry, JournalLine, JournalStatus
 from app.models.user import User
 from app.services.audit import record_audit
 
@@ -39,6 +40,19 @@ def _has_postings(db: Session, account_id: int) -> bool:
 
 def _has_children(db: Session, account_id: int) -> bool:
     return bool(db.scalar(select(exists().where(GLAccount.parent_id == account_id))))
+
+
+def _account_has_non_zero_balance(db: Session, company_id: int, account_id: int) -> bool:
+    balance = db.scalar(
+        select(func.coalesce(func.sum(JournalLine.base_amount), Decimal(0)))
+        .join(JournalEntry, JournalEntry.id == JournalLine.entry_id)
+        .where(
+            JournalLine.company_id == company_id,
+            JournalLine.gl_account_id == account_id,
+            JournalEntry.status == JournalStatus.POSTED,
+        )
+    )
+    return balance is not None and balance != Decimal(0)
 
 
 def _validate_parent(
@@ -73,7 +87,7 @@ def create_account(
     company_id: int,
     data: AccountInput,
     *,
-    actor: User | None,
+    actor: User,
     request: Request | None = None,
 ) -> GLAccount:
     if data.parent_id is not None:
@@ -109,8 +123,8 @@ def create_account(
         entity="gl_accounts",
         entity_id=account.id,
         after={"code": account.code, "name": account.name, "class": account.class_.value},
-        actor_user_id=actor.id if actor else None,
-        actor_email=actor.email if actor else None,
+        actor_user_id=actor.id,
+        actor_email=actor.email,
         request=request,
     )
     return account
@@ -125,7 +139,7 @@ def update_account(
     parent_id: int | None | object = ...,
     is_postable: bool | None = None,
     is_active: bool | None = None,
-    actor: User | None,
+    actor: User,
     request: Request | None = None,
 ) -> GLAccount:
     before = {
@@ -184,6 +198,16 @@ def update_account(
                     "This account is referenced by GL settings and cannot be deactivated",
                     code="account_in_use",
                 )
+            if account.is_control:
+                raise LedgerStateError(
+                    "Control accounts cannot be deactivated",
+                    code="control_account_cannot_be_deactivated",
+                )
+            if _account_has_non_zero_balance(db, account.company_id, account.id):
+                raise LedgerStateError(
+                    "An account with a non-zero balance cannot be deactivated",
+                    code="account_has_non_zero_balance",
+                )
         account.is_active = is_active
     db.flush()
     after = {
@@ -204,15 +228,15 @@ def update_account(
             entity_id=account.id,
             before=before,
             after=after,
-            actor_user_id=actor.id if actor else None,
-            actor_email=actor.email if actor else None,
+            actor_user_id=actor.id,
+            actor_email=actor.email,
             request=request,
         )
     return account
 
 
 def add_exchange_rate(
-    db: Session, company_id: int, *, currency_id: int, valid_from: date, rate, actor: User | None
+    db: Session, company_id: int, *, currency_id: int, valid_from: date, rate, actor: User
 ) -> ExchangeRate:
     currency = db.get(Currency, currency_id)
     if currency is None or currency.company_id != company_id:
@@ -241,7 +265,7 @@ def add_exchange_rate(
         entity="exchange_rates",
         entity_id=row.id,
         after={"currency": currency.code, "valid_from": valid_from.isoformat(), "rate": str(rate)},
-        actor_user_id=actor.id if actor else None,
-        actor_email=actor.email if actor else None,
+        actor_user_id=actor.id,
+        actor_email=actor.email,
     )
     return row

@@ -23,7 +23,7 @@ def close_fiscal_year(
     company_id: int,
     fiscal_year_id: int,
     *,
-    actor: User | None,
+    actor: User,
     request: Request | None = None,
 ) -> FiscalYear:
     year = get_fiscal_year(db, company_id, fiscal_year_id)
@@ -84,8 +84,8 @@ def close_fiscal_year(
             "closing_entry_number": entry.number if entry is not None else None,
             "periods_locked": len(periods),
         },
-        actor_user_id=actor.id if actor else None,
-        actor_email=actor.email if actor else None,
+        actor_user_id=actor.id,
+        actor_email=actor.email,
         request=request,
     )
     db.flush()
@@ -97,7 +97,7 @@ def reopen_fiscal_year(
     company_id: int,
     fiscal_year_id: int,
     *,
-    actor: User | None,
+    actor: User,
     reason: str,
     request: Request | None = None,
 ) -> FiscalYear:
@@ -141,8 +141,8 @@ def reopen_fiscal_year(
             "reason": reason,
             "reversal_entry_number": reversed_number,
         },
-        actor_user_id=actor.id if actor else None,
-        actor_email=actor.email if actor else None,
+        actor_user_id=actor.id,
+        actor_email=actor.email,
         request=request,
     )
     db.flush()

@@ -13,6 +13,7 @@ dist/
 *.log
 uv.lock.tmp
 next-env.d.ts
+*.tsbuildinfo
 frontend/screenshots/
 # Local Postgres data directories (rootless dev instances)
 vinea-pgdata/
