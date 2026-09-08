@@ -77,7 +77,7 @@ export default function TrialBalanceReportPage() {
       {/* Screen Header */}
       <header className="flex items-center justify-between border-b border-[var(--vinea-border)] bg-[var(--vinea-surface-raised)] px-6 py-3 print:hidden">
         <div className="flex items-center gap-3">
-          <Link href="/" className="text-[var(--vinea-ink-subtle)] hover:text-[var(--vinea-ink)]">
+          <Link href="/" className="text-[var(--vinea-ink-subtle)] hover:text-[var(--vinea-ink)]" aria-label="Back">
             <ArrowLeft className="size-4" />
           </Link>
           <div>

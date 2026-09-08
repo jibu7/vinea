@@ -21,6 +21,10 @@ SANCTIONED_CALLERS = {
     "services/invitations.py": "invitation accept: the invitee has no session yet",
     "services/provisioning.py": "signup: the company does not exist yet",
     "services/operator.py": "operator console: deliberately cross-tenant, always audited",
+    "scripts/seed_e2e.py": (
+        "e2e fixture seeding: provisions a second tenant and a cross-company membership "
+        "no HTTP route can produce (invite-accept needs a mailed token)"
+    ),
 }
 
 

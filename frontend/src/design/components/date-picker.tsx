@@ -4,6 +4,7 @@ import { useState } from "react";
 import * as PopoverPrimitive from "@radix-ui/react-popover";
 import { Calendar, ChevronLeft, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { useFieldLabelId } from "./input";
 import { formatDate } from "@/lib/format";
 
 const WEEKDAYS = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"];
@@ -39,6 +40,7 @@ export function DatePicker({
   const year = cursor.getFullYear();
   const month = cursor.getMonth();
   const today = new Date();
+  const labelId = useFieldLabelId();
 
   const cells: Array<Date | null> = [
     ...Array(leadingOffset(year, month)).fill(null),
@@ -54,6 +56,7 @@ export function DatePicker({
       <PopoverPrimitive.Trigger asChild>
         <button
           type="button"
+          aria-labelledby={labelId}
           className={cn(
             "flex h-10 w-full items-center justify-between gap-2 rounded-[var(--radius-control)]",
             "border border-[var(--vinea-border-strong)] bg-[var(--vinea-surface-raised)] px-3 text-left text-sm",
@@ -72,13 +75,13 @@ export function DatePicker({
           className="z-50 w-72 rounded-[var(--radius-control)] border border-[var(--vinea-border)] bg-[var(--vinea-surface-raised)] p-3 shadow-[var(--elevation-2)]"
         >
           <div className="mb-2 flex items-center justify-between">
-            <button type="button" onClick={() => changeMonth(-1)} className="rounded-[var(--radius-control)] p-1 hover:bg-[var(--vinea-surface-sunken)]">
+            <button type="button" onClick={() => changeMonth(-1)} aria-label="Previous month" className="rounded-[var(--radius-control)] p-1 hover:bg-[var(--vinea-surface-sunken)]">
               <ChevronLeft className="size-4" />
             </button>
             <span className="text-sm font-medium">
               {cursor.toLocaleString("en-GB", { month: "long" })} {year}
             </span>
-            <button type="button" onClick={() => changeMonth(1)} className="rounded-[var(--radius-control)] p-1 hover:bg-[var(--vinea-surface-sunken)]">
+            <button type="button" onClick={() => changeMonth(1)} aria-label="Next month" className="rounded-[var(--radius-control)] p-1 hover:bg-[var(--vinea-surface-sunken)]">
               <ChevronRight className="size-4" />
             </button>
           </div>
@@ -99,7 +102,7 @@ export function DatePicker({
                 className={cn(
                   "rounded-[var(--radius-control)] py-1 text-sm text-[var(--vinea-ink)] hover:bg-[var(--vinea-surface-sunken)] disabled:opacity-0",
                   date && isSameDay(date, today) && "font-semibold text-[var(--vinea-brand)]",
-                  date && value && isSameDay(date, value) && "bg-[var(--vinea-brand)] text-white hover:bg-[var(--vinea-brand-strong)]",
+                  date && value && isSameDay(date, value) && "bg-[var(--vinea-brand)] text-[var(--vinea-on-brand)] hover:bg-[var(--vinea-brand-strong)]",
                 )}
               >
                 {date?.getDate()}

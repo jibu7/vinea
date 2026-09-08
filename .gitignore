@@ -15,6 +15,9 @@ uv.lock.tmp
 next-env.d.ts
 *.tsbuildinfo
 frontend/screenshots/
+frontend/playwright-report/
+frontend/test-results/
+frontend/coverage/
 # Local Postgres data directories (rootless dev instances)
 vinea-pgdata/
 vinea-pgdata

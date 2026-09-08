@@ -66,7 +66,7 @@ function RenameAccountView() {
     <div className="flex min-h-screen flex-col" data-density="dense">
       <header className="flex items-center justify-between border-b border-[var(--vinea-border)] bg-[var(--vinea-surface-raised)] px-6 py-3">
         <div className="flex items-center gap-3">
-          <Link href="/maintenance/chart-of-accounts" className="text-[var(--vinea-ink-subtle)] hover:text-[var(--vinea-ink)]">
+          <Link href="/maintenance/chart-of-accounts" className="text-[var(--vinea-ink-subtle)] hover:text-[var(--vinea-ink)]" aria-label="Back">
             <ArrowLeft className="size-4" />
           </Link>
           <div>

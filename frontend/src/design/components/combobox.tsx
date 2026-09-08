@@ -5,6 +5,7 @@ import * as PopoverPrimitive from "@radix-ui/react-popover";
 import { Command as CommandPrimitive } from "cmdk";
 import { Check, ChevronsUpDown } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { useFieldLabelId } from "./input";
 import type { SelectOption } from "./select";
 
 /** Typeahead combobox — used for account/transaction-type/project/branch/tax cells. */
@@ -16,6 +17,7 @@ export function Combobox({
   className,
   onKeyDown,
   onFocus,
+  ariaLabel,
 }: {
   options: SelectOption[];
   value?: string;
@@ -24,15 +26,20 @@ export function Combobox({
   className?: string;
   onKeyDown?: React.KeyboardEventHandler<HTMLButtonElement>;
   onFocus?: React.FocusEventHandler<HTMLButtonElement>;
+  /** Accessible name for contexts with no `Field` wrapper to supply one (e.g. LineGrid cells). */
+  ariaLabel?: string;
 }) {
   const [open, setOpen] = useState(false);
   const selected = options.find((o) => o.value === value);
+  const labelId = useFieldLabelId();
 
   return (
     <PopoverPrimitive.Root open={open} onOpenChange={setOpen}>
       <PopoverPrimitive.Trigger asChild>
         <button
           type="button"
+          aria-label={ariaLabel}
+          aria-labelledby={ariaLabel ? undefined : labelId}
           onKeyDown={onKeyDown}
           onFocus={onFocus}
           className={cn(

@@ -174,6 +174,7 @@ export default function ChartOfAccountsPage() {
               <button
                 type="button"
                 onClick={() => toggleCollapse(acc.id)}
+                aria-label={isNodeCollapsed ? `Expand ${acc.name}` : `Collapse ${acc.name}`}
                 className="rounded p-0.5 text-[var(--vinea-ink-subtle)] hover:bg-[var(--vinea-surface-sunken)] hover:text-[var(--vinea-ink)]"
               >
                 {isNodeCollapsed ? (
@@ -249,7 +250,7 @@ export default function ChartOfAccountsPage() {
     <div className="flex min-h-screen flex-col" data-density="dense">
       <header className="flex items-center justify-between border-b border-[var(--vinea-border)] bg-[var(--vinea-surface-raised)] px-6 py-3">
         <div className="flex items-center gap-3">
-          <Link href="/" className="text-[var(--vinea-ink-subtle)] hover:text-[var(--vinea-ink)]">
+          <Link href="/" className="text-[var(--vinea-ink-subtle)] hover:text-[var(--vinea-ink)]" aria-label="Back">
             <ArrowLeft className="size-4" />
           </Link>
           <div>
@@ -277,6 +278,7 @@ export default function ChartOfAccountsPage() {
                     <select
                       value={accountClass}
                       onChange={(e) => setAccountClass(e.target.value)}
+                      aria-label={t("accountClass")}
                       className="h-10 w-full rounded-[var(--radius-control)] border border-[var(--vinea-border-strong)] bg-[var(--vinea-surface-raised)] px-3 text-sm"
                     >
                       <option value="asset">Asset</option>
@@ -326,6 +328,7 @@ export default function ChartOfAccountsPage() {
                     <select
                       value={controlType}
                       onChange={(e) => setControlType(e.target.value)}
+                      aria-label={t("controlType")}
                       className="h-10 w-full rounded-[var(--radius-control)] border border-[var(--vinea-border-strong)] bg-[var(--vinea-surface-raised)] px-3 text-sm"
                     >
                       <option value="">Select control type…</option>
@@ -367,6 +370,7 @@ export default function ChartOfAccountsPage() {
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder="Filter accounts by code or name…"
+                aria-label="Filter accounts by code or name"
                 className="h-10 w-full rounded-[var(--radius-control)] border border-[var(--vinea-border-strong)] bg-[var(--vinea-surface-raised)] pl-9 pr-3 text-sm text-[var(--vinea-ink)]"
               />
             </div>
@@ -378,7 +382,7 @@ export default function ChartOfAccountsPage() {
                   onClick={() => setSelectedClass(cls)}
                   className={`rounded-[var(--radius-control)] px-3 py-1.5 text-xs font-medium capitalize transition-colors ${
                     selectedClass === cls
-                      ? "bg-[var(--vinea-brand)] text-white"
+                      ? "bg-[var(--vinea-brand)] text-[var(--vinea-on-brand)]"
                       : "bg-[var(--vinea-surface-sunken)] text-[var(--vinea-ink-muted)] hover:text-[var(--vinea-ink)]"
                   }`}
                 >

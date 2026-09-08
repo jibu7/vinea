@@ -38,7 +38,7 @@ export function DrawerContent({
               </DialogPrimitive.Description>
             )}
           </div>
-          <DialogPrimitive.Close className="rounded-[var(--radius-control)] p-1 text-[var(--vinea-ink-subtle)] hover:bg-[var(--vinea-surface-sunken)]">
+          <DialogPrimitive.Close aria-label="Close" className="rounded-[var(--radius-control)] p-1 text-[var(--vinea-ink-subtle)] hover:bg-[var(--vinea-surface-sunken)]">
             <X className="size-4" />
           </DialogPrimitive.Close>
         </div>

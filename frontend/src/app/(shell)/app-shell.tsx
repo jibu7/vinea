@@ -100,7 +100,7 @@ export function AppShell({ me, children }: { me: MeResponse; children: React.Rea
 
       <aside className="hidden w-64 shrink-0 overflow-y-auto border-r border-[var(--vinea-border)] bg-[var(--vinea-surface-raised)] p-4 lg:block print:hidden">
         <div className="mb-6 flex items-center gap-2 px-2">
-          <div className="flex size-8 items-center justify-center rounded-[var(--radius-control)] bg-[var(--vinea-brand)] text-white">
+          <div className="flex size-8 items-center justify-center rounded-[var(--radius-control)] bg-[var(--vinea-brand)] text-[var(--vinea-on-brand)]">
             <LayoutGrid className="size-4" />
           </div>
           <span className="font-display text-lg font-semibold">Vinea</span>
