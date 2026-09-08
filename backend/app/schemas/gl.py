@@ -3,7 +3,7 @@ debit/credit columns like an accountant expects and mapped to the kernel's signe
 
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Annotated
+from typing import Annotated, Any
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -117,6 +117,7 @@ class JournalLineIn(BaseModel):
 class JournalEntryCreate(BaseModel):
     entry_date: date
     description: str = Field(min_length=1, max_length=500)
+    reference: str | None = Field(default=None, max_length=500)
     branch_id: int | None = None
     lines: list[JournalLineIn] = Field(min_length=2)
 
@@ -187,11 +188,15 @@ class JournalEntryRead(ApiModel):
     entry_date: date
     period_id: int
     description: str
+    reference: str | None = None
     status: JournalStatus
     posted_by: int | None
     posted_at: datetime | None
     reverses_entry_id: int | None
+    reverses_entry_number: str | None = None
     reversal_reason: str | None
+    reversed_by_entry_id: int | None = None
+    reversed_by_number: str | None = None
     source_doc_type: str | None
     source_doc_id: int | None
     lines: list[JournalLineRead]
@@ -204,8 +209,11 @@ class JournalEntrySummary(ApiModel):
     event_type: str
     entry_date: date
     description: str
+    reference: str | None = None
     status: JournalStatus
     reverses_entry_id: int | None
+    reversed_by_entry_id: int | None = None
+    reversed_by_number: str | None = None
 
 
 # --- Enquiries ---------------------------------------------------------------------------
@@ -237,6 +245,7 @@ class AccountTransactionRead(BaseModel):
     entry_number: str
     entry_date: date
     description: str | None
+    reference: str | None = None
     branch_id: int
     project_id: int | None
     currency_id: int
@@ -341,7 +350,19 @@ class TransactionTypeRead(ApiModel):
     is_active: bool
 
 
-# --- Masters: branches, tax codes, currencies (thin, read-only for now) -------------------
+# --- Masters: branches, tax codes, currencies ---------------------------------------------
+
+
+class BranchCreate(BaseModel):
+    code: str = Field(min_length=1, max_length=20)
+    name: str = Field(min_length=1, max_length=200)
+    is_main: bool = False
+
+
+class BranchUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    is_main: bool | None = None
+    is_active: bool | None = None
 
 
 class BranchRead(ApiModel):
@@ -350,6 +371,25 @@ class BranchRead(ApiModel):
     name: str
     is_main: bool
     is_active: bool
+
+
+class TaxCodeCreate(BaseModel):
+    code: str = Field(min_length=1, max_length=20)
+    name: str = Field(min_length=1, max_length=100)
+    nature: TaxNature
+    rate_pct: Decimal = Field(ge=0, le=100)
+    gl_account_id: int | None = None
+    valid_from: date
+    valid_to: date | None = None
+
+
+class TaxCodeUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    rate_pct: Decimal | None = Field(default=None, ge=0, le=100)
+    gl_account_id: int | None = None
+    clear_gl_account: bool = False
+    valid_to: date | None = None
+    is_active: bool | None = None
 
 
 class TaxCodeRead(ApiModel):
@@ -364,6 +404,20 @@ class TaxCodeRead(ApiModel):
     is_active: bool
 
 
+class CurrencyCreate(BaseModel):
+    code: str = Field(min_length=3, max_length=3)
+    name: str = Field(min_length=1, max_length=100)
+    symbol: str | None = Field(default=None, max_length=10)
+    decimal_places: int = Field(default=2, ge=0, le=6)
+
+
+class CurrencyUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    symbol: str | None = Field(default=None, max_length=10)
+    decimal_places: int | None = Field(default=None, ge=0, le=6)
+    is_active: bool | None = None
+
+
 class CurrencyRead(ApiModel):
     id: int
     code: str
@@ -372,4 +426,13 @@ class CurrencyRead(ApiModel):
     decimal_places: int
     is_base: bool
     is_active: bool
+
+
+class AccountAuditRead(ApiModel):
+    id: int
+    action: str
+    at: datetime
+    actor_email: str | None
+    before: dict[str, Any] | None
+    after: dict[str, Any] | None
 

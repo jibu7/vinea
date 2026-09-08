@@ -7,7 +7,7 @@ import { Button } from "@/design/components/button";
 import { Field, Input } from "@/design/components/input";
 import { DatePicker } from "@/design/components/date-picker";
 import { Combobox } from "@/design/components/combobox";
-import { LineGrid, emptyLineGridRow, type LineGridRow } from "@/design/components/line-grid";
+import { LineGrid, emptyLineGridRow, type LineGridRow, type LineErrors } from "@/design/components/line-grid";
 import { Money } from "@/design/components/money";
 import { DocumentWorkspaceShell, useDocumentShortcuts } from "@/design/components/document-workspace";
 import { useToast } from "@/design/components/toast";
@@ -57,6 +57,7 @@ export default function NewCashbookBatchPage() {
   const [cashAccountId, setCashAccountId] = useState("");
   const [kind, setKind] = useState<"receipt" | "payment">("receipt");
   const [rows, setRows] = useState<LineGridRow[]>([emptyLineGridRow()]);
+  const [lineErrors, setLineErrors] = useState<LineErrors>({});
   const [dateError, setDateError] = useState<string>();
   const [errorBanner, setErrorBanner] = useState<string | null>(null);
 
@@ -122,6 +123,7 @@ export default function NewCashbookBatchPage() {
     if (!canPost || !me?.company || !me.user_id) return;
     setDateError(undefined);
     setErrorBanner(null);
+    setLineErrors({});
     try {
       const entry = await createEntry.mutateAsync({ payload: buildPayload(), idempotencyKey: draftId });
       clearDraft("cashbook", me.company.id, me.user_id);
@@ -129,12 +131,33 @@ export default function NewCashbookBatchPage() {
       router.push(`/gl/entries/${entry.id}`);
     } catch (err) {
       const fieldErrors = (err as { fieldErrors?: Record<string, string[]> }).fieldErrors;
-      if (fieldErrors?.entry_date) {
-        setDateError(fieldErrors.entry_date[0]);
-      } else if (fieldErrors && Object.keys(fieldErrors).length > 0) {
-        setErrorBanner(Object.values(fieldErrors)[0][0]);
+      const message = (err as { message?: string }).message;
+      const nextLineErrors: LineErrors = {};
+      const docErrors: string[] = [];
+
+      if (fieldErrors && Object.keys(fieldErrors).length > 0) {
+        for (const [key, msgs] of Object.entries(fieldErrors)) {
+          const match = key.match(/^lines\.(\d+)\.(.+)$/);
+          if (match) {
+            const lineIdx = Number(match[1]);
+            const field = match[2];
+            nextLineErrors[lineIdx] = nextLineErrors[lineIdx] || {};
+            nextLineErrors[lineIdx][field] = msgs.join(", ");
+          } else if (key === "entry_date") {
+            setDateError(msgs.join(", "));
+          } else {
+            docErrors.push(msgs.join(", "));
+          }
+        }
+      } else if (message) {
+        docErrors.push(message);
+      }
+
+      setLineErrors(nextLineErrors);
+      if (docErrors.length > 0) {
+        setErrorBanner(docErrors.join(" · "));
       } else {
-        showApiError(err, "Couldn't post entry");
+        setErrorBanner(null);
       }
     }
   }
@@ -209,6 +232,7 @@ export default function NewCashbookBatchPage() {
         mode="cashbook"
         rows={rows}
         onRowsChange={setRows}
+        errors={lineErrors}
         accountOptions={toOptions(
           (accounts.data ?? []).filter((a) => a.is_postable && a.control_type !== "bank" && a.control_type !== "cash"),
           (a) => `${a.code} \u00b7 ${a.name}`,

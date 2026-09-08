@@ -110,12 +110,13 @@ class AccountTransaction:
     entry_number: str
     entry_date: date
     description: str | None
-    branch_id: int
-    project_id: int | None
-    currency_id: int
-    amount: Decimal
-    base_amount: Decimal
-    running_base: Decimal
+    reference: str | None = None
+    branch_id: int = 0
+    project_id: int | None = None
+    currency_id: int = 0
+    amount: Decimal = ZERO
+    base_amount: Decimal = ZERO
+    running_base: Decimal = ZERO
 
 
 @dataclass(frozen=True)
@@ -215,6 +216,7 @@ def account_transactions(
                 entry_number=entry.number,
                 entry_date=entry.entry_date,
                 description=line.description or entry.description,
+                reference=entry.reference,
                 branch_id=line.branch_id,
                 project_id=line.project_id,
                 currency_id=line.currency_id,

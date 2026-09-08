@@ -253,7 +253,7 @@ def test_4b_reversing_a_reversal_is_rejected(db: Session, ledger: Ledger) -> Non
     original = post_simple(db, ledger, debit="6500", credit="2300", amount=Decimal(100), on=MARCH)
     db.commit()
     reversal = posting.reverse(
-        db, original.id, company_id=ledger.company_id, on_date=MARCH, reason="wrong", actor=None
+        db, original.id, company_id=ledger.company_id, on_date=MARCH, reason="wrong", actor=ledger.owner
     )
     db.commit()
 
@@ -264,7 +264,7 @@ def test_4b_reversing_a_reversal_is_rejected(db: Session, ledger: Ledger) -> Non
             company_id=ledger.company_id,
             on_date=APRIL,
             reason="undo the undo",
-            actor=None,
+            actor=ledger.owner,
         )
     assert excinfo.value.code == "cannot_reverse_a_reversal"
     db.rollback()

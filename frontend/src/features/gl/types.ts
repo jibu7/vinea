@@ -12,6 +12,21 @@ export interface GLAccount {
   is_active: boolean;
 }
 
+/** Wire values match backend `app.models.gl.ControlType` (a two-letter StrEnum for AR/AP —
+ * CSS `capitalize` mangles those to "Ar"/"Ap", so render through this label map instead. */
+const CONTROL_TYPE_LABELS: Record<string, string> = {
+  bank: "Bank",
+  cash: "Cash",
+  ar: "AR",
+  ap: "AP",
+  inventory: "Inventory",
+};
+
+export function controlTypeLabel(controlType: string | null | undefined): string {
+  if (!controlType) return "None";
+  return CONTROL_TYPE_LABELS[controlType] ?? controlType;
+}
+
 export interface Project {
   id: number;
   code: string;
@@ -82,6 +97,7 @@ export interface JournalLineInput {
 export interface JournalEntryCreatePayload {
   entry_date: string;
   description: string;
+  reference?: string | null;
   branch_id?: number | null;
   lines: JournalLineInput[];
 }
@@ -138,12 +154,125 @@ export interface JournalEntry {
   entry_date: string;
   period_id: number;
   description: string;
+  reference?: string | null;
   status: "draft" | "posted";
   posted_by: number | null;
   posted_at: string | null;
   reverses_entry_id: number | null;
+  reverses_entry_number?: string | null;
   reversal_reason: string | null;
+  reversed_by_entry_id?: number | null;
+  reversed_by_number?: string | null;
   source_doc_type: string | null;
   source_doc_id: number | null;
   lines: JournalLine[];
+}
+
+export interface AccountTransaction {
+  line_id: number;
+  entry_id: number;
+  entry_number: string;
+  entry_date: string;
+  description: string | null;
+  reference?: string | null;
+  branch_id: number;
+  project_id: number | null;
+  currency_id: number;
+  amount: string;
+  base_amount: string;
+  running_base: string;
+}
+
+export interface AccountTransactionsResponse {
+  gl_account_id: number;
+  date_from: string;
+  date_to: string;
+  opening_base: string;
+  items: AccountTransaction[];
+  next_cursor: number | null;
+}
+
+export interface TrialBalanceRow {
+  gl_account_id: number;
+  code: string;
+  name: string;
+  class: "asset" | "liability" | "equity" | "income" | "expense";
+  debit: string;
+  credit: string;
+  net: string;
+}
+
+export interface TrialBalanceResponse {
+  as_of: string;
+  branch_id: number | null;
+  project_id: number | null;
+  rows: TrialBalanceRow[];
+  total_debit: string;
+  total_credit: string;
+  foots: boolean;
+}
+
+export interface CompanyDetails {
+  id: number;
+  name: string;
+  tin: string | null;
+  vat_registered: boolean;
+  fiscal_country: string;
+  address: Record<string, unknown> | null;
+  status: string;
+  coa_template: string;
+}
+
+export interface GLSettings {
+  retained_earnings_account_id: number | null;
+  rounding_difference_account_id: number | null;
+}
+
+export interface FiscalYear {
+  id: number;
+  code: string;
+  start_date: string;
+  end_date: string;
+  status: "open" | "closing" | "closed" | "locked";
+  closing_entry_id: number | null;
+}
+
+export interface AccountingPeriod {
+  id: number;
+  fiscal_year_id: number;
+  period_number: number;
+  name: string;
+  start_date: string;
+  end_date: string;
+  status: "pending" | "open" | "closed" | "locked";
+  closed_at: string | null;
+  closed_by: number | null;
+}
+
+export interface AccountAuditRecord {
+  id: number;
+  action: string;
+  at: string;
+  actor_email: string | null;
+  before: Record<string, unknown> | null;
+  after: Record<string, unknown> | null;
+}
+
+export interface Role {
+  id: number;
+  name: string;
+  description: string | null;
+  is_system: boolean;
+}
+
+export interface CompanyMember {
+  id: number;
+  user_id: number | null;
+  full_name: string | null;
+  email: string;
+  is_owner: boolean;
+  status: string;
+  roles: Role[];
+  invited_at: string | null;
+  accepted_at: string | null;
 }

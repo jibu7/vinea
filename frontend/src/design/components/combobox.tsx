@@ -56,6 +56,7 @@ export function Combobox({
         >
           <CommandPrimitive>
             <CommandPrimitive.Input
+              autoFocus
               placeholder={placeholder}
               className="w-full border-b border-[var(--vinea-border)] px-3 py-2 text-sm outline-none"
             />

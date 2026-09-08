@@ -21,6 +21,7 @@ export function useDocumentShortcuts({
         e.preventDefault();
         if (canPost) onPost();
       } else if (e.key === "Escape") {
+        if (e.defaultPrevented) return;
         onCancel();
       }
     }

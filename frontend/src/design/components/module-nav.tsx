@@ -33,15 +33,15 @@ export const navIntents: NavIntent[] = [
   {
     label: "Maintenance",
     items: [
-      { label: "Company details", module: "Common", permission: "company:read" },
-      { label: "Foreign currency", module: "Common", permission: "common:setup_currencies" },
-      { label: "Tax types", module: "Tax", permission: "common:setup_taxes" },
-      { label: "Chart of accounts", module: "General Ledger", permission: "gl:setup_manage" },
-      { label: "Branches", module: "General Ledger", permission: "common:setup_branches" },
-      { label: "Transaction types", module: "General Ledger", permission: "gl:setup_manage" },
-      { label: "Defaults", module: "General Ledger", permission: "gl:setup_manage" },
-      { label: "Rename account", module: "General Ledger", permission: "gl:setup_manage" },
-      { label: "Projects", module: "General Ledger", permission: "projects:manage" },
+      { label: "Company details", module: "Common", permission: "company:read", href: "/maintenance/company-details" },
+      { label: "Foreign currency", module: "Common", permission: "common:setup_currencies", href: "/maintenance/currencies" },
+      { label: "Tax types", module: "Tax", permission: "common:setup_taxes", href: "/maintenance/taxes" },
+      { label: "Chart of accounts", module: "General Ledger", permission: "gl:setup_manage", href: "/maintenance/chart-of-accounts" },
+      { label: "Branches", module: "General Ledger", permission: "common:setup_branches", href: "/maintenance/branches" },
+      { label: "Transaction types", module: "General Ledger", permission: "gl:setup_manage", href: "/maintenance/transaction-types" },
+      { label: "Defaults", module: "General Ledger", permission: "gl:setup_manage", href: "/maintenance/defaults" },
+      { label: "Rename account", module: "General Ledger", permission: "gl:setup_manage", href: "/maintenance/rename-account" },
+      { label: "Projects", module: "General Ledger", permission: "projects:manage", href: "/maintenance/projects" },
       { label: "Customers", module: "Accounts Receivable", phase: "P4" },
       { label: "Sales reps", module: "Accounts Receivable", phase: "P4" },
       { label: "Suppliers", module: "Accounts Payable", phase: "P4" },
@@ -76,8 +76,8 @@ export const navIntents: NavIntent[] = [
   {
     label: "Enquiries",
     items: [
-      { label: "Account enquiry", module: "General Ledger", permission: "gl:reports_view" },
-      { label: "Trial balance enquiry", module: "General Ledger", permission: "gl:reports_view" },
+      { label: "Account enquiry", module: "General Ledger", permission: "gl:reports_view", href: "/gl/enquiries/account" },
+      { label: "Trial balance enquiry", module: "General Ledger", permission: "gl:reports_view", href: "/gl/enquiries/trial-balance" },
       { label: "Customer enquiry", module: "Accounts Receivable", phase: "P4" },
       { label: "Supplier enquiry", module: "Accounts Payable", phase: "P4" },
       { label: "Item enquiry", module: "Inventory", phase: "P5" },
@@ -86,9 +86,9 @@ export const navIntents: NavIntent[] = [
   {
     label: "Reports",
     items: [
-      { label: "Account transactions", module: "General Ledger", permission: "gl:reports_view" },
-      { label: "Trial balance", module: "General Ledger", permission: "reporting:trial_balance_view" },
-      { label: "Chart of accounts", module: "General Ledger", permission: "gl:reports_view" },
+      { label: "Account transactions", module: "General Ledger", permission: "gl:reports_view", href: "/gl/reports/account-transactions" },
+      { label: "Trial balance", module: "General Ledger", permission: "gl:reports_view", href: "/gl/reports/trial-balance" },
+      { label: "Chart of accounts", module: "General Ledger", permission: "gl:reports_view", href: "/gl/reports/chart-of-accounts" },
       { label: "Bank reconciliation", module: "General Ledger", phase: "P8" },
       { label: "Cashbooks", module: "General Ledger", phase: "P8" },
       { label: "Balance sheet", module: "General Ledger", phase: "P10" },

@@ -38,14 +38,16 @@ export function FieldError({ children }: { children?: string }) {
 export function Field({
   label,
   error,
+  className,
   children,
 }: {
   label: string;
   error?: string;
+  className?: string;
   children: React.ReactNode;
 }) {
   return (
-    <div>
+    <div className={className}>
       <Label>{label}</Label>
       {children}
       <FieldError>{error}</FieldError>

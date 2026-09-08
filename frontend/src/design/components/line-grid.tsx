@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ChevronsUpDown } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { Combobox } from "./combobox";
@@ -23,6 +23,8 @@ export interface LineGridRow {
   exchangeRate: string;
   taxCodeId: string;
 }
+
+export type LineErrors = Record<number, Record<string, string>>;
 
 export function emptyLineGridRow(defaults: Partial<LineGridRow> = {}): LineGridRow {
   return {
@@ -53,6 +55,7 @@ export interface LineGridProps {
   mode: "journal" | "cashbook";
   rows: LineGridRow[];
   onRowsChange: (rows: LineGridRow[]) => void;
+  errors?: LineErrors;
   accountOptions: SelectOption[];
   branchOptions?: SelectOption[];
   projectOptions?: SelectOption[];
@@ -67,13 +70,15 @@ export interface LineGridProps {
 /**
  * Spreadsheet-grade line grid shared by the Journal and Cashbook document workspaces.
  * Keyboard model: Tab/Enter move across cells, arrow keys navigate rows, Enter on the
- * last row adds a row. Branch/project/currency+rate/tax code are collapsible — hidden
- * by default, defaulted from the document header when shown.
+ * last row adds a row. Esc is two-level: while editing a cell, it reverts that cell's edit;
+ * when no cell is in edit, Esc leaves the document. Branch/project/currency+rate/tax code
+ * are collapsible — hidden by default, defaulted from the document header when shown.
  */
 export function LineGrid({
   mode,
   rows,
   onRowsChange,
+  errors = {},
   accountOptions,
   branchOptions = [],
   projectOptions = [],
@@ -86,6 +91,22 @@ export function LineGrid({
   const containerRef = useRef<HTMLDivElement>(null);
   const [activeCell, setActiveCell] = useState<{ row: number; col: number } | null>(null);
   const [showExtra, setShowExtra] = useState(false);
+  const cellSnapshotRef = useRef<{ row: number; field: keyof LineGridRow; value: string } | null>(null);
+
+  // Amount cells swap between a comma-formatted display and the raw digits while editing
+  // (activeCell). Selecting the old text synchronously in onFocus races that swap — the value
+  // can change out from under the selection before a fill()/keystroke replaces it, so a small
+  // slice of the stale formatted text survives and gets concatenated with the new digits
+  // (this is exactly how a typed 65,000 became 1,000,065,000). Select only after the raw value
+  // has actually committed to the DOM, i.e. in an effect that runs after the re-render. Note:
+  // 100/101/102 are logical column ids for debit/credit/amount, distinct from the sequential
+  // `data-col` DOM attribute, so we select via document.activeElement (React preserves the
+  // focused DOM node across the re-render) rather than re-querying by data-col.
+  useEffect(() => {
+    if (!activeCell || ![100, 101, 102].includes(activeCell.col)) return;
+    const el = document.activeElement;
+    if (el instanceof HTMLInputElement) el.select();
+  }, [activeCell]);
 
   function updateRow(index: number, patch: Partial<LineGridRow>) {
     const next = rows.slice();
@@ -105,7 +126,23 @@ export function LineGrid({
     setActiveCell({ row, col });
   }
 
-  function onCellKeyDown(e: React.KeyboardEvent, row: number, col: number) {
+  function startCellEdit(row: number, col: number, field: keyof LineGridRow, value: string) {
+    cellSnapshotRef.current = { row, field, value };
+    setActiveCell({ row, col });
+  }
+
+  function onCellKeyDown(e: React.KeyboardEvent, row: number, col: number, field?: keyof LineGridRow) {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      if (field && cellSnapshotRef.current && cellSnapshotRef.current.row === row && cellSnapshotRef.current.field === field) {
+        updateRow(row, { [field]: cellSnapshotRef.current.value });
+      }
+      cellSnapshotRef.current = null;
+      setActiveCell(null);
+      (e.target as HTMLElement)?.blur();
+      return;
+    }
     if (e.key === "ArrowDown") {
       e.preventDefault();
       focusCell(Math.min(row + 1, rows.length - 1), col);
@@ -168,127 +205,174 @@ export function LineGrid({
           <tbody className="divide-y divide-[var(--vinea-border)]">
             {rows.map((row, r) => {
               let col = 0;
+              const rowErr = errors[r];
+              const accountErr = rowErr?.gl_account_id || rowErr?.account;
+              const descErr = rowErr?.description;
+              const branchErr = rowErr?.branch_id;
+              const projectErr = rowErr?.project_id;
+              const currencyErr = rowErr?.currency_id;
+              const taxErr = rowErr?.tax_code_id;
+              const debitErr = rowErr?.debit || (rowErr?.amount && mode === "journal" ? rowErr.amount : undefined);
+              const creditErr = rowErr?.credit;
+              const amountErr = rowErr?.amount;
+
               return (
                 <tr key={row.id} className={cn(activeCell?.row === r && "bg-[var(--vinea-brand-soft)]/30")}>
-                  <td data-row={r} data-col={col++} className="min-w-48 p-1">
+                  <td data-row={r} data-col={col++} className="min-w-48 p-1 align-top">
                     <Combobox
                       options={accountOptions}
                       value={row.accountId}
                       onValueChange={(v) => updateRow(r, { accountId: v })}
                       placeholder="Account…"
-                      className="h-8"
-                      onFocus={() => setActiveCell({ row: r, col: 0 })}
+                      className={cn("h-8", accountErr && "border-[var(--vinea-danger)]")}
+                      onFocus={() => startCellEdit(r, 0, "accountId", row.accountId)}
+                      onKeyDown={(e) => onCellKeyDown(e, r, 0, "accountId")}
                     />
+                    {accountErr && <p className="mt-0.5 px-1 text-xs text-[var(--vinea-danger)]">{accountErr}</p>}
                   </td>
-                  <td data-row={r} data-col={col++} className="p-1">
+                  <td data-row={r} data-col={col++} className="p-1 align-top">
                     <input
                       value={row.description}
                       onChange={(e) => updateRow(r, { description: e.target.value })}
-                      onKeyDown={(e) => onCellKeyDown(e, r, 1)}
-                      onFocus={() => setActiveCell({ row: r, col: 1 })}
-                      className="h-8 w-full rounded-[var(--radius-control)] border border-transparent bg-transparent px-2 focus:border-[var(--vinea-brand)]"
+                      onKeyDown={(e) => onCellKeyDown(e, r, 1, "description")}
+                      onFocus={() => startCellEdit(r, 1, "description", row.description)}
+                      className={cn(
+                        "h-8 w-full rounded-[var(--radius-control)] border border-transparent bg-transparent px-2 focus:border-[var(--vinea-brand)]",
+                        descErr && "border-[var(--vinea-danger)]",
+                      )}
                       placeholder="Line description"
                     />
+                    {descErr && <p className="mt-0.5 px-1 text-xs text-[var(--vinea-danger)]">{descErr}</p>}
                   </td>
                   {showExtra && (
-                    <td data-row={r} data-col={col++} className="min-w-36 p-1">
+                    <td data-row={r} data-col={col++} className="min-w-36 p-1 align-top">
                       <Combobox
                         options={branchOptions}
                         value={row.branchId}
                         onValueChange={(v) => updateRow(r, { branchId: v })}
                         placeholder="Branch…"
-                        className="h-8"
+                        className={cn("h-8", branchErr && "border-[var(--vinea-danger)]")}
+                        onFocus={() => startCellEdit(r, 2, "branchId", row.branchId)}
+                        onKeyDown={(e) => onCellKeyDown(e, r, 2, "branchId")}
                       />
+                      {branchErr && <p className="mt-0.5 px-1 text-xs text-[var(--vinea-danger)]">{branchErr}</p>}
                     </td>
                   )}
                   {showExtra && (
-                    <td data-row={r} data-col={col++} className="min-w-36 p-1">
+                    <td data-row={r} data-col={col++} className="min-w-36 p-1 align-top">
                       <Combobox
                         options={projectOptions}
                         value={row.projectId}
                         onValueChange={(v) => updateRow(r, { projectId: v })}
                         placeholder="Project…"
-                        className="h-8"
+                        className={cn("h-8", projectErr && "border-[var(--vinea-danger)]")}
+                        onFocus={() => startCellEdit(r, 3, "projectId", row.projectId)}
+                        onKeyDown={(e) => onCellKeyDown(e, r, 3, "projectId")}
                       />
+                      {projectErr && <p className="mt-0.5 px-1 text-xs text-[var(--vinea-danger)]">{projectErr}</p>}
                     </td>
                   )}
                   {showExtra && (
-                    <td data-row={r} data-col={col++} className="min-w-44 p-1">
+                    <td data-row={r} data-col={col++} className="min-w-44 p-1 align-top">
                       <div className="flex gap-1">
                         <Combobox
                           options={currencyOptions}
                           value={row.currencyId}
                           onValueChange={(v) => onCurrencyChange(r, row, v)}
                           placeholder="Currency…"
-                          className="h-8 w-24"
+                          className={cn("h-8 w-24", currencyErr && "border-[var(--vinea-danger)]")}
+                          onFocus={() => startCellEdit(r, 4, "currencyId", row.currencyId)}
+                          onKeyDown={(e) => onCellKeyDown(e, r, 4, "currencyId")}
                         />
                         {row.currencyId && row.currencyId !== baseCurrencyId && (
                           <input
                             value={row.exchangeRate}
                             onChange={(e) => updateRow(r, { exchangeRate: e.target.value })}
+                            onKeyDown={(e) => onCellKeyDown(e, r, 4, "exchangeRate")}
+                            onFocus={() => startCellEdit(r, 4, "exchangeRate", row.exchangeRate)}
                             inputMode="decimal"
                             placeholder="Rate"
                             className="h-8 w-20 rounded-[var(--radius-control)] border border-[var(--vinea-border-strong)] bg-transparent px-2 text-right font-mono text-xs"
                           />
                         )}
                       </div>
+                      {currencyErr && <p className="mt-0.5 px-1 text-xs text-[var(--vinea-danger)]">{currencyErr}</p>}
                     </td>
                   )}
                   {showExtra && (
-                    <td data-row={r} data-col={col++} className="min-w-36 p-1">
+                    <td data-row={r} data-col={col++} className="min-w-36 p-1 align-top">
                       <Combobox
                         options={taxCodeOptions}
                         value={row.taxCodeId}
                         onValueChange={(v) => updateRow(r, { taxCodeId: v })}
                         placeholder="Tax code…"
-                        className="h-8"
+                        className={cn("h-8", taxErr && "border-[var(--vinea-danger)]")}
+                        onFocus={() => startCellEdit(r, 5, "taxCodeId", row.taxCodeId)}
+                        onKeyDown={(e) => onCellKeyDown(e, r, 5, "taxCodeId")}
                       />
+                      {taxErr && <p className="mt-0.5 px-1 text-xs text-[var(--vinea-danger)]">{taxErr}</p>}
                     </td>
                   )}
                   {mode === "journal" ? (
                     <>
-                      <td data-row={r} data-col={col++} className="w-32 p-1">
+                      <td data-row={r} data-col={col++} className="w-32 p-1 align-top">
                         <input
                           value={displayAmount(row.debit, activeCell?.row === r && activeCell.col === 100)}
                           onChange={(e) => updateRow(r, { debit: e.target.value, credit: e.target.value ? "" : row.credit })}
-                          onKeyDown={(e) => onCellKeyDown(e, r, 100)}
-                          onFocus={() => setActiveCell({ row: r, col: 100 })}
+                          onKeyDown={(e) => onCellKeyDown(e, r, 100, "debit")}
+                          onFocus={() => startCellEdit(r, 100, "debit", row.debit)}
+                          onBlur={() => setActiveCell(null)}
                           inputMode="decimal"
-                          className="h-8 w-full rounded-[var(--radius-control)] border border-transparent bg-transparent px-2 text-right font-mono tabular-nums focus:border-[var(--vinea-brand)]"
+                          className={cn(
+                            "h-8 w-full rounded-[var(--radius-control)] border border-transparent bg-transparent px-2 text-right font-mono tabular-nums focus:border-[var(--vinea-brand)]",
+                            debitErr && "border-[var(--vinea-danger)]",
+                          )}
                           placeholder="0"
                         />
+                        {debitErr && <p className="mt-0.5 text-right text-xs text-[var(--vinea-danger)]">{debitErr}</p>}
                       </td>
-                      <td data-row={r} data-col={col++} className="w-32 p-1">
+                      <td data-row={r} data-col={col++} className="w-32 p-1 align-top">
                         <input
                           value={displayAmount(row.credit, activeCell?.row === r && activeCell.col === 101)}
                           onChange={(e) => updateRow(r, { credit: e.target.value, debit: e.target.value ? "" : row.debit })}
-                          onKeyDown={(e) => onCellKeyDown(e, r, 101)}
-                          onFocus={() => setActiveCell({ row: r, col: 101 })}
+                          onKeyDown={(e) => onCellKeyDown(e, r, 101, "credit")}
+                          onFocus={() => startCellEdit(r, 101, "credit", row.credit)}
+                          onBlur={() => setActiveCell(null)}
                           inputMode="decimal"
-                          className="h-8 w-full rounded-[var(--radius-control)] border border-transparent bg-transparent px-2 text-right font-mono tabular-nums focus:border-[var(--vinea-brand)]"
+                          className={cn(
+                            "h-8 w-full rounded-[var(--radius-control)] border border-transparent bg-transparent px-2 text-right font-mono tabular-nums focus:border-[var(--vinea-brand)]",
+                            creditErr && "border-[var(--vinea-danger)]",
+                          )}
                           placeholder="0"
                         />
+                        {creditErr && <p className="mt-0.5 text-right text-xs text-[var(--vinea-danger)]">{creditErr}</p>}
                       </td>
                     </>
                   ) : (
                     <>
-                      <td data-row={r} data-col={col++} className="w-32 p-1">
+                      <td data-row={r} data-col={col++} className="w-32 p-1 align-top">
                         <input
                           value={displayAmount(row.amount, activeCell?.row === r && activeCell.col === 102)}
                           onChange={(e) => updateRow(r, { amount: e.target.value })}
-                          onKeyDown={(e) => onCellKeyDown(e, r, 102)}
-                          onFocus={() => setActiveCell({ row: r, col: 102 })}
+                          onKeyDown={(e) => onCellKeyDown(e, r, 102, "amount")}
+                          onFocus={() => startCellEdit(r, 102, "amount", row.amount)}
+                          onBlur={() => setActiveCell(null)}
                           inputMode="decimal"
-                          className="h-8 w-full rounded-[var(--radius-control)] border border-transparent bg-transparent px-2 text-right font-mono tabular-nums focus:border-[var(--vinea-brand)]"
+                          className={cn(
+                            "h-8 w-full rounded-[var(--radius-control)] border border-transparent bg-transparent px-2 text-right font-mono tabular-nums focus:border-[var(--vinea-brand)]",
+                            amountErr && "border-[var(--vinea-danger)]",
+                          )}
                           placeholder="0"
                         />
+                        {amountErr && <p className="mt-0.5 text-right text-xs text-[var(--vinea-danger)]">{amountErr}</p>}
                       </td>
-                      <td className="w-16 p-1 text-center">
+                      <td className="w-16 p-1 text-center align-top">
                         <input
                           type="checkbox"
                           checked={row.taxInclusive}
                           onChange={(e) => updateRow(r, { taxInclusive: e.target.checked })}
-                          className="size-4 accent-[var(--vinea-brand)]"
+                          onKeyDown={(e) => onCellKeyDown(e, r, 103)}
+                          className="mt-2 size-4 accent-[var(--vinea-brand)]"
                         />
                       </td>
                     </>

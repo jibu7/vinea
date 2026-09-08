@@ -77,6 +77,7 @@ class JournalEntry(AuditedMixin, CompanyScopedMixin, Base):
             "source_doc_type",
             "source_doc_id",
         ),
+        Index("ix_journal_entries_company_reference", "company_id", "reference"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
@@ -86,6 +87,7 @@ class JournalEntry(AuditedMixin, CompanyScopedMixin, Base):
     entry_date: Mapped[date] = mapped_column(Date, nullable=False)
     period_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     description: Mapped[str] = mapped_column(String(500), nullable=False)
+    reference: Mapped[str | None] = mapped_column(String(500))
     source_doc_type: Mapped[str | None] = mapped_column(String(50))
     source_doc_id: Mapped[int | None] = mapped_column(BigInteger)
     status: Mapped[JournalStatus] = mapped_column(

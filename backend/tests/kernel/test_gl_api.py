@@ -372,6 +372,223 @@ def test_another_tenant_cannot_see_the_entry(api: Api) -> None:
     )
 
 
+def test_reference_roundtrips_and_is_searchable(api: Api) -> None:
+    res = api.post_je(
+        "with-ref",
+        entry_date=f"{YEAR}-02-15",
+        reference="INV-2026-001",
+        lines=[
+            {"gl_account_id": api.accounts["6500"], "debit": "250"},
+            {"gl_account_id": api.accounts["2300"], "credit": "250"},
+        ],
+    )
+    assert res.status_code == 201
+    entry_id = res.json()["id"]
+    assert res.json()["reference"] == "INV-2026-001"
+
+    # Detail read
+    detail = api.client.get(f"/api/v1/gl/journal-entries/{entry_id}").json()
+    assert detail["reference"] == "INV-2026-001"
+    assert detail["reversed_by_entry_id"] is None
+
+    # Search by reference
+    found = api.client.get(
+        "/api/v1/gl/journal-entries", params={"reference": "INV-2026-001"}
+    ).json()
+    assert len(found["items"]) == 1
+    assert found["items"][0]["id"] == entry_id
+
+    # Search with general query
+    by_q = api.client.get("/api/v1/gl/journal-entries", params={"query": "INV-2026"}).json()
+    assert len(by_q["items"]) == 1
+    assert by_q["items"][0]["id"] == entry_id
+
+    # Not found search
+    not_found = api.client.get(
+        "/api/v1/gl/journal-entries", params={"reference": "NONEXISTENT"}
+    ).json()
+    assert len(not_found["items"]) == 0
+
+    # Appears in account transactions
+    tx = api.client.get(
+        f"/api/v1/gl/accounts/{api.accounts['6500']}/transactions",
+        params={"date_from": f"{YEAR}-02-01", "date_to": f"{YEAR}-02-28"},
+    ).json()
+    item = next(it for it in tx["items"] if it["entry_id"] == entry_id)
+    assert item["reference"] == "INV-2026-001"
+
+    # Reversal shows reversed_by_entry_id on original entry
+    rev = api.client.post(
+        f"/api/v1/gl/journal-entries/{entry_id}/reverse",
+        json={"entry_date": f"{YEAR}-02-16", "reason": "wrong reference"},
+        headers={"Idempotency-Key": "rev-ref-test"},
+    )
+    assert rev.status_code == 201
+    rev_id = rev.json()["id"]
+
+    # Re-reading original entry now returns reversed_by_entry_id and reversed_by_number
+    detail_after = api.client.get(f"/api/v1/gl/journal-entries/{entry_id}").json()
+    assert detail_after["reversed_by_entry_id"] == rev_id
+    assert detail_after["reversed_by_number"] == rev.json()["number"]
+
+    # Reading reversal entry returns reverses_entry_id and reverses_entry_number
+    rev_detail = api.client.get(f"/api/v1/gl/journal-entries/{rev_id}").json()
+    assert rev_detail["reverses_entry_id"] == entry_id
+    assert rev_detail["reverses_entry_number"] == detail["number"]
+
+
+def test_account_transactions_filtered_opening_and_reconciliation(api: Api, db: Session) -> None:
+    from app.models.company import Branch
+    from app.models.gl import Project
+
+    branch_b = Branch(
+        company_id=api.company_id, code="BB", name="Branch B", is_main=False, is_active=True
+    )
+    proj_a = Project(company_id=api.company_id, code="PRJ-A", name="Project A", is_active=True)
+    proj_b = Project(company_id=api.company_id, code="PRJ-B", name="Project B", is_active=True)
+    db.add_all([branch_b, proj_a, proj_b])
+    db.commit()
+
+    # Pre-period entries (before 2026-06-01):
+    # Entry 1 on PRJ-A: +500 to 6500
+    api.post_je(
+        "pre-1",
+        entry_date=f"{YEAR}-05-10",
+        lines=[
+            {"gl_account_id": api.accounts["6500"], "debit": "500", "project_id": proj_a.id},
+            {"gl_account_id": api.accounts["2300"], "credit": "500"},
+        ],
+    )
+    # Entry 2 on PRJ-B: +300 to 6500
+    api.post_je(
+        "pre-2",
+        entry_date=f"{YEAR}-05-20",
+        lines=[
+            {"gl_account_id": api.accounts["6500"], "debit": "300", "project_id": proj_b.id},
+            {"gl_account_id": api.accounts["2300"], "credit": "300"},
+        ],
+    )
+
+    # In-period entries (between 2026-06-01 and 2026-06-30):
+    # Entry 3 on PRJ-A: +200 to 6500
+    api.post_je(
+        "in-1",
+        entry_date=f"{YEAR}-06-05",
+        lines=[
+            {"gl_account_id": api.accounts["6500"], "debit": "200", "project_id": proj_a.id},
+            {"gl_account_id": api.accounts["2300"], "credit": "200"},
+        ],
+    )
+    # Entry 4 on PRJ-B: +150 to 6500
+    api.post_je(
+        "in-2",
+        entry_date=f"{YEAR}-06-15",
+        lines=[
+            {"gl_account_id": api.accounts["6500"], "debit": "150", "project_id": proj_b.id},
+            {"gl_account_id": api.accounts["2300"], "credit": "150"},
+        ],
+    )
+    # Entry 5 on PRJ-A: -50 (credit) to 6500
+    api.post_je(
+        "in-3",
+        entry_date=f"{YEAR}-06-25",
+        lines=[
+            {"gl_account_id": api.accounts["2300"], "debit": "50"},
+            {"gl_account_id": api.accounts["6500"], "credit": "50", "project_id": proj_a.id},
+        ],
+    )
+
+    # Query filtered by project_id=proj_a.id
+    res_a = api.client.get(
+        f"/api/v1/gl/accounts/{api.accounts['6500']}/transactions",
+        params={
+            "date_from": f"{YEAR}-06-01",
+            "date_to": f"{YEAR}-06-30",
+            "project_id": proj_a.id,
+        },
+    ).json()
+
+    # Filtered opening balance must ONLY include Entry 1 (500), ignoring Entry 2 (300)
+    assert Decimal(res_a["opening_base"]) == Decimal("500.000000")
+    # In-period rows must only include Entry 3 (+200) and Entry 5 (-50)
+    assert len(res_a["items"]) == 2
+    assert Decimal(res_a["items"][0]["base_amount"]) == Decimal("200.000000")
+    assert Decimal(res_a["items"][0]["running_base"]) == Decimal("700.000000")
+    assert Decimal(res_a["items"][1]["base_amount"]) == Decimal("-50.000000")
+    assert Decimal(res_a["items"][1]["running_base"]) == Decimal("650.000000")
+
+    # Reconciliation check: opening + sum(rows) == closing balance
+    opening = Decimal(res_a["opening_base"])
+    rows_net = sum(Decimal(item["base_amount"]) for item in res_a["items"])
+    closing = Decimal(res_a["items"][-1]["running_base"])
+    assert opening + rows_net == closing == Decimal("650.000000")
+
+
+def test_account_transactions_running_balance_accumulates_across_pagination(api: Api) -> None:
+    # Pre-period entry to set an opening balance: +1000
+    api.post_je(
+        "pag-pre",
+        entry_date=f"{YEAR}-07-01",
+        lines=[
+            {"gl_account_id": api.accounts["6500"], "debit": "1000"},
+            {"gl_account_id": api.accounts["2300"], "credit": "1000"},
+        ],
+    )
+
+    # 5 in-period entries: +100, +200, +300, +400, +500
+    for idx, amt in enumerate([100, 200, 300, 400, 500], start=1):
+        api.post_je(
+            f"pag-in-{idx}",
+            entry_date=f"{YEAR}-08-0{idx}",
+            lines=[
+                {"gl_account_id": api.accounts["6500"], "debit": str(amt)},
+                {"gl_account_id": api.accounts["2300"], "credit": str(amt)},
+            ],
+        )
+
+    # Page 1: limit=2 (smaller than the 5 rows)
+    p1 = api.client.get(
+        f"/api/v1/gl/accounts/{api.accounts['6500']}/transactions",
+        params={"date_from": f"{YEAR}-08-01", "date_to": f"{YEAR}-08-31", "limit": 2},
+    ).json()
+    assert Decimal(p1["opening_base"]) == Decimal("1000.000000")
+    assert len(p1["items"]) == 2
+    assert Decimal(p1["items"][0]["running_base"]) == Decimal("1100.000000")  # 1000 + 100
+    assert Decimal(p1["items"][1]["running_base"]) == Decimal("1300.000000")  # 1100 + 200
+    assert p1["next_cursor"] is not None
+
+    # Page 2: limit=2 from p1["next_cursor"]
+    p2 = api.client.get(
+        f"/api/v1/gl/accounts/{api.accounts['6500']}/transactions",
+        params={
+            "date_from": f"{YEAR}-08-01",
+            "date_to": f"{YEAR}-08-31",
+            "cursor": p1["next_cursor"],
+            "limit": 2,
+        },
+    ).json()
+    assert Decimal(p2["opening_base"]) == Decimal("1000.000000")
+    assert len(p2["items"]) == 2
+    # Running balance must accumulate from opening + page 1, NOT reset to zero or page-opening!
+    assert Decimal(p2["items"][0]["running_base"]) == Decimal("1600.000000")  # 1300 + 300
+    assert Decimal(p2["items"][1]["running_base"]) == Decimal("2000.000000")  # 1600 + 400
+    assert p2["next_cursor"] is not None
+
+    # Page 3: limit=2 from p2["next_cursor"]
+    p3 = api.client.get(
+        f"/api/v1/gl/accounts/{api.accounts['6500']}/transactions",
+        params={
+            "date_from": f"{YEAR}-08-01",
+            "date_to": f"{YEAR}-08-31",
+            "cursor": p2["next_cursor"],
+            "limit": 2,
+        },
+    ).json()
+    assert len(p3["items"]) == 1
+    assert Decimal(p3["items"][0]["running_base"]) == Decimal("2500.000000")  # 2000 + 500
+    assert p3["next_cursor"] is None
+
+
 # --- periods & year-end --------------------------------------------------------------------------
 
 

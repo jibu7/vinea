@@ -327,7 +327,7 @@ def test_closing_entry_cannot_be_reversed_directly(db: Session, ledger: Ledger) 
             company_id=ledger.company_id,
             on_date=date(YEAR + 1, 1, 15),
             reason="x",
-            actor=None,
+            actor=ledger.owner,
         )
     assert excinfo.value.code == "use_fiscal_year_reopen"
     db.rollback()

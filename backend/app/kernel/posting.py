@@ -340,74 +340,100 @@ def _resolve_lines(
             code="too_few_lines",
             field_errors={"lines": ["at least two lines required"]},
         )
-    account_ids = [resolve_account(ctx.db, ctx.company_id, spec, event) for spec in specs]
+    account_ids: list[int] = []
+    for index, spec in enumerate(specs):
+        try:
+            account_ids.append(resolve_account(ctx.db, ctx.company_id, spec, event))
+        except PostingError as err:
+            reindexed = {
+                (
+                    k
+                    if k.startswith("lines.") or k in ("lines", "entry_date")
+                    else f"lines.{index}.{k}"
+                ): v
+                for k, v in err.field_errors.items()
+            }
+            raise PostingError(err.message, code=err.code, field_errors=reindexed or None) from err
+
     ctx.preload_accounts(set(account_ids))
 
     resolved: list[ResolvedLine] = []
     for index, (spec, account_id) in enumerate(zip(specs, account_ids, strict=True)):
-        account = ctx.account(account_id)
-        _check_account(account, event, is_cash_side=index == cash_side_index)
-        _check_required_dimensions(account, spec)
+        try:
+            account = ctx.account(account_id)
+            _check_account(account, event, is_cash_side=index == cash_side_index)
+            _check_required_dimensions(account, spec)
 
-        branch = ctx.branch(spec.branch_id, event.branch_id)
-        if spec.project_id is not None:
-            ctx.project(spec.project_id)
-        currency = ctx.currency(spec.currency_id)
-        if spec.tax_code_id is not None:
-            resolve_tax_code(ctx.db, ctx.company_id, spec.tax_code_id, event.entry_date)
+            branch = ctx.branch(spec.branch_id, event.branch_id)
+            if spec.project_id is not None:
+                ctx.project(spec.project_id)
+            currency = ctx.currency(spec.currency_id)
+            if spec.tax_code_id is not None:
+                resolve_tax_code(ctx.db, ctx.company_id, spec.tax_code_id, event.entry_date)
 
-        if spec.amount == ZERO:
-            raise PostingError(
-                f"Line {index + 1} has a zero amount",
-                code="zero_amount_line",
-                field_errors={f"lines.{index}.amount": ["must not be zero"]},
-            )
-        if not is_rounded(spec.amount, currency.decimal_places):
-            raise PostingError(
-                f"Line {index + 1}: {currency.code} allows {currency.decimal_places} decimals",
-                code="amount_precision",
-                field_errors={f"lines.{index}.amount": ["too many decimal places"]},
-            )
-        if not is_rounded(spec.tax_amount, currency.decimal_places):
-            raise PostingError(
-                f"Line {index + 1}: tax amount exceeds {currency.code} precision",
-                code="amount_precision",
-                field_errors={f"lines.{index}.tax_amount": ["too many decimal places"]},
-            )
-        converted = to_base(
-            ctx.db,
-            spec.amount,
-            currency,
-            event.entry_date,
-            base=ctx.base,
-            rate=spec.exchange_rate,
-        )
-        if spec.base_amount is not None:
-            if not isinstance(event, ReversalRequested):
+            if spec.amount == ZERO:
                 raise PostingError(
-                    "base_amount can only be supplied by a reversal", code="base_amount_override"
+                    f"Line {index + 1} has a zero amount",
+                    code="zero_amount_line",
+                    field_errors={"amount": ["must not be zero"]},
                 )
-            converted = Converted(
-                amount=converted.amount, base_amount=spec.base_amount, rate=converted.rate
+            if not is_rounded(spec.amount, currency.decimal_places):
+                raise PostingError(
+                    f"Line {index + 1}: {currency.code} allows {currency.decimal_places} decimals",
+                    code="amount_precision",
+                    field_errors={"amount": ["too many decimal places"]},
+                )
+            if not is_rounded(spec.tax_amount, currency.decimal_places):
+                raise PostingError(
+                    f"Line {index + 1}: tax amount exceeds {currency.code} precision",
+                    code="amount_precision",
+                    field_errors={"tax_amount": ["too many decimal places"]},
+                )
+            converted = to_base(
+                ctx.db,
+                spec.amount,
+                currency,
+                event.entry_date,
+                base=ctx.base,
+                rate=spec.exchange_rate,
             )
-        resolved.append(
-            ResolvedLine(
-                gl_account_id=account.id,
-                branch_id=branch.id,
-                currency_id=currency.id,
-                converted=converted,
-                project_id=spec.project_id,
-                partner_type=spec.partner_type,
-                partner_id=spec.partner_id,
-                item_id=spec.item_id,
-                tax_code_id=spec.tax_code_id,
-                tax_amount=spec.tax_amount,
-                description=spec.description,
-                source_doc_type=spec.source_doc_type or event.source_doc_type,
-                source_doc_id=spec.source_doc_id or event.source_doc_id,
-                source_line_id=spec.source_line_id,
+            if spec.base_amount is not None:
+                if not isinstance(event, ReversalRequested):
+                    raise PostingError(
+                        "base_amount can only be supplied by a reversal",
+                        code="base_amount_override",
+                    )
+                converted = Converted(
+                    amount=converted.amount, base_amount=spec.base_amount, rate=converted.rate
+                )
+            resolved.append(
+                ResolvedLine(
+                    gl_account_id=account.id,
+                    branch_id=branch.id,
+                    currency_id=currency.id,
+                    converted=converted,
+                    project_id=spec.project_id,
+                    partner_type=spec.partner_type,
+                    partner_id=spec.partner_id,
+                    item_id=spec.item_id,
+                    tax_code_id=spec.tax_code_id,
+                    tax_amount=spec.tax_amount,
+                    description=spec.description,
+                    source_doc_type=spec.source_doc_type or event.source_doc_type,
+                    source_doc_id=spec.source_doc_id or event.source_doc_id,
+                    source_line_id=spec.source_line_id,
+                )
             )
-        )
+        except PostingError as err:
+            reindexed = {
+                (
+                    k
+                    if k.startswith("lines.") or k in ("lines", "entry_date")
+                    else f"lines.{index}.{k}"
+                ): v
+                for k, v in err.field_errors.items()
+            }
+            raise PostingError(err.message, code=err.code, field_errors=reindexed or None) from err
 
     difference = sum((line.converted.base_amount for line in resolved), ZERO)
     if difference != ZERO:
@@ -497,7 +523,15 @@ def _cashbook_specs(ctx: _Context, event: CashbookEntry) -> tuple[list[LineSpec]
         net, tax = line.amount, ZERO
         tax_account_id: int | None = None
         if line.tax_code_id is not None:
-            tax_code = resolve_tax_code(ctx.db, ctx.company_id, line.tax_code_id, event.entry_date)
+            try:
+                tax_code = resolve_tax_code(
+                    ctx.db, ctx.company_id, line.tax_code_id, event.entry_date
+                )
+            except PostingError as err:
+                reindexed = {f"lines.{index}.{k}": v for k, v in err.field_errors.items()}
+                raise PostingError(
+                    err.message, code=err.code, field_errors=reindexed or None
+                ) from err
             split = split_tax(
                 line.amount,
                 tax_code.rate_pct,
@@ -790,6 +824,7 @@ def _write(
         entry_date=event.entry_date,
         period_id=period.id,
         description=description,
+        reference=event.reference,
         source_doc_type=event.source_doc_type,
         source_doc_id=event.source_doc_id,
         status=JournalStatus.DRAFT,
@@ -870,7 +905,7 @@ def reverse(
     company_id: int,
     on_date: date,
     reason: str,
-    actor: User | None,
+    actor: User,
     idempotency_key: str | None = None,
     idempotency_hash: str | None = None,
 ) -> JournalEntry:

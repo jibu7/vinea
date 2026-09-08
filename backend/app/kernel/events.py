@@ -49,6 +49,7 @@ class PostingEvent:
 
     entry_date: date
     description: str
+    reference: str | None = None
     branch_id: int | None = None
     source_doc_type: str | None = None
     source_doc_id: int | None = None
@@ -100,7 +101,6 @@ class CashbookEntry(PostingEvent):
     lines: tuple[CashbookLineSpec, ...]
     currency_id: int | None = None
     exchange_rate: Decimal | None = None
-    reference: str | None = None
 
 
 @dataclass(frozen=True, kw_only=True)

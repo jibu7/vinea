@@ -7,7 +7,7 @@ import { Button } from "@/design/components/button";
 import { Field, Input } from "@/design/components/input";
 import { DatePicker } from "@/design/components/date-picker";
 import { StatusChip } from "@/design/components/status-chip";
-import { LineGrid, emptyLineGridRow, type LineGridRow } from "@/design/components/line-grid";
+import { LineGrid, emptyLineGridRow, type LineGridRow, type LineErrors } from "@/design/components/line-grid";
 import { Money } from "@/design/components/money";
 import { DocumentWorkspaceShell, useDocumentShortcuts } from "@/design/components/document-workspace";
 import { useToast } from "@/design/components/toast";
@@ -22,6 +22,7 @@ import { formatDate, roundHalfUp } from "@/lib/format";
 interface JournalDraftData {
   entryDate: string;
   description: string;
+  reference?: string;
   branchId: string;
   rows: LineGridRow[];
 }
@@ -47,44 +48,46 @@ export default function NewJournalBatchPage() {
   const exchangeRates = useExchangeRates();
   const currencyById = byId(currencies.data);
 
-  const hydrated = useRef(false);
+  const [isHydrated, setIsHydrated] = useState(false);
   const [draftId, setDraftId] = useState<string>("");
   const [entryDate, setEntryDate] = useState<Date>(new Date());
   const [description, setDescription] = useState("");
+  const [reference, setReference] = useState("");
   const [branchId, setBranchId] = useState("");
   const [rows, setRows] = useState<LineGridRow[]>([emptyLineGridRow(), emptyLineGridRow()]);
+  const [lineErrors, setLineErrors] = useState<LineErrors>({});
   const [dateError, setDateError] = useState<string>();
   const [errorBanner, setErrorBanner] = useState<string | null>(null);
 
   // Hydrate from an existing draft, or start a fresh one, once we know who's asking.
   useEffect(() => {
-    if (hydrated.current || !me?.company || !me.user_id || branches.isLoading) return;
-    hydrated.current = true;
+    if (isHydrated || !me?.company || !me.user_id || branches.isLoading) return;
     const existing = loadDraft<JournalDraftData>("journal", me.company.id, me.user_id);
     const mainBranch = branches.data?.find((b) => b.is_main);
     if (existing) {
       setDraftId(existing.draftId);
       setEntryDate(new Date(existing.data.entryDate));
       setDescription(existing.data.description);
+      setReference(existing.data.reference ?? "");
       setBranchId(existing.data.branchId);
       setRows(existing.data.rows);
     } else {
       setDraftId(newDraftId());
       if (mainBranch) setBranchId(String(mainBranch.id));
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [me, branches.data]);
+    setIsHydrated(true);
+  }, [me, branches.data, isHydrated]);
 
   // Autosave client-side — nothing touches the ledger until Post.
   useEffect(() => {
-    if (!hydrated.current || !draftId || !me?.company || !me.user_id) return;
+    if (!isHydrated || !draftId || !me?.company || !me.user_id) return;
     const draft: Draft<JournalDraftData> = {
       draftId,
       updatedAt: new Date().toISOString(),
-      data: { entryDate: entryDate.toISOString(), description, branchId, rows },
+      data: { entryDate: entryDate.toISOString(), description, reference, branchId, rows },
     };
     saveDraft("journal", me.company.id, me.user_id, draft);
-  }, [draftId, entryDate, description, branchId, rows, me]);
+  }, [draftId, entryDate, description, reference, branchId, rows, me, isHydrated]);
 
   const totals = useMemo(() => {
     const debit = rows.reduce((s, r) => s + toNumber(r.debit), 0);
@@ -112,6 +115,7 @@ export default function NewJournalBatchPage() {
     return {
       entry_date: entryDate.toISOString().slice(0, 10),
       description,
+      reference: reference.trim() || undefined,
       branch_id: branchId ? Number(branchId) : undefined,
       lines,
     };
@@ -121,6 +125,7 @@ export default function NewJournalBatchPage() {
     if (!canPost || !me?.company || !me.user_id) return;
     setDateError(undefined);
     setErrorBanner(null);
+    setLineErrors({});
     try {
       const entry = await createEntry.mutateAsync({ payload: buildPayload(), idempotencyKey: draftId });
       clearDraft("journal", me.company.id, me.user_id);
@@ -128,12 +133,33 @@ export default function NewJournalBatchPage() {
       router.push(`/gl/entries/${entry.id}`);
     } catch (err) {
       const fieldErrors = (err as { fieldErrors?: Record<string, string[]> }).fieldErrors;
-      if (fieldErrors?.entry_date) {
-        setDateError(fieldErrors.entry_date[0]);
-      } else if (fieldErrors && Object.keys(fieldErrors).length > 0) {
-        setErrorBanner(Object.values(fieldErrors)[0][0]);
+      const message = (err as { message?: string }).message;
+      const nextLineErrors: LineErrors = {};
+      const docErrors: string[] = [];
+
+      if (fieldErrors && Object.keys(fieldErrors).length > 0) {
+        for (const [key, msgs] of Object.entries(fieldErrors)) {
+          const match = key.match(/^lines\.(\d+)\.(.+)$/);
+          if (match) {
+            const lineIdx = Number(match[1]);
+            const field = match[2];
+            nextLineErrors[lineIdx] = nextLineErrors[lineIdx] || {};
+            nextLineErrors[lineIdx][field] = msgs.join(", ");
+          } else if (key === "entry_date") {
+            setDateError(msgs.join(", "));
+          } else {
+            docErrors.push(msgs.join(", "));
+          }
+        }
+      } else if (message) {
+        docErrors.push(message);
+      }
+
+      setLineErrors(nextLineErrors);
+      if (docErrors.length > 0) {
+        setErrorBanner(docErrors.join(" · "));
       } else {
-        showApiError(err, "Couldn't post entry");
+        setErrorBanner(null);
       }
     }
   }
@@ -178,7 +204,7 @@ export default function NewJournalBatchPage() {
         </div>
       }
     >
-      <div className="grid grid-cols-1 gap-4 rounded-[var(--radius-card)] border border-[var(--vinea-border)] bg-[var(--vinea-surface-raised)] p-5 sm:grid-cols-3">
+      <div className="grid grid-cols-1 gap-4 rounded-[var(--radius-card)] border border-[var(--vinea-border)] bg-[var(--vinea-surface-raised)] p-5 sm:grid-cols-2 lg:grid-cols-4">
         <Field label={t("date")} error={dateError}>
           <DatePicker value={entryDate} onValueChange={setEntryDate} />
         </Field>
@@ -194,6 +220,9 @@ export default function NewJournalBatchPage() {
             ))}
           </select>
         </Field>
+        <Field label={t("reference")}>
+          <Input value={reference} onChange={(e) => setReference(e.target.value)} placeholder="e.g. CHQ-1002" />
+        </Field>
         <Field label={t("description")}>
           <Input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="September payroll accrual" />
         </Field>
@@ -203,6 +232,7 @@ export default function NewJournalBatchPage() {
         mode="journal"
         rows={rows}
         onRowsChange={setRows}
+        errors={lineErrors}
         accountOptions={toOptions(accounts.data, (a) => `${a.code} · ${a.name}`)}
         branchOptions={toOptions(branches.data, (b) => `${b.code} · ${b.name}`)}
         projectOptions={toOptions(projects.data, (p) => `${p.code} · ${p.name}`)}

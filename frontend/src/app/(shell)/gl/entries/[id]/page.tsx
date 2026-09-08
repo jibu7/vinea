@@ -51,6 +51,9 @@ export default function EntryViewPage() {
   const title = isCashbook ? t("cashbookBatch") : t("journalBatch");
   const totalDebit = entry.lines.filter((l) => !l.is_rounding_line && Number(l.base_amount) > 0).reduce((s, l) => s + Number(l.base_amount), 0);
   const totalCredit = entry.lines.filter((l) => !l.is_rounding_line && Number(l.base_amount) < 0).reduce((s, l) => s - Number(l.base_amount), 0);
+  const isReversed = !!entry.reversed_by_entry_id;
+  const isReversal = !!entry.reverses_entry_id;
+  const canReverse = !isReversed && !isReversal;
 
   async function handleReverse() {
     setReverseError(null);
@@ -85,18 +88,41 @@ export default function EntryViewPage() {
           </Link>
           <div>
             <h1 className="font-display text-lg font-semibold">{title}</h1>
-            <p className="text-xs text-[var(--vinea-ink-muted)]">{entry.number} · {formatDate(entry.entry_date)}</p>
+            <p className="text-xs text-[var(--vinea-ink-muted)]">
+              {entry.number} · {formatDate(entry.entry_date)}
+              {entry.reference && ` · Ref: ${entry.reference}`}
+            </p>
           </div>
-          <StatusChip tone="success">{t("posted")}</StatusChip>
+          <StatusChip tone={isReversed ? "neutral" : "success"}>
+            {isReversed ? t("reversed") : t("posted")}
+          </StatusChip>
+          {entry.reversed_by_entry_id && (
+            <Link href={`/gl/entries/${entry.reversed_by_entry_id}`}>
+              <StatusChip tone="warning">
+                {t("reversedBy", { number: entry.reversed_by_number ?? entry.reversed_by_entry_id })}
+              </StatusChip>
+            </Link>
+          )}
         </div>
         <ThemeToggle />
       </header>
 
       <main className="flex-1 overflow-auto px-6 py-6">
         <div className="mx-auto max-w-5xl space-y-6">
+          {entry.reversed_by_entry_id && (
+            <div className="flex items-center justify-between rounded-[var(--radius-control)] border border-[var(--vinea-warning)] bg-[var(--vinea-warning-soft)] px-4 py-2 text-sm text-[var(--vinea-warning)]">
+              <span>
+                {t("reversedBy", { number: entry.reversed_by_number ?? entry.reversed_by_entry_id })}
+              </span>
+              <Link href={`/gl/entries/${entry.reversed_by_entry_id}`} className="font-medium underline">
+                view reversal
+              </Link>
+            </div>
+          )}
+
           {entry.reverses_entry_id && (
             <div className="rounded-[var(--radius-control)] border border-[var(--vinea-info)] bg-[var(--vinea-info-soft)] px-4 py-2 text-sm text-[var(--vinea-info)]">
-              {t("reversalOf", { number: entry.reverses_entry_id })} —{" "}
+              {t("reversalOf", { number: entry.reverses_entry_number ?? entry.reverses_entry_id })} —{" "}
               <Link href={`/gl/entries/${entry.reverses_entry_id}`} className="underline">
                 view original
               </Link>
@@ -164,32 +190,42 @@ export default function EntryViewPage() {
               {baseCurrency && <Money amount={totalCredit} currency={{ code: baseCurrency.code, decimalPlaces: baseCurrency.decimal_places, symbol: baseCurrency.symbol }} className="font-semibold" />}
             </div>
           </div>
-          <Dialog open={reverseOpen} onOpenChange={setReverseOpen}>
-            <DialogTrigger asChild>
-              <Button variant="danger">{t("reverse")}</Button>
-            </DialogTrigger>
-            <DialogContent title={t("reverseTitle")} description={t("reverseDescription")}>
-              {reverseError && (
-                <p className="mb-3 rounded-[var(--radius-control)] bg-[var(--vinea-danger-soft)] px-3 py-2 text-sm text-[var(--vinea-danger)]">
-                  {reverseError}
-                </p>
-              )}
-              <div className="space-y-3">
-                <Field label={t("date")}>
-                  <DatePicker value={reverseDate} onValueChange={setReverseDate} />
-                </Field>
-                <Field label={t("reason")}>
-                  <Input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Duplicate posting" />
-                </Field>
-              </div>
-              <div className="mt-4 flex justify-end gap-2">
-                <Button variant="ghost" onClick={() => setReverseOpen(false)}>{t("cancel")}</Button>
-                <Button variant="danger" disabled={!reason || reverseEntry.isPending} onClick={handleReverse}>
-                  {t("confirmReverse")}
-                </Button>
-              </div>
-            </DialogContent>
-          </Dialog>
+          {canReverse ? (
+            <Dialog open={reverseOpen} onOpenChange={setReverseOpen}>
+              <DialogTrigger asChild>
+                <Button variant="danger">{t("reverse")}</Button>
+              </DialogTrigger>
+              <DialogContent title={t("reverseTitle")} description={t("reverseDescription")}>
+                {reverseError && (
+                  <p className="mb-3 rounded-[var(--radius-control)] bg-[var(--vinea-danger-soft)] px-3 py-2 text-sm text-[var(--vinea-danger)]">
+                    {reverseError}
+                  </p>
+                )}
+                <div className="space-y-3">
+                  <Field label={t("date")}>
+                    <DatePicker value={reverseDate} onValueChange={setReverseDate} />
+                  </Field>
+                  <Field label={t("reason")}>
+                    <Input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Duplicate posting" />
+                  </Field>
+                </div>
+                <div className="mt-4 flex justify-end gap-2">
+                  <Button variant="ghost" onClick={() => setReverseOpen(false)}>{t("cancel")}</Button>
+                  <Button variant="danger" disabled={!reason || reverseEntry.isPending} onClick={handleReverse}>
+                    {t("confirmReverse")}
+                  </Button>
+                </div>
+              </DialogContent>
+            </Dialog>
+          ) : (
+            <Button
+              variant="danger"
+              disabled
+              title={isReversed ? "This entry has already been reversed" : "A reversal cannot be reversed"}
+            >
+              {t("reverse")}
+            </Button>
+          )}
         </div>
       </footer>
     </div>

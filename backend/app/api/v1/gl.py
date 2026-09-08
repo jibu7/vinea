@@ -9,8 +9,8 @@ from hashlib import sha256
 
 from fastapi import APIRouter, Depends, Header, Query, Request, Response, status
 from pydantic import BaseModel
-from sqlalchemy import select
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy import and_, select
+from sqlalchemy.orm import Session, aliased, selectinload
 
 from app.api.deps import AuthContext
 from app.core import permissions
@@ -27,17 +27,23 @@ from app.kernel.events import (
     LineSpec,
     ManualJournal,
 )
+from app.models.audit import AuditLog
 from app.models.currency import ExchangeRate
 from app.models.fiscal import AccountingPeriod, FiscalYear, PeriodStatus
 from app.models.gl import GLSettings
 from app.models.journal import JournalEntry
 from app.schemas.common import Page
 from app.schemas.gl import (
+    AccountAuditRead,
     AccountTransactionRead,
     AccountTransactionsRead,
+    BranchCreate,
     BranchRead,
+    BranchUpdate,
     CashbookEntryCreate,
+    CurrencyCreate,
     CurrencyRead,
+    CurrencyUpdate,
     ExchangeRateCreate,
     ExchangeRateRead,
     FiscalYearCreate,
@@ -57,7 +63,9 @@ from app.schemas.gl import (
     ProjectUpdate,
     ReasonBody,
     ReversalCreate,
+    TaxCodeCreate,
     TaxCodeRead,
+    TaxCodeUpdate,
     TransactionTypeCreate,
     TransactionTypeRead,
     TransactionTypeUpdate,
@@ -95,12 +103,40 @@ def _fingerprint(kind: str, payload: BaseModel) -> str:
 
 
 def _entry_read(db: Session, entry: JournalEntry) -> JournalEntryRead:
-    loaded = db.scalars(
-        select(JournalEntry)
+    Original = aliased(JournalEntry)
+    Reversing = aliased(JournalEntry)
+    row = db.execute(
+        select(
+            JournalEntry,
+            Original.number.label("reverses_entry_number"),
+            Reversing.id.label("reversed_by_entry_id"),
+            Reversing.number.label("reversed_by_number"),
+        )
+        .outerjoin(
+            Original,
+            and_(
+                Original.company_id == JournalEntry.company_id,
+                Original.id == JournalEntry.reverses_entry_id,
+            ),
+        )
+        .outerjoin(
+            Reversing,
+            and_(
+                Reversing.company_id == JournalEntry.company_id,
+                Reversing.reverses_entry_id == JournalEntry.id,
+            ),
+        )
         .options(selectinload(JournalEntry.lines))
         .where(JournalEntry.id == entry.id)
-    ).one()
-    return JournalEntryRead.model_validate(loaded)
+    ).first()
+    if row is None:
+        raise NotFoundError("Journal entry not found")
+    loaded, rev_num, rvd_by_id, rvd_by_num = row
+    data = JournalEntryRead.model_validate(loaded)
+    data.reverses_entry_number = rev_num
+    data.reversed_by_entry_id = rvd_by_id
+    data.reversed_by_number = rvd_by_num
+    return data
 
 
 def _posted_response(
@@ -189,6 +225,26 @@ def update_account(
     return GLAccountRead.model_validate(account)
 
 
+@router.get("/accounts/{account_id}/history")
+def get_account_history(
+    account_id: int,
+    auth: AuthContext = permissions.require(permissions.GL_REPORTS_VIEW),
+    db: Session = Depends(get_db),
+) -> list[AccountAuditRead]:
+    account = accounts_service.get_account(db, auth.company_id, account_id)
+    statement = (
+        select(AuditLog)
+        .where(
+            AuditLog.company_id == auth.company_id,
+            AuditLog.entity == "gl_accounts",
+            AuditLog.entity_id == str(account.id),
+        )
+        .order_by(AuditLog.at.desc())
+    )
+    rows = db.scalars(statement).all()
+    return [AccountAuditRead.model_validate(row) for row in rows]
+
+
 @router.get("/settings")
 def get_settings(
     auth: AuthContext = permissions.require(permissions.GL_REPORTS_VIEW),
@@ -260,7 +316,7 @@ def create_exchange_rate(
     return ExchangeRateRead.model_validate(row)
 
 
-# --- Branches, tax codes, currencies (thin reads; document workspaces need them for line cells) ---
+# --- Branches, tax codes, currencies ----------------------------------------------------
 
 
 @router.get("/branches")
@@ -273,6 +329,48 @@ def list_branches(
     return [BranchRead.model_validate(row) for row in rows]
 
 
+@router.post("/branches", status_code=status.HTTP_201_CREATED)
+def create_branch(
+    payload: BranchCreate,
+    request: Request,
+    auth: AuthContext = permissions.require(permissions.COMMON_SETUP_BRANCHES),
+    db: Session = Depends(get_db),
+) -> BranchRead:
+    branch = masters.create_branch(
+        db,
+        auth.company_id,
+        code=payload.code,
+        name=payload.name,
+        is_main=payload.is_main,
+        actor=auth.user,
+        request=request,
+    )
+    db.commit()
+    return BranchRead.model_validate(branch)
+
+
+@router.patch("/branches/{branch_id}")
+def update_branch(
+    branch_id: int,
+    payload: BranchUpdate,
+    request: Request,
+    auth: AuthContext = permissions.require(permissions.COMMON_SETUP_BRANCHES),
+    db: Session = Depends(get_db),
+) -> BranchRead:
+    branch = masters.get_branch(db, auth.company_id, branch_id)
+    masters.update_branch(
+        db,
+        branch,
+        name=payload.name,
+        is_main=payload.is_main,
+        is_active=payload.is_active,
+        actor=auth.user,
+        request=request,
+    )
+    db.commit()
+    return BranchRead.model_validate(branch)
+
+
 @router.get("/tax-codes")
 def list_tax_codes(
     include_inactive: bool = False,
@@ -283,6 +381,59 @@ def list_tax_codes(
     return [TaxCodeRead.model_validate(row) for row in rows]
 
 
+@router.post("/tax-codes", status_code=status.HTTP_201_CREATED)
+def create_tax_code(
+    payload: TaxCodeCreate,
+    request: Request,
+    auth: AuthContext = permissions.require(permissions.COMMON_SETUP_TAXES),
+    db: Session = Depends(get_db),
+) -> TaxCodeRead:
+    tax_code = masters.create_tax_code(
+        db,
+        auth.company_id,
+        code=payload.code,
+        name=payload.name,
+        nature=payload.nature,
+        rate_pct=payload.rate_pct,
+        gl_account_id=payload.gl_account_id,
+        valid_from=payload.valid_from,
+        valid_to=payload.valid_to,
+        actor=auth.user,
+        request=request,
+    )
+    db.commit()
+    return TaxCodeRead.model_validate(tax_code)
+
+
+@router.patch("/tax-codes/{code_id}")
+def update_tax_code(
+    code_id: int,
+    payload: TaxCodeUpdate,
+    request: Request,
+    auth: AuthContext = permissions.require(permissions.COMMON_SETUP_TAXES),
+    db: Session = Depends(get_db),
+) -> TaxCodeRead:
+    tax_code = masters.get_tax_code(db, auth.company_id, code_id)
+    gl_acc: int | None | object = ...
+    if payload.clear_gl_account:
+        gl_acc = None
+    elif payload.gl_account_id is not None:
+        gl_acc = payload.gl_account_id
+    masters.update_tax_code(
+        db,
+        tax_code,
+        name=payload.name,
+        rate_pct=payload.rate_pct,
+        gl_account_id=gl_acc,
+        valid_to=payload.valid_to if payload.valid_to is not None else ...,
+        is_active=payload.is_active,
+        actor=auth.user,
+        request=request,
+    )
+    db.commit()
+    return TaxCodeRead.model_validate(tax_code)
+
+
 @router.get("/currencies")
 def list_currencies(
     include_inactive: bool = False,
@@ -291,6 +442,50 @@ def list_currencies(
 ) -> list[CurrencyRead]:
     rows = masters.list_currencies(db, auth.company_id, include_inactive=include_inactive)
     return [CurrencyRead.model_validate(row) for row in rows]
+
+
+@router.post("/currencies", status_code=status.HTTP_201_CREATED)
+def create_currency(
+    payload: CurrencyCreate,
+    request: Request,
+    auth: AuthContext = permissions.require(permissions.COMMON_SETUP_CURRENCIES),
+    db: Session = Depends(get_db),
+) -> CurrencyRead:
+    currency = masters.create_currency(
+        db,
+        auth.company_id,
+        code=payload.code,
+        name=payload.name,
+        symbol=payload.symbol,
+        decimal_places=payload.decimal_places,
+        actor=auth.user,
+        request=request,
+    )
+    db.commit()
+    return CurrencyRead.model_validate(currency)
+
+
+@router.patch("/currencies/{currency_id}")
+def update_currency(
+    currency_id: int,
+    payload: CurrencyUpdate,
+    request: Request,
+    auth: AuthContext = permissions.require(permissions.COMMON_SETUP_CURRENCIES),
+    db: Session = Depends(get_db),
+) -> CurrencyRead:
+    currency = masters.get_currency(db, auth.company_id, currency_id)
+    masters.update_currency(
+        db,
+        currency,
+        name=payload.name,
+        symbol=payload.symbol,
+        decimal_places=payload.decimal_places,
+        is_active=payload.is_active,
+        actor=auth.user,
+        request=request,
+    )
+    db.commit()
+    return CurrencyRead.model_validate(currency)
 
 
 # --- Journal & cashbook entries ----------------------------------------------------------
@@ -311,6 +506,7 @@ def create_journal_entry(
     event = ManualJournal(
         entry_date=payload.entry_date,
         description=payload.description,
+        reference=payload.reference,
         branch_id=payload.branch_id,
         idempotency_key=idempotency_key,
         idempotency_hash=request_hash,
@@ -388,18 +584,50 @@ def list_journal_entries(
     limit: int = Query(default=50, ge=1, le=200),
     date_from: date | None = None,
     date_to: date | None = None,
+    reference: str | None = None,
+    query: str | None = None,
     auth: AuthContext = permissions.require(permissions.GL_REPORTS_VIEW),
     db: Session = Depends(get_db),
 ) -> Page[JournalEntrySummary]:
-    statement = select(JournalEntry).where(JournalEntry.company_id == auth.company_id)
+    Reversing = aliased(JournalEntry)
+    statement = (
+        select(
+            JournalEntry,
+            Reversing.id.label("reversed_by_entry_id"),
+            Reversing.number.label("reversed_by_number"),
+        )
+        .outerjoin(
+            Reversing,
+            and_(
+                Reversing.company_id == JournalEntry.company_id,
+                Reversing.reverses_entry_id == JournalEntry.id,
+            ),
+        )
+        .where(JournalEntry.company_id == auth.company_id)
+    )
     if date_from is not None:
         statement = statement.where(JournalEntry.entry_date >= date_from)
     if date_to is not None:
         statement = statement.where(JournalEntry.entry_date <= date_to)
+    if reference is not None and reference.strip():
+        statement = statement.where(JournalEntry.reference.ilike(f"%{reference.strip()}%"))
+    if query is not None and query.strip():
+        q = f"%{query.strip()}%"
+        statement = statement.where(
+            (JournalEntry.number.ilike(q))
+            | (JournalEntry.description.ilike(q))
+            | (JournalEntry.reference.ilike(q))
+        )
     if cursor is not None:
         statement = statement.where(JournalEntry.id > cursor)
-    rows = db.scalars(statement.order_by(JournalEntry.id).limit(limit + 1)).all()
-    items = [JournalEntrySummary.model_validate(row) for row in rows[:limit]]
+    rows = db.execute(statement.order_by(JournalEntry.id).limit(limit + 1)).all()
+    items = []
+    for row in rows[:limit]:
+        entry_row, rvd_by_id, rvd_by_num = row
+        item = JournalEntrySummary.model_validate(entry_row)
+        item.reversed_by_entry_id = rvd_by_id
+        item.reversed_by_number = rvd_by_num
+        items.append(item)
     return Page(items=items, next_cursor=items[-1].id if len(rows) > limit else None)
 
 
