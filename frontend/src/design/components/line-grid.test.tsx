@@ -91,11 +91,14 @@ describe("LineGrid keyboard model", () => {
 // value, the selection no longer covered the full field, and new input landed next to
 // a surviving fragment of the old value instead of replacing it (65,000 in becoming
 // 1,000,065,000). The fix (line-grid.tsx) moved the select() into a useEffect that
-// runs after the raw value has committed. These tests overwrite a debit cell that
-// already holds a value via both a full-value replace (fill) and real keystrokes,
-// mirroring frontend/scripts/e2e-regression-amount-overwrite.ts.
+// runs after the raw value has committed. Both tests below type via user.keyboard(),
+// which respects whatever selection is live in the DOM at the moment of typing —
+// user.clear() and user.type(element, text) each do their own selection handling
+// first, which would make the test pass regardless of whether the fix regresses
+// (verified: with the fix temporarily reverted, a clear()+type() version of this test
+// still passed). user.keyboard() is what actually exercises the fix.
 describe("LineGrid amount cell overwrite (FRw 1,000,065,000 regression)", () => {
-  it("replaces a stale formatted value instead of concatenating, on fill", async () => {
+  it("replaces a stale formatted value instead of concatenating, on the very first focus", async () => {
     const user = userEvent.setup();
     render(<Harness initialRows={[emptyLineGridRow({ debit: "10000" })]} />);
     const debitInput = screen.getByLabelText("Debit, row 1");
@@ -103,9 +106,8 @@ describe("LineGrid amount cell overwrite (FRw 1,000,065,000 regression)", () => 
 
     expect(debitInput).toHaveValue("10,000");
 
-    await user.click(debitInput);
-    await user.clear(debitInput);
-    await user.type(debitInput, "65000");
+    await user.click(debitInput); // first-ever focus transition into this cell
+    await user.keyboard("65000");
     await user.click(descInput); // blur -> reformats with thousand separators
 
     expect(debitInput).toHaveValue("65,000");
