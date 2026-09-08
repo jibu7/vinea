@@ -27,10 +27,12 @@ from app.services.provisioning import ProvisionedTenant, provision_tenant
 
 PASSWORD = "E2E-Sup3rSecret!1"
 
-PRIMARY_EMAIL = "e2e.primary@vinea.test"
+# `.example` (RFC 2606) — `email-validator` (backing Pydantic's EmailStr on the login/signup
+# routes) explicitly rejects `.test`/`.invalid`/`.localhost` as reserved, but allows `.example`.
+PRIMARY_EMAIL = "e2e.primary@vinea.example"
 PRIMARY_COMPANY = "Rugari Wines E2E"
 
-SECONDARY_EMAIL = "e2e.secondary@vinea.test"
+SECONDARY_EMAIL = "e2e.secondary@vinea.example"
 SECONDARY_COMPANY = "Kivu Traders E2E"
 
 

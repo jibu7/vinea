@@ -1,9 +1,11 @@
 import type { Page } from "@playwright/test";
 
-/** Must match backend/app/scripts/seed_e2e.py — run once before the suite. */
-export const PRIMARY_EMAIL = "e2e.primary@vinea.test";
+/** Must match backend/app/scripts/seed_e2e.py — run once before the suite. `.example` (RFC
+ * 2606), not `.test`: email-validator rejects `.test`/`.invalid`/`.localhost` as reserved,
+ * which surfaced as every login POST 422ing even though the seeded user was real. */
+export const PRIMARY_EMAIL = "e2e.primary@vinea.example";
 export const PRIMARY_COMPANY = "Rugari Wines E2E";
-export const SECONDARY_EMAIL = "e2e.secondary@vinea.test";
+export const SECONDARY_EMAIL = "e2e.secondary@vinea.example";
 export const SECONDARY_COMPANY = "Kivu Traders E2E";
 export const PASSWORD = "E2E-Sup3rSecret!1";
 
