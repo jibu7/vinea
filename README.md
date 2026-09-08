@@ -2,7 +2,7 @@
 
 Multi-tenant cloud ERP for East African SMEs (Rwanda first). Sage-Evolution-class functionality on a modern stack: immutable ledger kernel, central posting engine, RRA EBM fiscalization, Postgres RLS tenancy.
 
-**Plan:** `docs/Vinea_ERP_Master_Plan_v5.md` (v5.1 — frozen for build). **Status:** Phase 0 complete.
+**Plan:** `docs/Vinea_ERP_Master_Plan_v5.md` (v5.1 — frozen for build). **Status:** Phase 3 complete.
 
 ## Quick start
 ```bash
