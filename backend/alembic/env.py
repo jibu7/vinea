@@ -1,13 +1,12 @@
 from logging.config import fileConfig
 
+import sqlalchemy as sa
 from sqlalchemy import engine_from_config, pool
 
 import app.models  # noqa: F401  (registers all tables on Base.metadata)
 from alembic import context
 from app.config import settings
 from app.db import Base
-
-import sqlalchemy as sa
 
 config = context.config
 if config.config_file_name is not None:
@@ -52,7 +51,8 @@ def run_migrations_online() -> None:
                 BEGIN
                     IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vinea_app') THEN
                         GRANT USAGE ON SCHEMA public TO vinea_app;
-                        GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO vinea_app;
+                        GRANT SELECT, INSERT, UPDATE, DELETE
+                            ON ALL TABLES IN SCHEMA public TO vinea_app;
                         GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO vinea_app;
                         GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO vinea_app;
                     END IF;
