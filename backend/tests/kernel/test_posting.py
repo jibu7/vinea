@@ -612,7 +612,12 @@ def test_reversal_rules(db: Session, ledger: Ledger) -> None:
     db.commit()
     with pytest.raises(PostingError) as excinfo:
         posting.reverse(
-            db, original.id, company_id=ledger.company_id, on_date=MARCH, reason="x", actor=ledger.owner
+            db,
+            original.id,
+            company_id=ledger.company_id,
+            on_date=MARCH,
+            reason="x",
+            actor=ledger.owner,
         )
     assert excinfo.value.code == "reversal_before_original"
     db.rollback()
@@ -623,7 +628,12 @@ def test_reversal_rules(db: Session, ledger: Ledger) -> None:
     db.commit()
     with pytest.raises(LedgerStateError) as state:
         posting.reverse(
-            db, original.id, company_id=ledger.company_id, on_date=APRIL, reason="y", actor=ledger.owner
+            db,
+            original.id,
+            company_id=ledger.company_id,
+            on_date=APRIL,
+            reason="y",
+            actor=ledger.owner,
         )
     assert state.value.code == "entry_already_reversed"
     db.rollback()
@@ -651,7 +661,12 @@ def test_reversal_of_a_cashbook_entry_may_touch_the_bank_control(
     )
     db.commit()
     reversal = posting.reverse(
-        db, entry.id, company_id=ledger.company_id, on_date=MARCH, reason="bounced", actor=ledger.owner
+        db,
+        entry.id,
+        company_id=ledger.company_id,
+        on_date=MARCH,
+        reason="bounced",
+        actor=ledger.owner,
     )
     db.commit()
     assert reversal.doc_type == "CB" and reversal.number == "CB-000002"
@@ -686,7 +701,12 @@ def test_reversal_specs_are_exact_mirrors_even_when_rates_moved(
     )
     db.commit()
     reversal = posting.reverse(
-        db, original.id, company_id=ledger.company_id, on_date=APRIL, reason="fx", actor=ledger.owner
+        db,
+        original.id,
+        company_id=ledger.company_id,
+        on_date=APRIL,
+        reason="fx",
+        actor=ledger.owner,
     )
     db.commit()
     assert [line.base_amount for line in _lines(db, reversal)] == [Decimal(-13005), Decimal(13005)]
