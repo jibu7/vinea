@@ -9,11 +9,11 @@ export const buttonVariants = cva(
   {
     variants: {
       variant: {
-        primary: "bg-[var(--vinea-brand)] text-white hover:bg-[var(--vinea-brand-strong)]",
+        primary: "bg-[var(--vinea-brand)] text-[var(--vinea-on-brand)] hover:bg-[var(--vinea-brand-strong)]",
         secondary:
           "border border-[var(--vinea-border-strong)] bg-[var(--vinea-surface-raised)] text-[var(--vinea-ink)] hover:bg-[var(--vinea-surface-sunken)]",
         ghost: "text-[var(--vinea-ink-muted)] hover:bg-[var(--vinea-surface-sunken)] hover:text-[var(--vinea-ink)]",
-        danger: "bg-[var(--vinea-danger)] text-white hover:opacity-90",
+        danger: "bg-[var(--vinea-danger)] text-[var(--vinea-on-danger)] hover:opacity-90",
       },
       size: {
         sm: "h-8 px-3 text-sm",

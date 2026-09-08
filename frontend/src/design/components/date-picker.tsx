@@ -102,7 +102,7 @@ export function DatePicker({
                 className={cn(
                   "rounded-[var(--radius-control)] py-1 text-sm text-[var(--vinea-ink)] hover:bg-[var(--vinea-surface-sunken)] disabled:opacity-0",
                   date && isSameDay(date, today) && "font-semibold text-[var(--vinea-brand)]",
-                  date && value && isSameDay(date, value) && "bg-[var(--vinea-brand)] text-white hover:bg-[var(--vinea-brand-strong)]",
+                  date && value && isSameDay(date, value) && "bg-[var(--vinea-brand)] text-[var(--vinea-on-brand)] hover:bg-[var(--vinea-brand-strong)]",
                 )}
               >
                 {date?.getDate()}

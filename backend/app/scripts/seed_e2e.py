@@ -2,10 +2,16 @@
 
 Provisions two tenants through the real signup path (`provision_tenant`, same as the
 `/auth/signup` route), then adds two pieces of state the HTTP API has no way to produce
-without an email round-trip: a second, already-active membership for the primary owner
+without an email round-trip: a second, already-active membership for the secondary owner
 (the invite-accept flow needs a mailed token) and one closed accounting period (closing a
 period for real goes through year-end close, which needs prior periods closed too — for a
 fixture we just need *a* closed period to exercise the `period_closed` error path).
+
+The cross-company membership goes on the *secondary* user, not the primary one, on purpose:
+`auth_service.select_membership()` only auto-selects a company on login when the user has
+exactly one membership, so PRIMARY_EMAIL — used by every spec except the switch-company one —
+needs to stay single-membership or login leaves every one of those tests with no active
+company and everything company-scoped (e.g. `/gl/accounts`) comes back empty.
 
 Idempotent: safe to run against a database that already has these fixtures — everything is
 looked up by its fixed email/name first and only created if missing. Run with
@@ -120,16 +126,16 @@ def _ensure_closed_period(db, *, company: Company) -> str | None:
 def main() -> None:
     db = SessionLocal()
     try:
-        primary_user, primary_company = _get_or_create_tenant(
+        _primary_user, primary_company = _get_or_create_tenant(
             db, company_name=PRIMARY_COMPANY, email=PRIMARY_EMAIL, full_name="E2E Primary Owner"
         )
-        _secondary_user, secondary_company = _get_or_create_tenant(
+        secondary_user, secondary_company = _get_or_create_tenant(
             db,
             company_name=SECONDARY_COMPANY,
             email=SECONDARY_EMAIL,
             full_name="E2E Secondary Owner",
         )
-        _ensure_cross_company_membership(db, user=primary_user, company=secondary_company)
+        _ensure_cross_company_membership(db, user=secondary_user, company=primary_company)
         closed_period = _ensure_closed_period(db, company=primary_company)
 
         print(

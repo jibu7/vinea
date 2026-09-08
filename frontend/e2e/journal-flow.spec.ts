@@ -2,24 +2,26 @@ import { expect, test } from "@playwright/test";
 import {
   CREDIT_ACCOUNT_CODE,
   DEBIT_ACCOUNT_CODE,
-  PRIMARY_EMAIL,
-  SECONDARY_COMPANY,
+  PRIMARY_COMPANY,
+  SECONDARY_EMAIL,
   login,
   pickAccount,
 } from "./support/fixtures";
 
 test.describe("journal batch: login, switch company, post, enquire", () => {
   test("switches company, posts a balanced journal, and it foots the trial balance", async ({ page }) => {
-    await login(page, PRIMARY_EMAIL);
+    // SECONDARY_EMAIL — not PRIMARY_EMAIL — is the user with two memberships (seed_e2e.py),
+    // so it's the one whose login leaves no company auto-selected (select_membership only
+    // auto-picks when there's exactly one membership) and needs the switcher. Every other
+    // spec logs in as PRIMARY_EMAIL, which has exactly one membership and auto-selects.
+    await login(page, SECONDARY_EMAIL);
 
     // --- switch company -----------------------------------------------------------------
-    // The primary e2e user has two memberships on purpose (for this test), so login doesn't
-    // auto-select one (auth_service.select_membership only auto-picks when there's exactly
-    // one) — the header shows "Select company" until the user picks. The switcher button is
+    // The header shows "Select company" until a company is picked. The switcher button is
     // the first button in the header regardless of which label it's currently showing.
     await page.locator("header button").first().click();
-    await page.getByRole("button", { name: SECONDARY_COMPANY }).click();
-    await expect(page.locator("header button").first()).toHaveText(SECONDARY_COMPANY);
+    await page.getByRole("button", { name: PRIMARY_COMPANY }).click();
+    await expect(page.locator("header button").first()).toHaveText(PRIMARY_COMPANY);
 
     // --- create + post a balanced two-line journal ------------------------------------
     const description = `E2E balanced journal ${Date.now()}`;
@@ -41,10 +43,14 @@ test.describe("journal batch: login, switch company, post, enquire", () => {
     await page.waitForSelector("text=Posted");
 
     // --- entry visible in account enquiry ----------------------------------------------
+    // The combobox's accessible name comes from its wrapping Field ("Account"), not its
+    // visible placeholder text ("Choose an account…") — Field/Combobox wire aria-labelledby
+    // to the Field's label, which wins over the trigger's own text for name computation.
     await page.goto("/gl/enquiries/account");
-    await page.getByRole("button", { name: "Choose an account…" }).click();
+    await page.getByRole("button", { name: "Account", exact: true }).click();
+    await page.locator("[cmdk-item]").first().waitFor({ state: "visible" });
     await page.keyboard.type(DEBIT_ACCOUNT_CODE);
-    await page.waitForTimeout(250);
+    await page.locator(`[cmdk-item]:has-text("${DEBIT_ACCOUNT_CODE}")`).first().waitFor({ state: "visible" });
     await page.keyboard.press("Enter");
     await page.waitForSelector("text=Opening balance");
     await expect(page.locator(`table tbody tr:has-text("${description}")`)).toBeVisible({ timeout: 10_000 });

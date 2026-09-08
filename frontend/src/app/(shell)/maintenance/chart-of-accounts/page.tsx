@@ -381,7 +381,7 @@ export default function ChartOfAccountsPage() {
                   onClick={() => setSelectedClass(cls)}
                   className={`rounded-[var(--radius-control)] px-3 py-1.5 text-xs font-medium capitalize transition-colors ${
                     selectedClass === cls
-                      ? "bg-[var(--vinea-brand)] text-white"
+                      ? "bg-[var(--vinea-brand)] text-[var(--vinea-on-brand)]"
                       : "bg-[var(--vinea-surface-sunken)] text-[var(--vinea-ink-muted)] hover:text-[var(--vinea-ink)]"
                   }`}
                 >
