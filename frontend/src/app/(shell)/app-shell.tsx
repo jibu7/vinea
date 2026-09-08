@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   Building2,
@@ -80,6 +81,16 @@ export function AppShell({ me, children }: { me: MeResponse; children: React.Rea
         onSelect: () => handleSwitchCompany(m.company_id),
       })),
     { id: "sign-out", label: "Sign out", group: "Preferences", onSelect: handleLogout },
+    ...(permissions.has("users:read")
+      ? [
+          {
+            id: "admin-users",
+            label: t("usersAndMemberships"),
+            group: "Administration",
+            onSelect: () => router.push("/administration/users"),
+          },
+        ]
+      : []),
     ...screenItems,
   ];
 
@@ -87,7 +98,7 @@ export function AppShell({ me, children }: { me: MeResponse; children: React.Rea
     <div className="flex min-h-screen" data-density="airy">
       <CommandPalette items={paletteItems} />
 
-      <aside className="hidden w-64 shrink-0 overflow-y-auto border-r border-[var(--vinea-border)] bg-[var(--vinea-surface-raised)] p-4 lg:block">
+      <aside className="hidden w-64 shrink-0 overflow-y-auto border-r border-[var(--vinea-border)] bg-[var(--vinea-surface-raised)] p-4 lg:block print:hidden">
         <div className="mb-6 flex items-center gap-2 px-2">
           <div className="flex size-8 items-center justify-center rounded-[var(--radius-control)] bg-[var(--vinea-brand)] text-white">
             <LayoutGrid className="size-4" />
@@ -102,8 +113,13 @@ export function AppShell({ me, children }: { me: MeResponse; children: React.Rea
               {t("administration")}
             </span>
             <ul className="ml-5 mt-0.5">
-              <li className="cursor-pointer rounded-[var(--radius-control)] px-2 py-1 text-sm text-[var(--vinea-ink-muted)] hover:bg-[var(--vinea-surface-sunken)] hover:text-[var(--vinea-ink)]">
-                {t("usersAndMemberships")}
+              <li>
+                <Link
+                  href="/administration/users"
+                  className="block cursor-pointer rounded-[var(--radius-control)] px-2 py-1 text-sm text-[var(--vinea-ink-muted)] hover:bg-[var(--vinea-surface-sunken)] hover:text-[var(--vinea-ink)]"
+                >
+                  {t("usersAndMemberships")}
+                </Link>
               </li>
             </ul>
           </div>
@@ -118,7 +134,7 @@ export function AppShell({ me, children }: { me: MeResponse; children: React.Rea
       </aside>
 
       <div className="flex-1">
-        <header className="flex items-center justify-between border-b border-[var(--vinea-border)] bg-[var(--vinea-surface-raised)] px-6 py-3">
+        <header className="flex items-center justify-between border-b border-[var(--vinea-border)] bg-[var(--vinea-surface-raised)] px-6 py-3 print:hidden">
           <div className="relative">
             <button
               onClick={() => setCompanyMenuOpen((o) => !o)}

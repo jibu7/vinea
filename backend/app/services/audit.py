@@ -14,11 +14,14 @@ def record_audit(
     company_id: int,
     action: str,
     entity: str,
+    # Every audited action has a real, identifiable actor — never a fabricated
+    # "system" placeholder. Automated/background jobs must attribute to a real service
+    # account User row, not None.
+    actor_user_id: int,
+    actor_email: str,
     entity_id: str | int | None = None,
     before: dict[str, Any] | None = None,
     after: dict[str, Any] | None = None,
-    actor_user_id: int | None = None,
-    actor_email: str | None = None,
     impersonated_by_user_id: int | None = None,
     request: Request | None = None,
 ) -> AuditLog:

@@ -10,7 +10,10 @@ class Settings(BaseSettings):
     app_env: str = "dev"
     app_name: str = "Vinea ERP"
     app_version: str = "0.1.0"
-    database_url: str = "postgresql+psycopg://vinea:vinea@localhost:5432/vinea"
+    # Runtime connects as non-superuser vinea_app (NOBYPASSRLS) to enforce tenant isolation
+    database_url: str = "postgresql+psycopg://vinea_app:vinea_app@localhost:5432/vinea"
+    # Migrations run under superuser role
+    migration_database_url: str = "postgresql+psycopg://vinea:vinea@localhost:5432/vinea"
     redis_url: str = "redis://localhost:6379/0"
     cors_origins: list[str] = ["http://localhost:3000"]
     frontend_base_url: str = "http://localhost:3000"
