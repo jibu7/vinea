@@ -28,9 +28,59 @@ jobs:
   frontend:
     runs-on: ubuntu-latest
     defaults: { run: { working-directory: frontend } }
+    env:
+      NEXT_PUBLIC_API_URL: http://localhost:8000
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
       - run: npm install --no-audit --no-fund
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run test
       - run: npm run build
+
+      # e2e: bring up the real stack (docker-compose.yml — db + backend + frontend, same
+      # images/env dev uses) and run Playwright against it, per P3 step 8.
+      - name: start database
+        run: docker compose up -d --wait db
+        working-directory: .
+      - name: build backend and frontend images
+        run: docker compose build backend frontend
+        working-directory: .
+      - name: apply migrations
+        run: docker compose run --rm backend uv run alembic upgrade head
+        working-directory: .
+      - name: start backend and frontend
+        run: docker compose up -d backend frontend
+        working-directory: .
+      - name: wait for backend and frontend
+        run: |
+          for i in $(seq 1 60); do curl -sf http://localhost:8000/health && break; sleep 2; done
+          curl -sf http://localhost:8000/health
+          for i in $(seq 1 60); do curl -sf -o /dev/null http://localhost:3000/login && break; sleep 2; done
+          curl -sf -o /dev/null http://localhost:3000/login
+        working-directory: .
+      - name: seed e2e fixtures
+        run: docker compose exec -T backend uv run python -m app.scripts.seed_e2e
+        working-directory: .
+      - run: npx playwright install --with-deps chromium
+      - run: npm run e2e
+        env:
+          PLAYWRIGHT_BASE_URL: http://localhost:3000
+          PLAYWRIGHT_API_URL: http://localhost:8000
+      - name: upload playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: frontend/playwright-report/
+          retention-days: 7
+      - name: docker compose logs
+        if: failure()
+        run: docker compose logs --tail=200
+        working-directory: .
+      - name: tear down stack
+        if: always()
+        run: docker compose down -v
+        working-directory: .

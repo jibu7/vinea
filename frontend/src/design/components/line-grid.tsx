@@ -224,6 +224,7 @@ export function LineGrid({
                       value={row.accountId}
                       onValueChange={(v) => updateRow(r, { accountId: v })}
                       placeholder="Account…"
+                      ariaLabel={`Account, row ${r + 1}`}
                       className={cn("h-8", accountErr && "border-[var(--vinea-danger)]")}
                       onFocus={() => startCellEdit(r, 0, "accountId", row.accountId)}
                       onKeyDown={(e) => onCellKeyDown(e, r, 0, "accountId")}
@@ -236,6 +237,7 @@ export function LineGrid({
                       onChange={(e) => updateRow(r, { description: e.target.value })}
                       onKeyDown={(e) => onCellKeyDown(e, r, 1, "description")}
                       onFocus={() => startCellEdit(r, 1, "description", row.description)}
+                      aria-label={`Description, row ${r + 1}`}
                       className={cn(
                         "h-8 w-full rounded-[var(--radius-control)] border border-transparent bg-transparent px-2 focus:border-[var(--vinea-brand)]",
                         descErr && "border-[var(--vinea-danger)]",
@@ -251,6 +253,7 @@ export function LineGrid({
                         value={row.branchId}
                         onValueChange={(v) => updateRow(r, { branchId: v })}
                         placeholder="Branch…"
+                        ariaLabel={`Branch, row ${r + 1}`}
                         className={cn("h-8", branchErr && "border-[var(--vinea-danger)]")}
                         onFocus={() => startCellEdit(r, 2, "branchId", row.branchId)}
                         onKeyDown={(e) => onCellKeyDown(e, r, 2, "branchId")}
@@ -265,6 +268,7 @@ export function LineGrid({
                         value={row.projectId}
                         onValueChange={(v) => updateRow(r, { projectId: v })}
                         placeholder="Project…"
+                        ariaLabel={`Project, row ${r + 1}`}
                         className={cn("h-8", projectErr && "border-[var(--vinea-danger)]")}
                         onFocus={() => startCellEdit(r, 3, "projectId", row.projectId)}
                         onKeyDown={(e) => onCellKeyDown(e, r, 3, "projectId")}
@@ -280,6 +284,7 @@ export function LineGrid({
                           value={row.currencyId}
                           onValueChange={(v) => onCurrencyChange(r, row, v)}
                           placeholder="Currency…"
+                          ariaLabel={`Currency, row ${r + 1}`}
                           className={cn("h-8 w-24", currencyErr && "border-[var(--vinea-danger)]")}
                           onFocus={() => startCellEdit(r, 4, "currencyId", row.currencyId)}
                           onKeyDown={(e) => onCellKeyDown(e, r, 4, "currencyId")}
@@ -292,6 +297,7 @@ export function LineGrid({
                             onFocus={() => startCellEdit(r, 4, "exchangeRate", row.exchangeRate)}
                             inputMode="decimal"
                             placeholder="Rate"
+                            aria-label={`Exchange rate, row ${r + 1}`}
                             className="h-8 w-20 rounded-[var(--radius-control)] border border-[var(--vinea-border-strong)] bg-transparent px-2 text-right font-mono text-xs"
                           />
                         )}
@@ -306,6 +312,7 @@ export function LineGrid({
                         value={row.taxCodeId}
                         onValueChange={(v) => updateRow(r, { taxCodeId: v })}
                         placeholder="Tax code…"
+                        ariaLabel={`Tax code, row ${r + 1}`}
                         className={cn("h-8", taxErr && "border-[var(--vinea-danger)]")}
                         onFocus={() => startCellEdit(r, 5, "taxCodeId", row.taxCodeId)}
                         onKeyDown={(e) => onCellKeyDown(e, r, 5, "taxCodeId")}
@@ -323,6 +330,7 @@ export function LineGrid({
                           onFocus={() => startCellEdit(r, 100, "debit", row.debit)}
                           onBlur={() => setActiveCell(null)}
                           inputMode="decimal"
+                          aria-label={`Debit, row ${r + 1}`}
                           className={cn(
                             "h-8 w-full rounded-[var(--radius-control)] border border-transparent bg-transparent px-2 text-right font-mono tabular-nums focus:border-[var(--vinea-brand)]",
                             debitErr && "border-[var(--vinea-danger)]",
@@ -339,6 +347,7 @@ export function LineGrid({
                           onFocus={() => startCellEdit(r, 101, "credit", row.credit)}
                           onBlur={() => setActiveCell(null)}
                           inputMode="decimal"
+                          aria-label={`Credit, row ${r + 1}`}
                           className={cn(
                             "h-8 w-full rounded-[var(--radius-control)] border border-transparent bg-transparent px-2 text-right font-mono tabular-nums focus:border-[var(--vinea-brand)]",
                             creditErr && "border-[var(--vinea-danger)]",
@@ -358,6 +367,7 @@ export function LineGrid({
                           onFocus={() => startCellEdit(r, 102, "amount", row.amount)}
                           onBlur={() => setActiveCell(null)}
                           inputMode="decimal"
+                          aria-label={`Amount, row ${r + 1}`}
                           className={cn(
                             "h-8 w-full rounded-[var(--radius-control)] border border-transparent bg-transparent px-2 text-right font-mono tabular-nums focus:border-[var(--vinea-brand)]",
                             amountErr && "border-[var(--vinea-danger)]",
@@ -372,6 +382,7 @@ export function LineGrid({
                           checked={row.taxInclusive}
                           onChange={(e) => updateRow(r, { taxInclusive: e.target.checked })}
                           onKeyDown={(e) => onCellKeyDown(e, r, 103)}
+                          aria-label={`Tax inclusive, row ${r + 1}`}
                           className="mt-2 size-4 accent-[var(--vinea-brand)]"
                         />
                       </td>

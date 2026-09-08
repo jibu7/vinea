@@ -212,6 +212,7 @@ export default function NewJournalBatchPage() {
           <select
             value={branchId}
             onChange={(e) => setBranchId(e.target.value)}
+            aria-label={t("branch")}
             className="h-10 w-full rounded-[var(--radius-control)] border border-[var(--vinea-border-strong)] bg-[var(--vinea-surface-raised)] px-3 text-sm"
           >
             <option value="">—</option>

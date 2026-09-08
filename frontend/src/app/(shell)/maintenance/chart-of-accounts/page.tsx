@@ -277,6 +277,7 @@ export default function ChartOfAccountsPage() {
                     <select
                       value={accountClass}
                       onChange={(e) => setAccountClass(e.target.value)}
+                      aria-label={t("accountClass")}
                       className="h-10 w-full rounded-[var(--radius-control)] border border-[var(--vinea-border-strong)] bg-[var(--vinea-surface-raised)] px-3 text-sm"
                     >
                       <option value="asset">Asset</option>
@@ -326,6 +327,7 @@ export default function ChartOfAccountsPage() {
                     <select
                       value={controlType}
                       onChange={(e) => setControlType(e.target.value)}
+                      aria-label={t("controlType")}
                       className="h-10 w-full rounded-[var(--radius-control)] border border-[var(--vinea-border-strong)] bg-[var(--vinea-surface-raised)] px-3 text-sm"
                     >
                       <option value="">Select control type…</option>
@@ -367,6 +369,7 @@ export default function ChartOfAccountsPage() {
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder="Filter accounts by code or name…"
+                aria-label="Filter accounts by code or name"
                 className="h-10 w-full rounded-[var(--radius-control)] border border-[var(--vinea-border-strong)] bg-[var(--vinea-surface-raised)] pl-9 pr-3 text-sm text-[var(--vinea-ink)]"
               />
             </div>

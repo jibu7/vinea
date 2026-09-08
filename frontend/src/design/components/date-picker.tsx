@@ -4,6 +4,7 @@ import { useState } from "react";
 import * as PopoverPrimitive from "@radix-ui/react-popover";
 import { Calendar, ChevronLeft, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { useFieldLabelId } from "./input";
 import { formatDate } from "@/lib/format";
 
 const WEEKDAYS = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"];
@@ -39,6 +40,7 @@ export function DatePicker({
   const year = cursor.getFullYear();
   const month = cursor.getMonth();
   const today = new Date();
+  const labelId = useFieldLabelId();
 
   const cells: Array<Date | null> = [
     ...Array(leadingOffset(year, month)).fill(null),
@@ -54,6 +56,7 @@ export function DatePicker({
       <PopoverPrimitive.Trigger asChild>
         <button
           type="button"
+          aria-labelledby={labelId}
           className={cn(
             "flex h-10 w-full items-center justify-between gap-2 rounded-[var(--radius-control)]",
             "border border-[var(--vinea-border-strong)] bg-[var(--vinea-surface-raised)] px-3 text-left text-sm",
