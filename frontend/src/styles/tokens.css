@@ -53,9 +53,10 @@
   --vinea-ink-muted: #565b52;
   /* #8b9086 only cleared 3.1-3.3:1 against white/near-white — axe's color-contrast rule
      (WCAG AA, 4.5:1) failed everywhere this ran as body text (kbd hints, loading states,
-     muted labels). Darkened to keep it visibly lighter than --vinea-ink-muted while clearing
-     AA with margin (~4.8-5.1:1 against white and the sunken surface tone). */
-  --vinea-ink-subtle: #6c7068;
+     muted labels). First pass (#6c7068) still only cleared 4.40:1 against the sunken surface
+     tone at small (10px) sizes; darkened further for real margin there (~5.2-6.0:1 across
+     white/surface/sunken) while staying visibly lighter than --vinea-ink-muted. */
+  --vinea-ink-subtle: #61655e;
 
   /* Brand — vineyard leaf green with a warm harvest accent */
   --vinea-brand: #2f7a4d;
@@ -67,14 +68,20 @@
   --vinea-on-brand: #ffffff;
   --vinea-on-danger: #ffffff;
 
-  /* Semantic */
-  --vinea-success: #2f7a4d;
+  /* Semantic — success/info darkened and warning darkened significantly from their original
+     hex (2f7a4d/2f6f8f/b8752e): StatusChip pairs each with its matching *-soft background at
+     12px text, and axe measured success at 4.49:1 and warning at just 3.18:1 there (b8752e
+     only reaches 3.74:1 even against solid white) — both well under WCAG AA's 4.5:1. These are
+     text/icon-only tokens (nothing pairs them with white text the way brand/danger do for
+     buttons), so darkening only ever improves their contrast, including everywhere else they
+     already run as plain text (KPI deltas, trial balance amounts, field errors). */
+  --vinea-success: #2b6e46;
   --vinea-success-soft: #e3f1e7;
-  --vinea-warning: #b8752e;
+  --vinea-warning: #885722;
   --vinea-warning-soft: #fbead9;
   --vinea-danger: #ae3939;
   --vinea-danger-soft: #f8e4e2;
-  --vinea-info: #2f6f8f;
+  --vinea-info: #2c6886;
   --vinea-info-soft: #e2eff5;
 
   /* Rhythm (airy shell defaults) */
