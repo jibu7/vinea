@@ -176,11 +176,13 @@ export function LineGrid({
       </div>
       <div
         ref={containerRef}
-        role="grid"
-        aria-label={mode === "journal" ? "Journal lines" : "Cashbook lines"}
         className="overflow-auto rounded-[var(--radius-card)] border border-[var(--vinea-border)]"
       >
-        <table className="w-full border-collapse text-sm">
+        <table
+          role="grid"
+          aria-label={mode === "journal" ? "Journal lines" : "Cashbook lines"}
+          className="w-full border-collapse text-sm"
+        >
           <thead className="bg-[var(--vinea-surface-sunken)] text-xs uppercase tracking-wide text-[var(--vinea-ink-subtle)]">
             <tr>
               <th className="px-3 py-2 text-left">Account</th>
