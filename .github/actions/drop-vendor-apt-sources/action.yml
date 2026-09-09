@@ -1,0 +1,28 @@
+name: Drop vendor apt sources
+description: >
+  Remove the third-party apt sources the runner image ships (Google Chrome, Microsoft) that
+  our jobs never install from, so their outages cannot fail our builds.
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        # `apt-get update` exits 100 if *any* index fails. The runner image carries vendor
+        # repos we never install from, so one of them publishing a Release file ahead of its
+        # Packages.gz takes our build down for a repo we do not use. That happened three times
+        # in a row on 2026-09-09 (Chrome index hash-sum mismatch), in the backend job's
+        # WeasyPrint install and again inside `playwright install --with-deps`, which runs its
+        # own apt-get and so needs the sources cleaned before it starts.
+        #
+        # Matched by content, not by filename: deleting `google-chrome.list` missed it,
+        # because the image now declares the repo in deb822 `.sources` format.
+        #
+        # Deliberately not `apt-get update || true` anywhere: that would also swallow a real
+        # failure on the repos we do need — pango and cairo for WeasyPrint, Chromium's own
+        # dependencies for Playwright — and turn a red build into a mystery at runtime.
+        sudo find /etc/apt/sources.list.d -type f \
+          \( -name '*.list' -o -name '*.sources' \) \
+          -exec grep -lE 'dl\.google\.com|packages\.microsoft\.com' {} + \
+          | sudo xargs -r rm -v -f
+        sudo sed -i -E '/dl\.google\.com|packages\.microsoft\.com/d' /etc/apt/sources.list
