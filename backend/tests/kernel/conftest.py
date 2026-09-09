@@ -35,11 +35,12 @@ settings.register_profile(
     deadline=None,
     suppress_health_check=[HealthCheck.function_scoped_fixture, HealthCheck.too_slow],
 )
-# Run by hand (`HYPOTHESIS_PROFILE=deep uv run pytest -m slow`) when a property is being
-# trusted with something new; CI keeps the fast profile so the suite stays under a minute.
+# The nightly profile (`.github/workflows/nightly-property.yml`, and by hand when a property
+# is being trusted with something new). Per-commit CI keeps the fast profile so the suite
+# stays under a minute; depth is what the nightly buys.
 settings.register_profile(
     "deep",
-    max_examples=30,
+    max_examples=300,
     deadline=None,
     suppress_health_check=[HealthCheck.function_scoped_fixture, HealthCheck.too_slow],
 )

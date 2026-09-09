@@ -8,13 +8,13 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.kernel.errors import LedgerStateError, PostingError
+from app.kernel.errors import LedgerStateError
 from app.models.journal import JournalEntry, JournalLine
 from app.models.partner import PartnerRole
-from app.models.subledger import DocumentKind, DocumentStatus, InstrumentType
+from app.models.subledger import DocumentKind, InstrumentType
 from app.subledger import documents as documents_service
 from tests.kernel.invariants import assert_ledger_invariants
-from tests.subledger.conftest import MARCH, Subledger, set_credit_limit
+from tests.subledger.conftest import MARCH, Subledger
 from tests.subledger.invariants import assert_subledger_invariants
 
 
@@ -185,79 +185,6 @@ def test_idempotency_key_replays_the_same_document(db: Session, subledger: Suble
     assert db.scalar(select(JournalEntry.id).where(JournalEntry.number == "INV-000002")) is None
 
 
-def test_credit_limit_blocks_the_post_and_the_override_clears_it(
-    db: Session, subledger: Subledger
-) -> None:
-    set_credit_limit(db, subledger, PartnerRole.AR, Decimal(50000))
-    with pytest.raises(PostingError) as excinfo:
-        post_invoice(db, subledger, amount=Decimal(60000))
-    assert excinfo.value.code == "credit_limit_exceeded"
-    db.rollback()
-
-    set_credit_limit(db, subledger, PartnerRole.AR, Decimal(50000))
-    document, _ = post_invoice(
-        db, subledger, amount=Decimal(60000), permissions={"ar:credit_limit_override"}
-    )
-    db.commit()
-    assert document.total_amount == Decimal(60000)
-    from app.models.audit import AuditLog
-
-    actions = set(db.scalars(select(AuditLog.action)))
-    assert "partner_document.credit_limit_override" in actions
-
-
-def test_zero_credit_limit_means_no_credit(db: Session, subledger: Subledger) -> None:
-    set_credit_limit(db, subledger, PartnerRole.AR, Decimal(0))
-    with pytest.raises(PostingError) as excinfo:
-        post_invoice(db, subledger, amount=Decimal(1))
-    assert excinfo.value.code == "credit_limit_exceeded"
-    db.rollback()
-
-
-def test_a_credit_note_never_trips_the_credit_limit(db: Session, subledger: Subledger) -> None:
-    set_credit_limit(db, subledger, PartnerRole.AR, Decimal(0))
-    document, _ = post_invoice(
-        db, subledger, kind=DocumentKind.CREDIT_NOTE, amount=Decimal(1000)
-    )
-    db.commit()
-    assert document.direction == -1
-
-
-def test_post_dated_receipt_stays_out_of_bank_until_matured(
-    db: Session, subledger: Subledger
-) -> None:
-    ledger = subledger.ledger
-    maturity = MARCH + timedelta(days=45)
-    receipt = post_settlement(
-        db, subledger, amount=Decimal(20000), maturity_date=maturity
-    )
-    db.commit()
-
-    lines = db.scalars(
-        select(JournalLine).where(JournalLine.entry_id == receipt.journal_entry_id)
-    ).all()
-    accounts = {line.gl_account_id for line in lines}
-    assert ledger.acct("1250") in accounts, "post-dated receivable, not bank"
-    assert ledger.acct("1120") not in accounts
-    assert receipt.is_pending_instrument
-
-    matured = documents_service.mature_instruments(
-        db, subledger.company_id, as_of=maturity, actor=ledger.owner, role=PartnerRole.AR
-    )
-    db.commit()
-    assert [document.id for document in matured] == [receipt.id]
-    transfer_lines = db.scalars(
-        select(JournalLine).where(JournalLine.entry_id == receipt.matured_entry_id)
-    ).all()
-    assert {line.gl_account_id for line in transfer_lines} == {
-        ledger.acct("1250"),
-        ledger.acct("1120"),
-    }
-    assert sum(line.base_amount for line in transfer_lines) == Decimal(0)
-    assert_ledger_invariants(db, subledger.company_id)
-    assert_subledger_invariants(db, subledger.company_id)
-
-
 def test_a_same_day_instrument_goes_straight_to_bank(
     db: Session, subledger: Subledger
 ) -> None:
@@ -271,24 +198,6 @@ def test_a_same_day_instrument_goes_straight_to_bank(
         )
     }
     assert ledger.acct("1120") in accounts
-
-
-def test_reversal_unwinds_the_open_item(db: Session, subledger: Subledger) -> None:
-    document, _ = post_invoice(db, subledger, amount=Decimal(30000))
-    db.commit()
-    documents_service.reverse_document(
-        db,
-        document,
-        on_date=MARCH,
-        reason="raised in error",
-        actor=subledger.ledger.owner,
-    )
-    db.commit()
-    assert document.status == DocumentStatus.REVERSED
-    assert document.open_amount == Decimal(0)
-    assert document.reversed_on == MARCH
-    assert_ledger_invariants(db, subledger.company_id)
-    assert_subledger_invariants(db, subledger.company_id)
 
 
 def test_a_document_cannot_be_reversed_twice(db: Session, subledger: Subledger) -> None:

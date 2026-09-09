@@ -201,3 +201,57 @@ def test_enqueue_stamps_a_retention_deadline(db: Session) -> None:
     db.commit()
     assert job.expires_at is not None
     assert job.expires_at > datetime.now(UTC) + jobs_service.RETENTION - timedelta(minutes=1)
+
+
+def test_the_reaper_endpoint_is_closed_to_a_reports_only_role(
+    client: TestClient, db: Session
+) -> None:
+    """`POST /jobs/sweep` deletes rows. Reading a statement and reaping other people's jobs
+    are different privileges: the endpoint takes the AR/AP *setup* permissions, so the seeded
+    Accountant and Clerk roles — both of which hold only the reports ones — are refused."""
+    from app.core import permissions as perms
+    from app.models.membership import Role
+    from app.services import email as email_service
+
+    session = client.post(
+        "/api/v1/auth/signup",
+        json={
+            "company_name": "Kigali Traders Ltd",
+            "full_name": "Aline Uwase",
+            "email": "owner@kigali.example",
+            "password": PASSWORD,
+        },
+    ).json()
+    set_tenant(db, session["company_id"])
+    accountant_role = db.scalars(
+        select(Role.id).where(
+            Role.company_id == session["company_id"], Role.name == "Accountant"
+        )
+    ).one()
+    client.post(
+        "/api/v1/invitations",
+        json={"email": "accountant@kigali.example", "role_ids": [accountant_role]},
+    )
+    token = email_service.outbox[-1].context["token"]
+    accountant = TestClient(client.app)
+    accountant.post(
+        "/api/v1/invitations/accept",
+        json={"token": token, "full_name": "Accountant Person", "password": PASSWORD},
+    )
+
+    # The premise: this role really does hold the reports permissions and not the setup ones.
+    accountant_perms = next(
+        spec["permissions"] for spec in perms.SYSTEM_ROLES if spec["name"] == "Accountant"
+    )
+    assert perms.AR_REPORTS_VIEW in accountant_perms
+    assert perms.AR_SETUP_MANAGE not in accountant_perms
+    assert perms.AP_SETUP_MANAGE not in accountant_perms
+
+    assert accountant.get("/api/v1/subledger/jobs").status_code == 200
+    denied = accountant.post("/api/v1/subledger/jobs/sweep")
+    assert denied.status_code == 403
+    assert denied.json()["code"] == "permission_denied"
+    assert "ar:setup_manage" in denied.json()["message"]
+
+    # The owner, who holds everything, still may.
+    assert client.post("/api/v1/subledger/jobs/sweep").status_code == 200

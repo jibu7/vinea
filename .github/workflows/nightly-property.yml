@@ -1,0 +1,83 @@
+name: Nightly property run
+
+# The Hypothesis `deep` profile (300 examples) against `main`. Per-commit CI runs the `ci`
+# profile — 2 examples — so the suite stays under a minute; depth is what this buys. It is
+# deliberately **not** a required check: it gates nothing and blocks no merge. A failure
+# opens an issue, because a property failure found at 300 examples is a real defect that a
+# red tick nobody is watching would lose.
+on:
+  schedule:
+    - cron: "17 2 * * *"   # 02:17 UTC daily
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  deep:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env: { POSTGRES_USER: vinea, POSTGRES_PASSWORD: vinea, POSTGRES_DB: vinea }
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U vinea" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgresql+psycopg://vinea:vinea@localhost:5432/vinea
+      HYPOTHESIS_PROFILE: deep
+    defaults: { run: { working-directory: backend } }
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: main }
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      # `-m slow` is the property suite. `--hypothesis-show-statistics` puts the example
+      # count and the shrink in the log, so a run that silently degraded to the fast profile
+      # is visible rather than passing quietly.
+      - name: deep property run
+        id: deep
+        run: |
+          set -o pipefail
+          uv run pytest -m slow -q -p no:randomly --no-header -rA \
+            --hypothesis-show-statistics 2>&1 | tee deep.log
+      - name: upload the log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deep-property-log
+          path: backend/deep.log
+          retention-days: 30
+      - name: open an issue on failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const run = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const title = 'Nightly property run failed (HYPOTHESIS_PROFILE=deep)';
+            // One open issue, not one per night: reopen/comment on the standing one instead.
+            const { data: existing } = await github.rest.issues.listForRepo({
+              ...context.repo, state: 'open', labels: 'nightly-property', per_page: 1,
+            });
+            const body = [
+              `The deep property run failed on \`main\` at ${context.sha.slice(0, 7)}.`,
+              '',
+              `Run: ${run}`,
+              '',
+              'Hypothesis prints the shrunk counterexample in the job log and in the',
+              '`deep-property-log` artifact. Reproduce locally with:',
+              '',
+              '```',
+              'cd backend && HYPOTHESIS_PROFILE=deep uv run pytest -m slow -q',
+              '```',
+            ].join('\n');
+            if (existing.length) {
+              await github.rest.issues.createComment({
+                ...context.repo, issue_number: existing[0].number, body,
+              });
+            } else {
+              await github.rest.issues.create({
+                ...context.repo, title, body, labels: ['nightly-property'],
+              });
+            }

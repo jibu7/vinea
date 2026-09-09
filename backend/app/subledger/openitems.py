@@ -53,6 +53,33 @@ def _slices(
     return slices
 
 
+def slices_taken(db: Session, document: PartnerDocument) -> list[Decimal]:
+    """Every amount already taken off `document` by a recorded allocation line, kept as
+    individual slices — the granularity the base-currency rounding actually happened at.
+    Unallocation lines are negated, and `ROUND_HALF_UP` is symmetric about zero, so a
+    reversal cancels its original slice exactly."""
+    amounts = [
+        amount
+        for (amount,) in db.execute(
+            select(AllocationLine.amount).where(
+                AllocationLine.company_id == document.company_id,
+                (AllocationLine.debit_document_id == document.id)
+                | (AllocationLine.credit_document_id == document.id),
+            )
+        ).all()
+    ]
+    amounts.extend(
+        discount
+        for (discount,) in db.execute(
+            select(AllocationLine.discount_amount).where(
+                AllocationLine.company_id == document.company_id,
+                AllocationLine.discount_document_id == document.id,
+            )
+        ).all()
+    )
+    return amounts
+
+
 def recompute_open_amount(db: Session, document: PartnerDocument) -> Decimal:
     """One document's open amount, straight from the allocation lines that touch it."""
     if document.status == DocumentStatus.REVERSED:
@@ -114,9 +141,17 @@ class OpenItem:
         return self.open_base_amount * self.document.direction
 
 
-def _open_base(
+def base_residual(
     document: PartnerDocument, taken: list[Decimal], base_decimal_places: int
 ) -> Decimal:
+    """What the document still contributes to its control account, unsigned.
+
+    `base_total_amount` was posted once; each allocated slice took `round(slice × rate)` back
+    off. Base rounding is not additive, so those need not cancel even when the document is
+    settled to the minor unit in its own currency — the leftover is the *settlement rounding
+    residual*, and the allocation that closes the document posts it away (`_settle_residuals`
+    in `allocations.py`). This function is the arithmetic both sides share.
+    """
     return document.base_total_amount - sum(
         (
             round_amount(amount * document.exchange_rate, base_decimal_places)
@@ -124,6 +159,21 @@ def _open_base(
         ),
         ZERO,
     )
+
+
+def _open_base(
+    document: PartnerDocument,
+    taken: list[Decimal],
+    base_decimal_places: int,
+    *,
+    open_amount: Decimal,
+) -> Decimal:
+    # A document settled in its own currency is settled in base too: the allocation that
+    # closed it moved the residual to the rounding-difference account, so nothing of it is
+    # left on the control account and the open item must say so.
+    if open_amount == ZERO:
+        return ZERO
+    return base_residual(document, taken, base_decimal_places)
 
 
 def open_items_as_of(
@@ -164,7 +214,9 @@ def open_items_as_of(
             OpenItem(
                 document=document,
                 open_amount=open_amount,
-                open_base_amount=_open_base(document, taken, places),
+                open_base_amount=_open_base(
+                    document, taken, places, open_amount=open_amount
+                ),
             )
         )
     return items

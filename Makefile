@@ -19,3 +19,20 @@ db-reset:
 	docker compose run --rm backend uv run alembic upgrade head
 	docker compose up -d backend frontend
 	docker compose exec -T backend uv run python -m app.scripts.seed_e2e
+
+# The migration gate, run against a throwaway database — up from nothing, models-vs-migrations
+# check, then all the way back down. Use this rather than hand-rolling it: `alembic/env.py`
+# reads **`MIGRATION_DATABASE_URL`** (the superuser role), *not* `DATABASE_URL`, so
+# `DATABASE_URL=…/somewhere_else alembic downgrade base` silently targets the dev database
+# and wipes it. CI gets the same gate for free because its `vinea` database is untouched by
+# pytest, which works in `vinea_test`.
+MIGRATION_SCRATCH_DB ?= vinea_migration_check
+migrate-check:
+	docker compose exec -T db psql -U vinea -d postgres -q \
+	  -c 'DROP DATABASE IF EXISTS $(MIGRATION_SCRATCH_DB)' \
+	  -c 'CREATE DATABASE $(MIGRATION_SCRATCH_DB)'
+	cd backend && MIGRATION_DATABASE_URL=postgresql+psycopg://vinea:vinea@localhost:5432/$(MIGRATION_SCRATCH_DB) \
+	  sh -c 'uv run alembic upgrade head && uv run alembic check && uv run alembic downgrade base'
+	docker compose exec -T db psql -U vinea -d postgres -q \
+	  -c 'DROP DATABASE IF EXISTS $(MIGRATION_SCRATCH_DB)'
+	@echo "migrate-check: upgrade-from-zero, alembic check and downgrade-to-base all green"

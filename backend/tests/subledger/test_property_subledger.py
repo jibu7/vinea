@@ -18,7 +18,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.kernel.errors import LedgerStateError, PostingError
-from app.models.currency import ExchangeRate
+from app.kernel.money import quantum, round_amount
+from app.models.currency import Currency, ExchangeRate
 from app.models.partner import PartnerRole
 from app.models.subledger import Allocation, DocumentKind, DocumentStatus, PartnerDocument
 from app.subledger import allocations as allocations_service
@@ -34,6 +35,7 @@ OPERATIONS = ("invoice", "credit_note", "settlement", "allocate", "unallocate", 
 
 CURRENCIES = ("RWF", "USD")
 RATES = (Decimal(1250), Decimal("1300.5"), Decimal(1410))
+HUNDRED = Decimal(100)
 
 
 @dataclass
@@ -115,7 +117,14 @@ def _open_documents(db: Session, sub: Subledger) -> list[PartnerDocument]:
     )
 
 
-def _try_allocate(db: Session, sub: Subledger, on: date) -> None:
+def _try_allocate(db: Session, sub: Subledger, on: date, magnitude: int) -> None:
+    """`magnitude` also picks what *fraction* of the largest possible slice to take.
+
+    Always allocating the maximum settles a document in as few slices as the documents allow,
+    which never exercises base-currency rounding across many uneven slices — and that is where
+    the settlement residual lives (`_settlement_residuals`). Taking a ragged fraction is what
+    makes a document close on its third or fourth partial instead of its first.
+    """
     documents = _open_documents(db, sub)
     debits = [d for d in documents if d.direction == 1 and d.document_date <= on]
     credits = [d for d in documents if d.direction == -1 and d.document_date <= on]
@@ -123,7 +132,12 @@ def _try_allocate(db: Session, sub: Subledger, on: date) -> None:
         for credit in credits:
             if debit.currency_id != credit.currency_id:
                 continue
-            amount = min(debit.open_amount, credit.open_amount)
+            largest = min(debit.open_amount, credit.open_amount)
+            if largest <= 0:
+                continue
+            places = db.get(Currency, debit.currency_id).decimal_places
+            portion = round_amount(largest * Decimal(magnitude % 100 + 1) / HUNDRED, places)
+            amount = min(largest, max(portion, quantum(places)))
             if amount <= 0:
                 continue
             allocations_service.allocate(
@@ -233,7 +247,7 @@ def test_the_subledger_survives_an_arbitrary_sequence(
                         amount=amount,
                     )
                 elif operation == "allocate":
-                    _try_allocate(db, subledger, on)
+                    _try_allocate(db, subledger, on, magnitude)
                 elif operation == "unallocate":
                     _try_unallocate(db, subledger, on)
                 else:

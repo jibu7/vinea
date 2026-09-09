@@ -21,6 +21,7 @@ from app.kernel.errors import (
 )
 from app.kernel.events import LineSpec, ManualJournal, PartnerDocumentPosted
 from app.kernel.sequences import DocType
+from app.models.gl import ControlType, GLAccount
 from app.models.journal import JournalEntry
 from tests.kernel.conftest import Ledger, post_simple
 from tests.subledger.conftest import MARCH, Subledger
@@ -111,9 +112,9 @@ INSERT_LINE = text(
     """
     INSERT INTO journal_lines (company_id, entry_id, line_no, gl_account_id, branch_id,
                                currency_id, exchange_rate, amount, base_amount, tax_amount,
-                               partner_type, partner_id)
+                               partner_type, partner_id, item_id)
     VALUES (:cid, :entry, 1, :account, :branch, :currency, 1, 100, 100, 0,
-            :partner_type, :partner_id)
+            :partner_type, :partner_id, :item_id)
     """
 )
 
@@ -126,6 +127,8 @@ def _raw_line(
     partner_type: str | None,
     partner_id: int | None,
     number: str,
+    account_code: str = "1200",
+    item_id: int | None = None,
 ) -> None:
     ledger = subledger.ledger
     period_id = next(p.id for p in ledger.periods if p.start_date <= MARCH <= p.end_date)
@@ -145,11 +148,12 @@ def _raw_line(
         {
             "cid": ledger.company_id,
             "entry": entry_id,
-            "account": ledger.acct("1200"),
+            "account": ledger.acct(account_code),
             "branch": ledger.main_branch.id,
             "currency": ledger.base.id,
             "partner_type": partner_type,
             "partner_id": partner_id,
+            "item_id": item_id,
         },
     )
 
@@ -224,4 +228,73 @@ def test_manual_journal_still_names_bank_accounts_distinctly(
             actor=ledger.owner,
         )
     assert excinfo.value.code == "control_account_manual_posting"
+    db.rollback()
+
+
+def test_the_inventory_item_check_cannot_fire_before_the_inv_module_exists(
+    db: Session, subledger: Subledger
+) -> None:
+    """`1300 Inventory` is seeded as an `inventory` control account in every tenant, and it is
+    postable — so the item-dimension rule added in 0009 has a live account to fire on. It
+    still cannot fire on any posting path that exists today, because the registry pairs
+    `inventory` with module `inv` alone and no `inv` module ships before P5: the module check
+    refuses the line first, at both layers. The rule reads `journal_lines.item_id`, a nullable
+    bigint with no foreign key — there is no `items` table yet — and this test is what will
+    tell us the day it becomes reachable."""
+    ledger = subledger.ledger
+    stock = db.scalar(
+        select(GLAccount).where(
+            GLAccount.company_id == ledger.company_id, GLAccount.code == "1300"
+        )
+    )
+    assert stock is not None
+    assert stock.control_type == ControlType.INVENTORY and stock.is_postable
+
+    # Posting Engine: refused for the module, never for the missing item.
+    with pytest.raises(PostingError) as excinfo:
+        post_simple(db, ledger, debit="1300", credit="2300", amount=Decimal(100), on=MARCH)
+    assert excinfo.value.code == "control_account_direct_posting"
+    db.rollback()
+
+    # Database: the same order. VN007 (module), not VN008 (dimension).
+    with pytest.raises(DBAPIError) as excinfo:
+        _raw_line(
+            db,
+            subledger,
+            module="gl",
+            partner_type=None,
+            partner_id=None,
+            number="RAW-INV-1",
+            account_code="1300",
+        )
+    assert kernel_sqlstate(excinfo.value) == SQLSTATE_CONTROL_ACCOUNT
+    db.rollback()
+
+    # Reach past the module check the only way there is — claim to be `inv` — and the item
+    # rule is there, reading `item_id`, waiting for P5.
+    with pytest.raises(DBAPIError) as excinfo:
+        _raw_line(
+            db,
+            subledger,
+            module="inv",
+            partner_type=None,
+            partner_id=None,
+            number="RAW-INV-2",
+            account_code="1300",
+        )
+    assert kernel_sqlstate(excinfo.value) == SQLSTATE_CONTROL_PARTNER
+    assert "requires an item" in str(excinfo.value)
+    db.rollback()
+
+    # And it is satisfied by any item id, because nothing references an item table yet.
+    _raw_line(
+        db,
+        subledger,
+        module="inv",
+        partner_type=None,
+        partner_id=None,
+        number="RAW-INV-3",
+        account_code="1300",
+        item_id=1,
+    )
     db.rollback()

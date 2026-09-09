@@ -10,7 +10,7 @@ Unallocation posts a mirror allocation with negated lines and a frozen-base jour
 — one reversal only, matching the P2 rule for journal entries.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
 
@@ -22,7 +22,7 @@ from app.core.errors import NotFoundError
 from app.kernel import posting
 from app.kernel.errors import LedgerStateError, PostingError
 from app.kernel.events import AllocationPosted, LineSpec
-from app.kernel.money import ZERO, base_currency, is_rounded, round_amount
+from app.kernel.money import ZERO, base_currency, is_rounded, quantum, round_amount
 from app.kernel.periods import assert_period_open, find_period
 from app.kernel.sequences import DocType, claim_number
 from app.models.currency import Currency
@@ -37,7 +37,7 @@ from app.models.subledger import (
 from app.models.user import User
 from app.subledger import masters
 from app.subledger.common import PARTNER_TYPE_FOR_ROLE, audit, role_accounts
-from app.subledger.openitems import recompute_open_amount
+from app.subledger.openitems import base_residual, recompute_open_amount, slices_taken
 
 HUNDRED = Decimal(100)
 
@@ -73,10 +73,17 @@ class Preview:
     currency: Currency
     pairs: list[_Pair]
     postings: list[Posting]
+    # (document, residual) for every document this allocation closes that would otherwise
+    # strand a sub-unit of base currency on the control account.
+    residuals: list[tuple[PartnerDocument, Decimal]] = field(default_factory=list)
 
     @property
     def total_allocated(self) -> Decimal:
         return sum((pair.amount for pair in self.pairs), ZERO)
+
+    @property
+    def total_rounding_base(self) -> Decimal:
+        return sum((residual for _, residual in self.residuals), ZERO)
 
     @property
     def total_discount(self) -> Decimal:
@@ -148,6 +155,10 @@ def prepare(
     prepared: list[_Pair] = []
     # Documents can appear in several pairs; track consumption across the whole allocation.
     remaining: dict[int, Decimal] = {}
+    involved: dict[int, PartnerDocument] = {}
+    # Slices this allocation adds, per document — needed to compute the base residual of any
+    # document it closes before the allocation lines exist to be read back.
+    new_slices: dict[int, list[Decimal]] = {}
 
     for index, pair in enumerate(pairs):
         debit = _load_document(db, company_id, pair.debit_document_id)
@@ -161,6 +172,7 @@ def prepare(
             # Recomputed, never the stored `open_amount` column: a cache that has drifted
             # must not be able to authorise an over-allocation (decision 3).
             remaining.setdefault(document.id, recompute_open_amount(db, document))
+            involved.setdefault(document.id, document)
         if debit.direction != 1 or credit.direction != -1:
             raise LedgerStateError(
                 "An allocation matches one debit document against one credit document",
@@ -224,6 +236,9 @@ def prepare(
                     field_errors={f"pairs.{index}.amount": ["exceeds the open amount"]},
                 )
             remaining[document.id] -= consumed
+            new_slices.setdefault(document.id, []).append(pair.amount)
+            if discount_document is not None and discount_document.id == document.id:
+                new_slices[document.id].append(discount)
 
         fx_base = round_amount(
             pair.amount * debit.exchange_rate, base.decimal_places
@@ -240,9 +255,49 @@ def prepare(
         )
 
     assert currency is not None
+    residuals = _settlement_residuals(db, involved, remaining, new_slices, base.decimal_places)
     return Preview(
-        currency=currency, pairs=prepared, postings=_postings(db, role, base, prepared)
+        currency=currency,
+        pairs=prepared,
+        postings=_postings(db, role, base, prepared, residuals),
+        residuals=residuals,
     )
+
+
+def _settlement_residuals(
+    db: Session,
+    involved: dict[int, PartnerDocument],
+    remaining: dict[int, Decimal],
+    new_slices: dict[int, list[Decimal]],
+    places: int,
+) -> list[tuple[PartnerDocument, Decimal]]:
+    """The base-currency residue every document this allocation *closes* would otherwise
+    leave stranded on its control account.
+
+    A document posts `round(total × rate)` once and gives back `round(slice × rate)` per
+    allocated slice. Base rounding is not additive, so a document settled to the last minor
+    unit in its own currency can still be a franc out in base — real money, sitting on the
+    control account of a partner who owes nothing. The closing allocation absorbs it, exactly
+    as the Posting Engine's tolerance rule absorbs a per-line residue (ADR-06): bounded by
+    half a minor unit per slice, and anything larger is a wrong number, not a rounding error.
+    """
+    residuals: list[tuple[PartnerDocument, Decimal]] = []
+    for document_id, left in sorted(remaining.items()):
+        if left != ZERO:
+            continue
+        document = involved[document_id]
+        taken = slices_taken(db, document) + new_slices.get(document_id, [])
+        residual = base_residual(document, taken, places)
+        if residual == ZERO:
+            continue
+        if abs(residual) > len(taken) * quantum(places):
+            raise LedgerStateError(
+                f"{document.number} is settled but {residual:+f} out in base currency, which "
+                f"is more than rounding can explain",
+                code="settlement_residual_too_large",
+            )
+        residuals.append((document, residual))
+    return residuals
 
 
 def _discount_side(debit: PartnerDocument, credit: PartnerDocument) -> PartnerDocument | None:
@@ -255,10 +310,14 @@ def _discount_side(debit: PartnerDocument, credit: PartnerDocument) -> PartnerDo
 
 
 def _postings(
-    db: Session, role: PartnerRole, base: Currency, pairs: list[_Pair]
+    db: Session,
+    role: PartnerRole,
+    base: Currency,
+    pairs: list[_Pair],
+    residuals: list[tuple[PartnerDocument, Decimal]],
 ) -> list[Posting]:
-    """Base-currency GL effect of an allocation: control against FX gain/loss and the
-    settlement discount account. Returns an empty list when nothing needs to post."""
+    """Base-currency GL effect of an allocation: control against FX gain/loss, the settlement
+    discount account and the rounding difference. Empty when nothing needs to post."""
     accounts = role_accounts(db, base.company_id, role)
     by_account: dict[int, Decimal] = {}
     descriptions: dict[int, str] = {}
@@ -307,6 +366,23 @@ def _postings(
                 else "Settlement discount received",
             )
             control_totals[control_id] -= signed
+
+    # Every document this allocation closes hands its base residue to the rounding-difference
+    # account. The document's standing contribution to the control account is
+    # `direction × residual`, so posting the negation of that leaves the control account at
+    # exactly zero for it — which is what makes `open_base_amount == 0` on a settled document
+    # a statement about the ledger and not just about the open-item list.
+    for document, residual in residuals:
+        if accounts.rounding_account_id is None:
+            raise PostingError(
+                "Set the rounding difference account in GL settings before settling a "
+                "foreign-currency document to the last minor unit",
+                code="rounding_account_unset",
+            )
+        signed = document.direction * residual
+        control_totals.setdefault(document.control_account_id, ZERO)
+        control_totals[document.control_account_id] -= signed
+        add(accounts.rounding_account_id, signed, "Settlement rounding")
 
     postings = [
         Posting(

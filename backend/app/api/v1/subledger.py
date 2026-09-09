@@ -1071,8 +1071,11 @@ def sweep_jobs(
     db: Session = Depends(get_db),
 ) -> JobSweepResult:
     """Retention + reaper: fails jobs abandoned by a restarted process and deletes expired
-    ones. Runs on every enqueue as well; this endpoint is for the scheduler."""
-    _require_any(auth, permissions.AR_REPORTS_VIEW, permissions.AP_REPORTS_VIEW)
+    ones. Runs on every enqueue as well; this endpoint is for the scheduler.
+
+    It **deletes rows**, so it is gated on the setup permissions, not the reports ones: a
+    clerk who may read a statement may not reap other people's jobs."""
+    _require_any(auth, permissions.AR_SETUP_MANAGE, permissions.AP_SETUP_MANAGE)
     abandoned, deleted = jobs_service.sweep(db, auth.company_id)
     db.commit()
     return JobSweepResult(abandoned=abandoned, deleted=deleted)

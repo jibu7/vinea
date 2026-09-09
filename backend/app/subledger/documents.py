@@ -599,12 +599,22 @@ def _check_credit_limit(
     request: Request | None,
 ) -> None:
     limit: Decimal | None = getattr(settings, "credit_limit", None)
-    if limit is None or direction < 0:
+    # The document that *builds* exposure is the one pointing the same way as the role's
+    # invoice: an AR invoice debits the customer (+1), a supplier invoice credits the
+    # supplier (-1). Testing `direction < 0` instead read AR's signs on both sides, which
+    # left the AP limit dead on supplier invoices while blocking returns to supplier — the
+    # only two documents it could reach, and both the wrong way round.
+    builds_exposure = DOCUMENT_MATRIX[(role, DocumentKind.INVOICE)].direction
+    if limit is None or direction != builds_exposure:
         return  # no limit, or a document that reduces exposure
 
     converted = to_base(db, total, currency, document_date, rate=exchange_rate)
+    # Exposure in the role's own sense — what the customer owes us, what we owe the supplier.
+    # Open items are signed by their side of the control account, so the invoice direction is
+    # what turns both into a positive amount outstanding.
     exposure = (
-        sum(
+        builds_exposure
+        * sum(
             (
                 item.signed_base_amount
                 for item in open_items_as_of(

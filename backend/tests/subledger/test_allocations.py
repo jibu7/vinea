@@ -12,13 +12,12 @@ from sqlalchemy.orm import Session
 from app.kernel.errors import LedgerStateError, PostingError
 from app.models.journal import JournalLine
 from app.models.partner import PartnerRole
-from app.models.subledger import DocumentKind
 from app.subledger import allocations as allocations_service
-from app.subledger.openitems import verify_open_items
-from tests.kernel.conftest import USD_RATE, Ledger
+from app.subledger.openitems import open_items_as_of, verify_open_items
+from tests.kernel.conftest import Ledger
 from tests.kernel.invariants import assert_ledger_invariants
 from tests.subledger.conftest import MARCH, Subledger, set_terms
-from tests.subledger.invariants import assert_subledger_invariants
+from tests.subledger.invariants import assert_subledger_invariants, control_balance
 from tests.subledger.test_documents import post_invoice, post_settlement
 
 
@@ -84,159 +83,6 @@ def test_part_payment_leaves_the_balance_open(db: Session, subledger: Subledger)
     assert_subledger_invariants(db, subledger.company_id)
 
 
-def test_realized_fx_posts_at_allocation(db: Session, subledger: Subledger) -> None:
-    """USD invoice at 1300.5, receipt at 1250: the base-currency difference is a loss and
-    posts against the control account, so the subledger keeps reconciling."""
-    ledger = subledger.ledger
-    later = MARCH + timedelta(days=20)
-    _set_usd_rate(db, ledger, later, Decimal(1250))
-
-    invoice, _ = post_invoice(
-        db, subledger, amount=Decimal("100.00"), currency="USD", on=MARCH
-    )
-    receipt = post_settlement(
-        db, subledger, amount=Decimal("100.00"), currency="USD", on=later
-    )
-    db.commit()
-
-    allocation = _allocate(
-        db, subledger, debit=invoice, credit=receipt, amount=Decimal("100.00"), on=later
-    )
-    db.commit()
-
-    assert allocation.journal_entry_id is not None
-    lines = db.scalars(
-        select(JournalLine).where(JournalLine.entry_id == allocation.journal_entry_id)
-    ).all()
-    expected_loss = Decimal(100) * USD_RATE - Decimal(100) * Decimal(1250)
-    loss = next(line for line in lines if line.gl_account_id == ledger.acct("6950"))
-    control = next(
-        line for line in lines if line.gl_account_id == invoice.control_account_id
-    )
-    assert loss.base_amount == expected_loss.quantize(Decimal(1))
-    assert control.base_amount == -expected_loss.quantize(Decimal(1))
-    assert control.partner_id == subledger.customer.id
-    assert invoice.open_amount == Decimal(0) and receipt.open_amount == Decimal(0)
-    assert_ledger_invariants(db, subledger.company_id)
-    assert_subledger_invariants(db, subledger.company_id)
-
-
-def test_realized_fx_on_the_ap_side_is_a_gain(db: Session, subledger: Subledger) -> None:
-    ledger = subledger.ledger
-    later = MARCH + timedelta(days=20)
-    _set_usd_rate(db, ledger, later, Decimal(1250))
-
-    invoice, _ = post_invoice(
-        db, subledger, role=PartnerRole.AP, amount=Decimal("100.00"), currency="USD", on=MARCH
-    )
-    payment = post_settlement(
-        db, subledger, role=PartnerRole.AP, amount=Decimal("100.00"), currency="USD", on=later
-    )
-    db.commit()
-    allocation, _ = allocations_service.allocate(
-        db,
-        subledger.company_id,
-        PartnerRole.AP,
-        partner_id=subledger.supplier.id,
-        allocation_date=later,
-        pairs=[
-            allocations_service.PairInput(
-                debit_document_id=payment.id,
-                credit_document_id=invoice.id,
-                amount=Decimal("100.00"),
-            )
-        ],
-        actor=ledger.owner,
-    )
-    db.commit()
-    lines = db.scalars(
-        select(JournalLine).where(JournalLine.entry_id == allocation.journal_entry_id)
-    ).all()
-    assert any(line.gl_account_id == ledger.acct("4400") for line in lines), "exchange gain"
-    assert_subledger_invariants(db, subledger.company_id)
-
-
-def test_settlement_discount_posts_at_allocation(db: Session, subledger: Subledger) -> None:
-    ledger = subledger.ledger
-    set_terms(db, subledger, PartnerRole.AR, subledger.discount_terms.id)
-    db.commit()
-
-    invoice, _ = post_invoice(db, subledger, amount=Decimal(100000))
-    receipt = post_settlement(db, subledger, amount=Decimal(98000))
-    db.commit()
-    assert invoice.payment_terms_id == subledger.discount_terms.id
-
-    allocation = _allocate(
-        db,
-        subledger,
-        debit=invoice,
-        credit=receipt,
-        amount=Decimal(98000),
-        discount=Decimal(2000),
-    )
-    db.commit()
-
-    assert invoice.open_amount == Decimal(0)
-    lines = db.scalars(
-        select(JournalLine).where(JournalLine.entry_id == allocation.journal_entry_id)
-    ).all()
-    discount = next(line for line in lines if line.gl_account_id == ledger.acct("6960"))
-    assert discount.base_amount == Decimal(2000)
-    assert_ledger_invariants(db, subledger.company_id)
-    assert_subledger_invariants(db, subledger.company_id)
-
-
-def test_settlement_discount_on_the_ap_side_is_income(
-    db: Session, subledger: Subledger
-) -> None:
-    """The mirror of the AR case: we pay less than we owe, so the supplier's control account
-    is *debited* by the discount and the difference is income. Getting this sign wrong leaves
-    the AP control account out by twice the discount."""
-    ledger = subledger.ledger
-    set_terms(db, subledger, PartnerRole.AP, subledger.discount_terms.id)
-    db.commit()
-
-    invoice, _ = post_invoice(
-        db, subledger, role=PartnerRole.AP, amount=Decimal(100000)
-    )
-    payment = post_settlement(
-        db, subledger, role=PartnerRole.AP, amount=Decimal(98000)
-    )
-    db.commit()
-
-    allocation, _ = allocations_service.allocate(
-        db,
-        subledger.company_id,
-        PartnerRole.AP,
-        partner_id=subledger.supplier.id,
-        allocation_date=MARCH,
-        pairs=[
-            allocations_service.PairInput(
-                debit_document_id=payment.id,
-                credit_document_id=invoice.id,
-                amount=Decimal(98000),
-                discount_amount=Decimal(2000),
-            )
-        ],
-        actor=ledger.owner,
-    )
-    db.commit()
-
-    assert invoice.open_amount == Decimal(0) and payment.open_amount == Decimal(0)
-    lines = db.scalars(
-        select(JournalLine).where(JournalLine.entry_id == allocation.journal_entry_id)
-    ).all()
-    income = next(line for line in lines if line.gl_account_id == ledger.acct("4350"))
-    control = next(
-        line for line in lines if line.gl_account_id == invoice.control_account_id
-    )
-    assert income.base_amount == Decimal(-2000), "discount received is income (credit)"
-    assert control.base_amount == Decimal(2000), "AP control is debited by the discount"
-    assert _control_balance(db, subledger, invoice.control_account_id) == Decimal(0)
-    assert_ledger_invariants(db, subledger.company_id)
-    assert_subledger_invariants(db, subledger.company_id)
-
-
 def test_a_discount_beyond_the_terms_is_refused(db: Session, subledger: Subledger) -> None:
     set_terms(db, subledger, PartnerRole.AR, subledger.discount_terms.id)
     db.commit()
@@ -295,49 +141,6 @@ def test_cross_currency_allocation_is_refused(db: Session, subledger: Subledger)
         _allocate(db, subledger, debit=invoice, credit=receipt, amount=Decimal(10))
     assert excinfo.value.code == "cross_currency_allocation_unsupported"
     db.rollback()
-
-
-def test_a_credit_note_settles_an_invoice(db: Session, subledger: Subledger) -> None:
-    invoice, _ = post_invoice(db, subledger, amount=Decimal(10000))
-    note, _ = post_invoice(
-        db, subledger, kind=DocumentKind.CREDIT_NOTE, amount=Decimal(4000)
-    )
-    db.commit()
-    _allocate(db, subledger, debit=invoice, credit=note, amount=Decimal(4000))
-    db.commit()
-    assert invoice.open_amount == Decimal(6000)
-    assert note.open_amount == Decimal(0)
-    assert_subledger_invariants(db, subledger.company_id)
-
-
-def test_unallocate_returns_the_ledger_to_the_same_position(
-    db: Session, subledger: Subledger
-) -> None:
-    ledger = subledger.ledger
-    later = MARCH + timedelta(days=20)
-    _set_usd_rate(db, ledger, later, Decimal(1250))
-    invoice, _ = post_invoice(db, subledger, amount=Decimal("100.00"), currency="USD")
-    receipt = post_settlement(
-        db, subledger, amount=Decimal("100.00"), currency="USD", on=later
-    )
-    db.commit()
-    before = _control_balance(db, subledger, invoice.control_account_id)
-
-    allocation = _allocate(
-        db, subledger, debit=invoice, credit=receipt, amount=Decimal("100.00"), on=later
-    )
-    db.commit()
-    reversal = allocations_service.unallocate(
-        db, allocation, on_date=later, reason="allocated in error", actor=ledger.owner
-    )
-    db.commit()
-
-    assert reversal.reverses_allocation_id == allocation.id
-    assert invoice.open_amount == Decimal("100.00")
-    assert receipt.open_amount == Decimal("100.00")
-    assert _control_balance(db, subledger, invoice.control_account_id) == before
-    assert_ledger_invariants(db, subledger.company_id)
-    assert_subledger_invariants(db, subledger.company_id)
 
 
 def test_an_allocation_can_only_be_unallocated_once(
@@ -424,35 +227,6 @@ def test_open_items_never_go_negative(
         db.rollback()
 
 
-@pytest.mark.slow
-@given(rate=st.integers(min_value=1000, max_value=1600))
-def test_full_settlement_realizes_exactly_the_booking_rate_difference(
-    db: Session, subledger: Subledger, rate: int
-) -> None:
-    try:
-        ledger = subledger.ledger
-        later = MARCH + timedelta(days=20)
-        _set_usd_rate(db, ledger, later, Decimal(rate))
-        invoice, _ = post_invoice(db, subledger, amount=Decimal("100.00"), currency="USD")
-        receipt = post_settlement(
-            db, subledger, amount=Decimal("100.00"), currency="USD", on=later
-        )
-        _allocate(
-            db, subledger, debit=invoice, credit=receipt, amount=Decimal("100.00"), on=later
-        )
-
-        expected = (Decimal(100) * USD_RATE).quantize(Decimal(1)) - (
-            Decimal(100) * Decimal(rate)
-        ).quantize(Decimal(1))
-        fx_total = sum((line.base_amount for line in _fx_lines(db, subledger)), Decimal(0))
-        assert fx_total == expected
-        # Fully settled: the control account is back to zero and nothing else moved.
-        assert _control_balance(db, subledger, invoice.control_account_id) == Decimal(0)
-        assert_subledger_invariants(db, subledger.company_id)
-    finally:
-        db.rollback()
-
-
 def _fx_lines(db: Session, sub: Subledger) -> list[JournalLine]:
     ledger = sub.ledger
     return list(
@@ -490,3 +264,62 @@ def _set_usd_rate(db: Session, ledger: Ledger, on, rate: Decimal) -> None:  # no
         )
     )
     db.flush()
+
+
+def test_full_settlement_leaves_no_base_residual_in_the_control_account(
+    db: Session, subledger: Subledger
+) -> None:
+    """Base rounding is not additive. A USD 100.00 invoice at 1250 posts 125 000 RWF, but the
+    three receipts that settle it — 33.33 + 33.33 + 33.34 — post 41 663 + 41 663 + 41 675 =
+    125 001. Settling the last minor unit in document currency must settle it in base too:
+    the final allocation absorbs the residual to the rounding-difference account, so the
+    document's open base amount is exactly zero and so is the control account."""
+    ledger = subledger.ledger
+    _set_usd_rate(db, ledger, MARCH, Decimal(1250))
+    db.commit()
+
+    invoice, _ = post_invoice(
+        db, subledger, amount=Decimal("100.00"), currency="USD", on=MARCH
+    )
+    slices = [Decimal("33.33"), Decimal("33.33"), Decimal("33.34")]
+    receipts = [
+        post_settlement(db, subledger, amount=amount, currency="USD", on=MARCH)
+        for amount in slices
+    ]
+    db.commit()
+    # The premise: the slices really do round to one RWF more than the invoice posted.
+    assert invoice.base_total_amount == Decimal(125000)
+    assert sum(r.base_total_amount for r in receipts) == Decimal(125001)
+
+    allocations = [
+        _allocate(db, subledger, debit=invoice, credit=receipt, amount=amount)
+        for receipt, amount in zip(receipts, slices, strict=True)
+    ]
+    db.commit()
+
+    # Only the allocation that closes the invoice posts anything: the rates match, so there
+    # is no realized FX, and the first two allocations leave the invoice open.
+    assert [a.journal_entry_id for a in allocations[:2]] == [None, None]
+    lines = db.scalars(
+        select(JournalLine).where(JournalLine.entry_id == allocations[2].journal_entry_id)
+    ).all()
+    control = next(line for line in lines if line.gl_account_id == invoice.control_account_id)
+    rounding = next(line for line in lines if line.gl_account_id == ledger.acct("6950"))
+    assert control.base_amount == Decimal(1) and rounding.base_amount == Decimal(-1)
+    assert rounding.description == "Settlement rounding"
+    assert control.partner_id == subledger.customer.id
+
+    assert invoice.open_amount == Decimal(0)
+    settled = next(
+        item
+        for item in open_items_as_of(
+            db, subledger.company_id, as_of=MARCH, include_settled=True
+        )
+        if item.document.id == invoice.id
+    )
+    assert settled.open_base_amount == Decimal(0), "a settled document holds no base residual"
+    assert control_balance(
+        db, subledger.company_id, invoice.control_account_id, as_of=MARCH
+    ) == Decimal(0), "the residual is still sitting in the AR control account"
+    assert_ledger_invariants(db, subledger.company_id)
+    assert_subledger_invariants(db, subledger.company_id)

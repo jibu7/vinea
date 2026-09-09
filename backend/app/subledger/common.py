@@ -52,6 +52,7 @@ class RoleAccounts:
     post_dated_account_id: int | None
     fx_gain_account_id: int | None
     fx_loss_account_id: int | None
+    rounding_account_id: int | None
 
 
 def _required(settings: GLSettings, field: str, label: str) -> int:
@@ -74,6 +75,7 @@ def role_accounts(db: Session, company_id: int, role: PartnerRole) -> RoleAccoun
             post_dated_account_id=settings.post_dated_receivable_account_id,
             fx_gain_account_id=settings.realized_fx_gain_account_id,
             fx_loss_account_id=settings.realized_fx_loss_account_id,
+            rounding_account_id=settings.rounding_difference_account_id,
         )
     return RoleAccounts(
         control_account_id=_required(settings, "ap_control_account_id", "AP control account"),
@@ -81,6 +83,7 @@ def role_accounts(db: Session, company_id: int, role: PartnerRole) -> RoleAccoun
         post_dated_account_id=settings.post_dated_payable_account_id,
         fx_gain_account_id=settings.realized_fx_gain_account_id,
         fx_loss_account_id=settings.realized_fx_loss_account_id,
+        rounding_account_id=settings.rounding_difference_account_id,
     )
 
 
