@@ -6,7 +6,7 @@ for account determination. Everything else — tax, numbering, credit limits, pe
 enforcement, reversal — is written once and runs for both roles.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date
 from decimal import Decimal
 
@@ -14,7 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from starlette.requests import Request
 
-from app.core.errors import NotFoundError
+from app.core.errors import ConflictError, NotFoundError
 from app.core.permissions import AP_CREDIT_LIMIT_OVERRIDE, AR_CREDIT_LIMIT_OVERRIDE
 from app.kernel import posting
 from app.kernel.errors import LedgerStateError, PostingError
@@ -79,6 +79,16 @@ DOCUMENT_MATRIX: dict[tuple[PartnerRole, DocumentKind], DocumentType] = {
     ),
 }
 
+#: A journal batch line posts an invoice- or credit-note-shaped document — the control account
+#: moves the same way — but under the JNL transaction type, and it must draw its number from
+#: the journal sequence. A journal debit consuming an invoice number would leave a hole in the
+#: INV- series that an audit cannot explain.
+JOURNAL_TRANSACTION_TYPE = "JNL"
+JOURNAL_DOC_TYPE = {
+    PartnerRole.AR: DocType.AR_JOURNAL,
+    PartnerRole.AP: DocType.AP_JOURNAL,
+}
+
 CREDIT_LIMIT_OVERRIDE = {
     PartnerRole.AR: AR_CREDIT_LIMIT_OVERRIDE,
     PartnerRole.AP: AP_CREDIT_LIMIT_OVERRIDE,
@@ -113,6 +123,9 @@ class DocumentInput:
     sales_rep_id: int | None = None
     tax_mode: TaxMode | None = None
     reference: str | None = None
+    #: Overrides the transaction type the (role, kind) matrix would give. Only `JNL` is
+    #: accepted, and only for invoice/credit-note kinds — see `JOURNAL_TRANSACTION_TYPE`.
+    transaction_type: str | None = None
     lines: tuple[LineInput, ...] = field(default_factory=tuple)
     # Settlements carry an amount and a cash account instead of lines.
     amount: Decimal | None = None
@@ -204,6 +217,26 @@ def post_document(
             return replayed, True
 
     spec = DOCUMENT_MATRIX[(role, data.kind)]
+    if data.transaction_type is not None and data.transaction_type != spec.transaction_type:
+        if data.transaction_type != JOURNAL_TRANSACTION_TYPE:
+            raise LedgerStateError(
+                f"{data.transaction_type} is not a transaction type this document kind can "
+                f"post under",
+                code="transaction_type_not_allowed",
+                field_errors={"transaction_type": ["not allowed for this kind"]},
+            )
+        if data.kind == DocumentKind.SETTLEMENT:
+            raise LedgerStateError(
+                "A receipt or payment cannot post as a journal",
+                code="transaction_type_not_allowed",
+                field_errors={"transaction_type": ["not allowed for a settlement"]},
+            )
+        spec = replace(
+            spec,
+            doc_type=JOURNAL_DOC_TYPE[role],
+            transaction_type=JOURNAL_TRANSACTION_TYPE,
+            label="Journal",
+        )
     partner = masters.get_partner(db, company_id, data.partner_id)
     if not partner.has_role(role):
         raise LedgerStateError(
@@ -368,6 +401,7 @@ def post_document(
         kind=data.kind,
         number=entry.number,
         doc_type=spec.doc_type,
+        transaction_type=spec.transaction_type,
         partner_id=partner.id,
         journal_entry_id=entry.id,
         document_date=data.document_date,
@@ -796,3 +830,139 @@ def mature_instruments(
         )
     db.flush()
     return matured
+
+
+# --- Journal batches -------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class BatchLineInput:
+    partner_id: int
+    contra_account_id: int
+    #: Signed in the partner's normal direction: positive increases what an AR customer owes
+    #: you, or what you owe an AP supplier. Negative is the credit side.
+    amount: Decimal
+    description: str
+    tax_code_id: int | None = None
+    branch_id: int | None = None
+    project_id: int | None = None
+    due_date: date | None = None
+
+
+@dataclass(frozen=True)
+class BatchInput:
+    batch_date: date
+    lines: tuple[BatchLineInput, ...]
+    reference: str | None = None
+    description: str | None = None
+
+
+def post_batch(
+    db: Session,
+    company_id: int,
+    role: PartnerRole,
+    data: BatchInput,
+    *,
+    actor: User,
+    permissions: set[str] | None = None,
+    idempotency_key: str | None = None,
+    idempotency_hash: str | None = None,
+    request: Request | None = None,
+) -> tuple[list[PartnerDocument], bool]:
+    """A journal batch: many partners charged or credited in one entry session.
+
+    Each line posts as its own partner document under the JNL transaction type, so each
+    creates an open item that can be allocated and aged like any other. They are separate
+    documents but one unit of work — the caller commits once, so a line that fails (a partner
+    on hold, a closed period, a control account in the contra column) takes the whole batch
+    with it rather than leaving half of it posted.
+
+    Direction comes from the sign, which is why this reuses the existing kinds rather than
+    inventing a journal kind whose direction would have to vary per line: positive is the
+    partner's normal side (invoice-shaped), negative is the other (credit-note-shaped).
+    """
+    if not data.lines:
+        raise LedgerStateError("A batch needs at least one line", code="empty_batch")
+
+    if idempotency_key:
+        replayed = _replay_batch(db, company_id, idempotency_key, idempotency_hash)
+        if replayed:
+            return replayed, True
+
+    documents: list[PartnerDocument] = []
+    for index, line in enumerate(data.lines):
+        if line.amount == ZERO:
+            raise LedgerStateError(
+                f"Line {index + 1} has no amount", code="empty_batch_line",
+                field_errors={f"lines.{index}.amount": ["required"]},
+            )
+        kind = DocumentKind.INVOICE if line.amount > ZERO else DocumentKind.CREDIT_NOTE
+        try:
+            document, _ = post_document(
+                db,
+                company_id,
+                role,
+                DocumentInput(
+                    kind=kind,
+                    partner_id=line.partner_id,
+                    document_date=data.batch_date,
+                    due_date=line.due_date,
+                    description=line.description,
+                    reference=data.reference,
+                    branch_id=line.branch_id,
+                    project_id=line.project_id,
+                    transaction_type=JOURNAL_TRANSACTION_TYPE,
+                    lines=(
+                        LineInput(
+                            unit_price=abs(line.amount),
+                            gl_account_id=line.contra_account_id,
+                            tax_code_id=line.tax_code_id,
+                            description=line.description,
+                            branch_id=line.branch_id,
+                            project_id=line.project_id,
+                        ),
+                    ),
+                ),
+                actor=actor,
+                permissions=permissions,
+                # The batch owns idempotency as a whole; its lines are not separately keyed.
+                idempotency_key=f"{idempotency_key}:{index}" if idempotency_key else None,
+                idempotency_hash=idempotency_hash,
+                request=request,
+            )
+        except (LedgerStateError, PostingError) as err:
+            # Re-point the error at the offending line so the grid can show it in place.
+            raise type(err)(
+                f"Line {index + 1}: {err.message}",
+                code=err.code,
+                field_errors={
+                    f"lines.{index}.{key}": value for key, value in err.field_errors.items()
+                }
+                or {f"lines.{index}": [err.code]},
+            ) from err
+        documents.append(document)
+    return documents, False
+
+
+def _replay_batch(
+    db: Session, company_id: int, idempotency_key: str, idempotency_hash: str | None
+) -> list[PartnerDocument]:
+    """Batch lines are keyed `<batch key>:<index>`, so a replay finds them all in order."""
+    rows = list(
+        db.scalars(
+            select(PartnerDocument)
+            .where(
+                PartnerDocument.company_id == company_id,
+                PartnerDocument.idempotency_key.like(f"{idempotency_key}:%"),
+            )
+            .order_by(PartnerDocument.id)
+        )
+    )
+    if rows and idempotency_hash is not None:
+        for row in rows:
+            if row.idempotency_hash not in (None, idempotency_hash):
+                raise ConflictError(
+                    "This Idempotency-Key was used with a different batch",
+                    code="idempotency_key_reused",
+                )
+    return rows

@@ -19,7 +19,7 @@ from app.models.partner import PartnerRole
 from app.services.jobs import handler
 from app.subledger import enquiries
 from app.subledger.ageing import age_analysis
-from app.subledger.documents import DOCUMENT_MATRIX
+from app.subledger.common import transaction_type_names
 
 STATEMENT_JOB = "partner_statement"
 
@@ -48,11 +48,14 @@ def _money(amount: Decimal, places: int) -> str:
     return f"{quantised:,.{places}f}"
 
 
-def _kind_label(role: PartnerRole, kind: str) -> str:
-    for (matrix_role, matrix_kind), spec in DOCUMENT_MATRIX.items():
-        if matrix_role == role and str(matrix_kind) == str(kind):
-            return spec.label
-    return str(kind)
+def _document_label(type_names: dict[str, str], document) -> str:  # noqa: ANN001
+    """What the document is, by transaction type — not what shape it has in the ledger.
+
+    A journal debit posts an invoice-shaped document under JNL; labelling it from `kind` would
+    print "Customer invoice" on a customer's statement for a charge that is nothing of the
+    sort.
+    """
+    return type_names.get(document.transaction_type, document.transaction_type)
 
 
 def render_statement_html(
@@ -69,6 +72,7 @@ def render_statement_html(
     base = db.scalar(select(Currency).where(Currency.company_id == company_id, Currency.is_base))
     assert company is not None and base is not None
     places = base.decimal_places
+    type_names = transaction_type_names(db, company_id, role)
     ageing = age_analysis(db, company_id, role, as_of=as_of)
     ageing_by_partner = {row.partner_id: row for row in ageing.rows}
 
@@ -85,7 +89,7 @@ def render_statement_html(
                 rows.append(
                     "<tr>"
                     f"<td>{escape(document.number)}</td>"
-                    f"<td>{escape(_kind_label(role, document.kind))}</td>"
+                    f"<td>{escape(_document_label(type_names, document))}</td>"
                     f"<td>{document.document_date:%d/%m/%Y}</td>"
                     f"<td>{due}</td>"
                     f"<td class='num'>{_money(document.total_amount, places)}</td>"
@@ -102,7 +106,7 @@ def render_statement_html(
                 rows.append(
                     "<tr>"
                     f"<td>{escape(document.number)}</td>"
-                    f"<td>{escape(_kind_label(role, document.kind))}</td>"
+                    f"<td>{escape(_document_label(type_names, document))}</td>"
                     f"<td>{document.document_date:%d/%m/%Y}</td>"
                     f"<td>{escape(document.description)}</td>"
                     f"<td class='num'>"

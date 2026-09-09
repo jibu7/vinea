@@ -31,6 +31,8 @@ from app.schemas.subledger import (
     ArApDefaultsRead,
     ArApDefaultsUpdate,
     AutoAllocateCreate,
+    BatchCreate,
+    BatchRead,
     BucketRead,
     BucketSetCreate,
     BucketSetRead,
@@ -69,6 +71,7 @@ from app.subledger import allocations as allocations_service
 from app.subledger import documents as documents_service
 from app.subledger import enquiries as enquiries_service
 from app.subledger import masters
+from app.subledger.common import transaction_type_names
 from app.subledger.statements import STATEMENT_JOB
 
 router = APIRouter(prefix="/subledger", tags=["accounts-receivable-payable"])
@@ -646,6 +649,61 @@ def post_document(
     return _document_read(db, document)
 
 
+@router.post("/{role}/batches", status_code=status.HTTP_201_CREATED)
+def post_batch(
+    payload: BatchCreate,
+    request: Request,
+    response: Response,
+    role: PartnerRole = RolePath,
+    idempotency_key: str = IdempotencyKey,
+    auth: AuthContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+) -> BatchRead:
+    """A journal batch: many partners charged or credited under the JNL transaction type.
+
+    Every line becomes its own partner document and its own journal entry, so each carries an
+    open item that ages and allocates like any other — but the batch is one unit of work. A
+    line that fails takes the whole batch with it; nothing is committed until every line has
+    posted.
+    """
+    _require(auth, POST_PERMISSION, role)
+    documents, replayed = documents_service.post_batch(
+        db,
+        auth.company_id,
+        role,
+        documents_service.BatchInput(
+            batch_date=payload.batch_date,
+            reference=payload.reference,
+            lines=tuple(
+                documents_service.BatchLineInput(
+                    partner_id=line.partner_id,
+                    contra_account_id=line.contra_account_id,
+                    amount=line.amount,
+                    description=line.description,
+                    tax_code_id=line.tax_code_id,
+                    branch_id=line.branch_id,
+                    project_id=line.project_id,
+                    due_date=line.due_date,
+                )
+                for line in payload.lines
+            ),
+        ),
+        actor=auth.user,
+        permissions=auth.permissions,
+        idempotency_key=idempotency_key,
+        idempotency_hash=fingerprint(f"{role.value}_batch", payload),
+        request=request,
+    )
+    db.commit()
+    if replayed:
+        response.status_code = status.HTTP_200_OK
+    return BatchRead(
+        batch_date=payload.batch_date,
+        reference=payload.reference,
+        documents=[DocumentSummary.model_validate(document) for document in documents],
+    )
+
+
 @router.get("/{role}/documents")
 def list_documents(
     role: PartnerRole = RolePath,
@@ -947,6 +1005,7 @@ def partner_enquiry(
     enquiry = enquiries_service.partner_enquiry(
         db, auth.company_id, role, partner_id, as_of=resolved, date_from=date_from
     )
+    type_names = transaction_type_names(db, auth.company_id, role)
     return PartnerEnquiry(
         role=role.value,
         partner_id=enquiry.partner.id,
@@ -961,6 +1020,10 @@ def partner_enquiry(
                 document_id=entry.document.id,
                 number=entry.document.number,
                 kind=str(entry.document.kind),
+                transaction_type=entry.document.transaction_type,
+                transaction_type_name=type_names.get(
+                    entry.document.transaction_type, entry.document.transaction_type
+                ),
                 document_date=entry.document.document_date,
                 due_date=entry.document.due_date,
                 currency_id=entry.document.currency_id,
@@ -978,6 +1041,10 @@ def partner_enquiry(
                 document_id=item.document.id,
                 number=item.document.number,
                 kind=str(item.document.kind),
+                transaction_type=item.document.transaction_type,
+                transaction_type_name=type_names.get(
+                    item.document.transaction_type, item.document.transaction_type
+                ),
                 document_date=item.document.document_date,
                 due_date=item.document.due_date,
                 currency_id=item.document.currency_id,
