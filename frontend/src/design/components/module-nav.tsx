@@ -78,7 +78,7 @@ export const navIntents: NavIntent[] = [
       { label: "Credit note", module: "Accounts Receivable", permission: "ar:transactions_post", href: "/ar/credit-notes/new" },
       { label: "Receipt", module: "Accounts Receivable", permission: "ar:transactions_post", href: "/ar/receipts/new" },
       { label: "Allocate", module: "Accounts Receivable", permission: "ar:transactions_post", href: "/ar/allocations/new" },
-      { label: "Account receivable batches", module: "Accounts Receivable", phase: "P4" },
+      { label: "Account receivable batches", module: "Accounts Receivable", permission: "ar:transactions_post", href: "/ar/batches/new" },
       // GRV and Purchase order are P6: goods receipt and the three-way match are the
       // purchasing cycle, not the AP subledger P4 builds. Supplier invoice, Receipt and
       // Payment are additions to the owner's list — master plan C.1.5.
@@ -88,7 +88,7 @@ export const navIntents: NavIntent[] = [
       { label: "Return to supplier", module: "Accounts Payable", permission: "ap:transactions_post", href: "/ap/returns/new" },
       { label: "Payment", module: "Accounts Payable", permission: "ap:transactions_post", href: "/ap/payments/new" },
       { label: "Allocate", module: "Accounts Payable", permission: "ap:transactions_post", href: "/ap/allocations/new" },
-      { label: "Account payable batches", module: "Accounts Payable", phase: "P4" },
+      { label: "Account payable batches", module: "Accounts Payable", permission: "ap:transactions_post", href: "/ap/batches/new" },
       { label: "Sales order", module: "Order Entry", phase: "P6" },
       { label: "Adjustments", module: "Inventory", phase: "P5" },
       { label: "Transfers", module: "Inventory", phase: "P5" },

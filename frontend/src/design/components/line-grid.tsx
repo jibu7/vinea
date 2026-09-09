@@ -22,6 +22,8 @@ export interface LineGridRow {
   quantity: string;
   unitPrice: string;
   discountPercent: string;
+  /** Batch mode (AR/AP journal batches): one partner per line, charged or credited. */
+  partnerId: string;
   /** Shared extra dimensions — collapsible, all default from the header. */
   branchId: string;
   projectId: string;
@@ -44,6 +46,7 @@ export function emptyLineGridRow(defaults: Partial<LineGridRow> = {}): LineGridR
     quantity: "1",
     unitPrice: "",
     discountPercent: "",
+    partnerId: "",
     branchId: "",
     projectId: "",
     currencyId: "",
@@ -86,6 +89,7 @@ const COL = {
   project: 3,
   currency: 4,
   taxCode: 5,
+  partner: 6,
   debit: 100,
   credit: 101,
   amount: 102,
@@ -105,7 +109,7 @@ const EDITABLE_AMOUNT_COLS: number[] = [
 ];
 
 export interface LineGridProps {
-  mode: "journal" | "cashbook" | "document";
+  mode: "journal" | "cashbook" | "document" | "batch";
   rows: LineGridRow[];
   onRowsChange: (rows: LineGridRow[]) => void;
   errors?: LineErrors;
@@ -114,6 +118,8 @@ export interface LineGridProps {
   projectOptions?: SelectOption[];
   currencyOptions?: SelectOption[];
   taxCodeOptions?: SelectOption[];
+  /** Batch mode only: who each line charges or credits. */
+  partnerOptions?: SelectOption[];
   baseCurrencyId?: string;
   /** Looks up the latest dated rate for a currency, to prefill the rate cell. */
   rateForCurrency?: (currencyId: string) => string | undefined;
@@ -137,6 +143,7 @@ export function LineGrid({
   projectOptions = [],
   currencyOptions = [],
   taxCodeOptions = [],
+  partnerOptions = [],
   baseCurrencyId,
   rateForCurrency,
   rowDefaults,
@@ -231,6 +238,10 @@ export function LineGrid({
             ? showExtra
               ? t("fewerColumns")
               : t("moreColumns")
+            : mode === "batch"
+            ? showExtra
+              ? t("fewerColumns")
+              : t("moreColumns")
             : showExtra
               ? "Fewer columns"
               : "More columns (branch, project, currency, tax)"}
@@ -247,7 +258,8 @@ export function LineGrid({
         >
           <thead className="bg-[var(--vinea-surface-sunken)] text-xs uppercase tracking-wide text-[var(--vinea-ink-subtle)]">
             <tr>
-              <th className="px-3 py-2 text-left">Account</th>
+              {mode === "batch" && <th className="px-3 py-2 text-left">{t("partner")}</th>}
+              <th className="px-3 py-2 text-left">{mode === "batch" ? t("contraAccount") : "Account"}</th>
               <th className="px-3 py-2 text-left">Description</th>
               {showExtra && <th className="px-3 py-2 text-left">Branch</th>}
               {showExtra && <th className="px-3 py-2 text-left">Project</th>}
@@ -263,6 +275,11 @@ export function LineGrid({
                 <>
                   <th className="px-3 py-2 text-right">Amount</th>
                   <th className="px-3 py-2 text-center">Tax incl.</th>
+                </>
+              )}
+              {mode === "batch" && (
+                <>
+                  <th className="px-3 py-2 text-right">{t("amount")}</th>
                 </>
               )}
               {mode === "document" && (
@@ -293,6 +310,25 @@ export function LineGrid({
 
               return (
                 <tr key={row.id} className={cn(activeCell?.row === r && "bg-[var(--vinea-brand-soft)]/30")}>
+                  {mode === "batch" && (
+                    <td data-row={r} data-col={COL.partner} className="min-w-48 p-1 align-top">
+                      <Combobox
+                        options={partnerOptions}
+                        value={row.partnerId}
+                        onValueChange={(v) => updateRow(r, { partnerId: v })}
+                        placeholder={t("partnerPlaceholder")}
+                        ariaLabel={t("partnerAria", { row: r + 1 })}
+                        className={cn("h-8", rowErr?.partner_id && "border-[var(--vinea-danger)]")}
+                        onFocus={() => startCellEdit(r, COL.partner, "partnerId", row.partnerId)}
+                        onKeyDown={(e) => onCellKeyDown(e, r, COL.partner, "partnerId")}
+                      />
+                      {rowErr?.partner_id && (
+                        <p className="mt-0.5 px-1 text-xs text-[var(--vinea-danger)]">
+                          {rowErr.partner_id}
+                        </p>
+                      )}
+                    </td>
+                  )}
                   <td data-row={r} data-col={COL.account} className="min-w-48 p-1 align-top">
                     <Combobox
                       options={accountOptions}
@@ -464,6 +500,25 @@ export function LineGrid({
                       </td>
                     </>
                   )}
+                  {mode === "batch" && (
+                    <td data-row={r} data-col={COL.amount} className="w-36 p-1 align-top">
+                      <input
+                        value={displayAmount(row.amount, activeCell?.row === r && activeCell.col === COL.amount)}
+                        onChange={(e) => updateRow(r, { amount: e.target.value })}
+                        onKeyDown={(e) => onCellKeyDown(e, r, COL.amount, "amount")}
+                        onFocus={() => startCellEdit(r, COL.amount, "amount", row.amount)}
+                        onBlur={() => setActiveCell(null)}
+                        inputMode="decimal"
+                        aria-label={t("amountAria", { row: r + 1 })}
+                        className={cn(
+                          "h-8 w-full rounded-[var(--radius-control)] border border-transparent bg-transparent px-2 text-right font-mono tabular-nums focus:border-[var(--vinea-brand)]",
+                          amountErr && "border-[var(--vinea-danger)]",
+                        )}
+                        placeholder="0"
+                      />
+                      {amountErr && <p className="mt-0.5 text-right text-xs text-[var(--vinea-danger)]">{amountErr}</p>}
+                    </td>
+                  )}
                   {mode === "document" && (
                     <>
                       <td data-row={r} data-col={COL.quantity} className="w-24 p-1 align-top">
@@ -536,7 +591,7 @@ export function LineGrid({
           onClick={addRow}
           className="w-full border-t border-[var(--vinea-border)] px-3 py-2 text-left text-xs font-medium text-[var(--vinea-brand)] hover:bg-[var(--vinea-surface-sunken)]"
         >
-          {mode === "document" ? t("addLine") : "+ Add line"}
+          {mode === "document" || mode === "batch" ? t("addLine") : "+ Add line"}
         </button>
       </div>
     </div>

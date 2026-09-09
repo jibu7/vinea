@@ -383,3 +383,29 @@ export interface Allocation {
   allocation_date: string;
   journal_entry_id: number | null;
 }
+
+// --- Journal batches ------------------------------------------------------------------------
+
+export interface BatchLinePayload {
+  partner_id: number;
+  contra_account_id: number;
+  /** Signed in the partner's normal direction; negative is the credit side. */
+  amount: string;
+  description: string;
+  tax_code_id?: number | null;
+  branch_id?: number | null;
+  project_id?: number | null;
+  due_date?: string | null;
+}
+
+export interface BatchPayload {
+  batch_date: string;
+  reference?: string | null;
+  lines: BatchLinePayload[];
+}
+
+export interface BatchResult {
+  batch_date: string;
+  reference: string | null;
+  documents: PartnerDocument[];
+}

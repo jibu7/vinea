@@ -179,6 +179,25 @@ async function main() {
     await allocCtx.close();
   }
 
+  // The AR batch screen with lines entered, so the partner column and the atomicity note are
+  // both visible.
+  if (process.env.SKIP_BATCH !== "1") {
+    const batchCtx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    const batch = await batchCtx.newPage();
+    await login(batch, OWNER);
+    for (const theme of ["light", "dark"] as const) {
+      await batch.goto(`${BASE}/ar/batches/new`);
+      await batch.waitForSelector("h1:has-text('Account receivable batches')");
+      await batch.getByLabel("Reference").fill("Monthly interest run");
+      await pick(batch, "Partner, row 1", "E2E");
+      await batch.getByLabel(/^Description, row 1/).fill("Interest on overdue account");
+      await batch.getByLabel(/^Amount, row 1/).fill("1200");
+      await batch.waitForTimeout(300);
+      await shoot(batch, "7-ar-batch", theme);
+    }
+    await batchCtx.close();
+  }
+
   const clerkCtx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const clerk = await clerkCtx.newPage();
   await login(clerk, READONLY);

@@ -725,6 +725,25 @@
       "selectCreditAria": "Apply {number}",
       "creditRemaining": "{amount} left",
       "previewNoPostings": "This allocation posts nothing to the ledger — it closes the open items and no more. There is no exchange difference and no discount to record."
+    },
+    "batches": {
+      "titleAr": "Account receivable batches",
+      "titleAp": "Account payable batches",
+      "subtitleAr": "Charge or credit many customers at once. Each line posts as its own journal document, ages on the customer's terms, and can be allocated like any other.",
+      "subtitleAp": "Charge or credit many suppliers at once. Each line posts as its own journal document, ages on the supplier's terms, and can be allocated like any other.",
+      "batchDate": "Batch date",
+      "reference": "Reference",
+      "referencePlaceholder": "Monthly interest run",
+      "lines": "Lines",
+      "total": "Batch total",
+      "post": "Post (Ctrl+Enter)",
+      "posting": "Posting…",
+      "posted": "{count} documents posted",
+      "postFailed": "Couldn't post the batch",
+      "atomicNote": "One unit of work: if any line is refused — a partner on hold, a closed period — none of them post.",
+      "draft": "Draft",
+      "signHintAr": "A positive amount charges the customer; a negative one credits them.",
+      "signHintAp": "A positive amount increases what you owe the supplier; a negative one reduces it."
     }
   },
   "lineGrid": {
@@ -740,6 +759,13 @@
     "discountPercentAria": "Discount percent, row {row}",
     "moreColumns": "More columns (branch, project, tax)",
     "fewerColumns": "Fewer columns",
-    "addLine": "+ Add line"
+    "addLine": "+ Add line",
+    "batchLines": "Batch lines",
+    "partner": "Partner",
+    "contraAccount": "Contra account",
+    "partnerPlaceholder": "Partner…",
+    "partnerAria": "Partner, row {row}",
+    "amount": "Amount",
+    "amountAria": "Amount, row {row}"
   }
 }
