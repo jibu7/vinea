@@ -31,11 +31,21 @@ jobs:
           # The runner image ships third-party apt sources (Google Chrome, Microsoft) that
           # this job never installs from. `apt-get update` exits 100 if *any* index fails, so
           # one of those vendors publishing a Release file ahead of its Packages.gz fails our
-          # build for a repo we do not use — which is exactly what happened on 1c7c358
-          # (Chrome index hash-sum mismatch). Drop the lists we don't need rather than
-          # `|| true`, which would also swallow a real failure on the repos we do.
-          sudo rm -f /etc/apt/sources.list.d/google-chrome.list \
-                     /etc/apt/sources.list.d/microsoft-prod.list
+          # build for a repo we do not use — which is what happened on 1c7c358 and again on
+          # 38957b6 (Chrome index hash-sum mismatch).
+          #
+          # Matched by content, not by filename: the first attempt deleted
+          # `google-chrome.list` and the repo was still fetched, because the image now
+          # declares it in deb822 `.sources` format. Grep both formats and the main list.
+          #
+          # Deliberately not `apt-get update || true`: that would also swallow a real failure
+          # on the repos this step does need, and it exists so WeasyPrint has pango and cairo.
+          # A silent miss there resurfaces as "statement PDFs are broken".
+          sudo find /etc/apt/sources.list.d -type f \
+            \( -name '*.list' -o -name '*.sources' \) \
+            -exec grep -lE 'dl\.google\.com|packages\.microsoft\.com' {} + \
+            | sudo xargs -r rm -v -f
+          sudo sed -i -E '/dl\.google\.com|packages\.microsoft\.com/d' /etc/apt/sources.list
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             libpango-1.0-0 libpangoft2-1.0-0 libcairo2 libgdk-pixbuf-2.0-0 libffi8 \
