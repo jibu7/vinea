@@ -1,4 +1,6 @@
-"""ADR-01 policy linter: no `company_id` table may silently opt out of RLS."""
+"""ADR-01 policy linter: no `company_id` table may silently opt out of RLS, and no
+`tenant_isolation` policy may be narrower than `FOR ALL` with both `USING` and `WITH CHECK`
+— a policy without `WITH CHECK` reads correctly but lets a tenant *write* another's rows."""
 
 from sqlalchemy import text
 
@@ -7,15 +9,17 @@ LINTER_QUERY = text(
     SELECT c.relname,
            c.relrowsecurity,
            c.relforcerowsecurity,
-           EXISTS (
-               SELECT 1 FROM pg_policies p
-               WHERE p.schemaname = 'public'
-                 AND p.tablename = c.relname
-                 AND p.policyname = 'tenant_isolation'
-           ) AS has_policy
+           p.policyname IS NOT NULL AS has_policy,
+           p.cmd,
+           p.qual IS NOT NULL AS has_using,
+           p.with_check IS NOT NULL AS has_with_check
     FROM pg_class c
     JOIN pg_namespace n ON n.oid = c.relnamespace
     JOIN pg_attribute a ON a.attrelid = c.oid
+    LEFT JOIN pg_policies p
+           ON p.schemaname = 'public'
+          AND p.tablename = c.relname
+          AND p.policyname = 'tenant_isolation'
     WHERE n.nspname = 'public'
       AND c.relkind = 'r'
       AND a.attname = 'company_id'
@@ -40,3 +44,30 @@ def test_every_company_scoped_table_has_forced_rls(admin_engine) -> None:
         "tables with company_id but without ENABLE + FORCE ROW LEVEL SECURITY and a "
         f"tenant_isolation policy: {offenders}"
     )
+
+
+def test_every_tenant_policy_is_for_all_with_a_write_check(admin_engine) -> None:
+    with admin_engine.connect() as conn:
+        rows = conn.execute(LINTER_QUERY).all()
+
+    offenders = [
+        (row.relname, row.cmd, row.has_using, row.has_with_check)
+        for row in rows
+        if row.cmd != "ALL" or not row.has_using or not row.has_with_check
+    ]
+    assert offenders == [], (
+        "tenant_isolation policies must be FOR ALL with both USING and WITH CHECK: "
+        f"{offenders}"
+    )
+
+
+def test_the_jobs_table_is_covered(admin_engine) -> None:
+    """Job artifacts are customer statement PDFs; name the table explicitly so a future
+    change that drops it out of the tenant tables list fails here, not in production."""
+    with admin_engine.connect() as conn:
+        rows = {row.relname: row for row in conn.execute(LINTER_QUERY).all()}
+
+    job = rows.get("jobs")
+    assert job is not None, "jobs must carry company_id and be linted"
+    assert job.relrowsecurity and job.relforcerowsecurity
+    assert job.has_policy and job.cmd == "ALL" and job.has_using and job.has_with_check

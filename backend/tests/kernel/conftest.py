@@ -35,6 +35,14 @@ settings.register_profile(
     deadline=None,
     suppress_health_check=[HealthCheck.function_scoped_fixture, HealthCheck.too_slow],
 )
+# Run by hand (`HYPOTHESIS_PROFILE=deep uv run pytest -m slow`) when a property is being
+# trusted with something new; CI keeps the fast profile so the suite stays under a minute.
+settings.register_profile(
+    "deep",
+    max_examples=30,
+    deadline=None,
+    suppress_health_check=[HealthCheck.function_scoped_fixture, HealthCheck.too_slow],
+)
 settings.load_profile(os.environ.get("HYPOTHESIS_PROFILE", "ci"))
 
 YEAR = date.today().year

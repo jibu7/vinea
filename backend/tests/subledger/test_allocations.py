@@ -186,6 +186,57 @@ def test_settlement_discount_posts_at_allocation(db: Session, subledger: Subledg
     assert_subledger_invariants(db, subledger.company_id)
 
 
+def test_settlement_discount_on_the_ap_side_is_income(
+    db: Session, subledger: Subledger
+) -> None:
+    """The mirror of the AR case: we pay less than we owe, so the supplier's control account
+    is *debited* by the discount and the difference is income. Getting this sign wrong leaves
+    the AP control account out by twice the discount."""
+    ledger = subledger.ledger
+    set_terms(db, subledger, PartnerRole.AP, subledger.discount_terms.id)
+    db.commit()
+
+    invoice, _ = post_invoice(
+        db, subledger, role=PartnerRole.AP, amount=Decimal(100000)
+    )
+    payment = post_settlement(
+        db, subledger, role=PartnerRole.AP, amount=Decimal(98000)
+    )
+    db.commit()
+
+    allocation, _ = allocations_service.allocate(
+        db,
+        subledger.company_id,
+        PartnerRole.AP,
+        partner_id=subledger.supplier.id,
+        allocation_date=MARCH,
+        pairs=[
+            allocations_service.PairInput(
+                debit_document_id=payment.id,
+                credit_document_id=invoice.id,
+                amount=Decimal(98000),
+                discount_amount=Decimal(2000),
+            )
+        ],
+        actor=ledger.owner,
+    )
+    db.commit()
+
+    assert invoice.open_amount == Decimal(0) and payment.open_amount == Decimal(0)
+    lines = db.scalars(
+        select(JournalLine).where(JournalLine.entry_id == allocation.journal_entry_id)
+    ).all()
+    income = next(line for line in lines if line.gl_account_id == ledger.acct("4350"))
+    control = next(
+        line for line in lines if line.gl_account_id == invoice.control_account_id
+    )
+    assert income.base_amount == Decimal(-2000), "discount received is income (credit)"
+    assert control.base_amount == Decimal(2000), "AP control is debited by the discount"
+    assert _control_balance(db, subledger, invoice.control_account_id) == Decimal(0)
+    assert_ledger_invariants(db, subledger.company_id)
+    assert_subledger_invariants(db, subledger.company_id)
+
+
 def test_a_discount_beyond_the_terms_is_refused(db: Session, subledger: Subledger) -> None:
     set_terms(db, subledger, PartnerRole.AR, subledger.discount_terms.id)
     db.commit()

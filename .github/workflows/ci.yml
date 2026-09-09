@@ -19,9 +19,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
+      # WeasyPrint renders the AR/AP statement PDFs (P4). Without these the import fails and
+      # the statement job would only ever be recorded as failed — never skipped, but the
+      # failure would look like a product bug rather than a missing library.
+      - name: install WeasyPrint system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libpango-1.0-0 libpangoft2-1.0-0 libcairo2 libgdk-pixbuf-2.0-0 libffi8 \
+            fonts-dejavu-core
       - run: uv sync
+      - name: prove WeasyPrint imports
+        run: uv run python -c "import weasyprint; print('weasyprint', weasyprint.__version__)"
       - run: uv run ruff check .
       - run: uv run pytest -q
+      # Named explicitly so the log shows the PDF path executing. `-p no:randomly` keeps the
+      # node ids stable and `--no-header -rA` prints PASSED lines rather than dots, so a
+      # silently-deselected test is visible as a missing line.
+      - name: prove the statement PDF tests ran
+        run: |
+          uv run pytest -p no:randomly --no-header -rA \
+            tests/subledger/test_reports.py::test_statement_job_produces_a_pdf \
+            tests/subledger/test_reports.py::test_statement_html_renders_open_items \
+            tests/subledger/test_api.py::test_statement_job_downloads_a_pdf
       - run: uv run alembic upgrade head   # migration-from-zero gate
       - run: uv run alembic check          # models and migrations must not drift apart
 

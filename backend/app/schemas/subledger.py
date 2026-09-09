@@ -1,7 +1,7 @@
 """AR/AP API schemas. One set of shapes for both roles — the role is a path segment, never
 a duplicated model."""
 
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Annotated
 
@@ -549,3 +549,10 @@ class JobRead(ApiModel):
     error: str | None
     artifact_name: str | None
     artifact_content_type: str | None
+    artifact_size: int | None
+    expires_at: datetime | None
+
+
+class JobSweepResult(BaseModel):
+    abandoned: int
+    deleted: int

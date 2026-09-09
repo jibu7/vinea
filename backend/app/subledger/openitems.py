@@ -7,24 +7,31 @@ on date X" calls `open_items_as_of`, which never reads the stored column.
 """
 
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.kernel.money import base_currency, round_amount
 from app.models.partner import PartnerRole
 from app.models.subledger import Allocation, AllocationLine, DocumentStatus, PartnerDocument
 
 ZERO = Decimal(0)
 
 
-def _consumed(
+def _slices(
     db: Session, company_id: int, *, as_of: date | None = None
-) -> dict[int, Decimal]:
-    """Allocated + discounted amount per document, in document currency."""
-    consumed: dict[int, Decimal] = defaultdict(lambda: ZERO)
+) -> dict[int, list[Decimal]]:
+    """Every amount taken off a document, kept **as individual slices** rather than a total.
+
+    Base-currency rounding is not additive, and the ledger rounds each slice: an allocation
+    posts `round(amount × rate)` per side, a discount `round(discount × rate)`. Summing first
+    and rounding once would disagree with the control account by up to half a minor unit per
+    slice, which is exactly the drift `assert_subledger_invariants` refuses to tolerate.
+    """
+    slices: dict[int, list[Decimal]] = defaultdict(list)
     statement = (
         select(
             AllocationLine.debit_document_id,
@@ -39,11 +46,11 @@ def _consumed(
     if as_of is not None:
         statement = statement.where(Allocation.allocation_date <= as_of)
     for debit_id, credit_id, amount, discount_id, discount in db.execute(statement).all():
-        consumed[debit_id] += amount
-        consumed[credit_id] += amount
+        slices[debit_id].append(amount)
+        slices[credit_id].append(amount)
         if discount_id is not None:
-            consumed[discount_id] += discount
-    return consumed
+            slices[discount_id].append(discount)
+    return slices
 
 
 def recompute_open_amount(db: Session, document: PartnerDocument) -> Decimal:
@@ -76,7 +83,7 @@ class OpenItemDrift:
 
 def verify_open_items(db: Session, company_id: int) -> list[OpenItemDrift]:
     """Empty list means every stored `open_amount` equals its recomputation."""
-    consumed = _consumed(db, company_id)
+    slices = _slices(db, company_id)
     drift: list[OpenItemDrift] = []
     for document in db.scalars(
         select(PartnerDocument).where(PartnerDocument.company_id == company_id)
@@ -84,7 +91,7 @@ def verify_open_items(db: Session, company_id: int) -> list[OpenItemDrift]:
         expected = (
             ZERO
             if document.status == DocumentStatus.REVERSED
-            else document.total_amount - consumed.get(document.id, ZERO)
+            else document.total_amount - sum(slices.get(document.id, []), ZERO)
         )
         if document.open_amount != expected:
             drift.append(
@@ -97,16 +104,26 @@ def verify_open_items(db: Session, company_id: int) -> list[OpenItemDrift]:
 class OpenItem:
     document: PartnerDocument
     open_amount: Decimal
-
-    @property
-    def open_base_amount(self) -> Decimal:
-        """Base-currency value at the document's own booking rate — the number that must
-        reconcile to the control account (realized FX is what keeps that true)."""
-        return self.open_amount * self.document.exchange_rate
+    # Residual of the *posted* base amount less each allocated slice converted at this
+    # document's own booking rate — the same arithmetic the PostingEngine did, so this is
+    # exactly the document's remaining contribution to the control account.
+    open_base_amount: Decimal = field(default=ZERO)
 
     @property
     def signed_base_amount(self) -> Decimal:
         return self.open_base_amount * self.document.direction
+
+
+def _open_base(
+    document: PartnerDocument, taken: list[Decimal], base_decimal_places: int
+) -> Decimal:
+    return document.base_total_amount - sum(
+        (
+            round_amount(amount * document.exchange_rate, base_decimal_places)
+            for amount in taken
+        ),
+        ZERO,
+    )
 
 
 def open_items_as_of(
@@ -132,16 +149,24 @@ def open_items_as_of(
     documents = list(
         db.scalars(statement.order_by(PartnerDocument.document_date, PartnerDocument.id))
     )
-    consumed = _consumed(db, company_id, as_of=as_of)
+    slices = _slices(db, company_id, as_of=as_of)
+    places = base_currency(db, company_id).decimal_places
 
     items: list[OpenItem] = []
     for document in documents:
         if document.reversed_on is not None and document.reversed_on <= as_of:
             continue
-        open_amount = document.total_amount - consumed.get(document.id, ZERO)
+        taken = slices.get(document.id, [])
+        open_amount = document.total_amount - sum(taken, ZERO)
         if open_amount == ZERO and not include_settled:
             continue
-        items.append(OpenItem(document=document, open_amount=open_amount))
+        items.append(
+            OpenItem(
+                document=document,
+                open_amount=open_amount,
+                open_base_amount=_open_base(document, taken, places),
+            )
+        )
     return items
 
 

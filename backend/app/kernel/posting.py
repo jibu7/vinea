@@ -51,6 +51,7 @@ from app.models.fiscal import AccountingPeriod
 from app.models.gl import (
     CASHBOOK_CONTROL_TYPES,
     PROFIT_AND_LOSS_CLASSES,
+    ControlAccountModule,
     ControlType,
     GLAccount,
     GLSettings,
@@ -70,6 +71,19 @@ RETAINED_EARNINGS_KEY = "__retained_earnings"
 # post bank↔bank transfers, but never the AR/AP/inventory subledger controls.
 SUBLEDGER_CONTROL_TYPES = frozenset({ControlType.AR, ControlType.AP, ControlType.INVENTORY})
 PARTNER_TYPE_FOR_CONTROL = {ControlType.AR: "customer", ControlType.AP: "supplier"}
+
+
+def control_account_modules(db: Session) -> dict[ControlType, frozenset[str]]:
+    """The `control_account_modules` registry: which modules may post to each module-owned
+    control account. A control type present here is deny-by-default for every module not
+    paired with it, so a new module (P10 POS raising AR) registers a row rather than the
+    engine growing another special case."""
+    allowed: dict[ControlType, set[str]] = {}
+    for control_type, module in db.execute(
+        select(ControlAccountModule.control_type, ControlAccountModule.module)
+    ).all():
+        allowed.setdefault(control_type, set()).add(module)
+    return {key: frozenset(value) for key, value in allowed.items()}
 
 
 # --- Account determination chain (ADR-05) ---------------------------------------------
@@ -194,6 +208,15 @@ class _Context:
         self._branches: dict[int, Branch] = {}
         self._projects: dict[int, Project] = {}
         self._main_branch: Branch | None = None
+        self._control_modules: dict[ControlType, frozenset[str]] | None = None
+
+    def modules_for(self, control_type: ControlType | None) -> frozenset[str] | None:
+        """`None` means the account is not module-owned (bank/cash, or a plain account)."""
+        if control_type is None:
+            return None
+        if self._control_modules is None:
+            self._control_modules = control_account_modules(self.db)
+        return self._control_modules.get(control_type)
 
     def main_branch(self) -> Branch:
         if self._main_branch is None:
@@ -272,7 +295,12 @@ class _Context:
 
 
 def _check_account(
-    account: GLAccount, event: PostingEvent, *, module: str, is_cash_side: bool = False
+    account: GLAccount,
+    event: PostingEvent,
+    *,
+    module: str,
+    allowed_modules: frozenset[str] | None,
+    is_cash_side: bool = False,
 ) -> None:
     if not account.is_active:
         raise PostingError(
@@ -288,12 +316,13 @@ def _check_account(
         )
     if isinstance(event, ReversalRequested):
         return  # mirrors an entry that was legitimately posted
-    # P4 decision 2: an AR/AP control account is reachable only from its own subledger.
-    # This is what keeps `SUM(open items) == control balance` true; there is no escape hatch.
-    if account.control_type in SUBLEDGER_CONTROL_TYPES and str(account.control_type) != module:
+    # P4 decision 2: a module-owned control account is reachable only from a module the
+    # `control_account_modules` registry pairs with it. This is what keeps
+    # `SUM(open items) == control balance` true; there is no escape hatch.
+    if allowed_modules is not None and module not in allowed_modules:
         raise PostingError(
             f"Account {account.code} is the {str(account.control_type).upper()} control "
-            "account; post through the subledger, not directly",
+            f"account; the {module} module may not post to it",
             code="control_account_direct_posting",
             field_errors={"gl_account_id": [f"{account.code} is a control account"]},
         )
@@ -383,7 +412,13 @@ def _resolve_lines(
     for index, (spec, account_id) in enumerate(zip(specs, account_ids, strict=True)):
         try:
             account = ctx.account(account_id)
-            _check_account(account, event, module=module, is_cash_side=index == cash_side_index)
+            _check_account(
+                account,
+                event,
+                module=module,
+                allowed_modules=ctx.modules_for(account.control_type),
+                is_cash_side=index == cash_side_index,
+            )
             _check_required_dimensions(account, spec)
 
             branch = ctx.branch(spec.branch_id, event.branch_id)
@@ -507,7 +542,9 @@ def _rounding_line(
             code="rounding_account_unset",
         )
     account = ctx.account(settings.rounding_difference_account_id)
-    _check_account(account, event, module=module)
+    _check_account(
+        account, event, module=module, allowed_modules=ctx.modules_for(account.control_type)
+    )
     return ResolvedLine(
         gl_account_id=account.id,
         branch_id=ctx.branch(None, event.branch_id).id,

@@ -46,6 +46,24 @@ class ControlType(enum.StrEnum):
 CASHBOOK_CONTROL_TYPES = frozenset({ControlType.BANK, ControlType.CASH})
 
 
+class ControlAccountModule(Base):
+    """Which modules may post to a module-owned control account (ADR-05).
+
+    A **registry, not an equality test**: `('ar', 'ar')` is a row, not a rule baked into the
+    engine, so P10's POS — which legitimately raises AR — registers `('ar', 'pos')` in its
+    own migration instead of weakening the guard. Default is deny: a control type listed here
+    at all is reachable only from the modules paired with it. Product-level configuration, so
+    it is not company-scoped and carries no RLS policy.
+    """
+
+    __tablename__ = "control_account_modules"
+
+    control_type: Mapped[ControlType] = mapped_column(
+        pg_enum(ControlType, "gl_control_type"), primary_key=True
+    )
+    module: Mapped[str] = mapped_column(String(10), primary_key=True)
+
+
 class GLAccount(AuditedMixin, CompanyScopedMixin, Base):
     __tablename__ = "gl_accounts"
     __table_args__ = (

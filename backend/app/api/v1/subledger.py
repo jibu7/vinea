@@ -41,6 +41,7 @@ from app.schemas.subledger import (
     DocumentRead,
     DocumentSummary,
     JobRead,
+    JobSweepResult,
     MaturityRunRequest,
     MaturityRunResult,
     OpenItemRead,
@@ -837,6 +838,7 @@ def unallocate(
     payload: ReversalRequest,
     request: Request,
     role: PartnerRole = RolePath,
+    idempotency_key: str = IdempotencyKey,
     auth: AuthContext = Depends(get_tenant_context),
     db: Session = Depends(get_db),
 ) -> AllocationRead:
@@ -845,7 +847,13 @@ def unallocate(
     if allocation is None or allocation.company_id != auth.company_id:
         raise NotFoundError("Allocation not found")
     reversal = allocations_service.unallocate(
-        db, allocation, on_date=payload.on_date, reason=payload.reason, actor=auth.user,
+        db,
+        allocation,
+        on_date=payload.on_date,
+        reason=payload.reason,
+        actor=auth.user,
+        idempotency_key=idempotency_key,
+        idempotency_hash=fingerprint(f"{role.value}_unallocate_{allocation_id}", payload),
         request=request,
     )
     db.commit()
@@ -1042,6 +1050,34 @@ def queue_statement(
     return JobRead.model_validate(job)
 
 
+@router.get("/jobs")
+def list_jobs(
+    kind: str | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
+    auth: AuthContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+) -> list[JobRead]:
+    """Listings never select the artifact bytes — `Job.artifact` is a deferred column."""
+    _require_any(auth, permissions.AR_REPORTS_VIEW, permissions.AP_REPORTS_VIEW)
+    return [
+        JobRead.model_validate(job)
+        for job in jobs_service.list_jobs(db, auth.company_id, kind=kind, limit=limit)
+    ]
+
+
+@router.post("/jobs/sweep")
+def sweep_jobs(
+    auth: AuthContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+) -> JobSweepResult:
+    """Retention + reaper: fails jobs abandoned by a restarted process and deletes expired
+    ones. Runs on every enqueue as well; this endpoint is for the scheduler."""
+    _require_any(auth, permissions.AR_REPORTS_VIEW, permissions.AP_REPORTS_VIEW)
+    abandoned, deleted = jobs_service.sweep(db, auth.company_id)
+    db.commit()
+    return JobSweepResult(abandoned=abandoned, deleted=deleted)
+
+
 @router.get("/jobs/{job_id}")
 def get_job(
     job_id: int,
@@ -1060,10 +1096,13 @@ def download_artifact(
 ) -> RawResponse:
     _require_any(auth, permissions.AR_REPORTS_VIEW, permissions.AP_REPORTS_VIEW)
     job = jobs_service.get_job(db, auth.company_id, job_id)
-    if job.status != JobStatus.SUCCEEDED or job.artifact is None:
+    if job.status != JobStatus.SUCCEEDED:
+        raise ConflictError("The job has not produced an artifact yet", code="job_not_ready")
+    artifact = jobs_service.load_artifact(db, auth.company_id, job_id)
+    if artifact is None:
         raise ConflictError("The job has not produced an artifact yet", code="job_not_ready")
     return RawResponse(
-        content=job.artifact,
+        content=artifact,
         media_type=job.artifact_content_type or "application/octet-stream",
         headers={"Content-Disposition": f'attachment; filename="{job.artifact_name}"'},
     )

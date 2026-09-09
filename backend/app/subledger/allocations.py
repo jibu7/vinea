@@ -23,6 +23,7 @@ from app.kernel import posting
 from app.kernel.errors import LedgerStateError, PostingError
 from app.kernel.events import AllocationPosted, LineSpec
 from app.kernel.money import ZERO, base_currency, is_rounded, round_amount
+from app.kernel.periods import assert_period_open, find_period
 from app.kernel.sequences import DocType, claim_number
 from app.models.currency import Currency
 from app.models.partner import PartnerRole, PaymentTerms
@@ -119,9 +120,10 @@ def max_discount(
     if deadline is None or on > deadline:
         return ZERO
     return min(
-        round_amount(document.total_amount * terms.discount_percent / HUNDRED,
-                     currency.decimal_places),
-        document.open_amount,
+        round_amount(
+            document.total_amount * terms.discount_percent / HUNDRED, currency.decimal_places
+        ),
+        recompute_open_amount(db, document),
     )
 
 
@@ -156,7 +158,9 @@ def prepare(
                     f"{document.number} belongs to a different partner or role",
                     code="allocation_partner_mismatch",
                 )
-            remaining.setdefault(document.id, document.open_amount)
+            # Recomputed, never the stored `open_amount` column: a cache that has drifted
+            # must not be able to authorise an over-allocation (decision 3).
+            remaining.setdefault(document.id, recompute_open_amount(db, document))
         if debit.direction != 1 or credit.direction != -1:
             raise LedgerStateError(
                 "An allocation matches one debit document against one credit document",
@@ -291,14 +295,18 @@ def _postings(
             discount_base = round_amount(
                 pair.discount_amount * pair.discount_document.exchange_rate, base.decimal_places
             )
+            # Signed by the invoice's side of the control account: AR grants a discount
+            # (credit the customer, debit an expense), AP receives one (debit the supplier,
+            # credit income). One expression, both roles.
+            signed = pair.discount_document.direction * discount_base
             add(
                 accounts.discount_account_id,
-                discount_base,
+                signed,
                 "Settlement discount granted"
                 if role == PartnerRole.AR
                 else "Settlement discount received",
             )
-            control_totals[control_id] -= discount_base
+            control_totals[control_id] -= signed
 
     postings = [
         Posting(
@@ -412,14 +420,26 @@ def unallocate(
     on_date: date,
     reason: str,
     actor: User,
+    idempotency_key: str | None = None,
+    idempotency_hash: str | None = None,
     request: Request | None = None,
 ) -> Allocation:
     """Mirror allocation with negated lines, plus the frozen-base reversal of its FX and
-    discount entry. One reversal only, enforced by `uq_allocations_reverses_allocation_id`."""
+    discount entry. One reversal only, enforced by `uq_allocations_reverses_allocation_id`.
+
+    `on_date` must fall in an **open** period. That is checked here even when the allocation
+    posted nothing to the ledger, so an allocation with no FX and no discount cannot be
+    unwound into a closed month while one that moved money cannot — the kernel would refuse
+    the reversal with `period_not_open` and the two paths would disagree.
+    """
     if allocation.reverses_allocation_id is not None:
         raise LedgerStateError(
             f"{allocation.number} is itself a reversal", code="cannot_reverse_a_reversal"
         )
+    if idempotency_key:
+        replayed = _replay(db, allocation.company_id, idempotency_key, idempotency_hash)
+        if replayed is not None:
+            return replayed
     existing = db.scalar(
         select(Allocation.id).where(
             Allocation.company_id == allocation.company_id,
@@ -430,6 +450,12 @@ def unallocate(
         raise LedgerStateError(
             f"{allocation.number} was already unallocated", code="allocation_already_reversed"
         )
+    if on_date < allocation.allocation_date:
+        raise LedgerStateError(
+            f"An unallocation cannot be dated before {allocation.number}",
+            code="reversal_before_original",
+        )
+    assert_period_open(find_period(db, allocation.company_id, on_date))
 
     entry = None
     if allocation.journal_entry_id is not None:
@@ -440,6 +466,8 @@ def unallocate(
             on_date=on_date,
             reason=reason,
             actor=actor,
+            idempotency_key=idempotency_key,
+            idempotency_hash=idempotency_hash,
         )
 
     claimed = claim_number(db, allocation.company_id, DocType.ALLOCATION)
@@ -453,6 +481,8 @@ def unallocate(
         journal_entry_id=entry.id if entry is not None else None,
         reverses_allocation_id=allocation.id,
         description=f"Unallocation of {allocation.number}: {reason}",
+        idempotency_key=idempotency_key,
+        idempotency_hash=idempotency_hash,
     )
     db.add(reversal)
     db.flush()
@@ -523,7 +553,7 @@ def auto_allocate_pairs(
     if credit_document_id is not None:
         credits = [d for d in credits if d.id == credit_document_id]
 
-    remaining = {d.id: d.open_amount for d in open_documents}
+    remaining = {d.id: recompute_open_amount(db, d) for d in open_documents}
     pairs: list[PairInput] = []
     for credit in credits:
         for debit in debits:
