@@ -2,7 +2,7 @@
 endpoints end to end through the HTTP layer."""
 
 from datetime import date, timedelta
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 import pytest
 from fastapi.testclient import TestClient
@@ -19,6 +19,7 @@ from tests.kernel.conftest import YEAR
 
 MARCH = date(YEAR, 3, 10)
 PASSWORD = "correct horse battery staple"
+ZERO_DECIMAL = Decimal(0)
 
 
 class Api:
@@ -1052,20 +1053,6 @@ def test_the_eight_p4_keys_plus_rounding_resolve_to_nine_distinct_accounts(api: 
     assert accounts[resolved["realized_fx_loss_account_id"]] == "6950"
 
 
-@pytest.mark.xfail(
-    reason=(
-        "Known deviation from P4 step 4's spec — 'FX gain and loss over a fully settled "
-        "invoice equal the booking-rate difference and nothing else'. FX is computed per "
-        "allocation pair and rounded on each side, so three pairs carry three roundings: the "
-        "line comes to 3,456 where the booking-rate difference on the full 100.00 is 3,457. "
-        "The control account still lands on exactly zero, so nothing is lost - but the 1 of "
-        "rounding noise sits inside the FX figure instead of in the rounding account, which "
-        "is the same complaint that separated the two accounts in the first place. Not fixed "
-        "unilaterally: it changes posting behaviour in a step already through its approval "
-        "gate, and both decompositions balance. See the report."
-    ),
-    strict=True,
-)
 def test_mixed_rate_settlement_splits_fx_from_the_rounding_residual(api: Api, db: Session) -> None:
     """Both accounts move, and each must take only its own part.
 
@@ -1181,3 +1168,139 @@ def test_mixed_rate_settlement_splits_fx_from_the_rounding_residual(api: Api, db
     assert sorted(
         (by_id[line["gl_account_id"]], Decimal(line["base_amount"])) for line in entry["lines"]
     ) == sorted((code, amount) for code, (amount, _) in postings.items())
+
+
+def test_fx_trues_up_across_three_separate_allocations(api: Api, db: Session) -> None:
+    """The case a single-allocation formula cannot get right: one invoice settled by three
+    receipts on three days at three rates, in three separate allocations.
+
+    After every one of them the running FX total must equal the rounded cumulative
+    booking-rate difference on what has been settled so far — not just after the last. Each
+    allocation posts the difference between that target and what is already on the document,
+    so an earlier allocation's rounding is corrected by the next rather than compounding.
+    """
+    accounts = {row["code"]: row["id"] for row in api.client.get("/api/v1/gl/accounts").json()}
+    by_id = {v: k for k, v in accounts.items()}
+    currencies = {row["code"]: row for row in api.client.get("/api/v1/gl/currencies").json()}
+    usd = currencies["USD"]["id"]
+
+    invoice_date = MARCH
+    schedule = [
+        (MARCH + timedelta(days=1), "33.33", Decimal("1234.5678")),
+        (MARCH + timedelta(days=2), "33.33", Decimal("1301.1111")),
+        (MARCH + timedelta(days=9), "33.34", Decimal("1188.4321")),
+    ]
+    invoice_rate = Decimal("1200")
+    api.client.post(
+        "/api/v1/gl/exchange-rates",
+        json={
+            "currency_id": usd,
+            "valid_from": invoice_date.isoformat(),
+            "rate": str(invoice_rate),
+        },
+    )
+    for when, _amount, rate in schedule:
+        api.client.post(
+            "/api/v1/gl/exchange-rates",
+            json={"currency_id": usd, "valid_from": when.isoformat(), "rate": str(rate)},
+        )
+
+    partner = api.client.post(
+        "/api/v1/subledger/ar/partners",
+        json={"name": "Trued Up Ltd", "customer_code": "CUST-TRUE", "currency_id": usd},
+    ).json()
+    invoice = api.client.post(
+        "/api/v1/subledger/ar/documents",
+        headers={"Idempotency-Key": "true-inv"},
+        json={
+            "kind": "invoice",
+            "partner_id": partner["id"],
+            "document_date": invoice_date.isoformat(),
+            "currency_id": usd,
+            "description": "Settled in three instalments",
+            "lines": [{"unit_price": "100.00", "gl_account_id": accounts["4100"]}],
+        },
+    )
+    assert invoice.status_code == 201, invoice.text
+    invoice_id = invoice.json()["id"]
+
+    settled_product = ZERO_DECIMAL
+    for index, (when, amount, rate) in enumerate(schedule):
+        receipt = api.client.post(
+            "/api/v1/subledger/ar/documents",
+            headers={"Idempotency-Key": f"true-rct-{index}"},
+            json={
+                "kind": "settlement",
+                "partner_id": partner["id"],
+                "document_date": when.isoformat(),
+                "currency_id": usd,
+                "description": f"Instalment {index + 1}",
+                "amount": amount,
+                "cash_account_id": accounts["1120"],
+                "instrument_type": "bank",
+            },
+        )
+        assert receipt.status_code == 201, receipt.text
+
+        posted = api.client.post(
+            "/api/v1/subledger/ar/allocations",
+            headers={"Idempotency-Key": f"true-alc-{index}"},
+            json={
+                "partner_id": partner["id"],
+                "allocation_date": when.isoformat(),
+                "pairs": [
+                    {
+                        "debit_document_id": invoice_id,
+                        "credit_document_id": receipt.json()["id"],
+                        "amount": amount,
+                    }
+                ],
+            },
+        )
+        assert posted.status_code == 201, posted.text
+
+        # After *this* allocation, the cumulative FX on the ledger must equal the rounded
+        # cumulative rate difference on everything settled so far.
+        settled_product += Decimal(amount) * (invoice_rate - rate)
+        expected_cumulative = settled_product.quantize(Decimal(1), rounding=ROUND_HALF_UP)
+
+        set_tenant(db, api.company_id)
+        fx_posted = db.execute(
+            text(
+                "SELECT COALESCE(SUM(base_amount), 0) FROM journal_lines "
+                "WHERE company_id = :cid AND gl_account_id IN (:gain, :loss)"
+            ),
+            {"cid": api.company_id, "gain": accounts["4400"], "loss": accounts["6950"]},
+        ).scalar_one()
+        # `settled_product` is (invoice rate - receipt rate), which is already the signed
+        # base movement: a receipt at a higher rate is a gain and posts as a credit.
+        assert Decimal(fx_posted) == expected_cumulative, (
+            f"after instalment {index + 1}: FX is {fx_posted}, "
+            f"cumulative rate difference is {expected_cumulative}"
+        )
+
+    # Fully settled, control at zero, and the rounding account carries only the conversion
+    # residual — never any part of the rate movement.
+    refreshed = api.client.get(f"/api/v1/subledger/ar/documents/{invoice_id}").json()
+    assert Decimal(refreshed["open_amount"]) == 0
+
+    set_tenant(db, api.company_id)
+    control_balance = db.execute(
+        text(
+            "SELECT COALESCE(SUM(base_amount), 0) FROM journal_lines "
+            "WHERE company_id = :cid AND gl_account_id = :account AND partner_id = :partner"
+        ),
+        {"cid": api.company_id, "account": accounts["1200"], "partner": partner["id"]},
+    ).scalar_one()
+    assert Decimal(control_balance) == 0, f"control account left holding {control_balance}"
+
+    rounding = db.execute(
+        text(
+            "SELECT COALESCE(SUM(base_amount), 0) FROM journal_lines "
+            "WHERE company_id = :cid AND gl_account_id = :account"
+        ),
+        {"cid": api.company_id, "account": accounts["6970"]},
+    ).scalar_one()
+    # Bounded by a minor unit per allocation: a residue, not a share of the rate movement.
+    assert abs(Decimal(rounding)) <= len(schedule), f"rounding account holds {rounding}"
+    assert by_id[accounts["6970"]] == "6970"
