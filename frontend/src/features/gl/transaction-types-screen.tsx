@@ -44,8 +44,10 @@ export function TransactionTypesScreen({
   const txTypesQuery = useTransactionTypes(module);
   const accountsQuery = useAccounts();
   const accountById = byId(accountsQuery.data);
+  // `_assert_usable_default` in the kernel requires postable *and* active, so an inactive
+  // account in this list could never be saved.
   const postableAccounts = useMemo(
-    () => (accountsQuery.data ?? []).filter((a) => a.is_postable),
+    () => (accountsQuery.data ?? []).filter((a) => a.is_postable && a.is_active),
     [accountsQuery.data],
   );
 

@@ -56,13 +56,15 @@ export default function ArApDefaultsPage() {
     setForm(next);
   }, [defaults.data]);
 
-  const controlAccounts = useMemo(
-    () => ({
-      ar: (accounts.data ?? []).filter((a) => a.control_type === "ar"),
-      ap: (accounts.data ?? []).filter((a) => a.control_type === "ap"),
-    }),
-    [accounts.data],
-  );
+  // `masters.update_ar_ap_defaults` requires postable *and* active on every key, control
+  // accounts included — offering an inactive one here only buys the operator a 409.
+  const controlAccounts = useMemo(() => {
+    const usable = (accounts.data ?? []).filter((a) => a.is_postable && a.is_active);
+    return {
+      ar: usable.filter((a) => a.control_type === "ar"),
+      ap: usable.filter((a) => a.control_type === "ap"),
+    };
+  }, [accounts.data]);
   const postable = useMemo(
     () => (accounts.data ?? []).filter((a) => a.is_postable && !a.is_control && a.is_active),
     [accounts.data],
@@ -117,11 +119,7 @@ export default function ArApDefaultsPage() {
         )}
         <p className="flex items-start gap-1.5 text-xs text-[var(--vinea-ink-muted)]">
           <ShieldAlert className="mt-0.5 size-3.5 shrink-0 text-[var(--vinea-warning)]" />
-          <span>
-            {t.rich("controlNote", {
-              code: () => <span className="mx-1 font-mono">{t("controlNoteCode")}</span>,
-            })}
-          </span>
+          <span>{t("controlNote")}</span>
         </p>
       </MaintenanceCard>
 
@@ -166,9 +164,7 @@ export default function ArApDefaultsPage() {
       <div className="flex items-center justify-between">
         {!canEdit && (
           <p className="text-xs text-[var(--vinea-ink-subtle)]">
-            {t.rich("readOnlyNote", {
-              code: () => <span className="mx-1 font-mono">{t("readOnlyNoteCode")}</span>,
-            })}
+            {t("readOnlyNote")}
           </p>
         )}
         <Button

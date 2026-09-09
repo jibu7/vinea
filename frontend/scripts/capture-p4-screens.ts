@@ -55,9 +55,17 @@ async function main() {
     await shoot(page, "1-customer-ar-settings", theme);
     await page.keyboard.press("Escape");
 
+    // The list with its seeded row, then the drawer open on the AP settings tab — the two
+    // halves of the supplier master.
     await page.goto(`${BASE}/maintenance/suppliers`);
     await page.waitForSelector("h1:has-text('Suppliers')");
+    await page.locator('button[aria-label^="Edit "]').first().waitFor({ state: "visible" });
     await shoot(page, "2-supplier-master", theme);
+    await page.locator('button[aria-label^="Edit "]').first().click();
+    await page.getByRole("tab", { name: "AP settings" }).click();
+    await page.waitForTimeout(500);
+    await shoot(page, "2b-supplier-ap-settings", theme);
+    await page.keyboard.press("Escape");
 
     await page.goto(`${BASE}/maintenance/payment-terms`);
     await page.waitForSelector("h1:has-text('Payment terms')");

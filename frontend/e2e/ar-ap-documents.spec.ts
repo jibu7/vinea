@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import messages from "../src/i18n/messages/en.json";
 import { PRIMARY_EMAIL, login } from "./support/fixtures";
 
 /** P4 step 7 — the AR/AP transaction screens on the P3 DocumentWorkspace + LineGrid. */
@@ -56,7 +57,11 @@ test.describe("AR transaction screens", () => {
     // its symbol (FRw) and no decimals. Tax and the inclusive total are the server's, and
     // the footer says so rather than guessing them.
     await expect(page.getByText("FRw 54,000")).toBeVisible();
-    await expect(page.getByText("computed on Post").first()).toBeVisible();
+    // Read from the catalogue, not spelled here: the assertion is that the footer says tax
+    // is not worked out on this screen, which stays true when the wording is tuned.
+    await expect(
+      page.getByText(messages.arap.documents.common.serverComputed).first(),
+    ).toBeVisible();
 
     const post = page.getByRole("button", { name: /^Post/ });
     await expect(post).toBeEnabled();

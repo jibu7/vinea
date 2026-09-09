@@ -17,6 +17,7 @@ import {
   useCreateAgeingBucketSet,
   useUpdateAgeingBucketSet,
 } from "@/features/subledger/hooks";
+import { appendBucket, normaliseBuckets, removeBucket } from "@/features/subledger/ageing-buckets";
 import {
   AGEING_BASES,
   AGEING_BASIS_MESSAGE,
@@ -38,19 +39,6 @@ function seedBuckets(currentLabel: string): AgeingBucketInput[] {
     { label: "91 - 120", from_days: 91, to_days: 120 },
     { label: "120+", from_days: 121, to_days: null },
   ];
-}
-
-/**
- * Buckets must start at 0, be contiguous and end open — the same rule the service enforces.
- * The editor owns `from_days` (each row starts one day after the previous row's end) and the
- * last row's `to_days` is always null, so an invalid set cannot be typed in the first place.
- */
-function normalise(buckets: AgeingBucketInput[]): AgeingBucketInput[] {
-  return buckets.map((bucket, index) => ({
-    label: bucket.label,
-    from_days: index === 0 ? 0 : (buckets[index - 1].to_days ?? 0) + 1,
-    to_days: index === buckets.length - 1 ? null : (bucket.to_days ?? 0),
-  }));
 }
 
 export default function AgeingBucketSetsPage() {
@@ -104,29 +92,20 @@ export default function AgeingBucketSetsPage() {
 
   function patchBucket(index: number, patch: Partial<AgeingBucketInput>) {
     setBuckets((current) =>
-      normalise(current.map((bucket, i) => (i === index ? { ...bucket, ...patch } : bucket))),
+      normaliseBuckets(current.map((bucket, i) => (i === index ? { ...bucket, ...patch } : bucket))),
     );
   }
 
   function addBucket() {
-    setBuckets((current) => {
-      const last = current[current.length - 1];
-      const boundary = last ? last.from_days + 30 : 30;
-      const closed = current.map((bucket, i) =>
-        i === current.length - 1 ? { ...bucket, to_days: boundary } : bucket,
-      );
-      return normalise([...closed, { label: `${boundary + 1}+`, from_days: boundary + 1, to_days: null }]);
-    });
+    setBuckets((current) => appendBucket(current, (boundary) => `${boundary}+`));
   }
 
-  function removeBucket(index: number) {
-    setBuckets((current) =>
-      current.length <= 1 ? current : normalise(current.filter((_, i) => i !== index)),
-    );
+  function dropBucket(index: number) {
+    setBuckets((current) => removeBucket(current, index));
   }
 
   async function handleSave() {
-    const payload = normalise(buckets);
+    const payload = normaliseBuckets(buckets);
     try {
       if (editing) {
         await updateSet.mutateAsync({
@@ -311,14 +290,23 @@ export default function AgeingBucketSetsPage() {
                           onChange={(e) => patchBucket(index, { label: e.target.value })}
                         />
                       </Field>
-                      <Field label={index === 0 ? t("from") : ""} className="w-20">
-                        <Input
-                          value={bucket.from_days}
+                      {/* Derived, never entered: each bucket starts the day after the
+                          previous one ends (see ageing-buckets.ts). Rendered as text rather
+                          than a disabled input, which reads as "editable, just not now". */}
+                      <div className="w-20">
+                        {index === 0 && (
+                          <p className="mb-1.5 text-xs font-medium text-[var(--vinea-ink-muted)]">
+                            {t("from")}
+                          </p>
+                        )}
+                        <p
+                          data-testid={`bucket-from-${index}`}
                           aria-label={t("bucketFromAria", { index: index + 1 })}
-                          disabled
-                          className="text-right font-mono tabular-nums"
-                        />
-                      </Field>
+                          className="flex h-8 items-center justify-end rounded-[var(--radius-control)] bg-[var(--vinea-surface-sunken)] px-2 font-mono text-xs tabular-nums text-[var(--vinea-ink-muted)]"
+                        >
+                          {bucket.from_days}
+                        </p>
+                      </div>
                       <Field label={index === 0 ? t("to") : ""} className="w-20">
                         <Input
                           type="number"
@@ -337,7 +325,7 @@ export default function AgeingBucketSetsPage() {
                       </Field>
                       <button
                         type="button"
-                        onClick={() => removeBucket(index)}
+                        onClick={() => dropBucket(index)}
                         disabled={buckets.length <= 1}
                         aria-label={t("removeBucketAria", { index: index + 1 })}
                         className="mb-1 rounded p-1.5 text-[var(--vinea-ink-subtle)] hover:text-[var(--vinea-danger)] disabled:opacity-40"

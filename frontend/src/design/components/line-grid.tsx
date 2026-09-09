@@ -70,6 +70,40 @@ export function lineNet(row: LineGridRow): number {
   return gross * (1 - (Number.isFinite(discount) ? discount : 0) / 100);
 }
 
+/**
+ * Cell coordinates for the keyboard model. These are the ids `focusCell` looks up via
+ * `[data-row][data-col]`, so a cell's `data-col` attribute and the id its handlers pass to
+ * `onCellKeyDown` must be the same number. They were not: the amount cells rendered a
+ * sequential counter while their handlers passed 100/101/102, so ArrowUp/ArrowDown/Enter
+ * from an amount cell found nothing to focus and silently stayed put, and the phantom
+ * `activeCell` it left behind un-formatted the *next* row's amount. Naming the columns once
+ * removes the possibility: there is no counter left to drift.
+ */
+const COL = {
+  account: 0,
+  description: 1,
+  branch: 2,
+  project: 3,
+  currency: 4,
+  taxCode: 5,
+  debit: 100,
+  credit: 101,
+  amount: 102,
+  taxInclusive: 103,
+  quantity: 104,
+  unitPrice: 105,
+  discountPercent: 106,
+} as const;
+
+/** Amount-style cells swap formatted display for raw digits while they hold the caret. */
+const EDITABLE_AMOUNT_COLS: number[] = [
+  COL.debit,
+  COL.credit,
+  COL.amount,
+  COL.quantity,
+  COL.unitPrice,
+];
+
 export interface LineGridProps {
   mode: "journal" | "cashbook" | "document";
   rows: LineGridRow[];
@@ -125,7 +159,7 @@ export function LineGrid({
   // `data-col` DOM attribute, so we select via document.activeElement (React preserves the
   // focused DOM node across the re-render) rather than re-querying by data-col.
   useEffect(() => {
-    if (!activeCell || ![100, 101, 102].includes(activeCell.col)) return;
+    if (!activeCell || !EDITABLE_AMOUNT_COLS.includes(activeCell.col)) return;
     const el = document.activeElement;
     if (el instanceof HTMLInputElement) el.select();
   }, [activeCell]);
@@ -243,7 +277,6 @@ export function LineGrid({
           </thead>
           <tbody className="divide-y divide-[var(--vinea-border)]">
             {rows.map((row, r) => {
-              let col = 0;
               const rowErr = errors[r];
               const accountErr = rowErr?.gl_account_id || rowErr?.account;
               const descErr = rowErr?.description;
@@ -260,7 +293,7 @@ export function LineGrid({
 
               return (
                 <tr key={row.id} className={cn(activeCell?.row === r && "bg-[var(--vinea-brand-soft)]/30")}>
-                  <td data-row={r} data-col={col++} className="min-w-48 p-1 align-top">
+                  <td data-row={r} data-col={COL.account} className="min-w-48 p-1 align-top">
                     <Combobox
                       options={accountOptions}
                       value={row.accountId}
@@ -268,17 +301,17 @@ export function LineGrid({
                       placeholder="Account…"
                       ariaLabel={`Account, row ${r + 1}`}
                       className={cn("h-8", accountErr && "border-[var(--vinea-danger)]")}
-                      onFocus={() => startCellEdit(r, 0, "accountId", row.accountId)}
-                      onKeyDown={(e) => onCellKeyDown(e, r, 0, "accountId")}
+                      onFocus={() => startCellEdit(r, COL.account, "accountId", row.accountId)}
+                      onKeyDown={(e) => onCellKeyDown(e, r, COL.account, "accountId")}
                     />
                     {accountErr && <p className="mt-0.5 px-1 text-xs text-[var(--vinea-danger)]">{accountErr}</p>}
                   </td>
-                  <td data-row={r} data-col={col++} className="p-1 align-top">
+                  <td data-row={r} data-col={COL.description} className="p-1 align-top">
                     <input
                       value={row.description}
                       onChange={(e) => updateRow(r, { description: e.target.value })}
-                      onKeyDown={(e) => onCellKeyDown(e, r, 1, "description")}
-                      onFocus={() => startCellEdit(r, 1, "description", row.description)}
+                      onKeyDown={(e) => onCellKeyDown(e, r, COL.description, "description")}
+                      onFocus={() => startCellEdit(r, COL.description, "description", row.description)}
                       aria-label={`Description, row ${r + 1}`}
                       className={cn(
                         "h-8 w-full rounded-[var(--radius-control)] border border-transparent bg-transparent px-2 focus:border-[var(--vinea-brand)]",
@@ -289,7 +322,7 @@ export function LineGrid({
                     {descErr && <p className="mt-0.5 px-1 text-xs text-[var(--vinea-danger)]">{descErr}</p>}
                   </td>
                   {showExtra && (
-                    <td data-row={r} data-col={col++} className="min-w-36 p-1 align-top">
+                    <td data-row={r} data-col={COL.branch} className="min-w-36 p-1 align-top">
                       <Combobox
                         options={branchOptions}
                         value={row.branchId}
@@ -297,14 +330,14 @@ export function LineGrid({
                         placeholder="Branch…"
                         ariaLabel={`Branch, row ${r + 1}`}
                         className={cn("h-8", branchErr && "border-[var(--vinea-danger)]")}
-                        onFocus={() => startCellEdit(r, 2, "branchId", row.branchId)}
-                        onKeyDown={(e) => onCellKeyDown(e, r, 2, "branchId")}
+                        onFocus={() => startCellEdit(r, COL.branch, "branchId", row.branchId)}
+                        onKeyDown={(e) => onCellKeyDown(e, r, COL.branch, "branchId")}
                       />
                       {branchErr && <p className="mt-0.5 px-1 text-xs text-[var(--vinea-danger)]">{branchErr}</p>}
                     </td>
                   )}
                   {showExtra && (
-                    <td data-row={r} data-col={col++} className="min-w-36 p-1 align-top">
+                    <td data-row={r} data-col={COL.project} className="min-w-36 p-1 align-top">
                       <Combobox
                         options={projectOptions}
                         value={row.projectId}
@@ -312,14 +345,14 @@ export function LineGrid({
                         placeholder="Project…"
                         ariaLabel={`Project, row ${r + 1}`}
                         className={cn("h-8", projectErr && "border-[var(--vinea-danger)]")}
-                        onFocus={() => startCellEdit(r, 3, "projectId", row.projectId)}
-                        onKeyDown={(e) => onCellKeyDown(e, r, 3, "projectId")}
+                        onFocus={() => startCellEdit(r, COL.project, "projectId", row.projectId)}
+                        onKeyDown={(e) => onCellKeyDown(e, r, COL.project, "projectId")}
                       />
                       {projectErr && <p className="mt-0.5 px-1 text-xs text-[var(--vinea-danger)]">{projectErr}</p>}
                     </td>
                   )}
                   {showExtra && (
-                    <td data-row={r} data-col={col++} className="min-w-44 p-1 align-top">
+                    <td data-row={r} data-col={COL.currency} className="min-w-44 p-1 align-top">
                       <div className="flex gap-1">
                         <Combobox
                           options={currencyOptions}
@@ -328,15 +361,15 @@ export function LineGrid({
                           placeholder="Currency…"
                           ariaLabel={`Currency, row ${r + 1}`}
                           className={cn("h-8 w-24", currencyErr && "border-[var(--vinea-danger)]")}
-                          onFocus={() => startCellEdit(r, 4, "currencyId", row.currencyId)}
-                          onKeyDown={(e) => onCellKeyDown(e, r, 4, "currencyId")}
+                          onFocus={() => startCellEdit(r, COL.currency, "currencyId", row.currencyId)}
+                          onKeyDown={(e) => onCellKeyDown(e, r, COL.currency, "currencyId")}
                         />
                         {row.currencyId && row.currencyId !== baseCurrencyId && (
                           <input
                             value={row.exchangeRate}
                             onChange={(e) => updateRow(r, { exchangeRate: e.target.value })}
-                            onKeyDown={(e) => onCellKeyDown(e, r, 4, "exchangeRate")}
-                            onFocus={() => startCellEdit(r, 4, "exchangeRate", row.exchangeRate)}
+                            onKeyDown={(e) => onCellKeyDown(e, r, COL.currency, "exchangeRate")}
+                            onFocus={() => startCellEdit(r, COL.currency, "exchangeRate", row.exchangeRate)}
                             inputMode="decimal"
                             placeholder="Rate"
                             aria-label={`Exchange rate, row ${r + 1}`}
@@ -348,7 +381,7 @@ export function LineGrid({
                     </td>
                   )}
                   {showExtra && (
-                    <td data-row={r} data-col={col++} className="min-w-36 p-1 align-top">
+                    <td data-row={r} data-col={COL.taxCode} className="min-w-36 p-1 align-top">
                       <Combobox
                         options={taxCodeOptions}
                         value={row.taxCodeId}
@@ -356,20 +389,20 @@ export function LineGrid({
                         placeholder="Tax code…"
                         ariaLabel={`Tax code, row ${r + 1}`}
                         className={cn("h-8", taxErr && "border-[var(--vinea-danger)]")}
-                        onFocus={() => startCellEdit(r, 5, "taxCodeId", row.taxCodeId)}
-                        onKeyDown={(e) => onCellKeyDown(e, r, 5, "taxCodeId")}
+                        onFocus={() => startCellEdit(r, COL.taxCode, "taxCodeId", row.taxCodeId)}
+                        onKeyDown={(e) => onCellKeyDown(e, r, COL.taxCode, "taxCodeId")}
                       />
                       {taxErr && <p className="mt-0.5 px-1 text-xs text-[var(--vinea-danger)]">{taxErr}</p>}
                     </td>
                   )}
                   {mode === "journal" && (
                     <>
-                      <td data-row={r} data-col={col++} className="w-32 p-1 align-top">
+                      <td data-row={r} data-col={COL.debit} className="w-32 p-1 align-top">
                         <input
-                          value={displayAmount(row.debit, activeCell?.row === r && activeCell.col === 100)}
+                          value={displayAmount(row.debit, activeCell?.row === r && activeCell.col === COL.debit)}
                           onChange={(e) => updateRow(r, { debit: e.target.value, credit: e.target.value ? "" : row.credit })}
-                          onKeyDown={(e) => onCellKeyDown(e, r, 100, "debit")}
-                          onFocus={() => startCellEdit(r, 100, "debit", row.debit)}
+                          onKeyDown={(e) => onCellKeyDown(e, r, COL.debit, "debit")}
+                          onFocus={() => startCellEdit(r, COL.debit, "debit", row.debit)}
                           onBlur={() => setActiveCell(null)}
                           inputMode="decimal"
                           aria-label={`Debit, row ${r + 1}`}
@@ -381,12 +414,12 @@ export function LineGrid({
                         />
                         {debitErr && <p className="mt-0.5 text-right text-xs text-[var(--vinea-danger)]">{debitErr}</p>}
                       </td>
-                      <td data-row={r} data-col={col++} className="w-32 p-1 align-top">
+                      <td data-row={r} data-col={COL.credit} className="w-32 p-1 align-top">
                         <input
-                          value={displayAmount(row.credit, activeCell?.row === r && activeCell.col === 101)}
+                          value={displayAmount(row.credit, activeCell?.row === r && activeCell.col === COL.credit)}
                           onChange={(e) => updateRow(r, { credit: e.target.value, debit: e.target.value ? "" : row.debit })}
-                          onKeyDown={(e) => onCellKeyDown(e, r, 101, "credit")}
-                          onFocus={() => startCellEdit(r, 101, "credit", row.credit)}
+                          onKeyDown={(e) => onCellKeyDown(e, r, COL.credit, "credit")}
+                          onFocus={() => startCellEdit(r, COL.credit, "credit", row.credit)}
                           onBlur={() => setActiveCell(null)}
                           inputMode="decimal"
                           aria-label={`Credit, row ${r + 1}`}
@@ -402,12 +435,12 @@ export function LineGrid({
                   )}
                   {mode === "cashbook" && (
                     <>
-                      <td data-row={r} data-col={col++} className="w-32 p-1 align-top">
+                      <td data-row={r} data-col={COL.amount} className="w-32 p-1 align-top">
                         <input
-                          value={displayAmount(row.amount, activeCell?.row === r && activeCell.col === 102)}
+                          value={displayAmount(row.amount, activeCell?.row === r && activeCell.col === COL.amount)}
                           onChange={(e) => updateRow(r, { amount: e.target.value })}
-                          onKeyDown={(e) => onCellKeyDown(e, r, 102, "amount")}
-                          onFocus={() => startCellEdit(r, 102, "amount", row.amount)}
+                          onKeyDown={(e) => onCellKeyDown(e, r, COL.amount, "amount")}
+                          onFocus={() => startCellEdit(r, COL.amount, "amount", row.amount)}
                           onBlur={() => setActiveCell(null)}
                           inputMode="decimal"
                           aria-label={`Amount, row ${r + 1}`}
@@ -424,7 +457,7 @@ export function LineGrid({
                           type="checkbox"
                           checked={row.taxInclusive}
                           onChange={(e) => updateRow(r, { taxInclusive: e.target.checked })}
-                          onKeyDown={(e) => onCellKeyDown(e, r, 103)}
+                          onKeyDown={(e) => onCellKeyDown(e, r, COL.taxInclusive)}
                           aria-label={`Tax inclusive, row ${r + 1}`}
                           className="mt-2 size-4 accent-[var(--vinea-brand)]"
                         />
@@ -433,12 +466,12 @@ export function LineGrid({
                   )}
                   {mode === "document" && (
                     <>
-                      <td data-row={r} data-col={col++} className="w-24 p-1 align-top">
+                      <td data-row={r} data-col={COL.quantity} className="w-24 p-1 align-top">
                         <input
-                          value={displayAmount(row.quantity, activeCell?.row === r && activeCell.col === 104)}
+                          value={displayAmount(row.quantity, activeCell?.row === r && activeCell.col === COL.quantity)}
                           onChange={(e) => updateRow(r, { quantity: e.target.value })}
-                          onKeyDown={(e) => onCellKeyDown(e, r, 104, "quantity")}
-                          onFocus={() => startCellEdit(r, 104, "quantity", row.quantity)}
+                          onKeyDown={(e) => onCellKeyDown(e, r, COL.quantity, "quantity")}
+                          onFocus={() => startCellEdit(r, COL.quantity, "quantity", row.quantity)}
                           onBlur={() => setActiveCell(null)}
                           inputMode="decimal"
                           aria-label={t("quantityAria", { row: r + 1 })}
@@ -450,12 +483,12 @@ export function LineGrid({
                         />
                         {quantityErr && <p className="mt-0.5 text-right text-xs text-[var(--vinea-danger)]">{quantityErr}</p>}
                       </td>
-                      <td data-row={r} data-col={col++} className="w-32 p-1 align-top">
+                      <td data-row={r} data-col={COL.unitPrice} className="w-32 p-1 align-top">
                         <input
-                          value={displayAmount(row.unitPrice, activeCell?.row === r && activeCell.col === 105)}
+                          value={displayAmount(row.unitPrice, activeCell?.row === r && activeCell.col === COL.unitPrice)}
                           onChange={(e) => updateRow(r, { unitPrice: e.target.value })}
-                          onKeyDown={(e) => onCellKeyDown(e, r, 105, "unitPrice")}
-                          onFocus={() => startCellEdit(r, 105, "unitPrice", row.unitPrice)}
+                          onKeyDown={(e) => onCellKeyDown(e, r, COL.unitPrice, "unitPrice")}
+                          onFocus={() => startCellEdit(r, COL.unitPrice, "unitPrice", row.unitPrice)}
                           onBlur={() => setActiveCell(null)}
                           inputMode="decimal"
                           aria-label={t("unitPriceAria", { row: r + 1 })}
@@ -467,12 +500,12 @@ export function LineGrid({
                         />
                         {unitPriceErr && <p className="mt-0.5 text-right text-xs text-[var(--vinea-danger)]">{unitPriceErr}</p>}
                       </td>
-                      <td data-row={r} data-col={col++} className="w-24 p-1 align-top">
+                      <td data-row={r} data-col={COL.discountPercent} className="w-24 p-1 align-top">
                         <input
                           value={row.discountPercent}
                           onChange={(e) => updateRow(r, { discountPercent: e.target.value })}
-                          onKeyDown={(e) => onCellKeyDown(e, r, 106, "discountPercent")}
-                          onFocus={() => startCellEdit(r, 106, "discountPercent", row.discountPercent)}
+                          onKeyDown={(e) => onCellKeyDown(e, r, COL.discountPercent, "discountPercent")}
+                          onFocus={() => startCellEdit(r, COL.discountPercent, "discountPercent", row.discountPercent)}
                           onBlur={() => setActiveCell(null)}
                           inputMode="decimal"
                           aria-label={t("discountPercentAria", { row: r + 1 })}

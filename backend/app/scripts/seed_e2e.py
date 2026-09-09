@@ -48,6 +48,12 @@ SECONDARY_COMPANY = "Kivu Traders E2E"
 READONLY_EMAIL = "e2e.readonly@vinea.example"
 READONLY_ROLE_NAME = "Clerk"
 
+# One supplier, so the Suppliers master is not an empty table in screenshots or in the AP
+# specs. Customers are created by the specs themselves (they assert on creation); nothing
+# asserts on creating a supplier, so the fixture provides one.
+SUPPLIER_CODE = "E2ESUP001"
+SUPPLIER_NAME = "Musanze Packaging Ltd"
+
 
 def _existing_tenant(db, *, email: str) -> tuple[User, Company] | None:
     with platform_scope(db):
@@ -164,6 +170,45 @@ def _ensure_member_with_role(
         return user
 
 
+def _ensure_partners(db, *, company: Company, actor: User) -> str | None:
+    """Through the real service with a real actor — never a raw insert, so the seeded row is
+    the same shape the application would have written."""
+    from app.db import set_tenant
+    from app.models.partner import PartnerRole, TaxMode
+    from app.subledger import masters
+
+    set_tenant(db, company.id)
+    existing = masters.list_partners(db, company.id, role=PartnerRole.AP, include_inactive=True)
+    supplier = next((p for p in existing if p.supplier_code == SUPPLIER_CODE), None)
+    if supplier is None:
+        supplier = masters.create_partner(
+            db,
+            company.id,
+            masters.PartnerInput(
+                name=SUPPLIER_NAME,
+                supplier_code=SUPPLIER_CODE,
+                tin="102345678",
+                email="ap@musanze-packaging.example",
+                phone="+250788000111",
+            ),
+            actor=actor,
+        )
+        terms = {row.code: row for row in masters.list_payment_terms(db, company.id)}
+        masters.upsert_role_settings(
+            db,
+            company.id,
+            supplier,
+            PartnerRole.AP,
+            masters.RoleSettingsInput(
+                payment_terms_id=terms["NET30"].id if "NET30" in terms else None,
+                tax_mode=TaxMode.EXCLUSIVE,
+            ),
+            actor=actor,
+        )
+        db.commit()
+    return supplier.supplier_code
+
+
 def _ensure_closed_period(db, *, company: Company) -> str | None:
     with platform_scope(db):
         period = db.scalar(
@@ -183,7 +228,7 @@ def _ensure_closed_period(db, *, company: Company) -> str | None:
 def main() -> None:
     db = SessionLocal()
     try:
-        _primary_user, primary_company = _get_or_create_tenant(
+        primary_user, primary_company = _get_or_create_tenant(
             db, company_name=PRIMARY_COMPANY, email=PRIMARY_EMAIL, full_name="E2E Primary Owner"
         )
         secondary_user, secondary_company = _get_or_create_tenant(
@@ -200,6 +245,7 @@ def main() -> None:
             full_name="E2E Read Only",
             role_name=READONLY_ROLE_NAME,
         )
+        supplier_code = _ensure_partners(db, company=primary_company, actor=primary_user)
         closed_period = _ensure_closed_period(db, company=primary_company)
 
         print(
@@ -211,6 +257,7 @@ def main() -> None:
                     "secondary_company": SECONDARY_COMPANY,
                     "readonly_email": READONLY_EMAIL,
                     "readonly_role": READONLY_ROLE_NAME,
+                    "supplier_code": supplier_code,
                     "password": PASSWORD,
                     "closed_period": closed_period,
                 },

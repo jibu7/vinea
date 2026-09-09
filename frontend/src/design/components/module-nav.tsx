@@ -70,12 +70,24 @@ export const navIntents: NavIntent[] = [
     items: [
       { label: "Journal batches", module: "General Ledger", permission: "gl:journal_post", href: "/gl/journal-batches/new" },
       { label: "Cashbook batches", module: "General Ledger", permission: "gl:journal_post", href: "/gl/cashbook-batches/new" },
+      // Appendix C's AR block, in the owner's order, plus Receipt (the settlement side of
+      // the same subledger) and "Account receivable batches" — the spec lists AR batches and
+      // both are P4 screens, so they belong in the tree from the start rather than appearing
+      // when they happen to be built.
       { label: "Invoice", module: "Accounts Receivable", phase: "P4" },
       { label: "Credit note", module: "Accounts Receivable", phase: "P4" },
+      { label: "Receipt", module: "Accounts Receivable", phase: "P4" },
       { label: "Allocate", module: "Accounts Receivable", phase: "P4" },
-      { label: "GRV", module: "Accounts Payable", phase: "P4" },
-      { label: "Purchase order", module: "Accounts Payable", phase: "P4" },
+      { label: "Account receivable batches", module: "Accounts Receivable", phase: "P4" },
+      // GRV and Purchase order are P6: goods receipt and the three-way match are the
+      // purchasing cycle, not the AP subledger P4 builds.
+      { label: "GRV", module: "Accounts Payable", phase: "P6" },
+      { label: "Purchase order", module: "Accounts Payable", phase: "P6" },
+      { label: "Supplier invoice", module: "Accounts Payable", phase: "P4" },
       { label: "Return to supplier", module: "Accounts Payable", phase: "P4" },
+      { label: "Payment", module: "Accounts Payable", phase: "P4" },
+      { label: "Allocate", module: "Accounts Payable", phase: "P4" },
+      { label: "Account payable batches", module: "Accounts Payable", phase: "P4" },
       { label: "Sales order", module: "Order Entry", phase: "P6" },
       { label: "Adjustments", module: "Inventory", phase: "P5" },
       { label: "Transfers", module: "Inventory", phase: "P5" },

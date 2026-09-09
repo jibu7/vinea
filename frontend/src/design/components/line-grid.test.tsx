@@ -185,3 +185,55 @@ describe("lineNet", () => {
     expect(lineNet(emptyLineGridRow({ quantity: "2", unitPrice: "500", discountPercent: "abc" }))).toBe(1000);
   });
 });
+
+/** Regression: the amount cells rendered a sequential `data-col` while their handlers passed
+ * 100/101/102, so `focusCell` looked up a coordinate that did not exist and arrow/Enter
+ * navigation from an amount cell silently did nothing. Caught by Copilot review on PR #7;
+ * it affected journal and cashbook mode as much as the document mode it was reported on. */
+describe("LineGrid amount-cell navigation", () => {
+  it("moves ArrowDown from a debit cell to the next row's debit cell", () => {
+    render(<Harness initialRows={[emptyLineGridRow(), emptyLineGridRow()]} />);
+    const debits = screen.getAllByLabelText(/^Debit, row/);
+
+    debits[0].focus();
+    fireEvent.keyDown(debits[0], { key: "ArrowDown" });
+
+    expect(document.activeElement).toBe(debits[1]);
+  });
+
+  it("moves ArrowUp from a credit cell back to the previous row's credit cell", () => {
+    render(<Harness initialRows={[emptyLineGridRow(), emptyLineGridRow()]} />);
+    const credits = screen.getAllByLabelText(/^Credit, row/);
+
+    credits[1].focus();
+    fireEvent.keyDown(credits[1], { key: "ArrowUp" });
+
+    expect(document.activeElement).toBe(credits[0]);
+  });
+
+  it("moves ArrowDown from a unit price cell in document mode", () => {
+    render(
+      <Harness mode="document" initialRows={[emptyLineGridRow(), emptyLineGridRow()]} />,
+    );
+    const prices = screen.getAllByLabelText(/^Unit price, row/);
+
+    prices[0].focus();
+    fireEvent.keyDown(prices[0], { key: "ArrowDown" });
+
+    expect(document.activeElement).toBe(prices[1]);
+  });
+
+  it("keeps the extra columns navigable when they are shown", async () => {
+    const user = userEvent.setup();
+    render(<Harness initialRows={[emptyLineGridRow(), emptyLineGridRow()]} />);
+    await user.click(screen.getByText(/More columns/));
+    const debits = screen.getAllByLabelText(/^Debit, row/);
+
+    debits[0].focus();
+    fireEvent.keyDown(debits[0], { key: "ArrowDown" });
+
+    // Showing branch/project/currency/tax shifts every column's position in the row; the
+    // amount cells must still find each other.
+    expect(document.activeElement).toBe(debits[1]);
+  });
+});
