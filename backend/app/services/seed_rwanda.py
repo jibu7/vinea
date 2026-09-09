@@ -17,9 +17,17 @@ from app.kernel.sequences import DEFAULT_PREFIXES, ensure_sequence
 from app.models.company import Branch, Company
 from app.models.currency import Currency
 from app.models.fiscal import FiscalYear
-from app.models.gl import AccountClass, ControlType, GLAccount, GLSettings
+from app.models.gl import AccountClass, ControlType, GLAccount, GLSettings, GLTransactionType
 from app.models.membership import Role
+from app.models.partner import (
+    AgeingBasis,
+    AgeingBucket,
+    AgeingBucketSet,
+    DueBasis,
+    PaymentTerms,
+)
 from app.models.tax import TaxCode, TaxNature
+from app.subledger.masters import DEFAULT_AGEING_BUCKETS
 
 COA_TEMPLATE = "rw_sme_v1"
 
@@ -34,6 +42,18 @@ ACCOUNT_VAT_OUTPUT = "2200"
 ACCOUNT_RETAINED_EARNINGS = "3200"
 # Sub-unit residues from per-line FX rounding land with the exchange differences.
 ACCOUNT_ROUNDING_DIFFERENCE = "6950"
+# P4 AR/AP defaults.
+ACCOUNT_AR_CONTROL = "1200"
+ACCOUNT_AP_CONTROL = "2100"
+ACCOUNT_POST_DATED_RECEIVABLE = "1250"
+ACCOUNT_POST_DATED_PAYABLE = "2150"
+ACCOUNT_FX_GAIN = "4400"
+ACCOUNT_FX_LOSS = "6950"
+ACCOUNT_DISCOUNT_RECEIVED = "4350"
+ACCOUNT_DISCOUNT_GRANTED = "6960"
+ACCOUNT_SALES_REVENUE = "4100"
+ACCOUNT_BANK = "1120"
+ACCOUNT_SUNDRY_EXPENSES = "6990"
 
 RWANDA_TAX_CODES = [
     {
@@ -84,6 +104,8 @@ RW_SME_V1_ACCOUNTS: tuple[
     ("1110", "Cash on Hand", _A, "1100", True, ControlType.CASH),
     ("1120", "Bank Account", _A, "1100", True, ControlType.BANK),
     ("1200", "Accounts Receivable", _A, "1100", True, ControlType.AR),
+    # Post-dated instruments are a real claim but not yet cash — never a control account.
+    ("1250", "Post-dated Receivables", _A, "1100", True, None),
     ("1300", "Inventory", _A, "1100", True, ControlType.INVENTORY),
     (ACCOUNT_VAT_INPUT, "VAT Input (Receivable)", _A, "1100", True, None),
     ("1500", "Prepayments & Deposits", _A, "1100", True, None),
@@ -92,6 +114,7 @@ RW_SME_V1_ACCOUNTS: tuple[
     ("1620", "Accumulated Depreciation", _A, "1600", True, None),
     ("2000", "Liabilities", _L, None, False, None),
     ("2100", "Accounts Payable", _L, "2000", True, ControlType.AP),
+    ("2150", "Post-dated Payables", _L, "2000", True, None),
     (ACCOUNT_VAT_OUTPUT, "VAT Output (Payable)", _L, "2000", True, None),
     ("2300", "Accrued Expenses", _L, "2000", True, None),
     ("2400", "PAYE & Social Security Payable", _L, "2000", True, None),
@@ -104,6 +127,7 @@ RW_SME_V1_ACCOUNTS: tuple[
     ("4100", "Sales Revenue", _I, "4000", True, None),
     ("4200", "Service Revenue", _I, "4000", True, None),
     ("4300", "Other Income", _I, "4000", True, None),
+    ("4350", "Settlement Discount Received", _I, "4000", True, None),
     ("4400", "Foreign Exchange Gain", _I, "4000", True, None),
     ("5000", "Cost of Sales", _X, None, False, None),
     ("5100", "Cost of Goods Sold", _X, "5000", True, None),
@@ -120,7 +144,30 @@ RW_SME_V1_ACCOUNTS: tuple[
     ("6800", "Depreciation", _X, "6000", True, None),
     ("6900", "Professional Fees", _X, "6000", True, None),
     ("6950", "Foreign Exchange Loss", _X, "6000", True, None),
+    ("6960", "Settlement Discount Granted", _X, "6000", True, None),
     ("6990", "Sundry Expenses", _X, "6000", True, None),
+)
+
+# (module, code, name, default account code) — the 4th link of the ADR-05 chain. Sign is a
+# property of the (role, kind) matrix in `app.subledger.documents`, not of the type row.
+SUBLEDGER_TRANSACTION_TYPES: tuple[tuple[str, str, str, str | None], ...] = (
+    ("ar", "INV", "Customer invoice", ACCOUNT_SALES_REVENUE),
+    ("ar", "CRN", "Customer credit note", ACCOUNT_SALES_REVENUE),
+    ("ar", "RCT", "Customer receipt", ACCOUNT_BANK),
+    ("ar", "JNL", "AR journal", None),
+    ("ap", "INV", "Supplier invoice", ACCOUNT_SUNDRY_EXPENSES),
+    ("ap", "DBN", "Return to supplier (debit note)", ACCOUNT_SUNDRY_EXPENSES),
+    ("ap", "PMT", "Supplier payment", ACCOUNT_BANK),
+    ("ap", "JNL", "AP journal", None),
+)
+
+# (code, name, basis, due days, discount %, discount days)
+DEFAULT_PAYMENT_TERMS: tuple[tuple[str, str, DueBasis, int, Decimal, int], ...] = (
+    ("COD", "Cash on delivery", DueBasis.DAYS_FROM_DOCUMENT_DATE, 0, Decimal(0), 0),
+    ("NET30", "30 days from invoice", DueBasis.DAYS_FROM_DOCUMENT_DATE, 30, Decimal(0), 0),
+    ("NET60", "60 days from invoice", DueBasis.DAYS_FROM_DOCUMENT_DATE, 60, Decimal(0), 0),
+    ("EOM30", "30 days from end of month", DueBasis.DAYS_FROM_END_OF_MONTH, 30, Decimal(0), 0),
+    ("2/10N30", "2% within 10 days, net 30", DueBasis.DAYS_FROM_DOCUMENT_DATE, 30, Decimal(2), 10),
 )
 
 
@@ -171,10 +218,85 @@ def seed_chart_of_accounts(db: Session, company: Company) -> dict[str, GLAccount
             company_id=company.id,
             retained_earnings_account_id=accounts[ACCOUNT_RETAINED_EARNINGS].id,
             rounding_difference_account_id=accounts[ACCOUNT_ROUNDING_DIFFERENCE].id,
+            realized_fx_gain_account_id=accounts[ACCOUNT_FX_GAIN].id,
+            realized_fx_loss_account_id=accounts[ACCOUNT_FX_LOSS].id,
+            settlement_discount_granted_account_id=accounts[ACCOUNT_DISCOUNT_GRANTED].id,
+            settlement_discount_received_account_id=accounts[ACCOUNT_DISCOUNT_RECEIVED].id,
+            post_dated_receivable_account_id=accounts[ACCOUNT_POST_DATED_RECEIVABLE].id,
+            post_dated_payable_account_id=accounts[ACCOUNT_POST_DATED_PAYABLE].id,
+            ar_control_account_id=accounts[ACCOUNT_AR_CONTROL].id,
+            ap_control_account_id=accounts[ACCOUNT_AP_CONTROL].id,
         )
     )
     db.flush()
     return accounts
+
+
+def seed_subledger_transaction_types(
+    db: Session, company: Company, accounts: dict[str, GLAccount]
+) -> list[GLTransactionType]:
+    types = [
+        GLTransactionType(
+            company_id=company.id,
+            module=module,
+            code=code,
+            name=name,
+            default_gl_account_id=accounts[account_code].id if account_code else None,
+            is_active=True,
+        )
+        for module, code, name, account_code in SUBLEDGER_TRANSACTION_TYPES
+    ]
+    db.add_all(types)
+    db.flush()
+    return types
+
+
+def seed_payment_terms(db: Session, company: Company) -> list[PaymentTerms]:
+    terms = [
+        PaymentTerms(
+            company_id=company.id,
+            code=code,
+            name=name,
+            due_basis=basis,
+            due_days=due_days,
+            discount_percent=discount_pct,
+            discount_days=discount_days,
+            is_active=True,
+        )
+        for code, name, basis, due_days, discount_pct, discount_days in DEFAULT_PAYMENT_TERMS
+    ]
+    db.add_all(terms)
+    db.flush()
+    return terms
+
+
+def seed_ageing_buckets(db: Session, company: Company) -> AgeingBucketSet:
+    """The 30/60/90/120+ default set, aged on due date."""
+    bucket_set = AgeingBucketSet(
+        company_id=company.id,
+        code="STD",
+        name="Standard 30/60/90/120+",
+        basis=AgeingBasis.DUE_DATE,
+        is_default=True,
+        is_active=True,
+    )
+    db.add(bucket_set)
+    db.flush()
+    db.add_all(
+        [
+            AgeingBucket(
+                company_id=company.id,
+                bucket_set_id=bucket_set.id,
+                sequence=index,
+                label=label,
+                from_days=from_days,
+                to_days=to_days,
+            )
+            for index, (label, from_days, to_days) in enumerate(DEFAULT_AGEING_BUCKETS)
+        ]
+    )
+    db.flush()
+    return bucket_set
 
 
 def seed_tax_codes(
@@ -242,6 +364,9 @@ def seed_company(db: Session, company: Company, *, year: int | None = None) -> l
     seed_branch(db, company)
     accounts = seed_chart_of_accounts(db, company)
     seed_tax_codes(db, company, valid_from=date(fiscal_year, 1, 1), accounts=accounts)
+    seed_subledger_transaction_types(db, company, accounts)
+    seed_payment_terms(db, company)
+    seed_ageing_buckets(db, company)
     seed_fiscal_year(db, company, year=fiscal_year)
     seed_document_sequences(db, company)
     return seed_roles(db, company)

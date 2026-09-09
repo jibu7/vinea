@@ -30,6 +30,7 @@ from app.kernel.events import (
     PeriodClosed,
     PostingEvent,
     ReversalRequested,
+    SubledgerJournal,
 )
 from app.kernel.money import (
     ONE,
@@ -83,8 +84,20 @@ def _line_override(db: Session, company_id: int, spec: LineSpec, event: PostingE
 def _partner_default(
     db: Session, company_id: int, spec: LineSpec, event: PostingEvent
 ) -> int | None:
-    """P4: customers/suppliers carry default revenue/expense and control accounts."""
-    return None
+    """P4: customers/suppliers carry a default revenue/expense account. Only consulted for
+    subledger lines that name a partner and no account of their own."""
+    if spec.partner_id is None or event.module not in ("ar", "ap"):
+        return None
+    # Imported here: the subledger sits above the kernel, so the kernel must not import it
+    # at module scope.
+    from app.models.partner import PartnerApSettings, PartnerArSettings
+
+    model = PartnerArSettings if event.module == "ar" else PartnerApSettings
+    return db.scalar(
+        select(model.default_gl_account_id).where(
+            model.company_id == company_id, model.partner_id == spec.partner_id
+        )
+    )
 
 
 def _item_default(db: Session, company_id: int, spec: LineSpec, event: PostingEvent) -> int | None:
@@ -258,7 +271,9 @@ class _Context:
         return self._projects[project_id]
 
 
-def _check_account(account: GLAccount, event: PostingEvent, *, is_cash_side: bool = False) -> None:
+def _check_account(
+    account: GLAccount, event: PostingEvent, *, module: str, is_cash_side: bool = False
+) -> None:
     if not account.is_active:
         raise PostingError(
             f"Account {account.code} is inactive",
@@ -273,6 +288,15 @@ def _check_account(account: GLAccount, event: PostingEvent, *, is_cash_side: boo
         )
     if isinstance(event, ReversalRequested):
         return  # mirrors an entry that was legitimately posted
+    # P4 decision 2: an AR/AP control account is reachable only from its own subledger.
+    # This is what keeps `SUM(open items) == control balance` true; there is no escape hatch.
+    if account.control_type in SUBLEDGER_CONTROL_TYPES and str(account.control_type) != module:
+        raise PostingError(
+            f"Account {account.code} is the {str(account.control_type).upper()} control "
+            "account; post through the subledger, not directly",
+            code="control_account_direct_posting",
+            field_errors={"gl_account_id": [f"{account.code} is a control account"]},
+        )
     if isinstance(event, ManualJournal) and account.is_control:
         raise PostingError(
             f"Account {account.code} is a {account.control_type} control account; post through "
@@ -280,19 +304,12 @@ def _check_account(account: GLAccount, event: PostingEvent, *, is_cash_side: boo
             code="control_account_manual_posting",
             field_errors={"gl_account_id": [f"{account.code} is a control account"]},
         )
-    if isinstance(event, CashbookEntry):
-        if is_cash_side and account.control_type not in CASHBOOK_CONTROL_TYPES:
+    if isinstance(event, CashbookEntry) and is_cash_side:
+        if account.control_type not in CASHBOOK_CONTROL_TYPES:
             raise PostingError(
                 f"Account {account.code} is not a bank or cash account",
                 code="not_a_cash_account",
                 field_errors={"cash_account_id": ["must be a bank/cash control account"]},
-            )
-        if not is_cash_side and account.control_type in SUBLEDGER_CONTROL_TYPES:
-            raise PostingError(
-                f"Account {account.code} is a {account.control_type} control account; use the "
-                "subledger",
-                code="control_account_manual_posting",
-                field_errors={"gl_account_id": [f"{account.code} is a control account"]},
             )
     if isinstance(event, PeriodClosed) and account.is_control:
         raise PostingError(
@@ -332,7 +349,12 @@ def _check_required_dimensions(account: GLAccount, spec: LineSpec) -> None:
 
 
 def _resolve_lines(
-    ctx: _Context, event: PostingEvent, specs: Sequence[LineSpec], *, cash_side_index: int | None
+    ctx: _Context,
+    event: PostingEvent,
+    specs: Sequence[LineSpec],
+    *,
+    cash_side_index: int | None,
+    module: str,
 ) -> list[ResolvedLine]:
     if len(specs) < 2:
         raise PostingError(
@@ -361,7 +383,7 @@ def _resolve_lines(
     for index, (spec, account_id) in enumerate(zip(specs, account_ids, strict=True)):
         try:
             account = ctx.account(account_id)
-            _check_account(account, event, is_cash_side=index == cash_side_index)
+            _check_account(account, event, module=module, is_cash_side=index == cash_side_index)
             _check_required_dimensions(account, spec)
 
             branch = ctx.branch(spec.branch_id, event.branch_id)
@@ -437,7 +459,7 @@ def _resolve_lines(
 
     difference = sum((line.converted.base_amount for line in resolved), ZERO)
     if difference != ZERO:
-        resolved.append(_rounding_line(ctx, event, resolved, difference))
+        resolved.append(_rounding_line(ctx, event, resolved, difference, module=module))
     return resolved
 
 
@@ -450,7 +472,12 @@ def _reject_unbalanced(base_code: str, difference: Decimal) -> PostingError:
 
 
 def _rounding_line(
-    ctx: _Context, event: PostingEvent, resolved: list[ResolvedLine], difference: Decimal
+    ctx: _Context,
+    event: PostingEvent,
+    resolved: list[ResolvedLine],
+    difference: Decimal,
+    *,
+    module: str,
 ) -> ResolvedLine:
     """Absorb a sub-unit residue left by per-line rounding (ADR-06).
 
@@ -480,7 +507,7 @@ def _rounding_line(
             code="rounding_account_unset",
         )
     account = ctx.account(settings.rounding_difference_account_id)
-    _check_account(account, event)
+    _check_account(account, event, module=module)
     return ResolvedLine(
         gl_account_id=account.id,
         branch_id=ctx.branch(None, event.branch_id).id,
@@ -744,11 +771,14 @@ def post(
 
     cash_side_index: int | None = None
     doc_type = str(event.doc_type)
+    module = str(event.module)
     description = event.description
     reverses_entry_id: int | None = None
     reversal_reason: str | None = None
     if isinstance(event, ManualJournal):
         specs: Sequence[LineSpec] = event.lines
+    elif isinstance(event, SubledgerJournal):
+        specs = event.lines
     elif isinstance(event, CashbookEntry):
         specs, cash_side_index = _cashbook_specs(ctx, event)
     elif isinstance(event, ReversalRequested):
@@ -763,6 +793,9 @@ def post(
             )
         specs = _reversal_specs(original)
         doc_type = original.doc_type
+        # A reversal belongs to the module that posted the original, or it would trip the
+        # control-account guard on its way back out.
+        module = original.module
         description = event.description or f"Reversal of {original.number}: {event.reason}"
         reverses_entry_id = original.id
         reversal_reason = event.reason
@@ -777,13 +810,14 @@ def post(
             code="unsupported_event",
         )
 
-    resolved = _resolve_lines(ctx, event, specs, cash_side_index=cash_side_index)
+    resolved = _resolve_lines(ctx, event, specs, cash_side_index=cash_side_index, module=module)
     return _write(
         db,
         ctx,
         event,
         period=period,
         doc_type=doc_type,
+        module=module,
         description=description,
         lines=resolved,
         actor=actor,
@@ -809,6 +843,7 @@ def _write(
     *,
     period: AccountingPeriod,
     doc_type: str,
+    module: str,
     description: str,
     lines: list[ResolvedLine],
     actor: User | None,
@@ -821,6 +856,7 @@ def _write(
         number=claimed.number,
         doc_type=claimed.doc_type,
         event_type=event.event_type,
+        module=module,
         entry_date=event.entry_date,
         period_id=period.id,
         description=description,

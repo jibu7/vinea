@@ -84,6 +84,11 @@ class JournalEntry(AuditedMixin, CompanyScopedMixin, Base):
     number: Mapped[str] = mapped_column(String(30), nullable=False)
     doc_type: Mapped[str] = mapped_column(String(10), nullable=False)
     event_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    # Owning module ('gl', 'ar', 'ap', …). The subledger guard compares it to the control
+    # type of every account the entry touches (P4 decision 2).
+    module: Mapped[str] = mapped_column(
+        String(10), nullable=False, default="gl", server_default=text("'gl'")
+    )
     entry_date: Mapped[date] = mapped_column(Date, nullable=False)
     period_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     description: Mapped[str] = mapped_column(String(500), nullable=False)

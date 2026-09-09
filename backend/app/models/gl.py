@@ -82,30 +82,54 @@ class GLAccount(AuditedMixin, CompanyScopedMixin, Base):
         return self.class_ in PROFIT_AND_LOSS_CLASSES
 
 
+# P4 adds the AR/AP defaults; each is a composite FK back to `gl_accounts`.
+SETTINGS_ACCOUNT_FIELDS = (
+    "retained_earnings_account_id",
+    "rounding_difference_account_id",
+    "realized_fx_gain_account_id",
+    "realized_fx_loss_account_id",
+    "settlement_discount_granted_account_id",
+    "settlement_discount_received_account_id",
+    "post_dated_receivable_account_id",
+    "post_dated_payable_account_id",
+    "ar_control_account_id",
+    "ap_control_account_id",
+)
+
+
+def _settings_account_fk(field: str) -> ForeignKeyConstraint:
+    return ForeignKeyConstraint(
+        ["company_id", field],
+        ["gl_accounts.company_id", "gl_accounts.id"],
+        name=f"fk_gl_settings_{field.removesuffix('_id')}",
+        ondelete="RESTRICT",
+    )
+
+
 class GLSettings(AuditedMixin, CompanyScopedMixin, Base):
     """Module defaults for the account-determination chain (ADR-05) — one row per company."""
 
     __tablename__ = "gl_settings"
     __table_args__ = (
         UniqueConstraint("company_id", name="uq_gl_settings_company_id"),
-        ForeignKeyConstraint(
-            ["company_id", "retained_earnings_account_id"],
-            ["gl_accounts.company_id", "gl_accounts.id"],
-            name="fk_gl_settings_retained_earnings_account",
-            ondelete="RESTRICT",
-        ),
-        ForeignKeyConstraint(
-            ["company_id", "rounding_difference_account_id"],
-            ["gl_accounts.company_id", "gl_accounts.id"],
-            name="fk_gl_settings_rounding_difference_account",
-            ondelete="RESTRICT",
-        ),
+        *(_settings_account_fk(field) for field in SETTINGS_ACCOUNT_FIELDS),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     retained_earnings_account_id: Mapped[int | None] = mapped_column(BigInteger)
     # Absorbs sub-unit differences left by per-line rounding on multi-currency entries.
     rounding_difference_account_id: Mapped[int | None] = mapped_column(BigInteger)
+    # --- P4 AR/AP defaults ---------------------------------------------------------------
+    # Realized FX at allocation time; the two may point at the same account.
+    realized_fx_gain_account_id: Mapped[int | None] = mapped_column(BigInteger)
+    realized_fx_loss_account_id: Mapped[int | None] = mapped_column(BigInteger)
+    settlement_discount_granted_account_id: Mapped[int | None] = mapped_column(BigInteger)
+    settlement_discount_received_account_id: Mapped[int | None] = mapped_column(BigInteger)
+    # Cash that has not landed yet: post-dated cheques and similar instruments (§B.2).
+    post_dated_receivable_account_id: Mapped[int | None] = mapped_column(BigInteger)
+    post_dated_payable_account_id: Mapped[int | None] = mapped_column(BigInteger)
+    ar_control_account_id: Mapped[int | None] = mapped_column(BigInteger)
+    ap_control_account_id: Mapped[int | None] = mapped_column(BigInteger)
 
 
 class Project(AuditedMixin, CompanyScopedMixin, Base):

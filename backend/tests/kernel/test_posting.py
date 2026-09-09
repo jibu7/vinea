@@ -17,7 +17,7 @@ from app.kernel.events import (
     CashbookEntry,
     CashbookKind,
     CashbookLineSpec,
-    InvoicePosted,
+    GoodsReceived,
     LineSpec,
     ManualJournal,
     PeriodClosed,
@@ -194,7 +194,7 @@ def test_future_period_and_missing_period_are_rejected(db: Session, ledger: Ledg
     [
         ("6000", "account_not_postable"),  # header
         ("1120", "control_account_manual_posting"),  # bank — cashbook only
-        ("1200", "control_account_manual_posting"),  # AR — subledger only
+        ("1200", "control_account_direct_posting"),  # AR — subledger only (P4 decision 2)
     ],
 )
 def test_manual_journal_account_rules(
@@ -293,7 +293,7 @@ def test_stub_events_are_not_postable_yet(db: Session, ledger: Ledger) -> None:
     with pytest.raises(PostingError) as excinfo:
         posting.post(
             db,
-            InvoicePosted(entry_date=MARCH, description="P4"),
+            GoodsReceived(entry_date=MARCH, description="P6"),
             company_id=ledger.company_id,
             actor=ledger.owner,
         )
@@ -543,7 +543,7 @@ def test_cashbook_side_rules(db: Session, ledger: Ledger) -> None:
             company_id=ledger.company_id,
             actor=ledger.owner,
         )
-    assert excinfo.value.code == "control_account_manual_posting"
+    assert excinfo.value.code == "control_account_direct_posting"
     # Bank → cash transfer is the cashbook's own business.
     transfer = posting.post(
         db,

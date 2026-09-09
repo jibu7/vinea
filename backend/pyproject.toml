@@ -13,6 +13,7 @@ dependencies = [
   "pyjwt>=2.9",
   "argon2-cffi>=23.1",
   "email-validator>=2.2",
+  "weasyprint>=70.0",
 ]
 
 [dependency-groups]

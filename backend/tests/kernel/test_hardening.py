@@ -248,10 +248,9 @@ def test_transaction_type_listing_and_update(api: Api) -> None:
     created = _create_type(api)
     _create_type(api, module="ar", code="AR-TYPE", name="AR type", default_gl_account_id=None)
 
-    assert {row["code"] for row in api.client.get("/api/v1/gl/transaction-types").json()} == {
-        "BANK-CHARGES",
-        "AR-TYPE",
-    }
+    # The seed pack ships AR/AP types (P4), so assert on inclusion rather than equality.
+    all_codes = {row["code"] for row in api.client.get("/api/v1/gl/transaction-types").json()}
+    assert {"BANK-CHARGES", "AR-TYPE"} <= all_codes
     gl_only = api.client.get("/api/v1/gl/transaction-types", params={"module": "gl"}).json()
     assert [row["code"] for row in gl_only] == ["BANK-CHARGES"]
 

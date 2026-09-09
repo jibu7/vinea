@@ -47,11 +47,14 @@ AR_SETUP_MANAGE = "ar:setup_manage"
 AR_TRANSACTIONS_POST = "ar:transactions_post"
 AR_REPORTS_VIEW = "ar:reports_view"
 AR_WRITEOFF_APPROVE = "ar:writeoff_approve"
+# Posting past a customer credit limit is audited, so it is its own permission (P4 D8).
+AR_CREDIT_LIMIT_OVERRIDE = "ar:credit_limit_override"
 
 # Accounts Payable
 AP_SETUP_MANAGE = "ap:setup_manage"
 AP_TRANSACTIONS_POST = "ap:transactions_post"
 AP_REPORTS_VIEW = "ap:reports_view"
+AP_CREDIT_LIMIT_OVERRIDE = "ap:credit_limit_override"
 
 # Inventory
 INV_SETUP_MANAGE = "inv:setup_manage"
@@ -124,9 +127,11 @@ ALL_PERMISSIONS: tuple[str, ...] = (
     AR_TRANSACTIONS_POST,
     AR_REPORTS_VIEW,
     AR_WRITEOFF_APPROVE,
+    AR_CREDIT_LIMIT_OVERRIDE,
     AP_SETUP_MANAGE,
     AP_TRANSACTIONS_POST,
     AP_REPORTS_VIEW,
+    AP_CREDIT_LIMIT_OVERRIDE,
     INV_SETUP_MANAGE,
     INV_TRANSACTIONS_ADJUST,
     INV_REPORTS_VIEW,

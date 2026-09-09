@@ -126,43 +126,53 @@ class PeriodClosed(PostingEvent):
     description: str = ""
 
 
+# --- Subledger events (P4 AR/AP) --------------------------------------------------------
+
+
+@dataclass(frozen=True, kw_only=True)
+class SubledgerJournal(PostingEvent):
+    """A posting whose accounts and dimensions the subledger has already resolved.
+
+    `module` and `doc_type` are instance fields (shadowing the class-level defaults) because
+    one code path serves both roles and all six document kinds — the role/kind matrix lives
+    in `app.subledger`, not in a family of event classes.
+    """
+
+    module: str
+    doc_type: str
+    lines: tuple[LineSpec, ...]
+
+
+@dataclass(frozen=True, kw_only=True)
+class PartnerDocumentPosted(SubledgerJournal):
+    event_type: ClassVar[str] = "partner_document_posted"
+
+
+@dataclass(frozen=True, kw_only=True)
+class AllocationPosted(SubledgerJournal):
+    """Realized FX and settlement discount, posted on the allocation date."""
+
+    event_type: ClassVar[str] = "allocation_posted"
+    doc_type: str = DocType.ALLOCATION_JOURNAL
+
+
+@dataclass(frozen=True, kw_only=True)
+class InstrumentMatured(SubledgerJournal):
+    """A post-dated cheque reaching maturity: post-dated account → bank."""
+
+    event_type: ClassVar[str] = "instrument_matured"
+    doc_type: str = DocType.INSTRUMENT_MATURITY
+
+
 # --- Stubs for later phases (documented vocabulary, not yet postable) ------------------
 
 
 @dataclass(frozen=True, kw_only=True)
 class _StubEvent(PostingEvent):
-    """Placeholder: the emitting module arrives in a later phase (P4 AR/AP, P5 Inventory,
-    P6 OE, P7 FX, P9 Fixed Assets, P11 POS, P12 BOM)."""
+    """Placeholder: the emitting module arrives in a later phase (P5 Inventory, P6 OE,
+    P7 FX, P9 Fixed Assets, P11 POS, P12 BOM)."""
 
     lines: tuple[LineSpec, ...] = field(default_factory=tuple)
-
-
-@dataclass(frozen=True, kw_only=True)
-class InvoicePosted(_StubEvent):
-    event_type: ClassVar[str] = "invoice_posted"
-    doc_type: ClassVar[str] = "INV"
-    module: ClassVar[str] = "ar"
-
-
-@dataclass(frozen=True, kw_only=True)
-class CreditNotePosted(_StubEvent):
-    event_type: ClassVar[str] = "credit_note_posted"
-    doc_type: ClassVar[str] = "CN"
-    module: ClassVar[str] = "ar"
-
-
-@dataclass(frozen=True, kw_only=True)
-class ReceiptPosted(_StubEvent):
-    event_type: ClassVar[str] = "receipt_posted"
-    doc_type: ClassVar[str] = "RCT"
-    module: ClassVar[str] = "ar"
-
-
-@dataclass(frozen=True, kw_only=True)
-class PaymentPosted(_StubEvent):
-    event_type: ClassVar[str] = "payment_posted"
-    doc_type: ClassVar[str] = "PAY"
-    module: ClassVar[str] = "ap"
 
 
 @dataclass(frozen=True, kw_only=True)

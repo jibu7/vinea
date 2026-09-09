@@ -22,12 +22,34 @@ class DocType(enum.StrEnum):
     JOURNAL = "JE"
     CASHBOOK = "CB"
     YEAR_END = "YE"
+    # P4 — AR/AP partner documents. The partner document and the journal entry it produces
+    # share one number, so there is exactly one gapless sequence per document type.
+    AR_INVOICE = "ARIN"
+    AR_CREDIT_NOTE = "ARCN"
+    AR_RECEIPT = "ARRC"
+    AP_INVOICE = "APIN"
+    AP_DEBIT_NOTE = "APDN"
+    AP_PAYMENT = "APPY"
+    ALLOCATION = "ALC"
+    # The realized-FX / settlement-discount entry an allocation posts, and the transfer
+    # that moves a matured post-dated instrument into the bank.
+    ALLOCATION_JOURNAL = "ALJ"
+    INSTRUMENT_MATURITY = "MAT"
 
 
 DEFAULT_PREFIXES: dict[str, str] = {
     DocType.JOURNAL: "JE-",
     DocType.CASHBOOK: "CB-",
     DocType.YEAR_END: "YE-",
+    DocType.AR_INVOICE: "INV-",
+    DocType.AR_CREDIT_NOTE: "CRN-",
+    DocType.AR_RECEIPT: "RCT-",
+    DocType.AP_INVOICE: "SIN-",
+    DocType.AP_DEBIT_NOTE: "DBN-",
+    DocType.AP_PAYMENT: "PMT-",
+    DocType.ALLOCATION: "ALC-",
+    DocType.ALLOCATION_JOURNAL: "ALJ-",
+    DocType.INSTRUMENT_MATURITY: "MAT-",
 }
 
 
