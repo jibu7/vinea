@@ -12,9 +12,13 @@ import pytest
 from sqlalchemy import URL, create_engine, make_url, text
 from sqlalchemy.orm import Session, sessionmaker
 
-ADMIN_URL = make_url(
-    os.environ.get("DATABASE_URL", "postgresql+psycopg://vinea:vinea@localhost:5432/vinea")
-)
+# Admin operations here — CREATE DATABASE, creating the app role, running migrations — need
+# the superuser, which is what MIGRATION_DATABASE_URL names. This used to read DATABASE_URL,
+# which worked only because it ran before the line below overwrote that variable with the
+# RLS-enforcing app-role URL. Import order is not a contract: read the variable that actually
+# means "superuser", so the file is correct wherever in the import graph it lands.
+DEFAULT_ADMIN_URL = "postgresql+psycopg://vinea:vinea@localhost:5432/vinea"
+ADMIN_URL = make_url(os.environ.get("MIGRATION_DATABASE_URL") or DEFAULT_ADMIN_URL)
 TEST_DB_NAME = f"{ADMIN_URL.database}_test"
 APP_ROLE = "vinea_app_test"
 APP_PASSWORD = "vinea_app_test"

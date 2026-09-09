@@ -1,3 +1,28 @@
+# P3 Definition-of-Done corrections
+
+P3 was accepted on a DoD that made two claims which were not true of what shipped. Both are
+recorded here rather than inherited quietly by later phases.
+
+| Claim in P3's DoD | What shipped | Decision |
+|---|---|---|
+| "next-intl with every string externalised" | 28 files, 327 violations of `react/jsx-no-literals` | Backfill — the rest of this document, tracked as [issue #6](https://github.com/jibu7/vinea/issues/6) |
+| "IndexedDB draft autosave with the draft UUID as `Idempotency-Key`" | `localStorage` autosave; the draft UUID *is* the `Idempotency-Key`, so only the storage engine differs | **Keep localStorage.** Decided at P4 step 7 |
+
+## The drafts decision
+
+Drafts are small, per-device and disposable, and localStorage's synchronous API is what makes
+"save on every keystroke" trivial — IndexedDB would buy asynchrony and a larger quota that
+nothing here needs. What localStorage does not give is a quota we can rely on, so
+`frontend/src/lib/drafts.ts` caps the total at 512 KB and evicts oldest-first, and the key
+carries module + company + user so a draft cannot leak across a company switch or between two
+users on one browser. Both are covered in `frontend/src/lib/drafts.test.ts`.
+
+This is a decision, not an oversight. If a later phase needs drafts that survive a quota
+squeeze, outlive a device, or hold something large, that is the point to revisit it — and the
+DoD claim should be corrected rather than the storage silently swapped.
+
+---
+
 # P3 i18n backfill — the screens that are not externalised
 
 P3's Definition of Done said "next-intl with every string externalised". That was not true

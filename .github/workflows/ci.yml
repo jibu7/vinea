@@ -14,7 +14,11 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U vinea" --health-interval 5s --health-timeout 5s --health-retries 10
     env:
+      # The suite reads MIGRATION_DATABASE_URL for its admin work (creating the throwaway
+      # databases, running migrations) and overwrites DATABASE_URL at conftest import with
+      # the non-superuser app role, so RLS is actually enforced in the tests.
       DATABASE_URL: postgresql+psycopg://vinea:vinea@localhost:5432/vinea
+      MIGRATION_DATABASE_URL: postgresql+psycopg://vinea:vinea@localhost:5432/vinea
     defaults: { run: { working-directory: backend } }
     steps:
       - uses: actions/checkout@v4

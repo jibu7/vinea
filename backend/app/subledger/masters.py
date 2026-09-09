@@ -952,9 +952,14 @@ def update_ar_ap_defaults(
     request: Request | None = None,
 ) -> GLSettings:
     """Sets AR/AP `gl_settings` keys, validating each account against its key's rule and
-    recording what changed. Only the keys present in `changes` are touched; an explicit
-    `None` clears a key, which is always allowed — an unset default fails loudly at posting
-    time, whereas a *wrongly* set one posts to the wrong account silently."""
+    recording what changed. Only the keys present in `changes` are touched.
+
+    All eight are required: clearing one is refused with `required_setting`. An earlier
+    version of this allowed clearing on the reasoning that an unset default "fails loudly at
+    posting time" — but it does not fail at *this* call, it fails at whichever allocation or
+    document post next needs it, by which time the operator who cleared it is gone and the
+    failure looks like a product bug. A NULL here is a guaranteed later failure, so it is
+    refused where it is caused."""
     unknown = set(changes) - set(AR_AP_DEFAULT_RULES)
     if unknown:
         raise LedgerStateError(
@@ -963,11 +968,14 @@ def update_ar_ap_defaults(
     settings = gl_settings_for(db, company_id)
     before = {field: getattr(settings, field) for field in changes}
     for field, value in changes.items():
-        setattr(
-            settings,
-            field,
-            None if value is None else _validated_account(db, company_id, field, value),
-        )
+        if value is None:
+            rule = AR_AP_DEFAULT_RULES[field]
+            raise LedgerStateError(
+                f"The {rule.label} account is required — the subledger cannot post without it",
+                code="required_setting",
+                field_errors={field: ["required"]},
+            )
+        setattr(settings, field, _validated_account(db, company_id, field, value))
     db.flush()
     after = {field: getattr(settings, field) for field in changes}
     if after != before:

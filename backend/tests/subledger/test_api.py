@@ -6,7 +6,7 @@ from decimal import Decimal
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.db import set_tenant
@@ -518,15 +518,20 @@ def test_ar_ap_defaults_write_no_audit_record_when_nothing_changes(api: Api, db:
     )
 
 
-def test_ar_ap_defaults_may_always_be_cleared(api: Api) -> None:
-    """An unset default fails loudly the first time it is needed; a wrongly set one posts
-    silently to the wrong account. Clearing therefore stays unvalidated."""
-    response = api.client.patch(DEFAULTS_PATH, json={"realized_fx_gain_account_id": None})
+@pytest.mark.parametrize("field", sorted(masters.AR_AP_DEFAULT_RULES))
+def test_ar_ap_defaults_refuse_to_clear_any_required_key(api: Api, field: str) -> None:
+    """All eight are required. A NULL here is not a loud early failure — it is a silent one
+    that surfaces at whichever post next needs the account, long after the operator who
+    cleared it has gone."""
+    before = api.client.get(DEFAULTS_PATH).json()
 
-    assert response.status_code == 200, response.text
-    assert response.json()["realized_fx_gain_account_id"] is None
+    response = api.client.patch(DEFAULTS_PATH, json={field: None})
 
-
+    assert response.status_code == 409, response.text
+    body = response.json()
+    assert body["code"] == "required_setting"
+    assert body["field_errors"] == {field: ["required"]}
+    assert api.client.get(DEFAULTS_PATH).json() == before
 # --- The allocation preview is the posting minus the commit (step 7 contract) --------------
 
 
@@ -643,3 +648,225 @@ def test_allocation_preview_matches_what_posting_actually_writes(api: Api) -> No
 
     # And the preview left nothing behind: one allocation exists, the one that was posted.
     assert len(api.client.get("/api/v1/subledger/ar/allocations").json()) == 1
+
+
+# --- The preview is a dry run: it consumes nothing ------------------------------------------
+
+CONSUMABLE_TABLES = (
+    "journal_entries",
+    "journal_lines",
+    "period_balances",
+    "allocations",
+    "allocation_lines",
+    "partner_documents",
+    "partner_document_lines",
+    "jobs",
+    "audit_log",
+)
+
+
+def _ledger_footprint(db: Session, company_id: int) -> dict:
+    """Everything an allocation would consume if it ran: gapless numbers, rows, audit."""
+    set_tenant(db, company_id)
+    counts = {
+        table: db.execute(text(f"SELECT count(*) FROM {table}")).scalar_one()
+        for table in CONSUMABLE_TABLES
+    }
+    sequences = {
+        (row.doc_type, row.branch_id): row.next_number
+        for row in db.execute(
+            text("SELECT doc_type, branch_id, next_number FROM document_sequences")
+        )
+    }
+    return {"counts": counts, "sequences": sequences}
+
+
+def _fx_setup(api: Api) -> dict:
+    accounts = {row["code"]: row["id"] for row in api.client.get("/api/v1/gl/accounts").json()}
+    currencies = {row["code"]: row for row in api.client.get("/api/v1/gl/currencies").json()}
+    usd = currencies["USD"]["id"]
+    for valid_from, rate in (
+        (MARCH.isoformat(), "1234.5678"),
+        ((MARCH + timedelta(days=8)).isoformat(), "1301.1111"),
+    ):
+        api.client.post(
+            "/api/v1/gl/exchange-rates",
+            json={"currency_id": usd, "valid_from": valid_from, "rate": rate},
+        )
+    partner = api.client.post(
+        "/api/v1/subledger/ar/partners",
+        json={"name": "Residual Ltd", "customer_code": "CUST-RND", "currency_id": usd},
+    ).json()
+    invoice = api.client.post(
+        "/api/v1/subledger/ar/documents",
+        headers={"Idempotency-Key": "rnd-inv"},
+        json={
+            "kind": "invoice",
+            "partner_id": partner["id"],
+            "document_date": MARCH.isoformat(),
+            "currency_id": usd,
+            "description": "Odd amount",
+            "lines": [{"unit_price": "333.33", "gl_account_id": accounts["4100"]}],
+        },
+    )
+    assert invoice.status_code == 201, invoice.text
+    settle_on = MARCH + timedelta(days=8)
+    receipt = api.client.post(
+        "/api/v1/subledger/ar/documents",
+        headers={"Idempotency-Key": "rnd-rct"},
+        json={
+            "kind": "settlement",
+            "partner_id": partner["id"],
+            "document_date": settle_on.isoformat(),
+            "currency_id": usd,
+            "description": "Settled in full",
+            "amount": "333.33",
+            "cash_account_id": accounts["1120"],
+            "instrument_type": "bank",
+        },
+    )
+    assert receipt.status_code == 201, receipt.text
+    return {
+        "accounts": accounts,
+        "body": {
+            "partner_id": partner["id"],
+            "allocation_date": settle_on.isoformat(),
+            "pairs": [
+                {
+                    "debit_document_id": invoice.json()["id"],
+                    "credit_document_id": receipt.json()["id"],
+                    "amount": "333.33",
+                }
+            ],
+        },
+    }
+
+
+def test_allocation_preview_consumes_nothing(api: Api, db: Session) -> None:
+    """A preview must not take a document-sequence number, write an idempotency-bearing row,
+    or insert a job. Anything it consumes is consumed whether or not the operator posts."""
+    setup = _fx_setup(api)
+    before = _ledger_footprint(db, api.company_id)
+
+    for _ in range(3):  # repeated previews must be as free as one
+        response = api.client.post("/api/v1/subledger/ar/allocations/preview", json=setup["body"])
+        assert response.status_code == 200, response.text
+
+    auto = api.client.post(
+        "/api/v1/subledger/ar/allocations/auto",
+        json={
+            "partner_id": setup["body"]["partner_id"],
+            "allocation_date": setup["body"]["allocation_date"],
+        },
+    )
+    assert auto.status_code == 200, auto.text
+
+    assert _ledger_footprint(db, api.company_id) == before
+
+
+def test_allocation_postings_balance_in_base_so_no_rounding_line_is_possible(api: Api) -> None:
+    """The review asked for a preview-equals-post case with a non-zero rounding residual.
+    There isn't one, and this pins why rather than contriving one.
+
+    `_post_postings` builds every allocation line *already in base currency* and balances the
+    control leg against the FX amount itself, so the engine's `difference` is exactly zero and
+    `_rounding_line` is never reached. Per-line rounding residues come from converting several
+    foreign-currency lines independently — which is document posting, not allocation. The
+    rounding path is covered where it can actually happen, in the test below.
+
+    If allocation ever posts in document currency, this test fails, and the preview will need
+    to account for a rounding line before that ships.
+    """
+    setup = _fx_setup(api)
+
+    previewed = api.client.post(
+        "/api/v1/subledger/ar/allocations/preview", json=setup["body"]
+    ).json()
+    posted = api.client.post(
+        "/api/v1/subledger/ar/allocations",
+        headers={"Idempotency-Key": "rnd-alc"},
+        json=setup["body"],
+    )
+    assert posted.status_code == 201, posted.text
+
+    entry = api.client.get(
+        f"/api/v1/gl/journal-entries/{posted.json()['journal_entry_id']}"
+    ).json()
+
+    # Rates carrying four decimals against a zero-decimal base: if anything could leave a
+    # residue it would be this, and it does not.
+    assert sum(Decimal(line["base_amount"]) for line in entry["lines"]) == 0
+    assert not any(line["is_rounding_line"] for line in entry["lines"])
+    assert all(line["currency_id"] == entry["lines"][0]["currency_id"] for line in entry["lines"])
+
+    actual = sorted(
+        (line["gl_account_id"], Decimal(line["base_amount"])) for line in entry["lines"]
+    )
+    expected = sorted(
+        (item["gl_account_id"], Decimal(item["base_amount"])) for item in previewed["postings"]
+    )
+    assert actual == expected
+
+
+def test_a_multi_line_foreign_currency_invoice_posts_a_rounding_line(api: Api) -> None:
+    """Where the residue actually comes from in the subledger.
+
+    33.33 + 33.33 + 33.34 USD is exactly 100.00, but each line converts and rounds to whole
+    RWF on its own while the control leg converts the document total, so the two sides miss by
+    a sub-unit and the kernel absorbs it into the rounding account. This is the same shape as
+    `tests/kernel/test_acceptance.py::test_4a_fx_rounding_residue_posts_as_an_explicit_rounding_line`,
+    reached through a real AR invoice rather than a manual journal.
+
+    (An *allocation* cannot do this — see the test above — which is why the allocation preview
+    never has to account for a rounding line.)
+    """
+    accounts = {row["code"]: row["id"] for row in api.client.get("/api/v1/gl/accounts").json()}
+    currencies = {row["code"]: row for row in api.client.get("/api/v1/gl/currencies").json()}
+    usd = currencies["USD"]["id"]
+    api.client.post(
+        "/api/v1/gl/exchange-rates",
+        json={"currency_id": usd, "valid_from": MARCH.isoformat(), "rate": "1234.5678"},
+    )
+    partner = api.client.post(
+        "/api/v1/subledger/ar/partners",
+        json={"name": "Residue Ltd", "customer_code": "CUST-RES", "currency_id": usd},
+    ).json()
+
+    invoice = api.client.post(
+        "/api/v1/subledger/ar/documents",
+        headers={"Idempotency-Key": "res-inv"},
+        json={
+            "kind": "invoice",
+            "partner_id": partner["id"],
+            "document_date": MARCH.isoformat(),
+            "currency_id": usd,
+            "description": "Three thirds of a hundred dollars",
+            "lines": [
+                {"unit_price": "33.33", "gl_account_id": accounts["4100"]},
+                {"unit_price": "33.33", "gl_account_id": accounts["4200"]},
+                {"unit_price": "33.34", "gl_account_id": accounts["4300"]},
+            ],
+        },
+    )
+    assert invoice.status_code == 201, invoice.text
+
+    entry = api.client.get(
+        f"/api/v1/gl/journal-entries/{invoice.json()['journal_entry_id']}"
+    ).json()
+    rounding = [line for line in entry["lines"] if line["is_rounding_line"]]
+
+    assert len(rounding) == 1, [
+        (line["gl_account_id"], line["base_amount"], line["is_rounding_line"])
+        for line in entry["lines"]
+    ]
+    # A residue, not a wrong number: bounded by half a minor unit per line.
+    assert 0 < abs(Decimal(rounding[0]["base_amount"])) <= len(entry["lines"])
+    # The residue is a base-currency artefact, so the line is booked in base — not in the
+    # document's currency like the lines that produced it.
+    base_currency_id = next(
+        row["id"] for row in api.client.get("/api/v1/gl/currencies").json() if row["is_base"]
+    )
+    assert rounding[0]["currency_id"] == base_currency_id
+    assert entry["lines"][0]["currency_id"] != base_currency_id
+    # And it still foots, which is the whole point of absorbing it.
+    assert sum(Decimal(line["base_amount"]) for line in entry["lines"]) == 0
