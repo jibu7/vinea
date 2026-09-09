@@ -254,3 +254,187 @@ def test_p4_backfills_a_pre_p4_tenant(pre_p4_engine: Engine) -> None:
             )
         }
         assert registry == {("ar", "ar"), ("ap", "ap"), ("inventory", "inv")}
+
+
+# --- 0011: transaction_type on documents that predate it -------------------------------------
+
+MID_P4_REVISION = "0010_p4_rounding_account"
+
+
+def _stage_document_before_0011(engine: Engine, company_id: int) -> int:
+    """A posted AR invoice as it looked at 0010 — before `transaction_type` existed.
+
+    Written directly, and with the single-writer guard opened by hand: this is a *historical*
+    row, the shape the table had one revision ago. The posting engine cannot produce it, since
+    the engine only ever writes the current schema.
+    """
+    # A transactional connection, not the fixture's AUTOCOMMIT one: the kernel's
+    # "a posted entry has at least two lines" check is a deferred constraint trigger, so under
+    # autocommit it fires on the entry insert, before its lines can exist.
+    txn_engine = create_engine(ADMIN_URL.set(database=BACKFILL_DB))
+    with txn_engine.begin() as conn:
+        conn.execute(text("SELECT set_config('app.posting_engine', 'on', false)"))
+        conn.execute(text("SET CONSTRAINTS ALL DEFERRED"))
+        ids = {
+            row.code: row.id
+            for row in conn.execute(
+                text("SELECT id, code FROM gl_accounts WHERE company_id = :cid"),
+                {"cid": company_id},
+            )
+        }
+        branch_id = conn.execute(
+            text("SELECT id FROM branches WHERE company_id = :cid"), {"cid": company_id}
+        ).scalar_one()
+        currency_id = conn.execute(
+            text("SELECT id FROM currencies WHERE company_id = :cid"), {"cid": company_id}
+        ).scalar_one()
+        year_id = conn.execute(
+            text(
+                "INSERT INTO fiscal_years (company_id, name, start_date, end_date, status) "
+                "VALUES (:cid, '2026', '2026-01-01', '2026-12-31', 'open') RETURNING id"
+            ),
+            {"cid": company_id},
+        ).scalar_one()
+        period_id = conn.execute(
+            text(
+                "INSERT INTO accounting_periods (company_id, fiscal_year_id, period_no, name, "
+                "start_date, end_date, status) VALUES (:cid, :year, 3, 'Mar 2026', "
+                "'2026-03-01', '2026-03-31', 'open') RETURNING id"
+            ),
+            {"cid": company_id, "year": year_id},
+        ).scalar_one()
+        partner_id = conn.execute(
+            text(
+                "INSERT INTO partners (company_id, name, customer_code, is_customer, "
+                "is_supplier, is_active) VALUES (:cid, 'Legacy Ltd', 'LEG001', true, false, "
+                "true) RETURNING id"
+            ),
+            {"cid": company_id},
+        ).scalar_one()
+        entry_id = conn.execute(
+            text(
+                "INSERT INTO journal_entries (company_id, number, doc_type, event_type, "
+                "module, entry_date, period_id, description, status) VALUES (:cid, "
+                "'INV-000001', 'ARIN', 'partner_document', 'ar', '2026-03-10', :period, "
+                "'Legacy invoice', 'draft') RETURNING id"
+            ),
+            {"cid": company_id, "period": period_id},
+        ).scalar_one()
+        document_id = conn.execute(
+            text(
+                """
+                INSERT INTO partner_documents
+                    (company_id, role, kind, number, doc_type, partner_id, journal_entry_id,
+                     document_date, currency_id, exchange_rate, branch_id, tax_mode,
+                     control_account_id, description, net_amount, tax_amount, total_amount,
+                     base_total_amount, open_amount, direction, status)
+                VALUES (:cid, 'ar', 'invoice', 'INV-000001', 'ARIN', :partner, :entry,
+                        '2026-03-10', :currency, 1, :branch, 'exclusive', :control,
+                        'Legacy invoice', 1000, 0, 1000, 1000, 1000, 1, 'posted')
+                RETURNING id
+                """
+            ),
+            {
+                "cid": company_id,
+                "partner": partner_id,
+                "entry": entry_id,
+                "currency": currency_id,
+                "branch": branch_id,
+                "control": ids["1200"],
+            },
+        ).scalar_one()
+        # Two balancing lines, so the entry satisfies the kernel's own invariants: this is a
+        # historical row, not an invalid one.
+        # The control leg carries the partner dimension, because the subledger guard requires
+        # it — a control-account line without a partner is refused by the database, which is
+        # the point of the guard.
+        lines = (
+            (ids["1200"], 1000, "customer", partner_id),
+            (ids["4100"], -1000, None, None),
+        )
+        for line_no, (account, amount, partner_type, line_partner) in enumerate(lines, start=1):
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO journal_lines
+                        (company_id, entry_id, line_no, gl_account_id, branch_id, currency_id,
+                         exchange_rate, amount, base_amount, tax_amount, is_rounding_line,
+                         partner_type, partner_id)
+                    VALUES (:cid, :entry, :line_no, :account, :branch, :currency, 1, :amount,
+                            :amount, 0, false, :partner_type, :partner)
+                    """
+                ),
+                {
+                    "cid": company_id,
+                    "entry": entry_id,
+                    "line_no": line_no,
+                    "account": account,
+                    "branch": branch_id,
+                    "currency": currency_id,
+                    "amount": amount,
+                    "partner_type": partner_type,
+                    "partner": line_partner,
+                },
+            )
+        # Posted last: `kernel_block_posted_line_mutation` makes an entry's lines immutable the
+        # moment it is posted, so the lines have to exist first — the same order the posting
+        # engine works in.
+        conn.execute(
+            text("UPDATE journal_entries SET status = 'posted' WHERE id = :id"),
+            {"id": entry_id},
+        )
+    txn_engine.dispose()
+    return document_id
+
+
+def test_0011_backfills_transaction_type_on_a_document_that_predates_it(
+    pre_p4_engine: Engine,
+) -> None:
+    """The other half of the back-fill story.
+
+    `test_p4_backfills_a_pre_p4_tenant` starts at 0005, where `partner_documents` does not
+    exist yet — so it can say nothing about 0011, which back-fills a column *on documents*.
+    This one stops at 0010, writes a document as the schema had it then, and only then goes to
+    head. Without the back-fill the column would be NULL on every document posted before this
+    release, and everything keyed on transaction type — statements, enquiries, and the sales
+    figures P9/P10 add — would silently skip them.
+    """
+    company_id = _provision_pre_p4_tenant(pre_p4_engine)
+    url = ADMIN_URL.set(database=BACKFILL_DB).render_as_string(hide_password=False)
+
+    _alembic(url, MID_P4_REVISION)
+    document_id = _stage_document_before_0011(pre_p4_engine, company_id)
+
+    with pre_p4_engine.connect() as conn:
+        # The column genuinely does not exist yet, or this proves nothing.
+        assert (
+            conn.execute(
+                text(
+                    "SELECT count(*) FROM information_schema.columns WHERE table_name = "
+                    "'partner_documents' AND column_name = 'transaction_type'"
+                )
+            ).scalar_one()
+            == 0
+        )
+
+    _alembic(url, "head")
+
+    with pre_p4_engine.connect() as conn:
+        row = conn.execute(
+            text(
+                "SELECT kind, transaction_type FROM partner_documents WHERE id = :id"
+            ),
+            {"id": document_id},
+        ).one()
+        # Invoice-shaped, and now labelled as the invoice it is.
+        assert row.kind == "invoice"
+        assert row.transaction_type == "INV"
+
+        # And the column is NOT NULL, so nothing posted after this can be left unlabelled.
+        nullable = conn.execute(
+            text(
+                "SELECT is_nullable FROM information_schema.columns WHERE table_name = "
+                "'partner_documents' AND column_name = 'transaction_type'"
+            )
+        ).scalar_one()
+        assert nullable == "NO"
