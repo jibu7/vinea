@@ -1,18 +1,30 @@
 import { useState } from "react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { NextIntlClientProvider } from "next-intl";
 import { describe, expect, it } from "vitest";
-import { LineGrid, emptyLineGridRow, type LineGridRow } from "./line-grid";
+import messages from "@/i18n/messages/en.json";
+import { LineGrid, emptyLineGridRow, lineNet, type LineGridRow } from "./line-grid";
 
 const accountOptions = [
   { value: "1", label: "Cash" },
   { value: "2", label: "Sales" },
 ];
 
-function Harness({ initialRows }: { initialRows: LineGridRow[] }) {
+/** LineGrid reads its document-mode copy from next-intl, so every render needs the real
+ * provider and the real catalogue — a stub would hide a missing key. */
+function Harness({
+  initialRows,
+  mode = "journal",
+}: {
+  initialRows: LineGridRow[];
+  mode?: "journal" | "cashbook" | "document";
+}) {
   const [rows, setRows] = useState(initialRows);
   return (
-    <LineGrid mode="journal" rows={rows} onRowsChange={setRows} accountOptions={accountOptions} />
+    <NextIntlClientProvider locale="en-GB" messages={messages}>
+      <LineGrid mode={mode} rows={rows} onRowsChange={setRows} accountOptions={accountOptions} />
+    </NextIntlClientProvider>
   );
 }
 
@@ -128,5 +140,48 @@ describe("LineGrid amount cell overwrite (FRw 1,000,065,000 regression)", () => 
     await user.click(descInput); // blur -> reformats
 
     expect(debitInput).toHaveValue("65,000");
+  });
+});
+
+describe("LineGrid document mode (P4 AR/AP lines)", () => {
+  it("renders quantity, unit price and discount instead of debit/credit", () => {
+    render(<Harness mode="document" initialRows={[emptyLineGridRow()]} />);
+
+    expect(screen.getByLabelText("Quantity, row 1")).toBeInTheDocument();
+    expect(screen.getByLabelText("Unit price, row 1")).toBeInTheDocument();
+    expect(screen.getByLabelText("Discount percent, row 1")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Debit, row 1")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Credit, row 1")).not.toBeInTheDocument();
+  });
+
+  it("keeps the shared keyboard model — Enter on the last row adds one", () => {
+    render(<Harness mode="document" initialRows={[emptyLineGridRow()]} />);
+
+    fireEvent.keyDown(descriptionInputs()[0], { key: "Enter" });
+
+    expect(descriptionInputs()).toHaveLength(2);
+  });
+
+  it("shows the net of discount, which is what the Exclusive footer sums", () => {
+    render(
+      <Harness
+        mode="document"
+        initialRows={[emptyLineGridRow({ quantity: "3", unitPrice: "1000", discountPercent: "10" })]}
+      />,
+    );
+
+    expect(screen.getByText("2,700")).toBeInTheDocument();
+  });
+});
+
+describe("lineNet", () => {
+  it("is quantity x price less the discount percent", () => {
+    expect(lineNet(emptyLineGridRow({ quantity: "2", unitPrice: "500" }))).toBe(1000);
+    expect(lineNet(emptyLineGridRow({ quantity: "2", unitPrice: "500", discountPercent: "25" }))).toBe(750);
+  });
+
+  it("treats blank and unparseable cells as zero rather than NaN", () => {
+    expect(lineNet(emptyLineGridRow({ quantity: "", unitPrice: "" }))).toBe(0);
+    expect(lineNet(emptyLineGridRow({ quantity: "2", unitPrice: "500", discountPercent: "abc" }))).toBe(1000);
   });
 });

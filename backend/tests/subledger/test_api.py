@@ -525,3 +525,117 @@ def test_ar_ap_defaults_may_always_be_cleared(api: Api) -> None:
 
     assert response.status_code == 200, response.text
     assert response.json()["realized_fx_gain_account_id"] is None
+
+
+# --- The allocation preview is the posting minus the commit (step 7 contract) --------------
+
+
+def test_allocation_preview_matches_what_posting_actually_writes(api: Api) -> None:
+    """The allocation screen shows realized FX and discount *before* Post. That preview must
+    come from the allocation service's own `prepare()` — the function `allocate()` then posts
+    — not from a second implementation that can drift. This pins the equality on a case with
+    both an FX movement and a settlement discount, where a re-implementation would show.
+    """
+    accounts = {row["code"]: row["id"] for row in api.client.get("/api/v1/gl/accounts").json()}
+    currencies = {row["code"]: row for row in api.client.get("/api/v1/gl/currencies").json()}
+    usd = currencies["USD"]["id"]
+    terms = {
+        row["code"]: row["id"]
+        for row in api.client.get("/api/v1/subledger/payment-terms").json()
+    }
+
+    # Two rates: the invoice books at 1200, the receipt eight days later at 1250, so settling
+    # in full realizes an FX gain on the base-currency difference.
+    for valid_from, rate in ((MARCH.isoformat(), "1200"), ((MARCH + timedelta(days=8)).isoformat(), "1250")):
+        response = api.client.post(
+            "/api/v1/gl/exchange-rates",
+            json={"currency_id": usd, "valid_from": valid_from, "rate": rate},
+        )
+        assert response.status_code in (200, 201), response.text
+
+    partner = api.client.post(
+        "/api/v1/subledger/ar/partners",
+        json={"name": "Kivu Exports", "customer_code": "CUST-FX", "currency_id": usd},
+    ).json()
+    api.client.put(
+        f"/api/v1/subledger/ar/partners/{partner['id']}/settings",
+        json={"payment_terms_id": terms["2/10N30"], "tax_mode": "exclusive"},
+    )
+
+    invoice = api.client.post(
+        "/api/v1/subledger/ar/documents",
+        headers={"Idempotency-Key": "fx-inv"},
+        json={
+            "kind": "invoice",
+            "partner_id": partner["id"],
+            "document_date": MARCH.isoformat(),
+            "currency_id": usd,
+            "description": "Export consulting",
+            "payment_terms_id": terms["2/10N30"],
+            "lines": [{"unit_price": "1000", "gl_account_id": accounts["4100"]}],
+        },
+    )
+    assert invoice.status_code == 201, invoice.text
+
+    settle_on = MARCH + timedelta(days=8)
+    receipt = api.client.post(
+        "/api/v1/subledger/ar/documents",
+        headers={"Idempotency-Key": "fx-rct"},
+        json={
+            "kind": "settlement",
+            "partner_id": partner["id"],
+            "document_date": settle_on.isoformat(),
+            "currency_id": usd,
+            "description": "Settled within the discount window",
+            "amount": "980",
+            "cash_account_id": accounts["1120"],
+            "instrument_type": "bank",
+        },
+    )
+    assert receipt.status_code == 201, receipt.text
+
+    body = {
+        "partner_id": partner["id"],
+        "allocation_date": settle_on.isoformat(),
+        "pairs": [
+            {
+                "debit_document_id": invoice.json()["id"],
+                "credit_document_id": receipt.json()["id"],
+                "amount": "980",
+                "discount_amount": "20",
+            }
+        ],
+    }
+
+    preview = api.client.post("/api/v1/subledger/ar/allocations/preview", json=body)
+    assert preview.status_code == 200, preview.text
+    previewed = preview.json()
+    # Anti-vacuity: this case must actually produce FX and discount postings, or the equality
+    # below would hold trivially for an empty list.
+    assert Decimal(previewed["total_discount"]) == Decimal(20)
+    assert Decimal(previewed["total_fx_base"]) != 0
+    assert len(previewed["postings"]) >= 2
+
+    posted = api.client.post(
+        "/api/v1/subledger/ar/allocations", headers={"Idempotency-Key": "fx-alc"}, json=body
+    )
+    assert posted.status_code == 201, posted.text
+
+    entry = api.client.get(
+        f"/api/v1/gl/journal-entries/{posted.json()['journal_entry_id']}"
+    ).json()
+    # `preview.postings` is the complete set of lines the allocation writes — the control
+    # leg included — so compare the whole entry, unfiltered. Filtering either side would
+    # weaken exactly the claim being made.
+    actual = sorted(
+        (line["gl_account_id"], line["description"], Decimal(line["base_amount"]))
+        for line in entry["lines"]
+    )
+    expected = sorted(
+        (item["gl_account_id"], item["description"], Decimal(item["base_amount"]))
+        for item in previewed["postings"]
+    )
+    assert actual == expected
+
+    # And the preview left nothing behind: one allocation exists, the one that was posted.
+    assert len(api.client.get("/api/v1/subledger/ar/allocations").json()) == 1

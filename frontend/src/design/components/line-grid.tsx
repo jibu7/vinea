@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useTranslations } from "next-intl";
 import { ChevronsUpDown } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { Combobox } from "./combobox";
@@ -16,6 +17,11 @@ export interface LineGridRow {
   /** Cashbook mode. */
   amount: string;
   taxInclusive: boolean;
+  /** Document mode (AR/AP invoice and credit-note lines, P4 decision 11). Item lines arrive
+   * with inventory in P5/P6 — this row shape is meant to grow an `itemId`, not be replaced. */
+  quantity: string;
+  unitPrice: string;
+  discountPercent: string;
   /** Shared extra dimensions — collapsible, all default from the header. */
   branchId: string;
   projectId: string;
@@ -35,6 +41,9 @@ export function emptyLineGridRow(defaults: Partial<LineGridRow> = {}): LineGridR
     credit: "",
     amount: "",
     taxInclusive: true,
+    quantity: "1",
+    unitPrice: "",
+    discountPercent: "",
     branchId: "",
     projectId: "",
     currencyId: "",
@@ -51,8 +60,18 @@ function displayAmount(raw: string, editing?: boolean): string {
   return Number.isFinite(n) ? new Intl.NumberFormat("en-RW").format(n) : raw;
 }
 
+/** Net of discount, before tax — the figure the line contributes to the Exclusive footer. */
+export function lineNet(row: LineGridRow): number {
+  const quantity = Number(row.quantity || 0);
+  const price = Number(row.unitPrice || 0);
+  const discount = Number(row.discountPercent || 0);
+  const gross = quantity * price;
+  if (!Number.isFinite(gross)) return 0;
+  return gross * (1 - (Number.isFinite(discount) ? discount : 0) / 100);
+}
+
 export interface LineGridProps {
-  mode: "journal" | "cashbook";
+  mode: "journal" | "cashbook" | "document";
   rows: LineGridRow[];
   onRowsChange: (rows: LineGridRow[]) => void;
   errors?: LineErrors;
@@ -88,6 +107,9 @@ export function LineGrid({
   rateForCurrency,
   rowDefaults,
 }: LineGridProps) {
+  // Document mode is P4 and fully externalised; the journal/cashbook literals below predate
+  // it and are part of the P3 i18n backfill (docs/i18n-backfill-p3.md, issue #6).
+  const t = useTranslations("lineGrid");
   const containerRef = useRef<HTMLDivElement>(null);
   const [activeCell, setActiveCell] = useState<{ row: number; col: number } | null>(null);
   const [showExtra, setShowExtra] = useState(false);
@@ -171,7 +193,13 @@ export function LineGrid({
           className="flex items-center gap-1.5 text-xs font-medium text-[var(--vinea-ink-muted)] hover:text-[var(--vinea-ink)]"
         >
           <ChevronsUpDown className="size-3.5" />
-          {showExtra ? "Fewer columns" : "More columns (branch, project, currency, tax)"}
+          {mode === "document"
+            ? showExtra
+              ? t("fewerColumns")
+              : t("moreColumns")
+            : showExtra
+              ? "Fewer columns"
+              : "More columns (branch, project, currency, tax)"}
         </button>
       </div>
       <div
@@ -180,7 +208,7 @@ export function LineGrid({
       >
         <table
           role="grid"
-          aria-label={mode === "journal" ? "Journal lines" : "Cashbook lines"}
+          aria-label={t(`${mode}Lines`)}
           className="w-full border-collapse text-sm"
         >
           <thead className="bg-[var(--vinea-surface-sunken)] text-xs uppercase tracking-wide text-[var(--vinea-ink-subtle)]">
@@ -191,15 +219,24 @@ export function LineGrid({
               {showExtra && <th className="px-3 py-2 text-left">Project</th>}
               {showExtra && <th className="px-3 py-2 text-left">Currency / rate</th>}
               {showExtra && <th className="px-3 py-2 text-left">Tax code</th>}
-              {mode === "journal" ? (
+              {mode === "journal" && (
                 <>
                   <th className="px-3 py-2 text-right">Debit</th>
                   <th className="px-3 py-2 text-right">Credit</th>
                 </>
-              ) : (
+              )}
+              {mode === "cashbook" && (
                 <>
                   <th className="px-3 py-2 text-right">Amount</th>
                   <th className="px-3 py-2 text-center">Tax incl.</th>
+                </>
+              )}
+              {mode === "document" && (
+                <>
+                  <th className="px-3 py-2 text-right">{t("quantity")}</th>
+                  <th className="px-3 py-2 text-right">{t("unitPrice")}</th>
+                  <th className="px-3 py-2 text-right">{t("discountPercent")}</th>
+                  <th className="px-3 py-2 text-right">{t("net")}</th>
                 </>
               )}
             </tr>
@@ -217,6 +254,9 @@ export function LineGrid({
               const debitErr = rowErr?.debit || (rowErr?.amount && mode === "journal" ? rowErr.amount : undefined);
               const creditErr = rowErr?.credit;
               const amountErr = rowErr?.amount;
+              const quantityErr = rowErr?.quantity;
+              const unitPriceErr = rowErr?.unit_price;
+              const discountErr = rowErr?.discount_percent;
 
               return (
                 <tr key={row.id} className={cn(activeCell?.row === r && "bg-[var(--vinea-brand-soft)]/30")}>
@@ -322,7 +362,7 @@ export function LineGrid({
                       {taxErr && <p className="mt-0.5 px-1 text-xs text-[var(--vinea-danger)]">{taxErr}</p>}
                     </td>
                   )}
-                  {mode === "journal" ? (
+                  {mode === "journal" && (
                     <>
                       <td data-row={r} data-col={col++} className="w-32 p-1 align-top">
                         <input
@@ -359,7 +399,8 @@ export function LineGrid({
                         {creditErr && <p className="mt-0.5 text-right text-xs text-[var(--vinea-danger)]">{creditErr}</p>}
                       </td>
                     </>
-                  ) : (
+                  )}
+                  {mode === "cashbook" && (
                     <>
                       <td data-row={r} data-col={col++} className="w-32 p-1 align-top">
                         <input
@@ -390,6 +431,68 @@ export function LineGrid({
                       </td>
                     </>
                   )}
+                  {mode === "document" && (
+                    <>
+                      <td data-row={r} data-col={col++} className="w-24 p-1 align-top">
+                        <input
+                          value={displayAmount(row.quantity, activeCell?.row === r && activeCell.col === 104)}
+                          onChange={(e) => updateRow(r, { quantity: e.target.value })}
+                          onKeyDown={(e) => onCellKeyDown(e, r, 104, "quantity")}
+                          onFocus={() => startCellEdit(r, 104, "quantity", row.quantity)}
+                          onBlur={() => setActiveCell(null)}
+                          inputMode="decimal"
+                          aria-label={t("quantityAria", { row: r + 1 })}
+                          className={cn(
+                            "h-8 w-full rounded-[var(--radius-control)] border border-transparent bg-transparent px-2 text-right font-mono tabular-nums focus:border-[var(--vinea-brand)]",
+                            quantityErr && "border-[var(--vinea-danger)]",
+                          )}
+                          placeholder="1"
+                        />
+                        {quantityErr && <p className="mt-0.5 text-right text-xs text-[var(--vinea-danger)]">{quantityErr}</p>}
+                      </td>
+                      <td data-row={r} data-col={col++} className="w-32 p-1 align-top">
+                        <input
+                          value={displayAmount(row.unitPrice, activeCell?.row === r && activeCell.col === 105)}
+                          onChange={(e) => updateRow(r, { unitPrice: e.target.value })}
+                          onKeyDown={(e) => onCellKeyDown(e, r, 105, "unitPrice")}
+                          onFocus={() => startCellEdit(r, 105, "unitPrice", row.unitPrice)}
+                          onBlur={() => setActiveCell(null)}
+                          inputMode="decimal"
+                          aria-label={t("unitPriceAria", { row: r + 1 })}
+                          className={cn(
+                            "h-8 w-full rounded-[var(--radius-control)] border border-transparent bg-transparent px-2 text-right font-mono tabular-nums focus:border-[var(--vinea-brand)]",
+                            unitPriceErr && "border-[var(--vinea-danger)]",
+                          )}
+                          placeholder="0"
+                        />
+                        {unitPriceErr && <p className="mt-0.5 text-right text-xs text-[var(--vinea-danger)]">{unitPriceErr}</p>}
+                      </td>
+                      <td data-row={r} data-col={col++} className="w-24 p-1 align-top">
+                        <input
+                          value={row.discountPercent}
+                          onChange={(e) => updateRow(r, { discountPercent: e.target.value })}
+                          onKeyDown={(e) => onCellKeyDown(e, r, 106, "discountPercent")}
+                          onFocus={() => startCellEdit(r, 106, "discountPercent", row.discountPercent)}
+                          onBlur={() => setActiveCell(null)}
+                          inputMode="decimal"
+                          aria-label={t("discountPercentAria", { row: r + 1 })}
+                          className={cn(
+                            "h-8 w-full rounded-[var(--radius-control)] border border-transparent bg-transparent px-2 text-right font-mono tabular-nums focus:border-[var(--vinea-brand)]",
+                            discountErr && "border-[var(--vinea-danger)]",
+                          )}
+                          placeholder="0"
+                        />
+                        {discountErr && <p className="mt-0.5 text-right text-xs text-[var(--vinea-danger)]">{discountErr}</p>}
+                      </td>
+                      {/* Read-only: the server computes tax and totals, this is only the
+                          quantity x price less discount the operator just typed. */}
+                      <td className="w-32 p-1 text-right align-top">
+                        <span className="block px-2 py-1.5 font-mono text-xs tabular-nums text-[var(--vinea-ink-muted)]">
+                          {displayAmount(String(lineNet(row)))}
+                        </span>
+                      </td>
+                    </>
+                  )}
                 </tr>
               );
             })}
@@ -400,7 +503,7 @@ export function LineGrid({
           onClick={addRow}
           className="w-full border-t border-[var(--vinea-border)] px-3 py-2 text-left text-xs font-medium text-[var(--vinea-brand)] hover:bg-[var(--vinea-surface-sunken)]"
         >
-          + Add line
+          {mode === "document" ? t("addLine") : "+ Add line"}
         </button>
       </div>
     </div>

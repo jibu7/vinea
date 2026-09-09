@@ -593,5 +593,20 @@
       "system": "System",
       "safetyNote": "Documents, allocations and journal lines stay tied to this partner; only the visible code changes. The other role’s code is untouched."
     }
+  },
+  "lineGrid": {
+    "journalLines": "Journal lines",
+    "cashbookLines": "Cashbook lines",
+    "documentLines": "Document lines",
+    "quantity": "Qty",
+    "unitPrice": "Unit price",
+    "discountPercent": "Disc %",
+    "net": "Net",
+    "quantityAria": "Quantity, row {row}",
+    "unitPriceAria": "Unit price, row {row}",
+    "discountPercentAria": "Discount percent, row {row}",
+    "moreColumns": "More columns (branch, project, tax)",
+    "fewerColumns": "Fewer columns",
+    "addLine": "+ Add line"
   }
 }
