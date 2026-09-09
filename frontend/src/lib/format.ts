@@ -44,3 +44,12 @@ export function formatDate(date: Date | string, opts: { locale?: string } = {}):
   return new Intl.DateTimeFormat(locale, { day: "2-digit", month: "2-digit", year: "numeric" }).format(d);
 }
 
+
+/** Drops a decimal string's insignificant trailing zeros for display in an editable field.
+ * The API returns Postgres NUMERIC scale verbatim ("500000.000000", "2.5000000000"), which
+ * is correct on the wire and unreadable in a text input. Never use this on money for
+ * display — `formatMoney` owns that, with the currency's real decimal places. */
+export function trimDecimalString(value: string): string {
+  if (!value.includes(".")) return value;
+  return value.replace(/0+$/, "").replace(/\.$/, "");
+}

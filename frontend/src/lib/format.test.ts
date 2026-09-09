@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { RWF, USD, formatDate, formatMoney, roundHalfUp } from "./format";
+import { RWF, USD, formatDate, formatMoney, roundHalfUp, trimDecimalString } from "./format";
 
 describe("formatMoney", () => {
   it("shows RWF with no decimal places", () => {
@@ -47,5 +47,19 @@ describe("formatDate", () => {
 
   it("accepts a Date instance", () => {
     expect(formatDate(new Date(Date.UTC(2026, 8, 30)))).toBe("30/09/2026");
+  });
+});
+
+describe("trimDecimalString", () => {
+  it("drops insignificant trailing zeros", () => {
+    expect(trimDecimalString("500000.000000")).toBe("500000");
+    expect(trimDecimalString("2.5000000000")).toBe("2.5");
+    expect(trimDecimalString("0.0500000000")).toBe("0.05");
+  });
+
+  it("leaves integers and already-trimmed values alone", () => {
+    expect(trimDecimalString("0")).toBe("0");
+    expect(trimDecimalString("1200")).toBe("1200");
+    expect(trimDecimalString("1200.75")).toBe("1200.75");
   });
 });

@@ -42,9 +42,21 @@ export const navIntents: NavIntent[] = [
       { label: "Defaults", module: "General Ledger", permission: "gl:setup_manage", href: "/maintenance/defaults" },
       { label: "Rename account", module: "General Ledger", permission: "gl:setup_manage", href: "/maintenance/rename-account" },
       { label: "Projects", module: "General Ledger", permission: "projects:manage", href: "/maintenance/projects" },
-      { label: "Customers", module: "Accounts Receivable", phase: "P4" },
-      { label: "Sales reps", module: "Accounts Receivable", phase: "P4" },
-      { label: "Suppliers", module: "Accounts Payable", phase: "P4" },
+      { label: "Customers", module: "Accounts Receivable", permission: "ar:reports_view", href: "/maintenance/customers" },
+      { label: "Sales reps", module: "Accounts Receivable", permission: "ar:reports_view", href: "/maintenance/sales-reps" },
+      { label: "Payment terms", module: "Accounts Receivable", permission: "ar:reports_view", href: "/maintenance/payment-terms" },
+      { label: "Ageing bucket sets", module: "Accounts Receivable", permission: "ar:reports_view", href: "/maintenance/ageing-bucket-sets" },
+      { label: "Transaction types", module: "Accounts Receivable", permission: "ar:reports_view", href: "/maintenance/ar-transaction-types" },
+      { label: "Defaults", module: "Accounts Receivable", permission: "ar:reports_view", href: "/maintenance/ar-ap-defaults" },
+      { label: "Rename customer code", module: "Accounts Receivable", permission: "ar:setup_manage", href: "/maintenance/rename-partner-code?role=ar" },
+      { label: "Suppliers", module: "Accounts Payable", permission: "ap:reports_view", href: "/maintenance/suppliers" },
+      // Payment terms and ageing bucket sets are one shared master each, listed under both
+      // modules so neither an AR-only nor an AP-only role has to borrow the other's nav.
+      { label: "Payment terms", module: "Accounts Payable", permission: "ap:reports_view", href: "/maintenance/payment-terms" },
+      { label: "Ageing bucket sets", module: "Accounts Payable", permission: "ap:reports_view", href: "/maintenance/ageing-bucket-sets" },
+      { label: "Transaction types", module: "Accounts Payable", permission: "ap:reports_view", href: "/maintenance/ap-transaction-types" },
+      { label: "Defaults", module: "Accounts Payable", permission: "ap:reports_view", href: "/maintenance/ar-ap-defaults" },
+      { label: "Rename supplier code", module: "Accounts Payable", permission: "ap:setup_manage", href: "/maintenance/rename-partner-code?role=ap" },
       { label: "Items", module: "Inventory", phase: "P5" },
       { label: "Warehouses", module: "Inventory", phase: "P5" },
       { label: "Order defaults", module: "Order Entry", phase: "P6" },
@@ -58,12 +70,25 @@ export const navIntents: NavIntent[] = [
     items: [
       { label: "Journal batches", module: "General Ledger", permission: "gl:journal_post", href: "/gl/journal-batches/new" },
       { label: "Cashbook batches", module: "General Ledger", permission: "gl:journal_post", href: "/gl/cashbook-batches/new" },
-      { label: "Invoice", module: "Accounts Receivable", phase: "P4" },
-      { label: "Credit note", module: "Accounts Receivable", phase: "P4" },
-      { label: "Allocate", module: "Accounts Receivable", phase: "P4" },
-      { label: "GRV", module: "Accounts Payable", phase: "P4" },
-      { label: "Purchase order", module: "Accounts Payable", phase: "P4" },
-      { label: "Return to supplier", module: "Accounts Payable", phase: "P4" },
+      // Appendix C's AR block, in the owner's order, plus Receipt (the settlement side of
+      // the same subledger) and "Account receivable batches" — the spec lists AR batches and
+      // both are P4 screens, so they belong in the tree from the start rather than appearing
+      // when they happen to be built.
+      { label: "Invoice", module: "Accounts Receivable", permission: "ar:transactions_post", href: "/ar/invoices/new" },
+      { label: "Credit note", module: "Accounts Receivable", permission: "ar:transactions_post", href: "/ar/credit-notes/new" },
+      { label: "Receipt", module: "Accounts Receivable", permission: "ar:transactions_post", href: "/ar/receipts/new" },
+      { label: "Allocate", module: "Accounts Receivable", permission: "ar:transactions_post", href: "/ar/allocations/new" },
+      { label: "Account receivable batches", module: "Accounts Receivable", phase: "P4" },
+      // GRV and Purchase order are P6: goods receipt and the three-way match are the
+      // purchasing cycle, not the AP subledger P4 builds. Supplier invoice, Receipt and
+      // Payment are additions to the owner's list — master plan C.1.5.
+      { label: "GRV", module: "Accounts Payable", phase: "P6" },
+      { label: "Purchase order", module: "Accounts Payable", phase: "P6" },
+      { label: "Supplier invoice", module: "Accounts Payable", permission: "ap:transactions_post", href: "/ap/supplier-invoices/new" },
+      { label: "Return to supplier", module: "Accounts Payable", permission: "ap:transactions_post", href: "/ap/returns/new" },
+      { label: "Payment", module: "Accounts Payable", permission: "ap:transactions_post", href: "/ap/payments/new" },
+      { label: "Allocate", module: "Accounts Payable", permission: "ap:transactions_post", href: "/ap/allocations/new" },
+      { label: "Account payable batches", module: "Accounts Payable", phase: "P4" },
       { label: "Sales order", module: "Order Entry", phase: "P6" },
       { label: "Adjustments", module: "Inventory", phase: "P5" },
       { label: "Transfers", module: "Inventory", phase: "P5" },
@@ -93,8 +118,20 @@ export const navIntents: NavIntent[] = [
       { label: "Cashbooks", module: "General Ledger", phase: "P8" },
       { label: "Balance sheet", module: "General Ledger", phase: "P10" },
       { label: "Income statement", module: "General Ledger", phase: "P10" },
+      // Appendix C's "Reports → AR / AP | Age analyses, Allocation, Listings, Statements" in
+      // that order, per module, plus Transaction listing — an addition to the owner's list,
+      // master plan C.1.4. Ageing, allocation, statements and transaction listings all exist
+      // on both sides of the subledger; only the partner listing is module-specific.
       { label: "Age analysis", module: "Accounts Receivable", phase: "P4" },
+      { label: "Allocation", module: "Accounts Receivable", phase: "P4" },
+      { label: "Customer listing", module: "Accounts Receivable", phase: "P4" },
       { label: "Statements", module: "Accounts Receivable", phase: "P4" },
+      { label: "Transaction listing", module: "Accounts Receivable", phase: "P4" },
+      { label: "Age analysis", module: "Accounts Payable", phase: "P4" },
+      { label: "Allocation", module: "Accounts Payable", phase: "P4" },
+      { label: "Supplier listing", module: "Accounts Payable", phase: "P4" },
+      { label: "Statements", module: "Accounts Payable", phase: "P4" },
+      { label: "Transaction listing", module: "Accounts Payable", phase: "P4" },
       { label: "Valuation", module: "Inventory", phase: "P5" },
       { label: "Movement", module: "Inventory", phase: "P5" },
       { label: "Sales analyses", module: "Inventory", phase: "P10" },

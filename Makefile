@@ -31,7 +31,8 @@ migrate-check:
 	docker compose exec -T db psql -U vinea -d postgres -q \
 	  -c 'DROP DATABASE IF EXISTS $(MIGRATION_SCRATCH_DB)' \
 	  -c 'CREATE DATABASE $(MIGRATION_SCRATCH_DB)'
-	cd backend && MIGRATION_DATABASE_URL=postgresql+psycopg://vinea:vinea@localhost:5432/$(MIGRATION_SCRATCH_DB) \
+	cd backend && env -u DATABASE_URL \
+	  MIGRATION_DATABASE_URL=postgresql+psycopg://vinea:vinea@localhost:5432/$(MIGRATION_SCRATCH_DB) \
 	  sh -c 'uv run alembic upgrade head && uv run alembic check && uv run alembic downgrade base'
 	docker compose exec -T db psql -U vinea -d postgres -q \
 	  -c 'DROP DATABASE IF EXISTS $(MIGRATION_SCRATCH_DB)'

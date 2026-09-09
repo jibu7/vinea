@@ -114,3 +114,32 @@ export function DatePicker({
     </PopoverPrimitive.Root>
   );
 }
+
+/** `yyyy-MM-dd` in, `yyyy-MM-dd` out — the shape the API speaks and the shape a draft can be
+ * JSON-serialised in. Conversion goes through local Y/M/D, never `toISOString()`, which would
+ * shift the day for anyone east or west of UTC. */
+export function IsoDatePicker({
+  value,
+  onValueChange,
+  placeholder,
+  className,
+}: {
+  value: string;
+  onValueChange: (value: string) => void;
+  placeholder?: string;
+  className?: string;
+}) {
+  const parsed = value ? new Date(`${value}T00:00:00`) : null;
+  return (
+    <DatePicker
+      value={parsed && !Number.isNaN(parsed.getTime()) ? parsed : null}
+      onValueChange={(date) => {
+        const month = String(date.getMonth() + 1).padStart(2, "0");
+        const day = String(date.getDate()).padStart(2, "0");
+        onValueChange(`${date.getFullYear()}-${month}-${day}`);
+      }}
+      placeholder={placeholder}
+      className={className}
+    />
+  );
+}

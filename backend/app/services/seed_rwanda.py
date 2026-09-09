@@ -40,8 +40,11 @@ SECONDARY_CURRENCIES = [
 ACCOUNT_VAT_INPUT = "1400"
 ACCOUNT_VAT_OUTPUT = "2200"
 ACCOUNT_RETAINED_EARNINGS = "3200"
-# Sub-unit residues from per-line FX rounding land with the exchange differences.
-ACCOUNT_ROUNDING_DIFFERENCE = "6950"
+# Sub-unit residues from per-line rounding get their own account, deliberately separate from
+# the exchange differences. They are not exchange differences: a settlement can round without
+# any rate movement at all, and pointing both keys at 6950 made every such residue reportable
+# as an FX loss — indistinguishable, in the ledger, from a real one.
+ACCOUNT_ROUNDING_DIFFERENCE = "6970"
 # P4 AR/AP defaults.
 ACCOUNT_AR_CONTROL = "1200"
 ACCOUNT_AP_CONTROL = "2100"
@@ -145,6 +148,7 @@ RW_SME_V1_ACCOUNTS: tuple[
     ("6900", "Professional Fees", _X, "6000", True, None),
     ("6950", "Foreign Exchange Loss", _X, "6000", True, None),
     ("6960", "Settlement Discount Granted", _X, "6000", True, None),
+    ("6970", "Rounding Difference", _X, "6000", True, None),
     ("6990", "Sundry Expenses", _X, "6000", True, None),
 )
 

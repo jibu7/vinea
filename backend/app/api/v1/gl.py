@@ -9,9 +9,9 @@ from sqlalchemy import and_, select
 from sqlalchemy.orm import Session, aliased, selectinload
 
 from app.api import idempotency
-from app.api.deps import AuthContext
+from app.api.deps import AuthContext, get_tenant_context
 from app.core import permissions
-from app.core.errors import NotFoundError
+from app.core.errors import NotFoundError, PermissionDeniedError
 from app.db import get_db
 from app.kernel import accounts as accounts_service
 from app.kernel import balances, enquiries, masters, posting, year_end
@@ -863,14 +863,46 @@ def reopen_period(
 
 # --- Transaction types (determination-chain defaults) ---------------------------------------
 
+# One table, one `module` discriminator (P2) — so the AR and AP maintenance screens read and
+# write their own rows through these endpoints. A module-scoped call therefore passes on the
+# GL permission *or* that module's own: a Sales Manager holds `ar:setup_manage` and no GL
+# rights at all, and must still be able to maintain AR transaction types.
+MODULE_VIEW_PERMISSIONS: dict[str, tuple[str, ...]] = {
+    "ar": (permissions.AR_REPORTS_VIEW, permissions.AR_SETUP_MANAGE),
+    "ap": (permissions.AP_REPORTS_VIEW, permissions.AP_SETUP_MANAGE),
+}
+MODULE_SETUP_PERMISSIONS: dict[str, tuple[str, ...]] = {
+    "ar": (permissions.AR_SETUP_MANAGE,),
+    "ap": (permissions.AP_SETUP_MANAGE,),
+}
+
+
+def _require_module_permission(
+    auth: AuthContext,
+    module: str | None,
+    *,
+    gl_permission: str,
+    by_module: dict[str, tuple[str, ...]],
+) -> None:
+    """An unscoped call (`module=None`, i.e. every module at once) stays GL-only."""
+    allowed = (gl_permission, *by_module.get(module or "", ()))
+    if not any(permission in auth.permissions for permission in allowed):
+        raise PermissionDeniedError(f"Missing required permission(s): {' or '.join(allowed)}")
+
 
 @router.get("/transaction-types")
 def list_transaction_types(
     module: str | None = None,
     include_inactive: bool = False,
-    auth: AuthContext = permissions.require(permissions.GL_REPORTS_VIEW),
+    auth: AuthContext = Depends(get_tenant_context),
     db: Session = Depends(get_db),
 ) -> list[TransactionTypeRead]:
+    _require_module_permission(
+        auth,
+        module,
+        gl_permission=permissions.GL_REPORTS_VIEW,
+        by_module=MODULE_VIEW_PERMISSIONS,
+    )
     rows = masters.list_transaction_types(
         db, auth.company_id, module=module, include_inactive=include_inactive
     )
@@ -881,9 +913,15 @@ def list_transaction_types(
 def create_transaction_type(
     payload: TransactionTypeCreate,
     request: Request,
-    auth: AuthContext = permissions.require(permissions.GL_SETUP_MANAGE),
+    auth: AuthContext = Depends(get_tenant_context),
     db: Session = Depends(get_db),
 ) -> TransactionTypeRead:
+    _require_module_permission(
+        auth,
+        payload.module,
+        gl_permission=permissions.GL_SETUP_MANAGE,
+        by_module=MODULE_SETUP_PERMISSIONS,
+    )
     row = masters.create_transaction_type(
         db,
         auth.company_id,
@@ -903,10 +941,16 @@ def update_transaction_type(
     type_id: int,
     payload: TransactionTypeUpdate,
     request: Request,
-    auth: AuthContext = permissions.require(permissions.GL_SETUP_MANAGE),
+    auth: AuthContext = Depends(get_tenant_context),
     db: Session = Depends(get_db),
 ) -> TransactionTypeRead:
     transaction_type = masters.get_transaction_type(db, auth.company_id, type_id)
+    _require_module_permission(
+        auth,
+        transaction_type.module,
+        gl_permission=permissions.GL_SETUP_MANAGE,
+        by_module=MODULE_SETUP_PERMISSIONS,
+    )
     default_account: int | None | object = ...
     if payload.clear_default_account:
         default_account = None

@@ -41,6 +41,19 @@ PRIMARY_COMPANY = "Rugari Wines E2E"
 SECONDARY_EMAIL = "e2e.secondary@vinea.example"
 SECONDARY_COMPANY = "Kivu Traders E2E"
 
+# A read-only member of the primary company, holding the seeded "Clerk" role: gl/ar/ap
+# `*_reports_view` and nothing that can write. Every screen that gates its actions on a
+# setup permission needs one of these to prove the gate is real rather than decorative
+# (P4 step 6's AR/AP defaults, and P4 step 9's credit-limit override).
+READONLY_EMAIL = "e2e.readonly@vinea.example"
+READONLY_ROLE_NAME = "Clerk"
+
+# One supplier, so the Suppliers master is not an empty table in screenshots or in the AP
+# specs. Customers are created by the specs themselves (they assert on creation); nothing
+# asserts on creating a supplier, so the fixture provides one.
+SUPPLIER_CODE = "E2ESUP001"
+SUPPLIER_NAME = "Musanze Packaging Ltd"
+
 
 def _existing_tenant(db, *, email: str) -> tuple[User, Company] | None:
     with platform_scope(db):
@@ -107,6 +120,95 @@ def _ensure_cross_company_membership(db, *, user: User, company: Company) -> Non
         db.commit()
 
 
+def _ensure_member_with_role(
+    db, *, company: Company, email: str, full_name: str, role_name: str
+) -> User:
+    """An already-active, non-owner membership carrying exactly one seeded role. Created
+    directly rather than through the invite flow, which needs a mailed token — the same
+    reason `_ensure_cross_company_membership` exists."""
+    from app.core.security import hash_password
+
+    with platform_scope(db):
+        user = db.scalar(select(User).where(User.email == email))
+        if user is None:
+            user = User(
+                email=email,
+                hashed_password=hash_password(PASSWORD),
+                full_name=full_name,
+                email_verified_at=datetime.now(UTC),
+            )
+            db.add(user)
+            db.flush()
+
+        existing = db.scalar(
+            select(CompanyMembership).where(
+                CompanyMembership.company_id == company.id, CompanyMembership.user_id == user.id
+            )
+        )
+        if existing is not None:
+            db.commit()
+            return user
+
+        role = db.scalar(
+            select(Role).where(Role.company_id == company.id, Role.name == role_name)
+        )
+        if role is None:
+            raise RuntimeError(f"{role_name!r} role missing for company {company.id}")
+
+        membership = CompanyMembership(
+            company_id=company.id,
+            user_id=user.id,
+            email=user.email,
+            is_owner=False,
+            status=MembershipStatus.ACTIVE,
+            accepted_at=datetime.now(UTC),
+        )
+        db.add(membership)
+        db.flush()
+        db.add(MembershipRole(company_id=company.id, membership_id=membership.id, role_id=role.id))
+        db.commit()
+        return user
+
+
+def _ensure_partners(db, *, company: Company, actor: User) -> str | None:
+    """Through the real service with a real actor — never a raw insert, so the seeded row is
+    the same shape the application would have written."""
+    from app.db import set_tenant
+    from app.models.partner import PartnerRole, TaxMode
+    from app.subledger import masters
+
+    set_tenant(db, company.id)
+    existing = masters.list_partners(db, company.id, role=PartnerRole.AP, include_inactive=True)
+    supplier = next((p for p in existing if p.supplier_code == SUPPLIER_CODE), None)
+    if supplier is None:
+        supplier = masters.create_partner(
+            db,
+            company.id,
+            masters.PartnerInput(
+                name=SUPPLIER_NAME,
+                supplier_code=SUPPLIER_CODE,
+                tin="102345678",
+                email="ap@musanze-packaging.example",
+                phone="+250788000111",
+            ),
+            actor=actor,
+        )
+        terms = {row.code: row for row in masters.list_payment_terms(db, company.id)}
+        masters.upsert_role_settings(
+            db,
+            company.id,
+            supplier,
+            PartnerRole.AP,
+            masters.RoleSettingsInput(
+                payment_terms_id=terms["NET30"].id if "NET30" in terms else None,
+                tax_mode=TaxMode.EXCLUSIVE,
+            ),
+            actor=actor,
+        )
+        db.commit()
+    return supplier.supplier_code
+
+
 def _ensure_closed_period(db, *, company: Company) -> str | None:
     with platform_scope(db):
         period = db.scalar(
@@ -126,7 +228,7 @@ def _ensure_closed_period(db, *, company: Company) -> str | None:
 def main() -> None:
     db = SessionLocal()
     try:
-        _primary_user, primary_company = _get_or_create_tenant(
+        primary_user, primary_company = _get_or_create_tenant(
             db, company_name=PRIMARY_COMPANY, email=PRIMARY_EMAIL, full_name="E2E Primary Owner"
         )
         secondary_user, secondary_company = _get_or_create_tenant(
@@ -136,6 +238,14 @@ def main() -> None:
             full_name="E2E Secondary Owner",
         )
         _ensure_cross_company_membership(db, user=secondary_user, company=primary_company)
+        _ensure_member_with_role(
+            db,
+            company=primary_company,
+            email=READONLY_EMAIL,
+            full_name="E2E Read Only",
+            role_name=READONLY_ROLE_NAME,
+        )
+        supplier_code = _ensure_partners(db, company=primary_company, actor=primary_user)
         closed_period = _ensure_closed_period(db, company=primary_company)
 
         print(
@@ -145,6 +255,9 @@ def main() -> None:
                     "primary_company": PRIMARY_COMPANY,
                     "secondary_email": SECONDARY_EMAIL,
                     "secondary_company": SECONDARY_COMPANY,
+                    "readonly_email": READONLY_EMAIL,
+                    "readonly_role": READONLY_ROLE_NAME,
+                    "supplier_code": supplier_code,
                     "password": PASSWORD,
                     "closed_period": closed_period,
                 },

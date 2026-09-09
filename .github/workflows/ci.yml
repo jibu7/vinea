@@ -14,7 +14,11 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U vinea" --health-interval 5s --health-timeout 5s --health-retries 10
     env:
+      # The suite reads MIGRATION_DATABASE_URL for its admin work (creating the throwaway
+      # databases, running migrations) and overwrites DATABASE_URL at conftest import with
+      # the non-superuser app role, so RLS is actually enforced in the tests.
       DATABASE_URL: postgresql+psycopg://vinea:vinea@localhost:5432/vinea
+      MIGRATION_DATABASE_URL: postgresql+psycopg://vinea:vinea@localhost:5432/vinea
     defaults: { run: { working-directory: backend } }
     steps:
       - uses: actions/checkout@v4
@@ -22,12 +26,13 @@ jobs:
       # WeasyPrint renders the AR/AP statement PDFs (P4). Without these the import fails and
       # the statement job would only ever be recorded as failed — never skipped, but the
       # failure would look like a product bug rather than a missing library.
+      - uses: ./.github/actions/drop-vendor-apt-sources
       - name: install WeasyPrint system libraries
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             libpango-1.0-0 libpangoft2-1.0-0 libcairo2 libgdk-pixbuf-2.0-0 libffi8 \
-            fonts-dejavu-core
+            libglib2.0-0 fonts-dejavu-core
       - run: uv sync
       - name: prove WeasyPrint imports
         run: uv run python -c "import weasyprint; print('weasyprint', weasyprint.__version__)"
@@ -89,6 +94,8 @@ jobs:
       - name: seed e2e fixtures
         run: docker compose exec -T backend uv run python -m app.scripts.seed_e2e
         working-directory: .
+      # `--with-deps` shells out to apt-get, so the vendor sources have to be gone first.
+      - uses: ./.github/actions/drop-vendor-apt-sources
       - run: npx playwright install --with-deps chromium
       - run: npm run e2e
         env:

@@ -25,7 +25,19 @@ services:
       REDIS_URL: redis://redis:6379/0
       JWT_SECRET: dev-only-insecure-secret-change-me
       COOKIE_SECURE: "false"
-    volumes: ["./backend:/app"]
+      REPO_ROOT: /repo
+      # The mount is owned by the host user, so git's dubious-ownership check refuses it.
+      # Declared through the environment rather than baked into the image: it is true of this
+      # bind mount, not of the container.
+      GIT_CONFIG_COUNT: "1"
+      GIT_CONFIG_KEY_0: safe.directory
+      GIT_CONFIG_VALUE_0: /repo
+    volumes:
+      - ./backend:/app
+      # Read-only, and only so the schema-invariant test that shells out to git has a work
+      # tree to ask. Without it that test cannot run in the container at all, and a locally
+      # green suite would be green for a reason CI's is not.
+      - .:/repo:ro
     ports: ["8000:8000"]
     depends_on: { db: { condition: service_healthy } }
   frontend:

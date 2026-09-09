@@ -1,5 +1,6 @@
 """Schema-level guarantees the rest of the product will rely on (ADR-06, §4 sketch)."""
 
+import os
 import subprocess
 from datetime import date
 from pathlib import Path
@@ -13,7 +14,10 @@ from app.db import engine, set_tenant
 from app.models.currency import Currency
 from app.models.tax import TaxCode
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+# The dev container mounts the repository read-only at /repo and names it here; outside it,
+# the source tree is inside the checkout already. Either way the git-backed assertions below
+# have a work tree, so they run in both places rather than only in CI.
+REPO_ROOT = Path(os.environ.get("REPO_ROOT") or Path(__file__).resolve().parents[2])
 
 
 def _columns(table: str) -> dict[str, object]:

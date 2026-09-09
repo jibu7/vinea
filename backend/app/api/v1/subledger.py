@@ -14,6 +14,7 @@ from app.core import permissions
 from app.core.errors import ConflictError, NotFoundError, PermissionDeniedError
 from app.db import get_db
 from app.kernel.posting import gl_settings_for
+from app.models.audit import AuditLog
 from app.models.job import JobStatus
 from app.models.partner import PartnerRole
 from app.models.subledger import Allocation, DocumentKind, PartnerDocument
@@ -46,6 +47,7 @@ from app.schemas.subledger import (
     MaturityRunResult,
     OpenItemRead,
     PartnerAllocationRead,
+    PartnerAuditRead,
     PartnerCreate,
     PartnerEnquiry,
     PartnerEnquiryEntry,
@@ -201,6 +203,29 @@ def update_partner(
     )
     db.commit()
     return PartnerRead.model_validate(partner)
+
+
+@router.get("/{role}/partners/{partner_id}/history")
+def get_partner_history(
+    partner_id: int,
+    role: PartnerRole = RolePath,
+    auth: AuthContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+) -> list[PartnerAuditRead]:
+    """Rename history for the customer/supplier code — the audit trail hangs off
+    `partner_id`, so a code can move without the history following it."""
+    _require(auth, VIEW_PERMISSION, role)
+    partner = masters.get_partner(db, auth.company_id, partner_id)
+    rows = db.scalars(
+        select(AuditLog)
+        .where(
+            AuditLog.company_id == auth.company_id,
+            AuditLog.entity == "partners",
+            AuditLog.entity_id == str(partner.id),
+        )
+        .order_by(AuditLog.at.desc())
+    ).all()
+    return [PartnerAuditRead.model_validate(row) for row in rows]
 
 
 @router.get("/{role}/partners/{partner_id}/settings")
@@ -534,12 +559,17 @@ def get_defaults(
 @router.patch("/defaults")
 def update_defaults(
     payload: ArApDefaultsUpdate,
+    request: Request,
     auth: AuthContext = permissions.require(permissions.GL_SETUP_MANAGE),
     db: Session = Depends(get_db),
 ) -> ArApDefaultsRead:
-    settings = gl_settings_for(db, auth.company_id)
-    for field, value in payload.model_dump(exclude_unset=True).items():
-        setattr(settings, field, value)
+    settings = masters.update_ar_ap_defaults(
+        db,
+        auth.company_id,
+        payload.model_dump(exclude_unset=True),
+        actor=auth.user,
+        request=request,
+    )
     db.commit()
     return ArApDefaultsRead.model_validate(settings)
 

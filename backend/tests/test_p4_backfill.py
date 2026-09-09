@@ -41,6 +41,8 @@ PRE_P4_ACCOUNTS = (
 )
 
 EXPECTED_SETTINGS = {
+    # Rounding gets its own account (0010): a residue is not an exchange difference.
+    "rounding_difference_account_id": "6970",
     "ar_control_account_id": "1200",
     "ap_control_account_id": "2100",
     "realized_fx_gain_account_id": "4400",
@@ -159,8 +161,12 @@ def test_p4_backfills_a_pre_p4_tenant(pre_p4_engine: Engine) -> None:
                 {"cid": company_id},
             )
         }
-        # 1. The four accounts P4 adds to rw_sme_v1.
-        assert {"1250", "2150", "4350", "6960"} <= codes.keys()
+        # 1. The accounts P4 adds to rw_sme_v1, including the dedicated rounding account.
+        assert {"1250", "2150", "4350", "6960", "6970"} <= codes.keys()
+
+        # The pre-P4 tenant had rounding pointing at 6950; the back-fill must move it off,
+        # not leave a rounding residue reportable as an FX loss.
+        assert codes["6970"] != codes["6950"]
 
         # 2. All eight gl_settings keys, resolved to the right accounts, none NULL.
         settings = conn.execute(
