@@ -93,3 +93,20 @@ export async function accountIdByCode(page: Page, code: string): Promise<number>
   if (!account) throw new Error(`No seeded account with code ${code}`);
   return account.id;
 }
+
+/** Flips the theme and waits out the `transition-colors` on every themed element. Without
+ * the settle, axe samples mid-transition and reports contrast against interpolated colors
+ * that are never actually painted at rest. */
+export async function setTheme(page: Page, theme: "light" | "dark"): Promise<void> {
+  await page.evaluate((t) => document.documentElement.setAttribute("data-theme", t), theme);
+  await page.waitForTimeout(200);
+}
+
+/** Fails on any serious/critical axe violation, with the full violation JSON in the message. */
+export async function assertNoSeriousViolations(page: Page): Promise<void> {
+  const { default: AxeBuilder } = await import("@axe-core/playwright");
+  const { expect } = await import("@playwright/test");
+  const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]).analyze();
+  const serious = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
+  expect(serious, JSON.stringify(serious, null, 2)).toEqual([]);
+}

@@ -28,7 +28,7 @@
   },
   "design": {
     "title": "Design System",
-    "subtitle": "Primitives for the Vinea hybrid UI \u2014 airy shell, dense work screens.",
+    "subtitle": "Primitives for the Vinea hybrid UI — airy shell, dense work screens.",
     "buttons": "Buttons",
     "inputs": "Inputs",
     "select": "Select / combobox",
@@ -89,7 +89,7 @@
     "cancel": "Cancel (Esc)"
   },
   "pos": {
-    "title": "Till \u2014 Register 1",
+    "title": "Till — Register 1",
     "products": "Products",
     "basket": "Basket",
     "tender": "Tender",
@@ -107,7 +107,7 @@
     "email": "Email",
     "password": "Password",
     "signIn": "Sign in",
-    "signingIn": "Signing in\u2026",
+    "signingIn": "Signing in…",
     "signOut": "Sign out"
   },
   "shell": {
@@ -167,7 +167,7 @@
     "difference": "Difference",
     "total": "Total",
     "post": "Post (Ctrl+Enter)",
-    "posting": "Posting\u2026",
+    "posting": "Posting…",
     "cancel": "Cancel (Esc)",
     "draftSaved": "Draft saved",
     "posted": "Posted",
@@ -235,7 +235,7 @@
     "vatRegistered": "VAT registered",
     "fiscalCountry": "Fiscal country",
     "save": "Save changes",
-    "saving": "Saving\u2026",
+    "saving": "Saving…",
     "saved": "Saved successfully",
     "fiscalYears": "Fiscal Years",
     "accountingPeriods": "Accounting Periods",
@@ -305,6 +305,15 @@
     "owner": "Owner",
     "pending": "Pending invite",
     "active": "Active",
-    "suspended": "Suspended"
+    "suspended": "Suspended",
+    "customers": "Customers",
+    "suppliers": "Suppliers",
+    "salesReps": "Sales representatives",
+    "paymentTerms": "Payment terms",
+    "ageingBucketSets": "Ageing bucket sets",
+    "arTransactionTypes": "AR transaction types",
+    "apTransactionTypes": "AP transaction types",
+    "arApDefaults": "AR/AP defaults",
+    "renamePartnerCode": "Rename customer / supplier code"
   }
 }

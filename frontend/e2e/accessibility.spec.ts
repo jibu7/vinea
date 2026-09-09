@@ -1,17 +1,5 @@
-import AxeBuilder from "@axe-core/playwright";
-import { expect, test, type Page } from "@playwright/test";
-import { PRIMARY_EMAIL, login } from "./support/fixtures";
-
-async function setTheme(page: Page, theme: "light" | "dark"): Promise<void> {
-  await page.evaluate((t) => document.documentElement.setAttribute("data-theme", t), theme);
-  await page.waitForTimeout(100);
-}
-
-async function assertNoSeriousViolations(page: Page): Promise<void> {
-  const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]).analyze();
-  const serious = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
-  expect(serious, JSON.stringify(serious, null, 2)).toEqual([]);
-}
+import { test } from "@playwright/test";
+import { PRIMARY_EMAIL, assertNoSeriousViolations, login, setTheme } from "./support/fixtures";
 
 test.describe("accessibility: no serious/critical axe violations", () => {
   test("dashboard — light and dark", async ({ page }) => {

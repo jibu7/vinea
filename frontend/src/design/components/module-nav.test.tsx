@@ -28,10 +28,10 @@ describe("SidebarNav permission filtering", () => {
   it("always renders phase-tagged items, disabled, regardless of permissions", () => {
     render(<SidebarNav permissions={new Set()} />);
 
-    const customers = screen.getByText("Customers");
-    expect(customers).toBeInTheDocument();
-    expect(customers.tagName).toBe("SPAN"); // disabled items render as inert text, not a link
-    expect(screen.getAllByText("P4").length).toBeGreaterThan(0);
+    const items = screen.getByText("Items"); // Inventory, still P5
+    expect(items).toBeInTheDocument();
+    expect(items.tagName).toBe("SPAN"); // disabled items render as inert text, not a link
+    expect(screen.getAllByText("P5").length).toBeGreaterThan(0);
   });
 
   it("renders a live item's label as a link, not disabled text", () => {
@@ -48,7 +48,8 @@ describe("SidebarNav permission filtering", () => {
     expect(screen.getByText("Transaction types")).toBeInTheDocument();
     expect(screen.queryByText("Company details")).not.toBeInTheDocument();
     expect(screen.queryByText("Foreign currency")).not.toBeInTheDocument();
-    expect(screen.getByText("Customers")).toBeInTheDocument(); // phase-tagged, always visible
+    expect(screen.queryByText("Customers")).not.toBeInTheDocument(); // live since P4, AR-gated
+    expect(screen.getByText("Items")).toBeInTheDocument(); // phase-tagged, always visible
   });
 
   it("keeps navIntents' declared order and grouping stable for the palette to reuse", () => {
@@ -56,5 +57,39 @@ describe("SidebarNav permission filtering", () => {
     expect(maintenance?.items[0]).toEqual(
       expect.objectContaining({ label: "Company details", permission: "company:read" }),
     );
+  });
+});
+
+describe("P4 maintenance screens", () => {
+  const arApPermissions = new Set(["ar:reports_view", "ar:setup_manage", "ap:reports_view", "ap:setup_manage"]);
+
+  it.each([
+    ["Customers", "/maintenance/customers"],
+    ["Sales reps", "/maintenance/sales-reps"],
+    ["Payment terms", "/maintenance/payment-terms"],
+    ["Ageing bucket sets", "/maintenance/ageing-bucket-sets"],
+    ["Suppliers", "/maintenance/suppliers"],
+    ["Rename customer code", "/maintenance/rename-partner-code?role=ar"],
+    ["Rename supplier code", "/maintenance/rename-partner-code?role=ap"],
+  ])("links %s to %s with no phase tag left", (label, href) => {
+    render(<SidebarNav permissions={arApPermissions} />);
+
+    const link = screen.getAllByText(label)[0].closest("a");
+    expect(link).not.toBeNull();
+    expect(link).toHaveAttribute("href", href);
+  });
+
+  it("leaves no P4 tag on any Maintenance item", () => {
+    const maintenance = navIntents.find((i) => i.label === "Maintenance");
+    const tagged = maintenance!.items.filter((item) => item.phase === "P4");
+    expect(tagged).toEqual([]);
+  });
+
+  it("points AR and AP transaction types at their own module screens", () => {
+    const maintenance = navIntents.find((i) => i.label === "Maintenance")!;
+    const byModule = (module: string) =>
+      maintenance.items.find((item) => item.module === module && item.label === "Transaction types");
+    expect(byModule("Accounts Receivable")?.href).toBe("/maintenance/ar-transaction-types");
+    expect(byModule("Accounts Payable")?.href).toBe("/maintenance/ap-transaction-types");
   });
 });

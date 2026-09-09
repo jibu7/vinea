@@ -279,18 +279,35 @@ def test_reversal_dated_before_the_original_is_rejected_at_the_api(api: Api) -> 
 
 
 def test_every_gl_route_requires_a_permission() -> None:
-    """Same honesty bar as P1's sanctioned-list test: every GL route must go through
-    `permissions.require(...)`, and the walk must actually see the router (anti-vacuity)."""
+    """Same honesty bar as P1's sanctioned-list test: every GL route must enforce a
+    permission, and the walk must actually see the router (anti-vacuity).
+
+    Transaction types are the one family that cannot state its permission in the signature:
+    the row's `module` decides whether the GL right or the owning module's own right applies
+    (P4 step 6 — a Sales Manager maintains AR types holding no GL permission). Those routes
+    guard in the body through `_require_module_permission`, and the exact set is pinned below
+    so the escape hatch cannot quietly widen.
+    """
     routes = [route for route in gl_api.router.routes if isinstance(route, APIRoute)]
     assert len(routes) >= 30, f"GL router shrank unexpectedly: {len(routes)} routes"
 
     missing: list[str] = []
+    module_guarded: list[str] = []
     for route in routes:
         source = inspect.getsource(route.endpoint)
-        if "permissions.require(" not in source:
-            methods = ",".join(sorted(route.methods or []))
-            missing.append(f"{methods} {route.path}")
-    assert missing == [], f"GL routes without permissions.require: {missing}"
+        methods = ",".join(sorted(route.methods or []))
+        if "permissions.require(" in source:
+            continue
+        if "_require_module_permission(" in source:
+            module_guarded.append(f"{methods} {route.path}")
+            continue
+        missing.append(f"{methods} {route.path}")
+    assert missing == [], f"GL routes without a permission guard: {missing}"
+    assert sorted(module_guarded) == [
+        "GET /gl/transaction-types",
+        "PATCH /gl/transaction-types/{type_id}",
+        "POST /gl/transaction-types",
+    ], module_guarded
 
 
 # --- 10. Cashbook idempotency parity ---------------------------------------------------------

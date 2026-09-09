@@ -71,6 +71,18 @@ class PartnerRead(ApiModel):
     is_active: bool
 
 
+class PartnerAuditRead(ApiModel):
+    """One `audit_log` row against a partner — what the "Rename customer/supplier" screen
+    shows as history, exactly as the GL rename screen reads `gl_accounts` history."""
+
+    id: int
+    action: str
+    at: datetime
+    actor_email: str | None
+    before: dict | None
+    after: dict | None
+
+
 class RoleSettingsWrite(BaseModel):
     control_account_id: int | None = None
     payment_terms_id: int | None = None

@@ -1,5 +1,6 @@
 "use client";
 
+import { useCallback, useMemo } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, ApiError } from "@/lib/api";
 import type { LoginPayload, MeResponse, SessionResponse, SignupPayload } from "./types";
@@ -46,6 +47,14 @@ export function useSwitchCompany() {
     mutationFn: (companyId: number) => api.post<SessionResponse>("/auth/switch-company", { company_id: companyId }),
     onSuccess: () => queryClient.invalidateQueries(), // switching tenants invalidates every cached query
   });
+}
+
+/** Permission check for screens that show read-only data but gate their write controls —
+ * the server is still the authority, this only keeps disabled buttons out of the way. */
+export function useHasPermission(): (permission: string) => boolean {
+  const { data: me } = useMe();
+  const granted = useMemo(() => new Set(me?.permissions ?? []), [me?.permissions]);
+  return useCallback((permission: string) => granted.has(permission), [granted]);
 }
 
 export function isApiError(err: unknown): err is ApiError {

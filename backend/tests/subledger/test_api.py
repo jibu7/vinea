@@ -299,3 +299,91 @@ def test_partners_are_tenant_isolated(db: Session, two_tenants) -> None:  # noqa
 
     set_tenant(db, second.company.id)
     assert db.query(Partner).all() == []
+
+
+def test_partner_history_records_every_code_rename(api: Api) -> None:
+    partner = api.client.post(
+        "/api/v1/subledger/ar/partners",
+        json={"name": "Amahoro Retail", "customer_code": "CUST001"},
+    ).json()
+    api.client.patch(
+        f"/api/v1/subledger/ar/partners/{partner['id']}",
+        json={"customer_code": "CUST100"},
+    )
+    api.client.patch(
+        f"/api/v1/subledger/ar/partners/{partner['id']}",
+        json={"name": "Amahoro Retail Ltd"},
+    )
+
+    history = api.client.get(f"/api/v1/subledger/ar/partners/{partner['id']}/history")
+    assert history.status_code == 200, history.text
+    rows = history.json()
+
+    # Newest first: the plain edit, the rename, then creation.
+    assert [row["action"] for row in rows] == [
+        "partner.updated",
+        "partner.renamed",
+        "partner.created",
+    ]
+    rename = rows[1]
+    assert rename["before"]["customer_code"] == "CUST001"
+    assert rename["after"]["customer_code"] == "CUST100"
+    assert rename["actor_email"] == "owner@kigali.example"
+
+
+def _invite_with_role(
+    client: TestClient, db: Session, company_id: int, role_name: str
+) -> TestClient:
+    """A second session holding exactly one seeded role — no owner bypass."""
+    from app.models.membership import Role
+    from app.services import email as email_service
+
+    set_tenant(db, company_id)
+    role_id = db.scalars(
+        select(Role.id).where(Role.company_id == company_id, Role.name == role_name)
+    ).one()
+    email = f"{role_name.lower().replace(' ', '.')}@kigali.example"
+    invited = client.post("/api/v1/invitations", json={"email": email, "role_ids": [role_id]})
+    assert invited.status_code in (200, 201), invited.text
+    token = email_service.outbox[-1].context["token"]
+    member = TestClient(client.app)
+    accepted = member.post(
+        "/api/v1/invitations/accept",
+        json={"token": token, "full_name": role_name, "password": PASSWORD},
+    )
+    assert accepted.status_code in (200, 201), accepted.text
+    return member
+
+
+def test_ar_setup_manager_maintains_ar_transaction_types_without_gl_rights(
+    api: Api, db: Session
+) -> None:
+    """AR/AP transaction types live in the GL table under a `module` discriminator, so the
+    AR maintenance screen has to work for a Sales Manager, who holds no GL permission."""
+    sales = _invite_with_role(api.client, db, api.company_id, "Sales Manager")
+
+    listed = sales.get("/api/v1/gl/transaction-types", params={"module": "ar"})
+    assert listed.status_code == 200, listed.text
+    assert {row["module"] for row in listed.json()} == {"ar"}
+
+    created = sales.post(
+        "/api/v1/gl/transaction-types",
+        json={"module": "ar", "code": "INTCH", "name": "Interest charge"},
+    )
+    assert created.status_code == 201, created.text
+    patched = sales.patch(
+        f"/api/v1/gl/transaction-types/{created.json()['id']}",
+        json={"name": "Interest charged"},
+    )
+    assert patched.status_code == 200, patched.text
+
+    # Neither the AP module, the GL module, nor the unscoped listing opens up.
+    assert sales.get("/api/v1/gl/transaction-types", params={"module": "ap"}).status_code == 403
+    assert sales.get("/api/v1/gl/transaction-types").status_code == 403
+    assert (
+        sales.post(
+            "/api/v1/gl/transaction-types",
+            json={"module": "gl", "code": "NOPE", "name": "Not allowed"},
+        ).status_code
+        == 403
+    )
