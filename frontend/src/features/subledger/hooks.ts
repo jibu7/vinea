@@ -4,6 +4,13 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import type {
   AgeingBucketSet,
+  Allocation,
+  AllocationPayload,
+  AllocationPreview,
+  AutoAllocatePayload,
+  DocumentCreatePayload,
+  PartnerDocument,
+  PartnerEnquiry,
   AgeingBucketSetCreatePayload,
   AgeingBucketSetUpdatePayload,
   ArApDefaults,
@@ -228,5 +235,73 @@ export function useUpdateArApDefaults() {
     mutationFn: (payload: ArApDefaultsPayload) =>
       api.patch<ArApDefaults>("/subledger/defaults", payload),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: [ROOT, "defaults"] }),
+  });
+}
+
+// --- Documents ------------------------------------------------------------------------------
+
+/** `Idempotency-Key` is the draft's UUID, so a retried post replays instead of duplicating. */
+export function usePostDocument(role: PartnerRole) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      payload,
+      idempotencyKey,
+    }: {
+      payload: DocumentCreatePayload;
+      idempotencyKey: string;
+    }) =>
+      api.post<PartnerDocument>(`/subledger/${role}/documents`, payload, {
+        "Idempotency-Key": idempotencyKey,
+      }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: [ROOT] }),
+  });
+}
+
+/** Open balance, credit limit and headroom for the partner typeahead, plus the open items
+ * the allocation screen works from. */
+export function usePartnerEnquiry(role: PartnerRole, partnerId: number | null, asOf?: string) {
+  return useQuery({
+    queryKey: [ROOT, role, "enquiry", partnerId, asOf ?? null],
+    queryFn: () =>
+      api.get<PartnerEnquiry>(
+        `/subledger/${role}/enquiry/${partnerId}${asOf ? `?as_of=${asOf}` : ""}`,
+      ),
+    enabled: partnerId !== null,
+  });
+}
+
+// --- Allocation -----------------------------------------------------------------------------
+
+/** The preview is the backend's own dry run — same service, no commit — never client-side
+ * arithmetic, so what the screen shows before Post is what Post writes. */
+export function useAllocationPreview(role: PartnerRole) {
+  return useMutation({
+    mutationFn: (payload: AllocationPayload) =>
+      api.post<AllocationPreview>(`/subledger/${role}/allocations/preview`, payload),
+  });
+}
+
+export function useAutoAllocate(role: PartnerRole) {
+  return useMutation({
+    mutationFn: (payload: AutoAllocatePayload) =>
+      api.post<AllocationPreview>(`/subledger/${role}/allocations/auto`, payload),
+  });
+}
+
+export function usePostAllocation(role: PartnerRole) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      payload,
+      idempotencyKey,
+    }: {
+      payload: AllocationPayload;
+      idempotencyKey: string;
+    }) =>
+      api.post<Allocation>(`/subledger/${role}/allocations`, payload, {
+        "Idempotency-Key": idempotencyKey,
+      }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: [ROOT] }),
   });
 }

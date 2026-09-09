@@ -592,6 +592,92 @@
       "changedBy": "Changed by",
       "system": "System",
       "safetyNote": "Documents, allocations and journal lines stay tied to this partner; only the visible code changes. The other role’s code is untouched."
+    },
+    "documents": {
+      "common": {
+        "post": "Post (Ctrl+Enter)",
+        "posting": "Posting…",
+        "posted": "Posted",
+        "draft": "Draft",
+        "draftRestored": "Draft restored",
+        "discardDraft": "Discard draft",
+        "partner": "Partner",
+        "choosePartner": "Choose partner…",
+        "openBalance": "Open balance",
+        "creditLimit": "Credit limit",
+        "creditHeadroom": "Credit headroom",
+        "noLimit": "No limit",
+        "overLimit": "Over limit",
+        "documentDate": "Document date",
+        "dueDate": "Due date",
+        "dueDateFromTerms": "From {terms}",
+        "dueDateEdited": "Edited — sent as typed",
+        "paymentTerms": "Payment terms",
+        "salesRep": "Sales representative",
+        "currency": "Currency",
+        "baseCurrency": "Base currency",
+        "exchangeRate": "Exchange rate",
+        "branch": "Branch",
+        "project": "Project",
+        "reference": "Reference",
+        "description": "Description",
+        "taxMode": "Tax mode",
+        "taxModeExclusive": "Exclusive",
+        "taxModeInclusive": "Inclusive",
+        "lines": "Lines",
+        "amount": "Amount",
+        "cashAccount": "Cash / bank account",
+        "chooseCashAccount": "Choose account…",
+        "instrumentType": "Instrument",
+        "maturityDate": "Maturity date",
+        "postDatedNotice": "Dated ahead — the cash side books to the post-dated account until it matures. The document is allocatable meanwhile.",
+        "instrumentCash": "Cash",
+        "instrumentBank": "Bank",
+        "instrumentCheque": "Cheque",
+        "instrumentMobile": "Mobile money",
+        "instrumentOther": "Other",
+        "footerExclusive": "Exclusive",
+        "footerTax": "Tax",
+        "footerInclusive": "Inclusive",
+        "footerNote": "Tax and totals are computed by the server on Post; this footer shows the exclusive lines you have entered.",
+        "postFailed": "Couldn't post the document",
+        "postedToast": "{number} posted",
+        "viewEntry": "View journal entry",
+        "none": "None",
+        "cancel": "Cancel",
+        "serverComputed": "computed on Post",
+        "zeroPlaceholder": "0"
+      },
+      "arInvoice": {
+        "title": "Invoice",
+        "subtitle": "Customer invoice — posts to the AR control account against revenue",
+        "descriptionPlaceholder": "Consulting services"
+      },
+      "arCreditNote": {
+        "title": "Credit note",
+        "subtitle": "Customer credit note — reverses revenue and reduces what the customer owes",
+        "descriptionPlaceholder": "Credit for returned goods"
+      },
+      "arReceipt": {
+        "title": "Receipt",
+        "subtitle": "Customer receipt — allocate it to open invoices once posted",
+        "descriptionPlaceholder": "Payment received"
+      },
+      "apInvoice": {
+        "title": "Supplier invoice",
+        "subtitle": "Supplier invoice — posts to the AP control account against expense",
+        "descriptionPlaceholder": "Office supplies"
+      },
+      "apCreditNote": {
+        "title": "Return to supplier",
+        "subtitle": "Supplier debit note — reverses expense and reduces what you owe",
+        "descriptionPlaceholder": "Returned goods"
+      },
+      "apPayment": {
+        "title": "Payment",
+        "subtitle": "Supplier payment — allocate it to open invoices once posted",
+        "descriptionPlaceholder": "Payment made"
+      }
     }
   },
   "lineGrid": {

@@ -546,7 +546,11 @@ def test_allocation_preview_matches_what_posting_actually_writes(api: Api) -> No
 
     # Two rates: the invoice books at 1200, the receipt eight days later at 1250, so settling
     # in full realizes an FX gain on the base-currency difference.
-    for valid_from, rate in ((MARCH.isoformat(), "1200"), ((MARCH + timedelta(days=8)).isoformat(), "1250")):
+    rates = (
+        (MARCH.isoformat(), "1200"),
+        ((MARCH + timedelta(days=8)).isoformat(), "1250"),
+    )
+    for valid_from, rate in rates:
         response = api.client.post(
             "/api/v1/gl/exchange-rates",
             json={"currency_id": usd, "valid_from": valid_from, "rate": rate},

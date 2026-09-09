@@ -85,10 +85,19 @@ describe("the arap message catalogue", () => {
       const namespaces = [
         ...source.matchAll(/useTranslations\("((?:arap|maintenance)[a-zA-Z.]*)"\)/g),
       ].map((m) => m[1]);
-      // The role namespace is built from a template literal (`arap.role.${role}`), so it
-      // needs naming explicitly; the parity test above keeps ar and ap in lockstep.
-      if (/useTranslations\(`arap\.role\.\$\{role\}`\)/.test(source)) {
-        namespaces.push("arap.role.ar", "arap.role.ap");
+      // Some namespaces are built from a template literal — `arap.role.${role}`,
+      // `arap.documents.${spec.messages}`. Expand the literal prefix to every child it has
+      // in the catalogue, so a key is accepted if it resolves under any of them. (The
+      // role-parity test above keeps the two role blocks in lockstep; the document blocks
+      // are checked the same way below.)
+      for (const [, prefix] of source.matchAll(/useTranslations\(`([a-zA-Z.]+)\.\$\{/g)) {
+        let node: unknown = messages;
+        for (const part of prefix.split(".")) {
+          node = typeof node === "object" && node !== null ? (node as Record<string, unknown>)[part] : undefined;
+        }
+        if (typeof node === "object" && node !== null) {
+          namespaces.push(...Object.keys(node).map((child) => `${prefix}.${child}`));
+        }
       }
       if (namespaces.length === 0) continue;
       for (const [, key] of source.matchAll(/\bt[a-z]?(?:\.rich)?\("([a-zA-Z][\w]*)"/g)) {
@@ -108,5 +117,15 @@ describe("the arap message catalogue", () => {
       (candidates) => !candidates.split("|").some(resolves),
     );
     expect(missing).toEqual([]);
+  });
+
+  it("gives every document screen the same key set, so no kind is missing copy", () => {
+    const documents = (arap.documents as Record<string, Record<string, string>>);
+    const perScreen = Object.entries(documents).filter(([name]) => name !== "common");
+    expect(perScreen.length).toBe(6);
+    const [, first] = perScreen[0];
+    for (const [name, block] of perScreen) {
+      expect(Object.keys(block).sort(), name).toEqual(Object.keys(first).sort());
+    }
   });
 });
