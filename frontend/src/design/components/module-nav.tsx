@@ -74,19 +74,20 @@ export const navIntents: NavIntent[] = [
       // the same subledger) and "Account receivable batches" — the spec lists AR batches and
       // both are P4 screens, so they belong in the tree from the start rather than appearing
       // when they happen to be built.
-      { label: "Invoice", module: "Accounts Receivable", phase: "P4" },
-      { label: "Credit note", module: "Accounts Receivable", phase: "P4" },
-      { label: "Receipt", module: "Accounts Receivable", phase: "P4" },
-      { label: "Allocate", module: "Accounts Receivable", phase: "P4" },
+      { label: "Invoice", module: "Accounts Receivable", permission: "ar:transactions_post", href: "/ar/invoices/new" },
+      { label: "Credit note", module: "Accounts Receivable", permission: "ar:transactions_post", href: "/ar/credit-notes/new" },
+      { label: "Receipt", module: "Accounts Receivable", permission: "ar:transactions_post", href: "/ar/receipts/new" },
+      { label: "Allocate", module: "Accounts Receivable", permission: "ar:transactions_post", href: "/ar/allocations/new" },
       { label: "Account receivable batches", module: "Accounts Receivable", phase: "P4" },
       // GRV and Purchase order are P6: goods receipt and the three-way match are the
-      // purchasing cycle, not the AP subledger P4 builds.
+      // purchasing cycle, not the AP subledger P4 builds. Supplier invoice, Receipt and
+      // Payment are additions to the owner's list — master plan C.1.5.
       { label: "GRV", module: "Accounts Payable", phase: "P6" },
       { label: "Purchase order", module: "Accounts Payable", phase: "P6" },
-      { label: "Supplier invoice", module: "Accounts Payable", phase: "P4" },
-      { label: "Return to supplier", module: "Accounts Payable", phase: "P4" },
-      { label: "Payment", module: "Accounts Payable", phase: "P4" },
-      { label: "Allocate", module: "Accounts Payable", phase: "P4" },
+      { label: "Supplier invoice", module: "Accounts Payable", permission: "ap:transactions_post", href: "/ap/supplier-invoices/new" },
+      { label: "Return to supplier", module: "Accounts Payable", permission: "ap:transactions_post", href: "/ap/returns/new" },
+      { label: "Payment", module: "Accounts Payable", permission: "ap:transactions_post", href: "/ap/payments/new" },
+      { label: "Allocate", module: "Accounts Payable", permission: "ap:transactions_post", href: "/ap/allocations/new" },
       { label: "Account payable batches", module: "Accounts Payable", phase: "P4" },
       { label: "Sales order", module: "Order Entry", phase: "P6" },
       { label: "Adjustments", module: "Inventory", phase: "P5" },
@@ -118,9 +119,9 @@ export const navIntents: NavIntent[] = [
       { label: "Balance sheet", module: "General Ledger", phase: "P10" },
       { label: "Income statement", module: "General Ledger", phase: "P10" },
       // Appendix C's "Reports → AR / AP | Age analyses, Allocation, Listings, Statements" in
-      // that order, per module, plus the Transaction listing P4 step 8 adds. Ageing,
-      // allocation, statements and transaction listings all exist on both sides of the
-      // subledger; only the partner listing is module-specific.
+      // that order, per module, plus Transaction listing — an addition to the owner's list,
+      // master plan C.1.4. Ageing, allocation, statements and transaction listings all exist
+      // on both sides of the subledger; only the partner listing is module-specific.
       { label: "Age analysis", module: "Accounts Receivable", phase: "P4" },
       { label: "Allocation", module: "Accounts Receivable", phase: "P4" },
       { label: "Customer listing", module: "Accounts Receivable", phase: "P4" },

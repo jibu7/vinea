@@ -16,6 +16,7 @@ OUT=../docs/screenshots/p4-step-6 npx tsx scripts/capture-p4-screens.ts
 | 3 | Payment terms | `3-payment-terms-{light,dark}.png` |
 | 4 | Ageing bucket-set editor | `4-bucket-set-editor-{light,dark}.png` |
 | 5 | AR/AP defaults, read-only | `5-ar-defaults-readonly-{light,dark}.png` |
+| 6 | Allocation screen with the preview panel | `6-allocation-preview-{light,dark}.png` |
 
 The supplier row is seeded by `seed_e2e` (`E2ESUP001`, Musanze Packaging Ltd) so the list is
 never empty here or in the AP specs; it is created through the masters service with a real

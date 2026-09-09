@@ -90,7 +90,9 @@ def test_4a_fx_rounding_residue_posts_as_an_explicit_rounding_line(
     assert len(lines) == 5
     rounding = lines[-1]
     assert rounding.is_rounding_line is True
-    assert rounding.gl_account_id == ledger.acct("6950")  # seeded exchange-difference account
+    # 6970 Rounding Difference, not 6950 Foreign Exchange Loss: a per-line rounding residue is
+    # not an exchange difference, and since migration 0010 the two have separate accounts.
+    assert rounding.gl_account_id == ledger.acct("6970")
     assert rounding.base_amount == Decimal(-1)
     assert rounding.currency_id == ledger.base.id
     assert rounding.description == "Rounding difference"

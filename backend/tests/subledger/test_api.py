@@ -1016,3 +1016,168 @@ def test_full_settlement_by_three_receipts_leaves_no_base_residual(api: Api, db:
         (by_id[line["gl_account_id"]], Decimal(line["base_amount"]), line["description"])
         for line in entry["lines"]
     ) == sorted((code, amount, text_) for code, (amount, text_) in postings.items())
+
+
+# --- The nine settings accounts are nine distinct accounts -----------------------------------
+
+SETTINGS_ACCOUNT_KEYS = (
+    "ar_control_account_id",
+    "ap_control_account_id",
+    "realized_fx_gain_account_id",
+    "realized_fx_loss_account_id",
+    "settlement_discount_granted_account_id",
+    "settlement_discount_received_account_id",
+    "post_dated_receivable_account_id",
+    "post_dated_payable_account_id",
+    "rounding_difference_account_id",
+)
+
+
+def test_the_eight_p4_keys_plus_rounding_resolve_to_nine_distinct_accounts(api: Api) -> None:
+    """A rounding residue must never be reportable as an FX loss, which is what sharing 6950
+    between `rounding_difference_account_id` and `realized_fx_loss_account_id` made it. Every
+    settings account now stands on its own, so each figure can be read for what it is."""
+    defaults = api.client.get("/api/v1/subledger/defaults").json()
+    gl_settings = api.client.get("/api/v1/gl/settings").json()
+    resolved = {
+        key: (defaults.get(key) if key in defaults else gl_settings.get(key))
+        for key in SETTINGS_ACCOUNT_KEYS
+    }
+
+    assert all(value is not None for value in resolved.values()), resolved
+    assert len(set(resolved.values())) == 9, resolved
+
+    accounts = {row["id"]: row["code"] for row in api.client.get("/api/v1/gl/accounts").json()}
+    assert accounts[resolved["rounding_difference_account_id"]] == "6970"
+    assert accounts[resolved["realized_fx_loss_account_id"]] == "6950"
+
+
+@pytest.mark.xfail(
+    reason=(
+        "Known deviation from P4 step 4's spec — 'FX gain and loss over a fully settled "
+        "invoice equal the booking-rate difference and nothing else'. FX is computed per "
+        "allocation pair and rounded on each side, so three pairs carry three roundings: the "
+        "line comes to 3,456 where the booking-rate difference on the full 100.00 is 3,457. "
+        "The control account still lands on exactly zero, so nothing is lost - but the 1 of "
+        "rounding noise sits inside the FX figure instead of in the rounding account, which "
+        "is the same complaint that separated the two accounts in the first place. Not fixed "
+        "unilaterally: it changes posting behaviour in a step already through its approval "
+        "gate, and both decompositions balance. See the report."
+    ),
+    strict=True,
+)
+def test_mixed_rate_settlement_splits_fx_from_the_rounding_residual(api: Api, db: Session) -> None:
+    """Both accounts move, and each must take only its own part.
+
+    A USD 100.00 invoice books at 1200 (120,000 base, exactly). Three receipts of
+    33.33 / 33.33 / 33.34 settle it at 1234.5678: 41,148 + 41,148 + 41,160 = 123,456, while
+    100.00 at that rate is 123,457. So two different things happened at once — the rate moved
+    by 34.5678 on the full 100.00 (a real exchange difference of 3,457) and the receipts
+    rounded 1 short of the whole. Realized FX must take the rate movement and nothing else;
+    the rounding account must take the 1 and nothing else.
+    """
+    accounts = {row["code"]: row["id"] for row in api.client.get("/api/v1/gl/accounts").json()}
+    by_id = {v: k for k, v in accounts.items()}
+    currencies = {row["code"]: row for row in api.client.get("/api/v1/gl/currencies").json()}
+    usd = currencies["USD"]["id"]
+    settle_on = MARCH + timedelta(days=8)
+    for valid_from, rate in ((MARCH.isoformat(), "1200"), (settle_on.isoformat(), "1234.5678")):
+        api.client.post(
+            "/api/v1/gl/exchange-rates",
+            json={"currency_id": usd, "valid_from": valid_from, "rate": rate},
+        )
+
+    partner = api.client.post(
+        "/api/v1/subledger/ar/partners",
+        json={"name": "Mixed Rate Ltd", "customer_code": "CUST-MIX", "currency_id": usd},
+    ).json()
+    invoice = api.client.post(
+        "/api/v1/subledger/ar/documents",
+        headers={"Idempotency-Key": "mix-inv"},
+        json={
+            "kind": "invoice",
+            "partner_id": partner["id"],
+            "document_date": MARCH.isoformat(),
+            "currency_id": usd,
+            "description": "Hundred dollars at 1200",
+            "lines": [{"unit_price": "100.00", "gl_account_id": accounts["4100"]}],
+        },
+    )
+    assert invoice.status_code == 201, invoice.text
+    assert Decimal(invoice.json()["base_total_amount"]) == Decimal(120000)
+
+    receipts = []
+    for index, amount in enumerate(("33.33", "33.33", "33.34")):
+        receipt = api.client.post(
+            "/api/v1/subledger/ar/documents",
+            headers={"Idempotency-Key": f"mix-rct-{index}"},
+            json={
+                "kind": "settlement",
+                "partner_id": partner["id"],
+                "document_date": settle_on.isoformat(),
+                "currency_id": usd,
+                "description": f"Receipt {index + 1} of 3",
+                "amount": amount,
+                "cash_account_id": accounts["1120"],
+                "instrument_type": "bank",
+            },
+        )
+        assert receipt.status_code == 201, receipt.text
+        receipts.append(receipt.json())
+
+    # The premise: receipts land 1 short of what the full amount converts to at their rate.
+    assert sum(Decimal(r["base_total_amount"]) for r in receipts) == Decimal(123456)
+    assert Decimal(100) * Decimal("1234.5678") == Decimal("123456.78")  # rounds to 123,457
+
+    body = {
+        "partner_id": partner["id"],
+        "allocation_date": settle_on.isoformat(),
+        "pairs": [
+            {
+                "debit_document_id": invoice.json()["id"],
+                "credit_document_id": receipt["id"],
+                "amount": receipt["total_amount"],
+            }
+            for receipt in receipts
+        ],
+    }
+    previewed = api.client.post("/api/v1/subledger/ar/allocations/preview", json=body).json()
+    posted = api.client.post(
+        "/api/v1/subledger/ar/allocations", headers={"Idempotency-Key": "mix-alc"}, json=body
+    )
+    assert posted.status_code == 201, posted.text
+
+    postings = {
+        by_id[item["gl_account_id"]]: (Decimal(item["base_amount"]), item["description"])
+        for item in previewed["postings"]
+    }
+    # 1. The control account is left at exactly zero for this partner.
+    set_tenant(db, api.company_id)
+    control_balance = db.execute(
+        text(
+            "SELECT COALESCE(SUM(base_amount), 0) FROM journal_lines "
+            "WHERE company_id = :cid AND gl_account_id = :account AND partner_id = :partner"
+        ),
+        {"cid": api.company_id, "account": accounts["1200"], "partner": partner["id"]},
+    ).scalar_one()
+    assert Decimal(control_balance) == 0, f"control account left holding {control_balance}"
+
+    # 2. Realized FX takes the booking-rate difference on the full amount, and only that:
+    #    100.00 x (1234.5678 - 1200) = 3,456.78 -> 3,457.
+    fx_codes = {"4400", "6950"} & postings.keys()
+    assert len(fx_codes) == 1, postings
+    fx_code = fx_codes.pop()
+    assert abs(postings[fx_code][0]) == Decimal(3457), postings
+
+    # 3. The rounding account takes the residual, and only that.
+    assert abs(postings["6970"][0]) == Decimal(1), postings
+    assert postings["6970"][1] == "Settlement rounding"
+
+    # 4. Nothing else moved, and the preview said all of it before the post did.
+    assert set(postings) == {"1200", fx_code, "6970"}, postings
+    entry = api.client.get(
+        f"/api/v1/gl/journal-entries/{posted.json()['journal_entry_id']}"
+    ).json()
+    assert sorted(
+        (by_id[line["gl_account_id"]], Decimal(line["base_amount"])) for line in entry["lines"]
+    ) == sorted((code, amount) for code, (amount, _) in postings.items())

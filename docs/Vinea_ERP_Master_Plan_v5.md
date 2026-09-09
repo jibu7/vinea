@@ -367,13 +367,13 @@ The owner's original menu ordering (software_interface docx) is **adopted as the
 | Maintenance → Inventory | Items, Warehouses, Trans types, Variable barcodes, UoM categories, Defaults, Rename Item Code | P5 |
 | Maintenance → Order entry / BOM / POS | Order defaults / BOM items+defaults / Tills+types+defaults | P6 / P12 / P11 |
 | Transactions → GL | Cashbook batches, Journal batches | P2 (banking depth P8) |
-| Transactions → AR | Credit note, Invoice, Receipt (C.1.4), AR batches; Sales order | P4; SO in P6 |
-| Transactions → AP *(mislabeled "Account Receivable" in spec — see C.1)* | GRV, Purchase order (both P6 — see C.1.4), Supplier invoice, Return to supplier, Payment, AP batches | P4 · P6 |
+| Transactions → AR | Credit note, Invoice, Receipt (C.1.5), AR batches; Sales order | P4; SO in P6 |
+| Transactions → AP *(mislabeled "Account Receivable" in spec — see C.1)* | GRV, Purchase order (both P6 — see C.1.5), Supplier invoice, Return to supplier, Payment, AP batches | P4 · P6 |
 | Transactions → Inventory | Journal batches, Transfers, Adjustments, Counts (+ CN/GRV/Invoice/RTS stock impacts) | P5 (impacts via P4/P6 events) |
 | Transactions → OE | Purchase order, **Breakup** | P6 (breakup = kit explosion) |
 | Transactions → BOM / POS | Manufacture process, Breakup / Sales, Returns, Transaction | P12 / P11 |
 | Reports → GL | Account transaction (P2), Trial Balance (P2), Chart of account (P3), **Bank reconciliation (P8)**, **Cashbooks (P8)**, Balance sheet (P10), Income statement (P10) | as noted |
-| Reports → AR / AP | Age analyses, Allocation, Listings, Statements | P4 |
+| Reports → AR / AP | Age analyses, Allocation, Listings, Statements, Transaction listing (C.1.4) — each for both modules | P4 |
 | Reports → Inventory | Movement, Count, Transaction, Valuation (P5); Sales analyses, Slow movers (P10) | as noted |
 | Reports → BOM / POS | Manufacture process, MRP / Cashier sales, Inventory sales | P12 / P11 |
 
@@ -384,7 +384,8 @@ The owner's original menu ordering (software_interface docx) is **adopted as the
 1. **Input/Output labels are swapped** in the tax list: the spec reads "Input (sales)" and "Output (purchases)", but VAT convention (incl. RRA) is **Output VAT = charged on sales, Input VAT = paid on purchases**. The P1 seed uses the correct mapping; only the labels change, rates stay 18/18/0/0.
 2. **Duplicated "Account Receivable" heading**: the second block (GRV, PO, Return to supplier, AP batches) is the **Accounts Payable** transactions section — a copy/paste slip carried since the original spec.
 3. **Allocation appears only under Reports** — but allocating receipts/payments to invoices is a *transaction*. The nav adds "Allocate" entries under Transactions → AR and → AP (P4); the Allocation *report* stays where the spec put it.
-4. **No supplier invoice under Transactions → AP** — the spec's AP block lists GRV, Purchase order, Return to supplier and AP batches, so the document that actually creates a payable has no entry. GRV is the *goods* side and arrives with the three-way match in P6; the AP subledger P4 builds needs an invoice screen of its own, exactly mirroring AR's. The nav adds **"Supplier invoice"** under Transactions → AP (P4), between Purchase order and Return to supplier. For the same reason it also adds **"Receipt"** and **"Payment"** — AR and AP settlements are documents the spec never lists, though its Allocate and Statement entries presuppose them.
+4. **Reports → AR / AP lists no transaction listing** — the spec's report line is "Age analyses, Allocation, Listings, Statements", where "Listings" is the customer/supplier master listing. There is no report that lists the *documents* posted in a period, which is the one an accountant reaches for when reconciling a control account to its subledger. The nav adds **"Transaction listing"** under Reports → AR and → AP (P4 step 8), after Statements.
+5. **No supplier invoice under Transactions → AP** — the spec's AP block lists GRV, Purchase order, Return to supplier and AP batches, so the document that actually creates a payable has no entry. GRV is the *goods* side and arrives with the three-way match in P6; the AP subledger P4 builds needs an invoice screen of its own, exactly mirroring AR's. The nav adds **"Supplier invoice"** under Transactions → AP (P4), between Purchase order and Return to supplier. For the same reason it also adds **"Receipt"** and **"Payment"** — AR and AP settlements are documents the spec never lists, though its Allocate and Statement entries presuppose them.
 
 ### C.2 Additions layered onto the owner's tree (post-spec decisions)
 

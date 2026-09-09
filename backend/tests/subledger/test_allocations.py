@@ -234,7 +234,7 @@ def _fx_lines(db: Session, sub: Subledger) -> list[JournalLine]:
             select(JournalLine).where(
                 JournalLine.company_id == sub.company_id,
                 JournalLine.gl_account_id.in_(
-                    [ledger.acct("6950"), ledger.acct("4400")]
+                    [ledger.acct("6950"), ledger.acct("4400"), ledger.acct("6970")]
                 ),
             )
         )
@@ -304,7 +304,7 @@ def test_full_settlement_leaves_no_base_residual_in_the_control_account(
         select(JournalLine).where(JournalLine.entry_id == allocations[2].journal_entry_id)
     ).all()
     control = next(line for line in lines if line.gl_account_id == invoice.control_account_id)
-    rounding = next(line for line in lines if line.gl_account_id == ledger.acct("6950"))
+    rounding = next(line for line in lines if line.gl_account_id == ledger.acct("6970"))
     assert control.base_amount == Decimal(1) and rounding.base_amount == Decimal(-1)
     assert rounding.description == "Settlement rounding"
     assert control.partner_id == subledger.customer.id
