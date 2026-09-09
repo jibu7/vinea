@@ -870,3 +870,149 @@ def test_a_multi_line_foreign_currency_invoice_posts_a_rounding_line(api: Api) -
     assert entry["lines"][0]["currency_id"] != base_currency_id
     # And it still foots, which is the whole point of absorbing it.
     assert sum(Decimal(line["base_amount"]) for line in entry["lines"]) == 0
+
+
+# --- Full settlement across three receipts, with a rounding residual ------------------------
+
+
+def test_full_settlement_by_three_receipts_leaves_no_base_residual(api: Api, db: Session) -> None:
+    """The concrete case: USD 100.00 invoiced at 1234.5678 is 123,457 base, but three receipts
+    of 33.33 / 33.33 / 33.34 at the same rate convert to 41,148 + 41,148 + 41,160 = 123,456.
+
+    So the invoice's control leg and the receipts' control legs disagree by 1 base unit even
+    though the document currency settles exactly. Allocating all three must leave the partner's
+    control balance at exactly zero — not at 1 — and the open items fully closed. This asserts
+    where the 1 went and names the account that absorbed it.
+    """
+    accounts = {row["code"]: row["id"] for row in api.client.get("/api/v1/gl/accounts").json()}
+    by_id = {v: k for k, v in accounts.items()}
+    currencies = {row["code"]: row for row in api.client.get("/api/v1/gl/currencies").json()}
+    usd = currencies["USD"]["id"]
+    api.client.post(
+        "/api/v1/gl/exchange-rates",
+        json={"currency_id": usd, "valid_from": MARCH.isoformat(), "rate": "1234.5678"},
+    )
+    partner = api.client.post(
+        "/api/v1/subledger/ar/partners",
+        json={"name": "Thirds Ltd", "customer_code": "CUST-THIRDS", "currency_id": usd},
+    ).json()
+
+    invoice = api.client.post(
+        "/api/v1/subledger/ar/documents",
+        headers={"Idempotency-Key": "thirds-inv"},
+        json={
+            "kind": "invoice",
+            "partner_id": partner["id"],
+            "document_date": MARCH.isoformat(),
+            "currency_id": usd,
+            "description": "One hundred dollars",
+            "lines": [{"unit_price": "100.00", "gl_account_id": accounts["4100"]}],
+        },
+    )
+    assert invoice.status_code == 201, invoice.text
+    invoice_id = invoice.json()["id"]
+
+    receipts = []
+    for index, amount in enumerate(("33.33", "33.33", "33.34")):
+        receipt = api.client.post(
+            "/api/v1/subledger/ar/documents",
+            headers={"Idempotency-Key": f"thirds-rct-{index}"},
+            json={
+                "kind": "settlement",
+                "partner_id": partner["id"],
+                "document_date": MARCH.isoformat(),
+                "currency_id": usd,
+                "description": f"Receipt {index + 1} of 3",
+                "amount": amount,
+                "cash_account_id": accounts["1120"],
+                "instrument_type": "bank",
+            },
+        )
+        assert receipt.status_code == 201, receipt.text
+        receipts.append(receipt.json())
+
+    # The premise: the base amounts genuinely disagree by one.
+    assert Decimal(invoice.json()["base_total_amount"]) == Decimal(123457)
+    assert sum(Decimal(r["base_total_amount"]) for r in receipts) == Decimal(123456)
+
+    # The Rwanda seed points `rounding_difference_account_id` and `realized_fx_loss_account_id`
+    # at the same account (6950), which would make "rounding" and "FX" indistinguishable here.
+    # Repoint rounding at 6990 so the assertion below actually identifies which key was read.
+    settings = api.client.get("/api/v1/gl/settings").json()
+    repointed = api.client.put(
+        "/api/v1/gl/settings",
+        json={
+            "retained_earnings_account_id": settings["retained_earnings_account_id"],
+            "rounding_difference_account_id": accounts["6990"],
+        },
+    )
+    assert repointed.status_code == 200, repointed.text
+
+    body = {
+        "partner_id": partner["id"],
+        "allocation_date": MARCH.isoformat(),
+        "pairs": [
+            {
+                "debit_document_id": invoice_id,
+                "credit_document_id": receipt["id"],
+                "amount": receipt["total_amount"],
+            }
+            for receipt in receipts
+        ],
+    }
+    previewed = api.client.post("/api/v1/subledger/ar/allocations/preview", json=body).json()
+    posted = api.client.post(
+        "/api/v1/subledger/ar/allocations", headers={"Idempotency-Key": "thirds-alc"}, json=body
+    )
+    assert posted.status_code == 201, posted.text
+
+    # 1. Every document is fully closed in document currency...
+    refreshed = api.client.get(f"/api/v1/subledger/ar/documents/{invoice_id}").json()
+    assert Decimal(refreshed["open_amount"]) == 0
+    for receipt in receipts:
+        row = api.client.get(f"/api/v1/subledger/ar/documents/{receipt['id']}").json()
+        assert Decimal(row["open_amount"]) == 0
+
+    # 2. ...and the open items carry no base residual either.
+    enquiry = api.client.get(
+        f"/api/v1/subledger/ar/enquiry/{partner['id']}",
+        params={"as_of": (MARCH + timedelta(days=1)).isoformat()},
+    ).json()
+    assert [Decimal(item["open_base_amount"]) for item in enquiry["open_items"]] == []
+    assert Decimal(enquiry["balance_base"]) == 0
+
+    # 3. The partner's control balance in base is exactly zero — the assertion that fails if
+    #    the residual is left stranded on the control account.
+    set_tenant(db, api.company_id)
+    control_balance = db.execute(
+        text(
+            "SELECT COALESCE(SUM(base_amount), 0) FROM journal_lines "
+            "WHERE company_id = :cid AND gl_account_id = :account AND partner_id = :partner"
+        ),
+        {"cid": api.company_id, "account": accounts["1200"], "partner": partner["id"]},
+    ).scalar_one()
+    assert Decimal(control_balance) == 0, f"control account left holding {control_balance}"
+
+    # 4. Name the account that absorbed the 1, and what the ledger calls it. It is the
+    #    **rounding-difference** account, not realized FX: both documents booked at the same
+    #    rate, so there is no rate movement to realize — only 100.00 and 33.33+33.33+33.34
+    #    rounding to different whole francs. `allocations.py` reads
+    #    `rounding_account_id` for exactly this, and repointing it above proves which key.
+    postings = {
+        by_id[item["gl_account_id"]]: (Decimal(item["base_amount"]), item["description"])
+        for item in previewed["postings"]
+    }
+    assert postings == {
+        "1200": (Decimal(-1), "Allocation"),
+        "6990": (Decimal(1), "Settlement rounding"),
+    }, postings
+    assert "6950" not in postings, "a same-rate residual must not be booked as realized FX"
+
+    # And the preview said so before the post did.
+    entry = api.client.get(
+        f"/api/v1/gl/journal-entries/{posted.json()['journal_entry_id']}"
+    ).json()
+    assert sorted(
+        (by_id[line["gl_account_id"]], Decimal(line["base_amount"]), line["description"])
+        for line in entry["lines"]
+    ) == sorted((code, amount, text_) for code, (amount, text_) in postings.items())

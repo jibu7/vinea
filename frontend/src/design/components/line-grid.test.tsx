@@ -32,28 +32,46 @@ function descriptionInputs(): HTMLInputElement[] {
   return screen.getAllByPlaceholderText("Line description");
 }
 
-describe("LineGrid keyboard model", () => {
+/** Every navigable column, by mode. The P3 versions of these tests ran only on the
+ * description column, whose `data-col` (1) happens to equal the id its handlers pass — the
+ * single column where a mismatch could not show. Debit/credit/amount, which carry ids in the
+ * 100s, were never exercised, and were broken from P3 step 5 (58f0176) until c80f992.
+ * Parameterising is the fix: a coincidence in one column can no longer stand in for the grid. */
+const NAVIGABLE_COLUMNS: Array<{
+  name: string;
+  mode: "journal" | "cashbook" | "document";
+  cells: () => HTMLInputElement[];
+}> = [
+  { name: "description", mode: "journal", cells: descriptionInputs },
+  { name: "debit", mode: "journal", cells: () => screen.getAllByLabelText(/^Debit, row/) },
+  { name: "credit", mode: "journal", cells: () => screen.getAllByLabelText(/^Credit, row/) },
+  { name: "amount", mode: "cashbook", cells: () => screen.getAllByLabelText(/^Amount, row/) },
+  { name: "quantity", mode: "document", cells: () => screen.getAllByLabelText(/^Quantity, row/) },
+  { name: "unit price", mode: "document", cells: () => screen.getAllByLabelText(/^Unit price, row/) },
+];
+
+describe.each(NAVIGABLE_COLUMNS)("LineGrid keyboard model — $name column", ({ mode, cells }) => {
   it("adds a row when Enter is pressed on the last row", () => {
-    render(<Harness initialRows={[emptyLineGridRow()]} />);
-    expect(descriptionInputs()).toHaveLength(1);
+    render(<Harness mode={mode} initialRows={[emptyLineGridRow()]} />);
+    expect(cells()).toHaveLength(1);
 
-    fireEvent.keyDown(descriptionInputs()[0], { key: "Enter" });
+    fireEvent.keyDown(cells()[0], { key: "Enter" });
 
-    expect(descriptionInputs()).toHaveLength(2);
+    expect(cells()).toHaveLength(2);
   });
 
   it("moves Enter to the next row instead of adding one when not on the last row", () => {
-    render(<Harness initialRows={[emptyLineGridRow(), emptyLineGridRow()]} />);
+    render(<Harness mode={mode} initialRows={[emptyLineGridRow(), emptyLineGridRow()]} />);
 
-    fireEvent.keyDown(descriptionInputs()[0], { key: "Enter" });
+    fireEvent.keyDown(cells()[0], { key: "Enter" });
 
-    expect(descriptionInputs()).toHaveLength(2);
-    expect(document.activeElement).toBe(descriptionInputs()[1]);
+    expect(cells()).toHaveLength(2);
+    expect(document.activeElement).toBe(cells()[1]);
   });
 
   it("ArrowDown/ArrowUp move focus between rows in the same column", () => {
-    render(<Harness initialRows={[emptyLineGridRow(), emptyLineGridRow()]} />);
-    const [row0, row1] = descriptionInputs();
+    render(<Harness mode={mode} initialRows={[emptyLineGridRow(), emptyLineGridRow()]} />);
+    const [row0, row1] = cells();
 
     fireEvent.keyDown(row0, { key: "ArrowDown" });
     expect(document.activeElement).toBe(row1);
@@ -63,8 +81,8 @@ describe("LineGrid keyboard model", () => {
   });
 
   it("clamps ArrowDown/ArrowUp at the grid's edges instead of leaving it", () => {
-    render(<Harness initialRows={[emptyLineGridRow(), emptyLineGridRow()]} />);
-    const [row0, row1] = descriptionInputs();
+    render(<Harness mode={mode} initialRows={[emptyLineGridRow(), emptyLineGridRow()]} />);
+    const [row0, row1] = cells();
 
     fireEvent.keyDown(row1, { key: "ArrowDown" });
     expect(document.activeElement).toBe(row1);
@@ -72,7 +90,9 @@ describe("LineGrid keyboard model", () => {
     fireEvent.keyDown(row0, { key: "ArrowUp" });
     expect(document.activeElement).toBe(row0);
   });
+});
 
+describe("LineGrid keyboard model", () => {
   it("Escape reverts an in-progress edit to the value at focus time", () => {
     render(<Harness initialRows={[emptyLineGridRow({ description: "Original text" })]} />);
     const input = descriptionInputs()[0];
@@ -190,50 +210,17 @@ describe("lineNet", () => {
  * 100/101/102, so `focusCell` looked up a coordinate that did not exist and arrow/Enter
  * navigation from an amount cell silently did nothing. Caught by Copilot review on PR #7;
  * it affected journal and cashbook mode as much as the document mode it was reported on. */
-describe("LineGrid amount-cell navigation", () => {
-  it("moves ArrowDown from a debit cell to the next row's debit cell", () => {
+describe("LineGrid amount-cell navigation with the extra columns shown", () => {
+  it("still finds the next row once branch/project/currency/tax shift every position", () => {
+    // Showing the extra columns moves every cell's ordinal in the row. Under the old
+    // sequential ids that was a second way for the lookup to miss; under named ids it cannot.
     render(<Harness initialRows={[emptyLineGridRow(), emptyLineGridRow()]} />);
+    fireEvent.click(screen.getByText(/More columns/));
     const debits = screen.getAllByLabelText(/^Debit, row/);
 
     debits[0].focus();
     fireEvent.keyDown(debits[0], { key: "ArrowDown" });
 
-    expect(document.activeElement).toBe(debits[1]);
-  });
-
-  it("moves ArrowUp from a credit cell back to the previous row's credit cell", () => {
-    render(<Harness initialRows={[emptyLineGridRow(), emptyLineGridRow()]} />);
-    const credits = screen.getAllByLabelText(/^Credit, row/);
-
-    credits[1].focus();
-    fireEvent.keyDown(credits[1], { key: "ArrowUp" });
-
-    expect(document.activeElement).toBe(credits[0]);
-  });
-
-  it("moves ArrowDown from a unit price cell in document mode", () => {
-    render(
-      <Harness mode="document" initialRows={[emptyLineGridRow(), emptyLineGridRow()]} />,
-    );
-    const prices = screen.getAllByLabelText(/^Unit price, row/);
-
-    prices[0].focus();
-    fireEvent.keyDown(prices[0], { key: "ArrowDown" });
-
-    expect(document.activeElement).toBe(prices[1]);
-  });
-
-  it("keeps the extra columns navigable when they are shown", async () => {
-    const user = userEvent.setup();
-    render(<Harness initialRows={[emptyLineGridRow(), emptyLineGridRow()]} />);
-    await user.click(screen.getByText(/More columns/));
-    const debits = screen.getAllByLabelText(/^Debit, row/);
-
-    debits[0].focus();
-    fireEvent.keyDown(debits[0], { key: "ArrowDown" });
-
-    // Showing branch/project/currency/tax shifts every column's position in the row; the
-    // amount cells must still find each other.
     expect(document.activeElement).toBe(debits[1]);
   });
 });

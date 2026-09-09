@@ -117,8 +117,20 @@ export const navIntents: NavIntent[] = [
       { label: "Cashbooks", module: "General Ledger", phase: "P8" },
       { label: "Balance sheet", module: "General Ledger", phase: "P10" },
       { label: "Income statement", module: "General Ledger", phase: "P10" },
+      // Appendix C's "Reports → AR / AP | Age analyses, Allocation, Listings, Statements" in
+      // that order, per module, plus the Transaction listing P4 step 8 adds. Ageing,
+      // allocation, statements and transaction listings all exist on both sides of the
+      // subledger; only the partner listing is module-specific.
       { label: "Age analysis", module: "Accounts Receivable", phase: "P4" },
+      { label: "Allocation", module: "Accounts Receivable", phase: "P4" },
+      { label: "Customer listing", module: "Accounts Receivable", phase: "P4" },
       { label: "Statements", module: "Accounts Receivable", phase: "P4" },
+      { label: "Transaction listing", module: "Accounts Receivable", phase: "P4" },
+      { label: "Age analysis", module: "Accounts Payable", phase: "P4" },
+      { label: "Allocation", module: "Accounts Payable", phase: "P4" },
+      { label: "Supplier listing", module: "Accounts Payable", phase: "P4" },
+      { label: "Statements", module: "Accounts Payable", phase: "P4" },
+      { label: "Transaction listing", module: "Accounts Payable", phase: "P4" },
       { label: "Valuation", module: "Inventory", phase: "P5" },
       { label: "Movement", module: "Inventory", phase: "P5" },
       { label: "Sales analyses", module: "Inventory", phase: "P10" },

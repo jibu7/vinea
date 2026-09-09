@@ -1,12 +1,18 @@
 # P3 Definition-of-Done corrections
 
-P3 was accepted on a DoD that made two claims which were not true of what shipped. Both are
-recorded here rather than inherited quietly by later phases.
+P3 was accepted on a DoD whose claims did not all hold. They are recorded here rather than
+inherited quietly by later phases; the full clause-by-clause check is in
+[`p3-dod-audit.md`](./p3-dod-audit.md).
 
 | Claim in P3's DoD | What shipped | Decision |
 |---|---|---|
 | "next-intl with every string externalised" | 28 files, 327 violations of `react/jsx-no-literals` | Backfill — the rest of this document, tracked as [issue #6](https://github.com/jibu7/vinea/issues/6) |
-| "IndexedDB draft autosave with the draft UUID as `Idempotency-Key`" | `localStorage` autosave; the draft UUID *is* the `Idempotency-Key`, so only the storage engine differs | **Keep localStorage.** Decided at P4 step 7 |
+| "IndexedDB drafts keyed by draft UUID as `Idempotency-Key`" — **P4 step 7's wording, not P3's** | `localStorage` autosave; the draft UUID *is* the `Idempotency-Key`, so only the storage engine differs | **Keep localStorage.** Decided at P4 step 7 |
+
+> **Correction.** An earlier version of this file, and a comment on issue #6, said P3's DoD
+> claimed IndexedDB. It did not: P3's prompt says "IndexedDB/**localStorage** keyed by user +
+> company", so localStorage was compliant there. The IndexedDB wording is **P4 step 7's**. The
+> deviation is real and the decision below stands; the phase it belongs to was wrong.
 
 ## The drafts decision
 
