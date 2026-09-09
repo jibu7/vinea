@@ -9,9 +9,9 @@ export default function TransactionTypesPage() {
     <TransactionTypesScreen
       module="gl"
       title={t("transactionTypes")}
-      description="Determination chain rules for General Ledger (ADR-05)"
-      codePlaceholder="EXP_PAYROLL"
-      namePlaceholder="Payroll Expense Posting"
+      description={t("glTransactionTypesSubtitle")}
+      codePlaceholder={t("glTransactionTypeCodePlaceholder")}
+      namePlaceholder={t("glTransactionTypeNamePlaceholder")}
     />
   );
 }

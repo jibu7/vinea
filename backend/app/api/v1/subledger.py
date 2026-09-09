@@ -559,12 +559,17 @@ def get_defaults(
 @router.patch("/defaults")
 def update_defaults(
     payload: ArApDefaultsUpdate,
+    request: Request,
     auth: AuthContext = permissions.require(permissions.GL_SETUP_MANAGE),
     db: Session = Depends(get_db),
 ) -> ArApDefaultsRead:
-    settings = gl_settings_for(db, auth.company_id)
-    for field, value in payload.model_dump(exclude_unset=True).items():
-        setattr(settings, field, value)
+    settings = masters.update_ar_ap_defaults(
+        db,
+        auth.company_id,
+        payload.model_dump(exclude_unset=True),
+        actor=auth.user,
+        request=request,
+    )
     db.commit()
     return ArApDefaultsRead.model_validate(settings)
 

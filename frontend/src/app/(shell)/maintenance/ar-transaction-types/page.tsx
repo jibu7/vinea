@@ -9,9 +9,9 @@ export default function ArTransactionTypesPage() {
     <TransactionTypesScreen
       module="ar"
       title={t("arTransactionTypes")}
-      description="Determination-chain defaults for customer invoices, credit notes and receipts"
-      codePlaceholder="INV"
-      namePlaceholder="Customer invoice"
+      description={t("arTransactionTypesSubtitle")}
+      codePlaceholder={t("arTransactionTypeCodePlaceholder")}
+      namePlaceholder={t("arTransactionTypeNamePlaceholder")}
     />
   );
 }

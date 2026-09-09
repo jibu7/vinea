@@ -18,20 +18,27 @@ import {
   useUpdateAgeingBucketSet,
 } from "@/features/subledger/hooks";
 import {
-  AGEING_BASIS_LABELS,
+  AGEING_BASES,
+  AGEING_BASIS_MESSAGE,
   type AgeingBasis,
   type AgeingBucketInput,
   type AgeingBucketSet,
 } from "@/features/subledger/types";
 import { useApiErrorToast } from "@/lib/use-api-error-toast";
 
-const SEED: AgeingBucketInput[] = [
-  { label: "Current", from_days: 0, to_days: 30 },
-  { label: "31 - 60", from_days: 31, to_days: 60 },
-  { label: "61 - 90", from_days: 61, to_days: 90 },
-  { label: "91 - 120", from_days: 91, to_days: 120 },
-  { label: "120+", from_days: 121, to_days: null },
-];
+/** The 30/60/90/120+ starting point a new set opens on. Only the first bucket carries a
+ * word; the rest are numeric ranges, which read the same in any locale. The label is user
+ * data from here on — the operator renames it freely — so it is seeded, not translated on
+ * every render. */
+function seedBuckets(currentLabel: string): AgeingBucketInput[] {
+  return [
+    { label: currentLabel, from_days: 0, to_days: 30 },
+    { label: "31 - 60", from_days: 31, to_days: 60 },
+    { label: "61 - 90", from_days: 61, to_days: 90 },
+    { label: "91 - 120", from_days: 91, to_days: 120 },
+    { label: "120+", from_days: 121, to_days: null },
+  ];
+}
 
 /**
  * Buckets must start at 0, be contiguous and end open — the same rule the service enforces.
@@ -46,12 +53,9 @@ function normalise(buckets: AgeingBucketInput[]): AgeingBucketInput[] {
   }));
 }
 
-function describe(bucket: { from_days: number; to_days: number | null }): string {
-  return bucket.to_days === null ? `${bucket.from_days}+ days` : `${bucket.from_days}–${bucket.to_days} days`;
-}
-
 export default function AgeingBucketSetsPage() {
-  const t = useTranslations("maintenance");
+  const t = useTranslations("arap.bucketSets");
+  const tc = useTranslations("arap.common");
   const toast = useToast();
   const showApiError = useApiErrorToast();
   const hasPermission = useHasPermission();
@@ -68,7 +72,13 @@ export default function AgeingBucketSetsPage() {
   const [name, setName] = useState("");
   const [basis, setBasis] = useState<AgeingBasis>("due_date");
   const [isDefault, setIsDefault] = useState(false);
-  const [buckets, setBuckets] = useState<AgeingBucketInput[]>(SEED);
+  const [buckets, setBuckets] = useState<AgeingBucketInput[]>(() => seedBuckets("Current"));
+
+  function describeRange(bucket: { from_days: number; to_days: number | null }): string {
+    return bucket.to_days === null
+      ? t("rangeOpen", { from: bucket.from_days })
+      : t("rangeClosed", { from: bucket.from_days, to: bucket.to_days });
+  }
 
   function startCreate() {
     setEditing(null);
@@ -76,7 +86,7 @@ export default function AgeingBucketSetsPage() {
     setName("");
     setBasis("due_date");
     setIsDefault(false);
-    setBuckets(SEED);
+    setBuckets(seedBuckets(t("seedCurrent")));
     setOpen(true);
   }
 
@@ -123,14 +133,14 @@ export default function AgeingBucketSetsPage() {
           setId: editing.id,
           payload: { name, basis, is_default: isDefault, buckets: payload },
         });
-        toast.show({ title: "Bucket set updated", tone: "success" });
+        toast.show({ title: t("updated"), tone: "success" });
       } else {
         await createSet.mutateAsync({ code, name, basis, is_default: isDefault, buckets: payload });
-        toast.show({ title: "Bucket set created", tone: "success" });
+        toast.show({ title: t("created"), tone: "success" });
       }
       setOpen(false);
     } catch (err) {
-      showApiError(err, "Couldn't save bucket set");
+      showApiError(err, t("saveFailed"));
     }
   }
 
@@ -139,27 +149,27 @@ export default function AgeingBucketSetsPage() {
       await updateSet.mutateAsync({ setId: row.id, payload: { is_active: !row.is_active } });
       toast.show({
         title: row.code,
-        description: row.is_active ? "Deactivated" : "Activated",
+        description: row.is_active ? tc("deactivated") : tc("activated"),
         tone: "success",
       });
     } catch (err) {
-      showApiError(err, "Couldn't update bucket set");
+      showApiError(err, t("updateFailed"));
     }
   }
 
   return (
     <MaintenancePage
-      title={t("ageingBucketSets")}
-      description="Buckets and the ageing basis used by the age analysis — configurable per company"
+      title={t("title")}
+      description={t("subtitle")}
       actions={
         <Button variant="primary" onClick={startCreate} disabled={!canEdit} className="gap-1.5 text-xs">
-          <Plus className="size-3.5" /> New bucket set
+          <Plus className="size-3.5" /> {t("new")}
         </Button>
       }
     >
       <MaintenanceCard
         icon={<Layers3 className="size-4" />}
-        title="Bucket sets"
+        title={t("cardTitle")}
         actions={
           <label className="flex items-center gap-1.5 text-xs text-[var(--vinea-ink-muted)]">
             <input
@@ -168,23 +178,23 @@ export default function AgeingBucketSetsPage() {
               onChange={(e) => setIncludeInactive(e.target.checked)}
               className="size-3.5"
             />
-            Show inactive
+            {tc("showInactive")}
           </label>
         }
       >
         {(sets.data ?? []).length === 0 ? (
           <p className="py-8 text-center text-xs text-[var(--vinea-ink-subtle)]">
-            {sets.isLoading ? "Loading…" : "No bucket sets yet."}
+            {sets.isLoading ? tc("loading") : t("empty")}
           </p>
         ) : (
           <Table>
             <THead>
               <TR>
-                <TH className="w-24">Code</TH>
-                <TH className="w-40">Name</TH>
-                <TH className="w-28">Basis</TH>
-                <TH>Buckets</TH>
-                <TH className="w-32 text-right">Status</TH>
+                <TH className="w-24">{tc("code")}</TH>
+                <TH className="w-40">{tc("name")}</TH>
+                <TH className="w-28">{t("basis")}</TH>
+                <TH>{t("buckets")}</TH>
+                <TH className="w-32 text-right">{tc("status")}</TH>
               </TR>
             </THead>
             <TBody>
@@ -194,21 +204,23 @@ export default function AgeingBucketSetsPage() {
                   <TD className="text-xs font-medium text-[var(--vinea-ink)]">
                     <span className="inline-flex items-center gap-2">
                       {row.name}
-                      {row.is_default && <StatusChip tone="info">Default</StatusChip>}
+                      {row.is_default && <StatusChip tone="info">{tc("default")}</StatusChip>}
                     </span>
                   </TD>
                   <TD className="text-xs text-[var(--vinea-ink-muted)]">
-                    {AGEING_BASIS_LABELS[row.basis]}
+                    {t(AGEING_BASIS_MESSAGE[row.basis])}
                   </TD>
                   <TD className="text-xs text-[var(--vinea-ink-muted)]">
-                    {row.buckets.map((b) => `${b.label} (${describe(b)})`).join(" · ")}
+                    {row.buckets
+                      .map((b) => t("bucketEntry", { label: b.label, range: describeRange(b) }))
+                      .join(" · ")}
                   </TD>
                   <TD className="text-right">
                     <div className="flex items-center justify-end gap-2">
                       <button
                         type="button"
                         onClick={() => startEdit(row)}
-                        aria-label={`Edit ${row.name}`}
+                        aria-label={tc("editLabel", { name: row.name })}
                         className="rounded p-1 text-[var(--vinea-ink-subtle)] hover:text-[var(--vinea-ink)]"
                       >
                         <Edit2 className="size-3.5" />
@@ -217,10 +229,12 @@ export default function AgeingBucketSetsPage() {
                         type="button"
                         onClick={() => toggleActive(row)}
                         disabled={!canEdit}
-                        aria-label={`${row.is_active ? "Deactivate" : "Activate"} ${row.name}`}
+                        aria-label={tc(row.is_active ? "deactivateLabel" : "activateLabel", {
+                          name: row.name,
+                        })}
                       >
                         <StatusChip tone={row.is_active ? "success" : "neutral"}>
-                          {row.is_active ? "Active" : "Inactive"}
+                          {row.is_active ? tc("active") : tc("inactive")}
                         </StatusChip>
                       </button>
                     </div>
@@ -234,34 +248,34 @@ export default function AgeingBucketSetsPage() {
 
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent
-          title={editing ? `Edit ${editing.name}` : "New ageing bucket set"}
+          title={editing ? t("editTitle", { name: editing.name }) : t("newTitle")}
           className="max-w-lg"
         >
           <div className="space-y-3 pt-2">
             <div className="grid grid-cols-2 gap-3">
-              <Field label="Code">
+              <Field label={tc("code")}>
                 <Input
                   value={code}
                   onChange={(e) => setCode(e.target.value)}
                   disabled={!!editing}
                   className="font-mono"
-                  placeholder="STD"
+                  placeholder={t("codePlaceholder")}
                 />
               </Field>
-              <Field label="Name">
+              <Field label={tc("name")}>
                 <Input
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  placeholder="Standard 30/60/90/120+"
+                  placeholder={t("namePlaceholder")}
                 />
               </Field>
             </div>
 
-            <Field label="Ageing basis">
+            <Field label={t("basisLabel")}>
               <Select
-                options={(Object.keys(AGEING_BASIS_LABELS) as AgeingBasis[]).map((value) => ({
+                options={AGEING_BASES.map((value) => ({
                   value,
-                  label: AGEING_BASIS_LABELS[value],
+                  label: t(AGEING_BASIS_MESSAGE[value]),
                 }))}
                 value={basis}
                 onValueChange={(v) => setBasis(v as AgeingBasis)}
@@ -275,14 +289,14 @@ export default function AgeingBucketSetsPage() {
                 onChange={(e) => setIsDefault(e.target.checked)}
                 className="size-3.5"
               />
-              Company default
+              {t("isDefault")}
             </label>
 
             <div className="space-y-2">
               <div className="flex items-center justify-between">
-                <p className="text-xs font-medium text-[var(--vinea-ink-muted)]">Buckets</p>
+                <p className="text-xs font-medium text-[var(--vinea-ink-muted)]">{t("buckets")}</p>
                 <Button variant="ghost" onClick={addBucket} className="gap-1 text-xs">
-                  <Plus className="size-3" /> Add bucket
+                  <Plus className="size-3" /> {t("addBucket")}
                 </Button>
               </div>
               <div className="space-y-2">
@@ -290,29 +304,29 @@ export default function AgeingBucketSetsPage() {
                   const isLast = index === buckets.length - 1;
                   return (
                     <div key={index} className="flex items-end gap-2">
-                      <Field label={index === 0 ? "Label" : ""} className="flex-1">
+                      <Field label={index === 0 ? t("bucketLabel") : ""} className="flex-1">
                         <Input
                           value={bucket.label}
-                          aria-label={`Bucket ${index + 1} label`}
+                          aria-label={t("bucketLabelAria", { index: index + 1 })}
                           onChange={(e) => patchBucket(index, { label: e.target.value })}
                         />
                       </Field>
-                      <Field label={index === 0 ? "From" : ""} className="w-20">
+                      <Field label={index === 0 ? t("from") : ""} className="w-20">
                         <Input
                           value={bucket.from_days}
-                          aria-label={`Bucket ${index + 1} from day`}
+                          aria-label={t("bucketFromAria", { index: index + 1 })}
                           disabled
                           className="text-right font-mono tabular-nums"
                         />
                       </Field>
-                      <Field label={index === 0 ? "To" : ""} className="w-20">
+                      <Field label={index === 0 ? t("to") : ""} className="w-20">
                         <Input
                           type="number"
                           min={bucket.from_days}
                           value={isLast ? "" : (bucket.to_days ?? "")}
-                          aria-label={`Bucket ${index + 1} to day`}
+                          aria-label={t("bucketToAria", { index: index + 1 })}
                           disabled={isLast}
-                          placeholder={isLast ? "open" : ""}
+                          placeholder={isLast ? t("openEnded") : ""}
                           onChange={(e) =>
                             patchBucket(index, {
                               to_days: e.target.value ? Number(e.target.value) : null,
@@ -325,7 +339,7 @@ export default function AgeingBucketSetsPage() {
                         type="button"
                         onClick={() => removeBucket(index)}
                         disabled={buckets.length <= 1}
-                        aria-label={`Remove bucket ${index + 1}`}
+                        aria-label={t("removeBucketAria", { index: index + 1 })}
                         className="mb-1 rounded p-1.5 text-[var(--vinea-ink-subtle)] hover:text-[var(--vinea-danger)] disabled:opacity-40"
                       >
                         <Trash2 className="size-3.5" />
@@ -334,17 +348,15 @@ export default function AgeingBucketSetsPage() {
                   );
                 })}
               </div>
-              <p className="text-xs text-[var(--vinea-ink-subtle)]">
-                Buckets start at day 0, run contiguously and the last one stays open-ended.
-              </p>
+              <p className="text-xs text-[var(--vinea-ink-subtle)]">{t("contiguityNote")}</p>
             </div>
 
             <div className="flex justify-end gap-2 pt-3">
               <Button variant="ghost" onClick={() => setOpen(false)}>
-                Cancel
+                {tc("cancel")}
               </Button>
               <Button variant="primary" disabled={!code || !name || !canEdit} onClick={handleSave}>
-                Save
+                {tc("save")}
               </Button>
             </div>
           </div>

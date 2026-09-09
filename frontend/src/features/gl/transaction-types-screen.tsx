@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { useTranslations } from "next-intl";
 import { Edit2, Layers, Plus } from "lucide-react";
 import { Button } from "@/design/components/button";
 import { Combobox } from "@/design/components/combobox";
@@ -34,6 +35,7 @@ export function TransactionTypesScreen({
   codePlaceholder: string;
   namePlaceholder: string;
 }) {
+  const t = useTranslations("maintenance");
   const toast = useToast();
   const showApiError = useApiErrorToast();
   const hasPermission = useHasPermission();
@@ -82,7 +84,7 @@ export function TransactionTypesScreen({
             default_gl_account_id: defaultAccountId ? Number(defaultAccountId) : null,
           },
         });
-        toast.show({ title: "Transaction type updated", tone: "success" });
+        toast.show({ title: t("transactionTypeUpdated"), tone: "success" });
       } else {
         await createTxType.mutateAsync({
           module,
@@ -90,11 +92,11 @@ export function TransactionTypesScreen({
           name,
           default_gl_account_id: defaultAccountId ? Number(defaultAccountId) : null,
         });
-        toast.show({ title: "Transaction type created", tone: "success" });
+        toast.show({ title: t("transactionTypeCreated"), tone: "success" });
       }
       setOpen(false);
     } catch (err) {
-      showApiError(err, "Couldn't save transaction type");
+      showApiError(err, t("transactionTypeSaveFailed"));
     }
   }
 
@@ -106,11 +108,11 @@ export function TransactionTypesScreen({
       });
       toast.show({
         title: item.code,
-        description: item.is_active ? "Deactivated" : "Activated",
+        description: item.is_active ? t("deactivated") : t("activated"),
         tone: "success",
       });
     } catch (err) {
-      showApiError(err, "Couldn't update transaction type");
+      showApiError(err, t("transactionTypeUpdateFailed"));
     }
   }
 
@@ -120,24 +122,24 @@ export function TransactionTypesScreen({
       description={description}
       actions={
         <Button variant="primary" onClick={startCreate} disabled={!canEdit} className="gap-1.5 text-xs">
-          <Plus className="size-3.5" /> New transaction type
+          <Plus className="size-3.5" /> {t("newTransactionType")}
         </Button>
       }
     >
       <MaintenanceCard icon={<Layers className="size-4" />} title={title}>
         {(txTypesQuery.data ?? []).length === 0 ? (
           <p className="py-8 text-center text-xs text-[var(--vinea-ink-subtle)]">
-            {txTypesQuery.isLoading ? "Loading…" : "No transaction types for this module yet."}
+            {txTypesQuery.isLoading ? t("loading") : t("transactionTypesEmpty")}
           </p>
         ) : (
           <Table>
             <THead>
               <TR>
-                <TH className="w-20">Module</TH>
-                <TH className="w-28">Code</TH>
-                <TH>Name</TH>
-                <TH>Default GL Account</TH>
-                <TH className="w-32 text-right">Status</TH>
+                <TH className="w-20">{t("transactionTypeModule")}</TH>
+                <TH className="w-28">{t("code")}</TH>
+                <TH>{t("name")}</TH>
+                <TH>{t("defaultAccount")}</TH>
+                <TH className="w-32 text-right">{t("transactionTypeStatus")}</TH>
               </TR>
             </THead>
             <TBody>
@@ -153,14 +155,14 @@ export function TransactionTypesScreen({
                     <TD className="font-mono text-xs font-semibold text-[var(--vinea-brand)]">{item.code}</TD>
                     <TD className="text-xs font-medium text-[var(--vinea-ink)]">{item.name}</TD>
                     <TD className="text-xs text-[var(--vinea-ink-muted)]">
-                      {defaultAcc ? `${defaultAcc.code} · ${defaultAcc.name}` : "—"}
+                      {defaultAcc ? `${defaultAcc.code} · ${defaultAcc.name}` : t("emptyValue")}
                     </TD>
                     <TD className="text-right">
                       <div className="flex items-center justify-end gap-2">
                         <button
                           type="button"
                           onClick={() => startEdit(item)}
-                          aria-label={`Edit ${item.name}`}
+                          aria-label={t("editLabel", { name: item.name })}
                           className="rounded p-1 text-[var(--vinea-ink-subtle)] hover:text-[var(--vinea-ink)]"
                         >
                           <Edit2 className="size-3.5" />
@@ -169,10 +171,12 @@ export function TransactionTypesScreen({
                           type="button"
                           onClick={() => handleToggleActive(item)}
                           disabled={!canEdit}
-                          aria-label={`${item.is_active ? "Deactivate" : "Activate"} ${item.name}`}
+                          aria-label={t(item.is_active ? "deactivateLabel" : "activateLabel", {
+                            name: item.name,
+                          })}
                         >
                           <StatusChip tone={item.is_active ? "success" : "neutral"}>
-                            {item.is_active ? "Active" : "Inactive"}
+                            {item.is_active ? t("active") : t("inactive")}
                           </StatusChip>
                         </button>
                       </div>
@@ -186,9 +190,11 @@ export function TransactionTypesScreen({
       </MaintenanceCard>
 
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent title={editingType ? "Edit transaction type" : "New transaction type"}>
+        <DialogContent
+          title={editingType ? t("editTransactionTypeTitle") : t("newTransactionTypeTitle")}
+        >
           <div className="space-y-3 pt-2">
-            <Field label="Code">
+            <Field label={t("code")}>
               <Input
                 value={code}
                 onChange={(e) => setCode(e.target.value)}
@@ -197,28 +203,28 @@ export function TransactionTypesScreen({
                 placeholder={codePlaceholder}
               />
             </Field>
-            <Field label="Name">
+            <Field label={t("name")}>
               <Input
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder={namePlaceholder}
               />
             </Field>
-            <Field label="Default GL account">
+            <Field label={t("defaultAccount")}>
               <Combobox
                 options={toOptions(postableAccounts, (a) => `${a.code} · ${a.name}`)}
                 value={defaultAccountId}
                 onValueChange={setDefaultAccountId}
-                placeholder="Choose default GL account…"
+                placeholder={t("chooseDefaultAccount")}
               />
             </Field>
 
             <div className="flex justify-end gap-2 pt-3">
               <Button variant="ghost" onClick={() => setOpen(false)}>
-                Cancel
+                {t("cancel")}
               </Button>
               <Button variant="primary" disabled={!code || !name || !canEdit} onClick={handleSave}>
-                Save
+                {t("save")}
               </Button>
             </div>
           </div>

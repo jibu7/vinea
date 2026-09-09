@@ -41,6 +41,13 @@ PRIMARY_COMPANY = "Rugari Wines E2E"
 SECONDARY_EMAIL = "e2e.secondary@vinea.example"
 SECONDARY_COMPANY = "Kivu Traders E2E"
 
+# A read-only member of the primary company, holding the seeded "Clerk" role: gl/ar/ap
+# `*_reports_view` and nothing that can write. Every screen that gates its actions on a
+# setup permission needs one of these to prove the gate is real rather than decorative
+# (P4 step 6's AR/AP defaults, and P4 step 9's credit-limit override).
+READONLY_EMAIL = "e2e.readonly@vinea.example"
+READONLY_ROLE_NAME = "Clerk"
+
 
 def _existing_tenant(db, *, email: str) -> tuple[User, Company] | None:
     with platform_scope(db):
@@ -107,6 +114,56 @@ def _ensure_cross_company_membership(db, *, user: User, company: Company) -> Non
         db.commit()
 
 
+def _ensure_member_with_role(
+    db, *, company: Company, email: str, full_name: str, role_name: str
+) -> User:
+    """An already-active, non-owner membership carrying exactly one seeded role. Created
+    directly rather than through the invite flow, which needs a mailed token — the same
+    reason `_ensure_cross_company_membership` exists."""
+    from app.core.security import hash_password
+
+    with platform_scope(db):
+        user = db.scalar(select(User).where(User.email == email))
+        if user is None:
+            user = User(
+                email=email,
+                hashed_password=hash_password(PASSWORD),
+                full_name=full_name,
+                email_verified_at=datetime.now(UTC),
+            )
+            db.add(user)
+            db.flush()
+
+        existing = db.scalar(
+            select(CompanyMembership).where(
+                CompanyMembership.company_id == company.id, CompanyMembership.user_id == user.id
+            )
+        )
+        if existing is not None:
+            db.commit()
+            return user
+
+        role = db.scalar(
+            select(Role).where(Role.company_id == company.id, Role.name == role_name)
+        )
+        if role is None:
+            raise RuntimeError(f"{role_name!r} role missing for company {company.id}")
+
+        membership = CompanyMembership(
+            company_id=company.id,
+            user_id=user.id,
+            email=user.email,
+            is_owner=False,
+            status=MembershipStatus.ACTIVE,
+            accepted_at=datetime.now(UTC),
+        )
+        db.add(membership)
+        db.flush()
+        db.add(MembershipRole(company_id=company.id, membership_id=membership.id, role_id=role.id))
+        db.commit()
+        return user
+
+
 def _ensure_closed_period(db, *, company: Company) -> str | None:
     with platform_scope(db):
         period = db.scalar(
@@ -136,6 +193,13 @@ def main() -> None:
             full_name="E2E Secondary Owner",
         )
         _ensure_cross_company_membership(db, user=secondary_user, company=primary_company)
+        _ensure_member_with_role(
+            db,
+            company=primary_company,
+            email=READONLY_EMAIL,
+            full_name="E2E Read Only",
+            role_name=READONLY_ROLE_NAME,
+        )
         closed_period = _ensure_closed_period(db, company=primary_company)
 
         print(
@@ -145,6 +209,8 @@ def main() -> None:
                     "primary_company": PRIMARY_COMPANY,
                     "secondary_email": SECONDARY_EMAIL,
                     "secondary_company": SECONDARY_COMPANY,
+                    "readonly_email": READONLY_EMAIL,
+                    "readonly_role": READONLY_ROLE_NAME,
                     "password": PASSWORD,
                     "closed_period": closed_period,
                 },

@@ -34,7 +34,8 @@ const EMPTY: Record<Key, string> = {
  * accounts; every other key is an ordinary postable account.
  */
 export default function ArApDefaultsPage() {
-  const t = useTranslations("maintenance");
+  const t = useTranslations("arap.defaults");
+  const tc = useTranslations("arap.common");
   const toast = useToast();
   const showApiError = useApiErrorToast();
   const canEdit = useHasPermission()("gl:setup_manage");
@@ -74,9 +75,9 @@ export default function ArApDefaultsPage() {
     }
     try {
       await updateDefaults.mutateAsync(payload);
-      toast.show({ title: "AR/AP defaults saved", tone: "success" });
+      toast.show({ title: t("saved"), tone: "success" });
     } catch (err) {
-      showApiError(err, "Couldn't save AR/AP defaults");
+      showApiError(err, t("saveFailed"));
     }
   }
 
@@ -84,7 +85,7 @@ export default function ArApDefaultsPage() {
     return (
       <Field label={label}>
         <Combobox
-          options={[{ value: "", label: "Not set" }, ...options]}
+          options={[{ value: "", label: tc("notSet") }, ...options]}
           value={form[key]}
           onValueChange={(v) => setForm({ ...form, [key]: v })}
           placeholder={hint}
@@ -97,83 +98,77 @@ export default function ArApDefaultsPage() {
 
   return (
     <MaintenancePage
-      title={t("arApDefaults")}
-      description="Control accounts and the automatic postings the subledger makes on your behalf"
+      title={t("title")}
+      description={t("subtitle")}
       width="narrow"
     >
-      <MaintenanceCard icon={<Landmark className="size-4" />} title="Control accounts">
+      <MaintenanceCard icon={<Landmark className="size-4" />} title={t("controlAccounts")}>
         {picker(
           "ar_control_account_id",
-          "Accounts receivable control",
+          t("arControl"),
           toOptions(controlAccounts.ar, (a) => `${a.code} · ${a.name}`),
-          "Choose an AR control account…",
+          t("chooseArControl"),
         )}
         {picker(
           "ap_control_account_id",
-          "Accounts payable control",
+          t("apControl"),
           toOptions(controlAccounts.ap, (a) => `${a.code} · ${a.name}`),
-          "Choose an AP control account…",
+          t("chooseApControl"),
         )}
         <p className="flex items-start gap-1.5 text-xs text-[var(--vinea-ink-muted)]">
           <ShieldAlert className="mt-0.5 size-3.5 shrink-0 text-[var(--vinea-warning)]" />
-          Control accounts are subledger-only: a manual journal aimed at one is rejected with
-          <span className="mx-1 font-mono">control_account_direct_posting</span>, and every
-          subledger line touching one carries a partner.
+          <span>
+            {t.rich("controlNote", {
+              code: () => <span className="mx-1 font-mono">{t("controlNoteCode")}</span>,
+            })}
+          </span>
         </p>
       </MaintenanceCard>
 
-      <MaintenanceCard icon={<Sliders className="size-4" />} title="Realized exchange difference">
-        {picker("realized_fx_gain_account_id", "Realized FX gain", accountOptions, "Choose an account…")}
-        {picker("realized_fx_loss_account_id", "Realized FX loss", accountOptions, "Choose an account…")}
-        <p className="text-xs text-[var(--vinea-ink-muted)]">
-          Posted at allocation, on the allocation date, for the base-currency difference between
-          the two documents&rsquo; booking rates. Both keys may point at the same account.
-        </p>
+      <MaintenanceCard icon={<Sliders className="size-4" />} title={t("fx")}>
+        {picker("realized_fx_gain_account_id", t("fxGain"), accountOptions, t("chooseAccount"))}
+        {picker("realized_fx_loss_account_id", t("fxLoss"), accountOptions, t("chooseAccount"))}
+        <p className="text-xs text-[var(--vinea-ink-muted)]">{t("fxNote")}</p>
       </MaintenanceCard>
 
-      <MaintenanceCard icon={<Percent className="size-4" />} title="Settlement discount">
+      <MaintenanceCard icon={<Percent className="size-4" />} title={t("discount")}>
         {picker(
           "settlement_discount_granted_account_id",
-          "Discount granted (AR)",
+          t("discountGranted"),
           accountOptions,
-          "Choose an account…",
+          t("chooseAccount"),
         )}
         {picker(
           "settlement_discount_received_account_id",
-          "Discount received (AP)",
+          t("discountReceived"),
           accountOptions,
-          "Choose an account…",
+          t("chooseAccount"),
         )}
-        <p className="text-xs text-[var(--vinea-ink-muted)]">
-          Taken when the allocation happens, not at invoice time, and posted gross — the VAT
-          treatment of a discount is a fiscalization-phase question.
-        </p>
+        <p className="text-xs text-[var(--vinea-ink-muted)]">{t("discountNote")}</p>
       </MaintenanceCard>
 
-      <MaintenanceCard icon={<Banknote className="size-4" />} title="Post-dated instruments">
+      <MaintenanceCard icon={<Banknote className="size-4" />} title={t("postDated")}>
         {picker(
           "post_dated_receivable_account_id",
-          "Post-dated receivable",
+          t("postDatedReceivable"),
           accountOptions,
-          "Choose an account…",
+          t("chooseAccount"),
         )}
         {picker(
           "post_dated_payable_account_id",
-          "Post-dated payable",
+          t("postDatedPayable"),
           accountOptions,
-          "Choose an account…",
+          t("chooseAccount"),
         )}
-        <p className="text-xs text-[var(--vinea-ink-muted)]">
-          A receipt or payment with a future maturity date books its cash side here instead of
-          the bank, and transfers on or after maturity. It stays allocatable meanwhile.
-        </p>
+        <p className="text-xs text-[var(--vinea-ink-muted)]">{t("postDatedNote")}</p>
       </MaintenanceCard>
 
       <div className="flex items-center justify-between">
         {!canEdit && (
           <p className="text-xs text-[var(--vinea-ink-subtle)]">
-            These keys live on GL settings — changing them needs
-            <span className="mx-1 font-mono">gl:setup_manage</span>.
+            {t.rich("readOnlyNote", {
+              code: () => <span className="mx-1 font-mono">{t("readOnlyNoteCode")}</span>,
+            })}
           </p>
         )}
         <Button
@@ -182,7 +177,7 @@ export default function ArApDefaultsPage() {
           disabled={!canEdit || updateDefaults.isPending}
           onClick={handleSave}
         >
-          {updateDefaults.isPending ? "Saving…" : "Save changes"}
+          {updateDefaults.isPending ? tc("saving") : t("saveChanges")}
         </Button>
       </div>
     </MaintenancePage>

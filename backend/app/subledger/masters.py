@@ -15,6 +15,8 @@ from starlette.requests import Request
 
 from app.core.errors import ConflictError, NotFoundError
 from app.kernel.errors import LedgerStateError
+from app.kernel.posting import gl_settings_for
+from app.models.gl import PROFIT_AND_LOSS_CLASSES, AccountClass, ControlType, GLAccount, GLSettings
 from app.models.partner import (
     ROLE_SETTINGS,
     AgeingBasis,
@@ -855,3 +857,129 @@ def _replace_buckets(db: Session, bucket_set: AgeingBucketSet, buckets: list[Buc
         ]
     )
     db.flush()
+
+
+# --- AR/AP defaults on gl_settings ------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _AccountRule:
+    """What an account must be for one `gl_settings` key to accept it."""
+
+    label: str
+    #: The control type this key requires. `None` means the account must not be a control
+    #: account at all — the posting guard would refuse a subledger-owned account there.
+    control_type: ControlType | None = None
+    #: Allowed account classes; `None` means any class will do.
+    classes: frozenset[AccountClass] | None = None
+
+
+#: Every key is validated the way `PUT /gl/settings` validates its two: the account must
+#: exist in this company, be postable and be active. Beyond that, each key has exactly one
+#: shape that can work at posting time — a control account of the matching type for the two
+#: control keys, a P&L account for the four that absorb gains, losses and discounts, and the
+#: matching side of the balance sheet for the two post-dated holding accounts.
+AR_AP_DEFAULT_RULES: dict[str, _AccountRule] = {
+    "ar_control_account_id": _AccountRule("AR control", control_type=ControlType.AR),
+    "ap_control_account_id": _AccountRule("AP control", control_type=ControlType.AP),
+    "realized_fx_gain_account_id": _AccountRule(
+        "realized FX gain", classes=PROFIT_AND_LOSS_CLASSES
+    ),
+    "realized_fx_loss_account_id": _AccountRule(
+        "realized FX loss", classes=PROFIT_AND_LOSS_CLASSES
+    ),
+    "settlement_discount_granted_account_id": _AccountRule(
+        "settlement discount granted", classes=PROFIT_AND_LOSS_CLASSES
+    ),
+    "settlement_discount_received_account_id": _AccountRule(
+        "settlement discount received", classes=PROFIT_AND_LOSS_CLASSES
+    ),
+    "post_dated_receivable_account_id": _AccountRule(
+        "post-dated receivable", classes=frozenset({AccountClass.ASSET})
+    ),
+    "post_dated_payable_account_id": _AccountRule(
+        "post-dated payable", classes=frozenset({AccountClass.LIABILITY})
+    ),
+}
+
+
+def _reject(field: str, message: str, reason: str) -> None:
+    raise LedgerStateError(
+        message, code="invalid_gl_setting_account", field_errors={field: [reason]}
+    )
+
+
+def _validated_account(db: Session, company_id: int, field: str, account_id: int) -> int:
+    rule = AR_AP_DEFAULT_RULES[field]
+    account = db.get(GLAccount, account_id)
+    if account is None or account.company_id != company_id:
+        _reject(field, f"The {rule.label} account was not found", "not found")
+    if not account.is_postable:
+        _reject(field, f"The {rule.label} account must be postable", "not postable")
+    if not account.is_active:
+        _reject(field, f"The {rule.label} account must be active", "inactive")
+    if rule.control_type is not None:
+        if account.control_type != rule.control_type:
+            _reject(
+                field,
+                f"The {rule.label} account must be a control account of type "
+                f"{rule.control_type.value}",
+                f"not a {rule.control_type.value} control account",
+            )
+    elif account.is_control:
+        _reject(
+            field,
+            f"The {rule.label} account must not be a control account — control accounts are "
+            "subledger-only",
+            "control account",
+        )
+    if rule.classes is not None and account.class_ not in rule.classes:
+        allowed = " or ".join(sorted(c.value for c in rule.classes))
+        _reject(
+            field,
+            f"The {rule.label} account must be {allowed}, not {account.class_.value}",
+            f"must be {allowed}",
+        )
+    return account.id
+
+
+def update_ar_ap_defaults(
+    db: Session,
+    company_id: int,
+    changes: dict[str, int | None],
+    *,
+    actor: User,
+    request: Request | None = None,
+) -> GLSettings:
+    """Sets AR/AP `gl_settings` keys, validating each account against its key's rule and
+    recording what changed. Only the keys present in `changes` are touched; an explicit
+    `None` clears a key, which is always allowed — an unset default fails loudly at posting
+    time, whereas a *wrongly* set one posts to the wrong account silently."""
+    unknown = set(changes) - set(AR_AP_DEFAULT_RULES)
+    if unknown:
+        raise LedgerStateError(
+            f"Not an AR/AP default: {', '.join(sorted(unknown))}", code="unknown_gl_setting"
+        )
+    settings = gl_settings_for(db, company_id)
+    before = {field: getattr(settings, field) for field in changes}
+    for field, value in changes.items():
+        setattr(
+            settings,
+            field,
+            None if value is None else _validated_account(db, company_id, field, value),
+        )
+    db.flush()
+    after = {field: getattr(settings, field) for field in changes}
+    if after != before:
+        audit(
+            db,
+            company_id,
+            "ar_ap_defaults.updated",
+            "gl_settings",
+            settings.id,
+            actor=actor,
+            before={k: v for k, v in before.items() if before[k] != after[k]},
+            after={k: v for k, v in after.items() if before[k] != after[k]},
+            request=request,
+        )
+    return settings

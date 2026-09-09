@@ -1,3 +1,29 @@
 {
-  "extends": "next/core-web-vitals"
+  "extends": "next/core-web-vitals",
+  "overrides": [
+    {
+      "files": [
+        "src/app/(shell)/maintenance/customers/**/*.tsx",
+        "src/app/(shell)/maintenance/suppliers/**/*.tsx",
+        "src/app/(shell)/maintenance/sales-reps/**/*.tsx",
+        "src/app/(shell)/maintenance/payment-terms/**/*.tsx",
+        "src/app/(shell)/maintenance/ageing-bucket-sets/**/*.tsx",
+        "src/app/(shell)/maintenance/ar-ap-defaults/**/*.tsx",
+        "src/app/(shell)/maintenance/ar-transaction-types/**/*.tsx",
+        "src/app/(shell)/maintenance/ap-transaction-types/**/*.tsx",
+        "src/app/(shell)/maintenance/rename-partner-code/**/*.tsx",
+        "src/features/subledger/**/*.tsx",
+        "src/features/gl/transaction-types-screen.tsx"
+      ],
+      "rules": {
+        "react/jsx-no-literals": [
+          "error",
+          {
+            "noStrings": true,
+            "ignoreProps": true
+          }
+        ]
+      }
+    }
+  ]
 }

@@ -1,8 +1,8 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { useTranslations } from "next-intl";
 import Link from "next/link";
+import { useTranslations } from "next-intl";
 import { Edit2, Plus, Search, Users } from "lucide-react";
 import { Button } from "@/design/components/button";
 import { Combobox } from "@/design/components/combobox";
@@ -21,7 +21,7 @@ import { useApiErrorToast } from "@/lib/use-api-error-toast";
 import { useCreatePartner, usePartners, useUpdatePartner } from "./hooks";
 import { PartnerContactsPanel } from "./partner-contacts-panel";
 import { PartnerSettingsForm } from "./partner-settings-form";
-import { ROLE_COPY, partnerCode, type Partner, type PartnerRole } from "./types";
+import { partnerCode, type Partner, type PartnerRole } from "./types";
 
 interface DetailsForm {
   name: string;
@@ -38,12 +38,13 @@ const BLANK: DetailsForm = { name: "", code: "", tin: "", email: "", phone: "", 
 /**
  * Customers and Suppliers are one screen: `partners` is one table with `is_customer` /
  * `is_supplier` flags, so the role only decides which code column is in play, which settings
- * row is edited and what the copy says. A partner that is already the other role keeps that
- * role untouched — nothing here ever clears the opposite code.
+ * row is edited and which `arap.role.*` message block supplies the copy. A partner that is
+ * already the other role keeps that role untouched — nothing here ever clears the other code.
  */
 export function PartnersScreen({ role }: { role: PartnerRole }) {
-  const t = useTranslations("maintenance");
-  const copy = ROLE_COPY[role];
+  const t = useTranslations("arap.partners");
+  const tc = useTranslations("arap.common");
+  const tr = useTranslations(`arap.role.${role}`);
   const toast = useToast();
   const showApiError = useApiErrorToast();
   const hasPermission = useHasPermission();
@@ -76,6 +77,10 @@ export function PartnersScreen({ role }: { role: PartnerRole }) {
   }, [partners.data, search, role]);
 
   const codeField = role === "ar" ? "customer_code" : "supplier_code";
+  const currencyOptions = [
+    { value: "", label: t("baseCurrency") },
+    ...toOptions(currencies.data ?? [], (c) => `${c.code} · ${c.name}`),
+  ];
 
   function openDetail(partner: Partner) {
     setSelected(partner);
@@ -101,12 +106,12 @@ export function PartnersScreen({ role }: { role: PartnerRole }) {
         notes: form.notes || null,
         currency_id: form.currencyId ? Number(form.currencyId) : null,
       });
-      toast.show({ title: `${copy.partner} created`, description: created.name, tone: "success" });
+      toast.show({ title: tr("created"), description: created.name, tone: "success" });
       setCreateOpen(false);
       setForm(BLANK);
       openDetail(created);
     } catch (err) {
-      showApiError(err, `Couldn't create ${copy.partner.toLowerCase()}`);
+      showApiError(err, tr("createFailed"));
     }
   }
 
@@ -128,9 +133,9 @@ export function PartnersScreen({ role }: { role: PartnerRole }) {
         },
       });
       setSelected(updated);
-      toast.show({ title: `${copy.partner} saved`, tone: "success" });
+      toast.show({ title: tr("saved"), tone: "success" });
     } catch (err) {
-      showApiError(err, "Couldn't save changes");
+      showApiError(err, t("saveFailed"));
     }
   }
 
@@ -142,18 +147,18 @@ export function PartnersScreen({ role }: { role: PartnerRole }) {
       });
       toast.show({
         title: partner.name,
-        description: partner.is_active ? "Deactivated" : "Activated",
+        description: partner.is_active ? tc("deactivated") : tc("activated"),
         tone: "success",
       });
     } catch (err) {
-      showApiError(err, `Couldn't update ${copy.partner.toLowerCase()}`);
+      showApiError(err, tr("updateFailed"));
     }
   }
 
   return (
     <MaintenancePage
-      title={t(role === "ar" ? "customers" : "suppliers")}
-      description={`Partner master, ${role.toUpperCase()} role — settings, credit terms and contacts`}
+      title={tr("partners")}
+      description={tr("subtitle")}
       actions={
         <Button
           variant="primary"
@@ -164,13 +169,13 @@ export function PartnersScreen({ role }: { role: PartnerRole }) {
           disabled={!canEdit}
           className="gap-1.5 text-xs"
         >
-          <Plus className="size-3.5" /> New {copy.partner.toLowerCase()}
+          <Plus className="size-3.5" /> {tr("newPartner")}
         </Button>
       }
     >
       <MaintenanceCard
         icon={<Users className="size-4" />}
-        title={copy.partners}
+        title={tr("partners")}
         actions={
           <div className="flex items-center gap-3">
             <label className="flex items-center gap-1.5 text-xs text-[var(--vinea-ink-muted)]">
@@ -180,16 +185,17 @@ export function PartnersScreen({ role }: { role: PartnerRole }) {
                 onChange={(e) => setIncludeInactive(e.target.checked)}
                 className="size-3.5"
               />
-              Show inactive
+              {tc("showInactive")}
             </label>
             <div className="relative">
               <Search className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-[var(--vinea-ink-subtle)]" />
               <Input
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                aria-label={`Search ${copy.partners.toLowerCase()}`}
-                placeholder="Search name, code, TIN…"
-                // `[data-density=dense]` re-sets px-2 on Input, so the icon gutter needs the same variant.
+                aria-label={tr("searchLabel")}
+                placeholder={t("searchPlaceholder")}
+                // `[data-density=dense]` re-sets px-2 on Input, so the icon gutter needs the
+                // same variant or the placeholder runs under the magnifier.
                 className="w-56 pl-7 [[data-density=dense]_&]:pl-7"
               />
             </div>
@@ -198,18 +204,18 @@ export function PartnersScreen({ role }: { role: PartnerRole }) {
       >
         {rows.length === 0 ? (
           <p className="py-8 text-center text-xs text-[var(--vinea-ink-subtle)]">
-            {partners.isLoading ? "Loading…" : `No ${copy.partners.toLowerCase()} match this view.`}
+            {partners.isLoading ? tc("loading") : tr("noneMatch")}
           </p>
         ) : (
           <Table>
             <THead>
               <TR>
-                <TH className="w-32">{copy.code}</TH>
-                <TH>Name</TH>
-                <TH className="w-28">TIN</TH>
-                <TH>Email</TH>
-                <TH className="w-24">Currency</TH>
-                <TH className="w-32 text-right">Status</TH>
+                <TH className="w-32">{tr("code")}</TH>
+                <TH>{tc("name")}</TH>
+                <TH className="w-28">{t("tin")}</TH>
+                <TH>{tc("email")}</TH>
+                <TH className="w-24">{t("currency")}</TH>
+                <TH className="w-32 text-right">{tc("status")}</TH>
               </TR>
             </THead>
             <TBody>
@@ -224,23 +230,25 @@ export function PartnersScreen({ role }: { role: PartnerRole }) {
                       <span className="inline-flex items-center gap-2">
                         {partner.name}
                         {partner.is_customer && partner.is_supplier && (
-                          <StatusChip tone="info">Both roles</StatusChip>
+                          <StatusChip tone="info">{t("bothRoles")}</StatusChip>
                         )}
                       </span>
                     </TD>
                     <TD className="font-mono text-xs text-[var(--vinea-ink-muted)]">
-                      {partner.tin ?? "—"}
+                      {partner.tin ?? tc("emptyValue")}
                     </TD>
-                    <TD className="text-xs text-[var(--vinea-ink-muted)]">{partner.email ?? "—"}</TD>
                     <TD className="text-xs text-[var(--vinea-ink-muted)]">
-                      {currency?.code ?? "Base"}
+                      {partner.email ?? tc("emptyValue")}
+                    </TD>
+                    <TD className="text-xs text-[var(--vinea-ink-muted)]">
+                      {currency?.code ?? t("baseCurrency")}
                     </TD>
                     <TD className="text-right">
                       <div className="flex items-center justify-end gap-2">
                         <button
                           type="button"
                           onClick={() => openDetail(partner)}
-                          aria-label={`Edit ${partner.name}`}
+                          aria-label={tc("editLabel", { name: partner.name })}
                           className="rounded p-1 text-[var(--vinea-ink-subtle)] hover:text-[var(--vinea-ink)]"
                         >
                           <Edit2 className="size-3.5" />
@@ -249,10 +257,12 @@ export function PartnersScreen({ role }: { role: PartnerRole }) {
                           type="button"
                           onClick={() => toggleActive(partner)}
                           disabled={!canEdit}
-                          aria-label={`${partner.is_active ? "Deactivate" : "Activate"} ${partner.name}`}
+                          aria-label={tc(partner.is_active ? "deactivateLabel" : "activateLabel", {
+                            name: partner.name,
+                          })}
                         >
                           <StatusChip tone={partner.is_active ? "success" : "neutral"}>
-                            {partner.is_active ? "Active" : "Inactive"}
+                            {partner.is_active ? tc("active") : tc("inactive")}
                           </StatusChip>
                         </button>
                       </div>
@@ -264,64 +274,63 @@ export function PartnersScreen({ role }: { role: PartnerRole }) {
           </Table>
         )}
         <p className="text-xs text-[var(--vinea-ink-subtle)]">
-          Codes change on the{" "}
-          <Link
-            href={`/maintenance/rename-partner-code?role=${role}`}
-            className="text-[var(--vinea-brand)] underline"
-          >
-            Rename {copy.partner.toLowerCase()} code
-          </Link>{" "}
-          screen, which keeps the full history.
+          {t.rich("renameHint", {
+            link: () => (
+              <Link
+                href={`/maintenance/rename-partner-code?role=${role}`}
+                className="text-[var(--vinea-brand)] underline"
+              >
+                {tr("renameLink")}
+              </Link>
+            ),
+          })}
         </p>
       </MaintenanceCard>
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-        <DialogContent title={`New ${copy.partner.toLowerCase()}`}>
+        <DialogContent title={tr("newPartner")}>
           <div className="space-y-3 pt-2">
-            <Field label={copy.code}>
+            <Field label={tr("code")}>
               <Input
                 value={form.code}
                 onChange={(e) => setForm({ ...form, code: e.target.value })}
                 className="font-mono"
-                placeholder={role === "ar" ? "CUST001" : "SUPP001"}
+                placeholder={tr("codePlaceholder")}
               />
             </Field>
-            <Field label="Name">
+            <Field label={tc("name")}>
               <Input
                 value={form.name}
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
-                placeholder="Amahoro Retail Ltd"
+                placeholder={t("namePlaceholder")}
               />
             </Field>
             <div className="grid grid-cols-2 gap-3">
-              <Field label="TIN">
+              <Field label={t("tin")}>
                 <Input
                   value={form.tin}
                   onChange={(e) => setForm({ ...form, tin: e.target.value })}
                   className="font-mono"
                 />
               </Field>
-              <Field label="Currency">
+              <Field label={t("currency")}>
                 <Combobox
-                  options={[
-                    { value: "", label: "Base currency" },
-                    ...toOptions(currencies.data ?? [], (c) => `${c.code} · ${c.name}`),
-                  ]}
+                  options={currencyOptions}
                   value={form.currencyId}
                   onValueChange={(v) => setForm({ ...form, currencyId: v })}
-                  placeholder="Base currency"
+                  placeholder={t("baseCurrency")}
                 />
               </Field>
             </div>
             <div className="grid grid-cols-2 gap-3">
-              <Field label="Email">
+              <Field label={tc("email")}>
                 <Input
                   type="email"
                   value={form.email}
                   onChange={(e) => setForm({ ...form, email: e.target.value })}
                 />
               </Field>
-              <Field label="Phone">
+              <Field label={tc("phone")}>
                 <Input
                   value={form.phone}
                   onChange={(e) => setForm({ ...form, phone: e.target.value })}
@@ -330,14 +339,14 @@ export function PartnersScreen({ role }: { role: PartnerRole }) {
             </div>
             <div className="flex justify-end gap-2 pt-3">
               <Button variant="ghost" onClick={() => setCreateOpen(false)}>
-                Cancel
+                {tc("cancel")}
               </Button>
               <Button
                 variant="primary"
                 disabled={!form.code || !form.name || createPartner.isPending}
                 onClick={handleCreate}
               >
-                Create
+                {tc("create")}
               </Button>
             </div>
           </div>
@@ -348,65 +357,62 @@ export function PartnersScreen({ role }: { role: PartnerRole }) {
         {selected && (
           <DrawerContent
             title={selected.name}
-            description={`${copy.code} ${partnerCode(selected, role) ?? "—"}`}
+            description={`${tr("code")} ${partnerCode(selected, role) ?? tc("emptyValue")}`}
           >
             <Tabs defaultValue="details">
               <TabsList className="mb-4">
-                <TabsTrigger value="details">Details</TabsTrigger>
-                <TabsTrigger value="settings">{role.toUpperCase()} settings</TabsTrigger>
-                <TabsTrigger value="contacts">Contacts</TabsTrigger>
+                <TabsTrigger value="details">{t("detailsTab")}</TabsTrigger>
+                <TabsTrigger value="settings">{tr("settingsTab")}</TabsTrigger>
+                <TabsTrigger value="contacts">{t("contactsTab")}</TabsTrigger>
               </TabsList>
 
               <TabsContent value="details" className="space-y-3">
-                <Field label={copy.code}>
+                <Field label={tr("code")}>
                   <Input
                     value={detailsForm.code}
                     onChange={(e) => setDetailsForm({ ...detailsForm, code: e.target.value })}
                     className="font-mono"
                   />
                 </Field>
-                <Field label="Name">
+                <Field label={tc("name")}>
                   <Input
                     value={detailsForm.name}
                     onChange={(e) => setDetailsForm({ ...detailsForm, name: e.target.value })}
                   />
                 </Field>
                 <div className="grid grid-cols-2 gap-3">
-                  <Field label="TIN">
+                  <Field label={t("tin")}>
                     <Input
                       value={detailsForm.tin}
                       onChange={(e) => setDetailsForm({ ...detailsForm, tin: e.target.value })}
                       className="font-mono"
                     />
                   </Field>
-                  <Field label="Currency">
+                  <Field label={t("currency")}>
                     <Combobox
-                      options={[
-                        { value: "", label: "Base currency" },
-                        ...toOptions(currencies.data ?? [], (c) => `${c.code} · ${c.name}`),
-                      ]}
+                      options={currencyOptions}
                       value={detailsForm.currencyId}
                       onValueChange={(v) => setDetailsForm({ ...detailsForm, currencyId: v })}
-                      placeholder="Base currency"
+                      placeholder={t("baseCurrency")}
                     />
                   </Field>
                 </div>
                 <div className="grid grid-cols-2 gap-3">
-                  <Field label="Email">
+                  <Field label={tc("email")}>
                     <Input
                       type="email"
                       value={detailsForm.email}
                       onChange={(e) => setDetailsForm({ ...detailsForm, email: e.target.value })}
                     />
                   </Field>
-                  <Field label="Phone">
+                  <Field label={tc("phone")}>
                     <Input
                       value={detailsForm.phone}
                       onChange={(e) => setDetailsForm({ ...detailsForm, phone: e.target.value })}
                     />
                   </Field>
                 </div>
-                <Field label="Notes">
+                <Field label={tc("notes")}>
                   <Input
                     value={detailsForm.notes}
                     onChange={(e) => setDetailsForm({ ...detailsForm, notes: e.target.value })}
@@ -418,7 +424,7 @@ export function PartnersScreen({ role }: { role: PartnerRole }) {
                     disabled={!canEdit || updatePartner.isPending}
                     onClick={handleSaveDetails}
                   >
-                    {updatePartner.isPending ? "Saving…" : "Save details"}
+                    {updatePartner.isPending ? tc("saving") : t("saveDetails")}
                   </Button>
                 </div>
               </TabsContent>

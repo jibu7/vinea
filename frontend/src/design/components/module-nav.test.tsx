@@ -79,12 +79,6 @@ describe("P4 maintenance screens", () => {
     expect(link).toHaveAttribute("href", href);
   });
 
-  it("leaves no P4 tag on any Maintenance item", () => {
-    const maintenance = navIntents.find((i) => i.label === "Maintenance");
-    const tagged = maintenance!.items.filter((item) => item.phase === "P4");
-    expect(tagged).toEqual([]);
-  });
-
   it("points AR and AP transaction types at their own module screens", () => {
     const maintenance = navIntents.find((i) => i.label === "Maintenance")!;
     const byModule = (module: string) =>

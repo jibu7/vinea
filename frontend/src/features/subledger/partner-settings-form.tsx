@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useTranslations } from "next-intl";
 import { Button } from "@/design/components/button";
 import { Combobox } from "@/design/components/combobox";
 import { Field, Input } from "@/design/components/input";
@@ -11,7 +12,7 @@ import { toOptions } from "@/features/gl/lookups";
 import { trimDecimalString } from "@/lib/format";
 import { useApiErrorToast } from "@/lib/use-api-error-toast";
 import { usePartnerSettings, usePaymentTerms, useSalesReps, useSavePartnerSettings } from "./hooks";
-import { ROLE_COPY, type PartnerRole, type RoleSettingsPayload, type TaxMode } from "./types";
+import type { PartnerRole, RoleSettingsPayload, TaxMode } from "./types";
 
 const NONE = "";
 
@@ -22,7 +23,7 @@ function idOrNull(value: string): number | null {
 /**
  * The per-role settings block: control-account override, terms, credit limit, sales rep and
  * the posting defaults. One form for both roles — `role` picks the endpoint, the control
- * accounts on offer and whether a sales rep is meaningful.
+ * accounts on offer, whether a sales rep is meaningful, and which `arap.role.*` copy applies.
  */
 export function PartnerSettingsForm({
   role,
@@ -33,6 +34,9 @@ export function PartnerSettingsForm({
   partnerId: number;
   canEdit: boolean;
 }) {
+  const t = useTranslations("arap.settings");
+  const tc = useTranslations("arap.common");
+  const tr = useTranslations(`arap.role.${role}`);
   const toast = useToast();
   const showApiError = useApiErrorToast();
 
@@ -97,80 +101,73 @@ export function PartnerSettingsForm({
     };
     try {
       await save.mutateAsync({ partnerId, payload });
-      toast.show({ title: "Settings saved", tone: "success" });
+      toast.show({ title: t("saved"), tone: "success" });
     } catch (err) {
-      showApiError(err, "Couldn't save settings");
+      showApiError(err, t("saveFailed"));
     }
   }
 
+  const noneOption = { value: NONE, label: tc("none") };
+
   return (
     <div className="space-y-3">
-      <Field label={`${ROLE_COPY[role].controlAccount} override`}>
+      <Field label={tr("controlAccountOverride")}>
         <Combobox
           options={[
-            { value: NONE, label: "Company default" },
+            { value: NONE, label: t("companyDefault") },
             ...toOptions(controlAccounts, (a) => `${a.code} · ${a.name}`),
           ]}
           value={controlAccountId}
           onValueChange={setControlAccountId}
-          placeholder="Company default"
+          placeholder={t("companyDefault")}
         />
       </Field>
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <Field label="Payment terms">
+        <Field label={t("paymentTerms")}>
           <Combobox
-            options={[
-              { value: NONE, label: "None" },
-              ...toOptions(terms.data ?? [], (t) => `${t.code} · ${t.name}`),
-            ]}
+            options={[noneOption, ...toOptions(terms.data ?? [], (x) => `${x.code} · ${x.name}`)]}
             value={paymentTermsId}
             onValueChange={setPaymentTermsId}
-            placeholder="None"
+            placeholder={tc("none")}
           />
         </Field>
-        <Field label="Credit limit (base currency — blank means no limit, 0 means no credit)">
+        <Field label={t("creditLimit")}>
           <Input
             value={creditLimit}
             onChange={(e) => setCreditLimit(e.target.value)}
             inputMode="decimal"
-            placeholder="No limit"
+            placeholder={t("creditLimitPlaceholder")}
             className="text-right font-mono tabular-nums"
           />
         </Field>
       </div>
 
       {role === "ar" && (
-        <Field label="Sales representative">
+        <Field label={t("salesRep")}>
           <Combobox
-            options={[
-              { value: NONE, label: "None" },
-              ...toOptions(reps.data ?? [], (r) => `${r.code} · ${r.name}`),
-            ]}
+            options={[noneOption, ...toOptions(reps.data ?? [], (r) => `${r.code} · ${r.name}`)]}
             value={salesRepId}
             onValueChange={setSalesRepId}
-            placeholder="None"
+            placeholder={tc("none")}
           />
         </Field>
       )}
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <Field label="Default tax code">
+        <Field label={t("defaultTaxCode")}>
           <Combobox
-            options={[
-              { value: NONE, label: "None" },
-              ...toOptions(taxCodes.data ?? [], (t) => `${t.code} · ${t.name}`),
-            ]}
+            options={[noneOption, ...toOptions(taxCodes.data ?? [], (x) => `${x.code} · ${x.name}`)]}
             value={taxCodeId}
             onValueChange={setTaxCodeId}
-            placeholder="None"
+            placeholder={tc("none")}
           />
         </Field>
-        <Field label="Tax mode">
+        <Field label={t("taxMode")}>
           <Select
             options={[
-              { value: "exclusive", label: "Exclusive — prices exclude tax" },
-              { value: "inclusive", label: "Inclusive — prices include tax" },
+              { value: "exclusive", label: t("taxModeExclusive") },
+              { value: "inclusive", label: t("taxModeInclusive") },
             ]}
             value={taxMode}
             onValueChange={(v) => setTaxMode(v as TaxMode)}
@@ -179,43 +176,33 @@ export function PartnerSettingsForm({
       </div>
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <Field label="Default branch">
+        <Field label={t("defaultBranch")}>
           <Combobox
-            options={[
-              { value: NONE, label: "None" },
-              ...toOptions(branches.data ?? [], (b) => `${b.code} · ${b.name}`),
-            ]}
+            options={[noneOption, ...toOptions(branches.data ?? [], (b) => `${b.code} · ${b.name}`)]}
             value={branchId}
             onValueChange={setBranchId}
-            placeholder="None"
+            placeholder={tc("none")}
           />
         </Field>
-        <Field label="Default project">
+        <Field label={t("defaultProject")}>
           <Combobox
-            options={[
-              { value: NONE, label: "None" },
-              ...toOptions(projects.data ?? [], (p) => `${p.code} · ${p.name}`),
-            ]}
+            options={[noneOption, ...toOptions(projects.data ?? [], (x) => `${x.code} · ${x.name}`)]}
             value={projectId}
             onValueChange={setProjectId}
-            placeholder="None"
+            placeholder={tc("none")}
           />
         </Field>
       </div>
 
-      <Field
-        label={
-          role === "ar" ? "Default revenue account" : "Default expense account"
-        }
-      >
+      <Field label={tr("defaultGlAccount")}>
         <Combobox
           options={[
-            { value: NONE, label: "None" },
+            noneOption,
             ...toOptions(revenueOrCostAccounts, (a) => `${a.code} · ${a.name}`),
           ]}
           value={glAccountId}
           onValueChange={setGlAccountId}
-          placeholder="None"
+          placeholder={tc("none")}
         />
       </Field>
 
@@ -226,7 +213,7 @@ export function PartnerSettingsForm({
           onChange={(e) => setOnHold(e.target.checked)}
           className="size-3.5"
         />
-        On hold — block new documents for this {role === "ar" ? "customer" : "supplier"}
+        {tr("onHold")}
       </label>
 
       <div className="flex justify-end pt-2">
@@ -235,7 +222,7 @@ export function PartnerSettingsForm({
           disabled={!canEdit || save.isPending || settings.isLoading}
           onClick={handleSave}
         >
-          {save.isPending ? "Saving…" : "Save settings"}
+          {save.isPending ? tc("saving") : t("saveSettings")}
         </Button>
       </div>
     </div>

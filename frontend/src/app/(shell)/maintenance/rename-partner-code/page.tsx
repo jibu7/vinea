@@ -14,7 +14,7 @@ import { TBody, TD, TH, THead, TR, Table } from "@/design/components/table";
 import { useToast } from "@/design/components/toast";
 import { useHasPermission } from "@/features/auth/hooks";
 import { usePartnerHistory, usePartners, useUpdatePartner } from "@/features/subledger/hooks";
-import { ROLE_COPY, partnerCode, type PartnerRole } from "@/features/subledger/types";
+import { partnerCode, type PartnerRole } from "@/features/subledger/types";
 import { formatDate } from "@/lib/format";
 import { useApiErrorToast } from "@/lib/use-api-error-toast";
 
@@ -30,7 +30,9 @@ function codeOf(record: Record<string, unknown> | null, role: PartnerRole): stri
  * hangs off `partner_id`, which is why the history below survives the rename.
  */
 function RenamePartnerCodeView() {
-  const t = useTranslations("maintenance");
+  const t = useTranslations("arap.rename");
+  const tc = useTranslations("arap.common");
+  const tp = useTranslations("arap.partners");
   const searchParams = useSearchParams();
   const toast = useToast();
   const showApiError = useApiErrorToast();
@@ -41,7 +43,7 @@ function RenamePartnerCodeView() {
   const [selectedId, setSelectedId] = useState("");
   const [newCode, setNewCode] = useState("");
 
-  const copy = ROLE_COPY[role];
+  const tr = useTranslations(`arap.role.${role}`);
   const canEdit = hasPermission(`${role}:setup_manage`);
 
   const partners = usePartners(role, { includeInactive: true });
@@ -72,13 +74,13 @@ function RenamePartnerCodeView() {
         payload: role === "ar" ? { customer_code: newCode } : { supplier_code: newCode },
       });
       toast.show({
-        title: `${copy.partner} renamed`,
+        title: tr("renamed"),
         description: `${existing} → ${partnerCode(updated, role)}`,
         tone: "success",
       });
       history.refetch();
     } catch (err) {
-      showApiError(err, `Couldn't rename ${copy.partner.toLowerCase()}`);
+      showApiError(err, tr("renameFailed"));
     }
   }
 
@@ -86,23 +88,23 @@ function RenamePartnerCodeView() {
 
   return (
     <MaintenancePage
-      title={t("renamePartnerCode")}
-      description="Change a code while every document, allocation and open item keeps its history"
+      title={t("title")}
+      description={t("subtitle")}
       backHref={role === "ar" ? "/maintenance/customers" : "/maintenance/suppliers"}
     >
-      <MaintenanceCard icon={<Tag className="size-4" />} title="Select a code to rename">
+      <MaintenanceCard icon={<Tag className="size-4" />} title={t("selectTitle")}>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-[12rem_1fr]">
-          <Field label="Role">
+          <Field label={t("roleLabel")}>
             <Select
               options={[
-                { value: "ar", label: "Customer" },
-                { value: "ap", label: "Supplier" },
+                { value: "ar", label: t("roleAr") },
+                { value: "ap", label: t("roleAp") },
               ]}
               value={role}
               onValueChange={(v) => switchRole(v as PartnerRole)}
             />
           </Field>
-          <Field label={copy.partner}>
+          <Field label={tr("partner")}>
             <Combobox
               options={(partners.data ?? []).map((p) => ({
                 value: String(p.id),
@@ -110,7 +112,7 @@ function RenamePartnerCodeView() {
               }))}
               value={selectedId}
               onValueChange={setSelectedId}
-              placeholder={`Choose ${copy.partner.toLowerCase()}…`}
+              placeholder={tr("choose")}
             />
           </Field>
         </div>
@@ -120,34 +122,34 @@ function RenamePartnerCodeView() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-xs uppercase tracking-wider text-[var(--vinea-ink-subtle)]">
-                  {copy.partner}
+                  {tr("partner")}
                 </p>
                 <p className="text-base font-semibold text-[var(--vinea-ink)]">{current.name}</p>
               </div>
               <div className="flex gap-2">
                 {current.is_customer && current.is_supplier && (
-                  <StatusChip tone="info">Both roles</StatusChip>
+                  <StatusChip tone="info">{tp("bothRoles")}</StatusChip>
                 )}
                 <StatusChip tone={current.is_active ? "success" : "neutral"}>
-                  {current.is_active ? "Active" : "Inactive"}
+                  {current.is_active ? tc("active") : tc("inactive")}
                 </StatusChip>
               </div>
             </div>
 
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <Field label={`Current ${copy.code.toLowerCase()}`}>
+              <Field label={tr("currentCode")}>
                 <Input
                   value={partnerCode(current, role) ?? ""}
                   disabled
                   className="bg-[var(--vinea-surface-sunken)] font-mono"
                 />
               </Field>
-              <Field label={`New ${copy.code.toLowerCase()}`}>
+              <Field label={tr("newCode")}>
                 <Input
                   value={newCode}
                   onChange={(e) => setNewCode(e.target.value)}
                   className="font-mono"
-                  placeholder={role === "ar" ? "CUST100" : "SUPP100"}
+                  placeholder={tr("newCodePlaceholder")}
                 />
               </Field>
             </div>
@@ -155,15 +157,14 @@ function RenamePartnerCodeView() {
             <div className="flex items-center justify-between gap-4">
               <p className="flex items-center gap-2 text-xs text-[var(--vinea-ink-muted)]">
                 <ShieldAlert className="size-4 shrink-0 text-[var(--vinea-warning)]" />
-                Documents, allocations and journal lines stay tied to this partner; only the
-                visible code changes. The other role&rsquo;s code is untouched.
+                {t("safetyNote")}
               </p>
               <Button
                 variant="primary"
                 disabled={!changed || !canEdit || updatePartner.isPending}
                 onClick={handleRename}
               >
-                {updatePartner.isPending ? "Saving…" : "Rename"}
+                {updatePartner.isPending ? tc("saving") : t("rename")}
               </Button>
             </div>
           </div>
@@ -171,21 +172,19 @@ function RenamePartnerCodeView() {
       </MaintenanceCard>
 
       {current && (
-        <MaintenanceCard icon={<History className="size-4" />} title="Rename history">
+        <MaintenanceCard icon={<History className="size-4" />} title={t("historyTitle")}>
           {history.isLoading ? (
-            <p className="py-4 text-center text-xs text-[var(--vinea-ink-subtle)]">Loading history…</p>
+            <p className="py-4 text-center text-xs text-[var(--vinea-ink-subtle)]">{t("loadingHistory")}</p>
           ) : (history.data ?? []).length === 0 ? (
-            <p className="text-xs text-[var(--vinea-ink-subtle)]">
-              No change events recorded for this {copy.partner.toLowerCase()}.
-            </p>
+            <p className="text-xs text-[var(--vinea-ink-subtle)]">{tr("noHistory")}</p>
           ) : (
             <Table>
               <THead>
                 <TR>
-                  <TH className="w-36">Timestamp</TH>
-                  <TH className="w-40">Event</TH>
-                  <TH>Details</TH>
-                  <TH className="w-48 text-right">Changed by</TH>
+                  <TH className="w-36">{t("timestamp")}</TH>
+                  <TH className="w-40">{t("event")}</TH>
+                  <TH>{t("details")}</TH>
+                  <TH className="w-48 text-right">{t("changedBy")}</TH>
                 </TR>
               </THead>
               <TBody>
@@ -208,12 +207,14 @@ function RenamePartnerCodeView() {
                           </span>
                         ) : (
                           <span className="text-[var(--vinea-ink-muted)]">
-                            {String((record.after as { name?: string } | null)?.name ?? "—")}
+                            {String(
+                              (record.after as { name?: string } | null)?.name ?? tc("emptyValue"),
+                            )}
                           </span>
                         )}
                       </TD>
                       <TD className="text-right text-xs text-[var(--vinea-ink-muted)]">
-                        {record.actor_email ?? "System"}
+                        {record.actor_email ?? t("system")}
                       </TD>
                     </TR>
                   );
@@ -228,9 +229,12 @@ function RenamePartnerCodeView() {
 }
 
 export default function RenamePartnerCodePage() {
+  const tc = useTranslations("arap.common");
   return (
     <Suspense
-      fallback={<div className="flex min-h-screen items-center justify-center text-sm">Loading…</div>}
+      fallback={
+        <div className="flex min-h-screen items-center justify-center text-sm">{tc("loading")}</div>
+      }
     >
       <RenamePartnerCodeView />
     </Suspense>

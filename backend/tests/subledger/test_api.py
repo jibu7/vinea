@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import set_tenant
+from app.models.audit import AuditLog
 from app.models.fiscal import AccountingPeriod, PeriodStatus
 from app.models.partner import Partner
 from app.subledger import masters
@@ -387,3 +388,140 @@ def test_ar_setup_manager_maintains_ar_transaction_types_without_gl_rights(
         ).status_code
         == 403
     )
+
+
+# --- AR/AP defaults validation (review item 3) --------------------------------------------
+
+DEFAULTS_PATH = "/api/v1/subledger/defaults"
+
+
+def _accounts(api: Api) -> dict[str, dict]:
+    return {row["code"]: row for row in api.client.get("/api/v1/gl/accounts").json()}
+
+
+@pytest.mark.parametrize(
+    ("field", "account_code", "reason"),
+    [
+        # Control keys demand a control account of their own type — the AP control account
+        # in the AR slot would reconcile the wrong subledger.
+        ("ar_control_account_id", "2100", "not a ar control account"),
+        ("ap_control_account_id", "1200", "not a ap control account"),
+        ("ar_control_account_id", "4100", "not a ar control account"),
+        # The four P&L keys refuse a balance-sheet account (1500 Prepayments and 2300
+        # Accrued Expenses are both plain, postable, non-control)...
+        ("realized_fx_gain_account_id", "1500", "must be expense or income"),
+        ("realized_fx_loss_account_id", "2300", "must be expense or income"),
+        ("settlement_discount_granted_account_id", "1500", "must be expense or income"),
+        ("settlement_discount_received_account_id", "2300", "must be expense or income"),
+        # ...and a control account, whichever class it is. 1120 is the bank control account,
+        # so it is refused for being control-owned before its class is even considered.
+        ("realized_fx_gain_account_id", "1200", "control account"),
+        ("realized_fx_loss_account_id", "1120", "control account"),
+        # The post-dated holding accounts sit on their own side of the balance sheet.
+        ("post_dated_receivable_account_id", "2100", "control account"),
+        ("post_dated_receivable_account_id", "4100", "must be asset"),
+        ("post_dated_payable_account_id", "1500", "must be liability"),
+    ],
+)
+def test_ar_ap_defaults_refuse_the_wrong_account_for_each_key(
+    api: Api, field: str, account_code: str, reason: str
+) -> None:
+    accounts = _accounts(api)
+    before = api.client.get(DEFAULTS_PATH).json()
+
+    response = api.client.patch(DEFAULTS_PATH, json={field: accounts[account_code]["id"]})
+
+    assert response.status_code == 409, response.text
+    body = response.json()
+    assert body["code"] == "invalid_gl_setting_account"
+    assert body["field_errors"] == {field: [reason]}
+    # A refused write changes nothing at all.
+    assert api.client.get(DEFAULTS_PATH).json() == before
+
+
+def test_ar_ap_defaults_refuse_an_inactive_or_header_account(api: Api) -> None:
+    accounts = _accounts(api)
+    header = next(row for row in accounts.values() if not row["is_postable"])
+
+    header_response = api.client.patch(
+        DEFAULTS_PATH, json={"realized_fx_gain_account_id": header["id"]}
+    )
+    assert header_response.status_code == 409
+    assert header_response.json()["field_errors"] == {
+        "realized_fx_gain_account_id": ["not postable"]
+    }
+
+    # 4400 is the seeded FX gain account; deactivate it and it stops qualifying.
+    fx_gain = accounts["4400"]
+    api.client.patch(f"/api/v1/gl/accounts/{fx_gain['id']}", json={"is_active": False})
+    inactive_response = api.client.patch(
+        DEFAULTS_PATH, json={"realized_fx_gain_account_id": fx_gain["id"]}
+    )
+    assert inactive_response.status_code == 409
+    assert inactive_response.json()["field_errors"] == {"realized_fx_gain_account_id": ["inactive"]}
+
+
+def test_ar_ap_defaults_accept_a_valid_change_and_audit_only_what_moved(
+    api: Api, db: Session
+) -> None:
+    accounts = _accounts(api)
+    before = api.client.get(DEFAULTS_PATH).json()
+    # 4300 Other Income and 6990 Sundry Expenses are both valid P&L targets and both differ
+    # from what the seed set, so this is a real change; ap_control is re-sent unchanged.
+    payload = {
+        "realized_fx_gain_account_id": accounts["4300"]["id"],
+        "realized_fx_loss_account_id": accounts["6990"]["id"],
+        "ap_control_account_id": before["ap_control_account_id"],
+    }
+
+    response = api.client.patch(DEFAULTS_PATH, json=payload)
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["realized_fx_gain_account_id"] == accounts["4300"]["id"]
+    assert body["realized_fx_loss_account_id"] == accounts["6990"]["id"]
+    # Untouched keys keep their seeded values.
+    assert body["ar_control_account_id"] == before["ar_control_account_id"]
+
+    set_tenant(db, api.company_id)
+    record = db.scalars(
+        select(AuditLog)
+        .where(
+            AuditLog.company_id == api.company_id,
+            AuditLog.action == "ar_ap_defaults.updated",
+        )
+        .order_by(AuditLog.at.desc())
+    ).first()
+    assert record is not None, "the defaults update must be audited"
+    assert record.entity == "gl_settings"
+    assert record.actor_email == "owner@kigali.example"
+    # Only the two keys that actually moved are recorded, with both sides.
+    assert set(record.after) == {"realized_fx_gain_account_id", "realized_fx_loss_account_id"}
+    assert record.after["realized_fx_gain_account_id"] == accounts["4300"]["id"]
+    assert record.before["realized_fx_gain_account_id"] == before["realized_fx_gain_account_id"]
+
+
+def test_ar_ap_defaults_write_no_audit_record_when_nothing_changes(api: Api, db: Session) -> None:
+    current = api.client.get(DEFAULTS_PATH).json()
+
+    assert api.client.patch(DEFAULTS_PATH, json=current).status_code == 200
+
+    set_tenant(db, api.company_id)
+    assert (
+        db.scalars(
+            select(AuditLog).where(
+                AuditLog.company_id == api.company_id,
+                AuditLog.action == "ar_ap_defaults.updated",
+            )
+        ).first()
+        is None
+    )
+
+
+def test_ar_ap_defaults_may_always_be_cleared(api: Api) -> None:
+    """An unset default fails loudly the first time it is needed; a wrongly set one posts
+    silently to the wrong account. Clearing therefore stays unvalidated."""
+    response = api.client.patch(DEFAULTS_PATH, json={"realized_fx_gain_account_id": None})
+
+    assert response.status_code == 200, response.text
+    assert response.json()["realized_fx_gain_account_id"] is None

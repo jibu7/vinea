@@ -7,6 +7,8 @@ export const PRIMARY_EMAIL = "e2e.primary@vinea.example";
 export const PRIMARY_COMPANY = "Rugari Wines E2E";
 export const SECONDARY_EMAIL = "e2e.secondary@vinea.example";
 export const SECONDARY_COMPANY = "Kivu Traders E2E";
+/** Clerk role in PRIMARY_COMPANY: `*:reports_view` only, no setup or posting rights. */
+export const READONLY_EMAIL = "e2e.readonly@vinea.example";
 export const PASSWORD = "E2E-Sup3rSecret!1";
 
 export const API_URL = process.env.PLAYWRIGHT_API_URL ?? "http://localhost:8000";
@@ -16,11 +18,30 @@ export const API_BASE = `${API_URL}/api/v1`;
 export const DEBIT_ACCOUNT_CODE = "6100"; // Salaries & Wages
 export const CREDIT_ACCOUNT_CODE = "2300"; // Accrued Expenses
 
+/** Resolves once React has hydrated the form — i.e. `onSubmit` is actually attached.
+ *
+ * `page.fill`/`page.click` auto-wait for the *element*, not for hydration, so a click that
+ * lands first submits the form natively: the browser navigates to `/login?email=…&password=…`
+ * and the page comes back with empty inputs and no session. React tags every hydrated DOM
+ * node with `__reactFiber$…`/`__reactProps$…` keys, so their presence on the form is the
+ * signal. (This race was always here; it only became deterministic when P4 step 6 grew the
+ * next-intl message payload and, with it, the time to hydrate.) */
+async function waitForHydration(page: Page, selector: string): Promise<void> {
+  await page.waitForFunction((sel) => {
+    const node = document.querySelector(sel);
+    return (
+      node !== null &&
+      Object.keys(node).some((key) => key.startsWith("__reactFiber$") || key.startsWith("__reactProps$"))
+    );
+  }, selector);
+}
+
 export async function login(page: Page, email: string = PRIMARY_EMAIL): Promise<void> {
   // `next dev`'s HMR websocket never idles, so `waitUntil: "networkidle"` here hangs to the
-  // navigation timeout — go straight to /login (no client-side redirect to race) and let
-  // page.fill's own auto-wait cover hydration instead.
+  // navigation timeout — go straight to /login (no client-side redirect to race) and wait on
+  // hydration explicitly instead.
   await page.goto("/login");
+  await waitForHydration(page, "form");
   await page.fill('input[type="email"]', email);
   await page.fill('input[type="password"]', PASSWORD);
   await page.click('button[type="submit"]');

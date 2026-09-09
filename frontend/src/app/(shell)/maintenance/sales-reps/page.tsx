@@ -16,7 +16,8 @@ import type { SalesRep } from "@/features/subledger/types";
 import { useApiErrorToast } from "@/lib/use-api-error-toast";
 
 export default function SalesRepsPage() {
-  const t = useTranslations("maintenance");
+  const t = useTranslations("arap.salesReps");
+  const tc = useTranslations("arap.common");
   const toast = useToast();
   const showApiError = useApiErrorToast();
   const canEdit = useHasPermission()("ar:setup_manage");
@@ -52,14 +53,14 @@ export default function SalesRepsPage() {
     try {
       if (editing) {
         await updateRep.mutateAsync({ repId: editing.id, payload: { name, email: email || null } });
-        toast.show({ title: "Sales representative updated", tone: "success" });
+        toast.show({ title: t("updated"), tone: "success" });
       } else {
         await createRep.mutateAsync({ code, name, email: email || null });
-        toast.show({ title: "Sales representative created", tone: "success" });
+        toast.show({ title: t("created"), tone: "success" });
       }
       setOpen(false);
     } catch (err) {
-      showApiError(err, "Couldn't save sales representative");
+      showApiError(err, t("saveFailed"));
     }
   }
 
@@ -68,27 +69,27 @@ export default function SalesRepsPage() {
       await updateRep.mutateAsync({ repId: rep.id, payload: { is_active: !rep.is_active } });
       toast.show({
         title: rep.code,
-        description: rep.is_active ? "Deactivated" : "Activated",
+        description: rep.is_active ? tc("deactivated") : tc("activated"),
         tone: "success",
       });
     } catch (err) {
-      showApiError(err, "Couldn't update sales representative");
+      showApiError(err, t("updateFailed"));
     }
   }
 
   return (
     <MaintenancePage
-      title={t("salesReps")}
-      description="Attributed on customer settings and carried onto AR documents"
+      title={t("title")}
+      description={t("subtitle")}
       actions={
         <Button variant="primary" onClick={startCreate} disabled={!canEdit} className="gap-1.5 text-xs">
-          <Plus className="size-3.5" /> New sales rep
+          <Plus className="size-3.5" /> {t("new")}
         </Button>
       }
     >
       <MaintenanceCard
         icon={<BadgeCheck className="size-4" />}
-        title="Sales representatives"
+        title={t("title")}
         actions={
           <label className="flex items-center gap-1.5 text-xs text-[var(--vinea-ink-muted)]">
             <input
@@ -97,22 +98,22 @@ export default function SalesRepsPage() {
               onChange={(e) => setIncludeInactive(e.target.checked)}
               className="size-3.5"
             />
-            Show inactive
+            {tc("showInactive")}
           </label>
         }
       >
         {(reps.data ?? []).length === 0 ? (
           <p className="py-8 text-center text-xs text-[var(--vinea-ink-subtle)]">
-            {reps.isLoading ? "Loading…" : "No sales representatives yet."}
+            {reps.isLoading ? tc("loading") : t("empty")}
           </p>
         ) : (
           <Table>
             <THead>
               <TR>
-                <TH className="w-28">Code</TH>
-                <TH>Name</TH>
-                <TH>Email</TH>
-                <TH className="w-32 text-right">Status</TH>
+                <TH className="w-28">{tc("code")}</TH>
+                <TH>{tc("name")}</TH>
+                <TH>{tc("email")}</TH>
+                <TH className="w-32 text-right">{tc("status")}</TH>
               </TR>
             </THead>
             <TBody>
@@ -120,13 +121,15 @@ export default function SalesRepsPage() {
                 <TR key={rep.id}>
                   <TD className="font-mono text-xs font-semibold text-[var(--vinea-brand)]">{rep.code}</TD>
                   <TD className="text-xs font-medium text-[var(--vinea-ink)]">{rep.name}</TD>
-                  <TD className="text-xs text-[var(--vinea-ink-muted)]">{rep.email ?? "—"}</TD>
+                  <TD className="text-xs text-[var(--vinea-ink-muted)]">
+                    {rep.email ?? tc("emptyValue")}
+                  </TD>
                   <TD className="text-right">
                     <div className="flex items-center justify-end gap-2">
                       <button
                         type="button"
                         onClick={() => startEdit(rep)}
-                        aria-label={`Edit ${rep.name}`}
+                        aria-label={tc("editLabel", { name: rep.name })}
                         className="rounded p-1 text-[var(--vinea-ink-subtle)] hover:text-[var(--vinea-ink)]"
                       >
                         <Edit2 className="size-3.5" />
@@ -135,10 +138,12 @@ export default function SalesRepsPage() {
                         type="button"
                         onClick={() => toggleActive(rep)}
                         disabled={!canEdit}
-                        aria-label={`${rep.is_active ? "Deactivate" : "Activate"} ${rep.name}`}
+                        aria-label={tc(rep.is_active ? "deactivateLabel" : "activateLabel", {
+                          name: rep.name,
+                        })}
                       >
                         <StatusChip tone={rep.is_active ? "success" : "neutral"}>
-                          {rep.is_active ? "Active" : "Inactive"}
+                          {rep.is_active ? tc("active") : tc("inactive")}
                         </StatusChip>
                       </button>
                     </div>
@@ -151,29 +156,29 @@ export default function SalesRepsPage() {
       </MaintenanceCard>
 
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent title={editing ? `Edit ${editing.name}` : "New sales representative"}>
+        <DialogContent title={editing ? t("editTitle", { name: editing.name }) : t("newTitle")}>
           <div className="space-y-3 pt-2">
-            <Field label="Code">
+            <Field label={tc("code")}>
               <Input
                 value={code}
                 onChange={(e) => setCode(e.target.value)}
                 disabled={!!editing}
                 className="font-mono"
-                placeholder="REP01"
+                placeholder={t("codePlaceholder")}
               />
             </Field>
-            <Field label="Name">
-              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Claudine Ineza" />
+            <Field label={tc("name")}>
+              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder={t("namePlaceholder")} />
             </Field>
-            <Field label="Email">
+            <Field label={tc("email")}>
               <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
             </Field>
             <div className="flex justify-end gap-2 pt-3">
               <Button variant="ghost" onClick={() => setOpen(false)}>
-                Cancel
+                {tc("cancel")}
               </Button>
               <Button variant="primary" disabled={!code || !name || !canEdit} onClick={handleSave}>
-                Save
+                {tc("save")}
               </Button>
             </div>
           </div>

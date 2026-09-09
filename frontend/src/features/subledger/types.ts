@@ -3,26 +3,9 @@
  * AR and AP share every shape here: the role is a path segment on the API and a prop on the
  * screens, never a second set of types. */
 
-/** `ar` = customers, `ap` = suppliers. The same partner row is often both. */
+/** `ar` = customers, `ap` = suppliers. The same partner row is often both. Everything a
+ * user reads about a role lives under `arap.role.<role>` in the message catalogue. */
 export type PartnerRole = "ar" | "ap";
-
-export const ROLE_COPY: Record<
-  PartnerRole,
-  { partner: string; partners: string; code: string; controlAccount: string }
-> = {
-  ar: {
-    partner: "Customer",
-    partners: "Customers",
-    code: "Customer code",
-    controlAccount: "AR control account",
-  },
-  ap: {
-    partner: "Supplier",
-    partners: "Suppliers",
-    code: "Supplier code",
-    controlAccount: "AP control account",
-  },
-};
 
 export type DueBasis =
   | "days_from_document_date"
@@ -31,15 +14,33 @@ export type DueBasis =
 export type AgeingBasis = "document_date" | "due_date";
 export type TaxMode = "exclusive" | "inclusive";
 
-export const DUE_BASIS_LABELS: Record<DueBasis, string> = {
-  days_from_document_date: "Days from document date",
-  days_from_end_of_month: "Days from end of month",
-  fixed_day_of_month: "Fixed day of month",
+/** Wire values, in the order the pickers offer them. Labels live in `messages/en.json`
+ * under `arap.paymentTerms.basis*` / `arap.bucketSets.basis*` — nothing user-visible is
+ * spelled here, so a second locale needs no code change. */
+export const DUE_BASES: readonly DueBasis[] = [
+  "days_from_document_date",
+  "days_from_end_of_month",
+  "fixed_day_of_month",
+] as const;
+
+export const AGEING_BASES: readonly AgeingBasis[] = ["document_date", "due_date"] as const;
+
+/** `arap.paymentTerms.<key>` for a due basis, and `arap.bucketSets.<key>` for an ageing one. */
+export const DUE_BASIS_MESSAGE: Record<DueBasis, string> = {
+  days_from_document_date: "basisDaysFromDocumentDate",
+  days_from_end_of_month: "basisDaysFromEndOfMonth",
+  fixed_day_of_month: "basisFixedDayOfMonth",
 };
 
-export const AGEING_BASIS_LABELS: Record<AgeingBasis, string> = {
-  document_date: "Document date",
-  due_date: "Due date",
+export const DUE_SUMMARY_MESSAGE: Record<DueBasis, string> = {
+  days_from_document_date: "dueDaysFromDocumentDate",
+  days_from_end_of_month: "dueDaysFromEndOfMonth",
+  fixed_day_of_month: "dueFixedDayOfMonth",
+};
+
+export const AGEING_BASIS_MESSAGE: Record<AgeingBasis, string> = {
+  document_date: "basisDocumentDate",
+  due_date: "basisDueDate",
 };
 
 export interface Partner {

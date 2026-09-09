@@ -18,7 +18,9 @@ import {
   useUpdatePaymentTerms,
 } from "@/features/subledger/hooks";
 import {
-  DUE_BASIS_LABELS,
+  DUE_BASES,
+  DUE_BASIS_MESSAGE,
+  DUE_SUMMARY_MESSAGE,
   type DueBasis,
   type PaymentTerms,
   type PaymentTermsPayload,
@@ -36,20 +38,9 @@ const BLANK: PaymentTermsPayload = {
   discount_days: 0,
 };
 
-/** Reads the row back the way a clerk would say it out loud. */
-function describeDue(terms: PaymentTerms): string {
-  switch (terms.due_basis) {
-    case "days_from_document_date":
-      return `${terms.due_days} days from document date`;
-    case "days_from_end_of_month":
-      return `${terms.due_days} days from end of month`;
-    case "fixed_day_of_month":
-      return `Day ${terms.due_day_of_month ?? "—"} of the following month`;
-  }
-}
-
 export default function PaymentTermsPage() {
-  const t = useTranslations("maintenance");
+  const t = useTranslations("arap.paymentTerms");
+  const tc = useTranslations("arap.common");
   const toast = useToast();
   const showApiError = useApiErrorToast();
   const hasPermission = useHasPermission();
@@ -89,14 +80,14 @@ export default function PaymentTermsPage() {
     try {
       if (editing) {
         await updateTerms.mutateAsync({ termsId: editing.id, payload: form });
-        toast.show({ title: "Payment terms updated", tone: "success" });
+        toast.show({ title: t("updated"), tone: "success" });
       } else {
         await createTerms.mutateAsync(form);
-        toast.show({ title: "Payment terms created", tone: "success" });
+        toast.show({ title: t("created"), tone: "success" });
       }
       setOpen(false);
     } catch (err) {
-      showApiError(err, "Couldn't save payment terms");
+      showApiError(err, t("saveFailed"));
     }
   }
 
@@ -118,29 +109,37 @@ export default function PaymentTermsPage() {
       });
       toast.show({
         title: row.code,
-        description: row.is_active ? "Deactivated" : "Activated",
+        description: row.is_active ? tc("deactivated") : tc("activated"),
         tone: "success",
       });
     } catch (err) {
-      showApiError(err, "Couldn't update payment terms");
+      showApiError(err, t("updateFailed"));
     }
   }
 
   const needsDayOfMonth = form.due_basis === "fixed_day_of_month";
 
+  /** Reads the row back the way a clerk would say it out loud, in the active locale. */
+  function describeDue(row: PaymentTerms): string {
+    return t(DUE_SUMMARY_MESSAGE[row.due_basis], {
+      days: row.due_days,
+      day: row.due_day_of_month ?? tc("emptyValue"),
+    });
+  }
+
   return (
     <MaintenancePage
-      title={t("paymentTerms")}
-      description="Due-date basis and the settlement discount, which is taken at allocation — not at invoice time"
+      title={t("title")}
+      description={t("subtitle")}
       actions={
         <Button variant="primary" onClick={startCreate} disabled={!canEdit} className="gap-1.5 text-xs">
-          <Plus className="size-3.5" /> New payment terms
+          <Plus className="size-3.5" /> {t("new")}
         </Button>
       }
     >
       <MaintenanceCard
         icon={<CalendarClock className="size-4" />}
-        title="Payment terms"
+        title={t("title")}
         actions={
           <label className="flex items-center gap-1.5 text-xs text-[var(--vinea-ink-muted)]">
             <input
@@ -149,23 +148,23 @@ export default function PaymentTermsPage() {
               onChange={(e) => setIncludeInactive(e.target.checked)}
               className="size-3.5"
             />
-            Show inactive
+            {tc("showInactive")}
           </label>
         }
       >
         {(terms.data ?? []).length === 0 ? (
           <p className="py-8 text-center text-xs text-[var(--vinea-ink-subtle)]">
-            {terms.isLoading ? "Loading…" : "No payment terms yet."}
+            {terms.isLoading ? tc("loading") : t("empty")}
           </p>
         ) : (
           <Table>
             <THead>
               <TR>
-                <TH className="w-24">Code</TH>
-                <TH>Name</TH>
-                <TH>Due</TH>
-                <TH className="w-40">Settlement discount</TH>
-                <TH className="w-32 text-right">Status</TH>
+                <TH className="w-24">{tc("code")}</TH>
+                <TH>{tc("name")}</TH>
+                <TH>{t("due")}</TH>
+                <TH className="w-40">{t("discount")}</TH>
+                <TH className="w-32 text-right">{tc("status")}</TH>
               </TR>
             </THead>
             <TBody>
@@ -176,15 +175,18 @@ export default function PaymentTermsPage() {
                   <TD className="text-xs text-[var(--vinea-ink-muted)]">{describeDue(row)}</TD>
                   <TD className="text-xs text-[var(--vinea-ink-muted)]">
                     {Number(row.discount_percent) > 0
-                      ? `${Number(row.discount_percent)}% within ${row.discount_days} days`
-                      : "None"}
+                      ? t("discountSummary", {
+                          percent: Number(row.discount_percent),
+                          days: row.discount_days,
+                        })
+                      : t("noDiscount")}
                   </TD>
                   <TD className="text-right">
                     <div className="flex items-center justify-end gap-2">
                       <button
                         type="button"
                         onClick={() => startEdit(row)}
-                        aria-label={`Edit ${row.name}`}
+                        aria-label={tc("editLabel", { name: row.name })}
                         className="rounded p-1 text-[var(--vinea-ink-subtle)] hover:text-[var(--vinea-ink)]"
                       >
                         <Edit2 className="size-3.5" />
@@ -193,10 +195,12 @@ export default function PaymentTermsPage() {
                         type="button"
                         onClick={() => toggleActive(row)}
                         disabled={!canEdit}
-                        aria-label={`${row.is_active ? "Deactivate" : "Activate"} ${row.name}`}
+                        aria-label={tc(row.is_active ? "deactivateLabel" : "activateLabel", {
+                          name: row.name,
+                        })}
                       >
                         <StatusChip tone={row.is_active ? "success" : "neutral"}>
-                          {row.is_active ? "Active" : "Inactive"}
+                          {row.is_active ? tc("active") : tc("inactive")}
                         </StatusChip>
                       </button>
                     </div>
@@ -209,32 +213,32 @@ export default function PaymentTermsPage() {
       </MaintenanceCard>
 
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent title={editing ? `Edit ${editing.name}` : "New payment terms"}>
+        <DialogContent title={editing ? t("editTitle", { name: editing.name }) : t("new")}>
           <div className="space-y-3 pt-2">
             <div className="grid grid-cols-2 gap-3">
-              <Field label="Code">
+              <Field label={tc("code")}>
                 <Input
                   value={form.code}
                   onChange={(e) => setForm({ ...form, code: e.target.value })}
                   disabled={!!editing}
                   className="font-mono"
-                  placeholder="NET30"
+                  placeholder={t("codePlaceholder")}
                 />
               </Field>
-              <Field label="Name">
+              <Field label={tc("name")}>
                 <Input
                   value={form.name}
                   onChange={(e) => setForm({ ...form, name: e.target.value })}
-                  placeholder="Net 30 days"
+                  placeholder={t("namePlaceholder")}
                 />
               </Field>
             </div>
 
-            <Field label="Due basis">
+            <Field label={t("dueBasis")}>
               <Select
-                options={(Object.keys(DUE_BASIS_LABELS) as DueBasis[]).map((value) => ({
+                options={DUE_BASES.map((value) => ({
                   value,
-                  label: DUE_BASIS_LABELS[value],
+                  label: t(DUE_BASIS_MESSAGE[value]),
                 }))}
                 value={form.due_basis}
                 onValueChange={(v) =>
@@ -248,7 +252,7 @@ export default function PaymentTermsPage() {
             </Field>
 
             <div className="grid grid-cols-2 gap-3">
-              <Field label="Due days">
+              <Field label={t("dueDays")}>
                 <Input
                   type="number"
                   min={0}
@@ -259,7 +263,7 @@ export default function PaymentTermsPage() {
                   className="text-right font-mono tabular-nums"
                 />
               </Field>
-              <Field label="Day of month">
+              <Field label={t("dayOfMonth")}>
                 <Input
                   type="number"
                   min={1}
@@ -278,7 +282,7 @@ export default function PaymentTermsPage() {
             </div>
 
             <div className="grid grid-cols-2 gap-3">
-              <Field label="Discount percent">
+              <Field label={t("discountPercent")}>
                 <Input
                   inputMode="decimal"
                   value={form.discount_percent}
@@ -286,7 +290,7 @@ export default function PaymentTermsPage() {
                   className="text-right font-mono tabular-nums"
                 />
               </Field>
-              <Field label="Discount days">
+              <Field label={t("discountDays")}>
                 <Input
                   type="number"
                   min={0}
@@ -298,17 +302,14 @@ export default function PaymentTermsPage() {
               </Field>
             </div>
 
-            <p className="text-xs text-[var(--vinea-ink-subtle)]">
-              A discount posts to the settlement-discount account when the allocation happens
-              inside the discount window — gross, with no VAT adjustment in this phase.
-            </p>
+            <p className="text-xs text-[var(--vinea-ink-subtle)]">{t("discountNote")}</p>
 
             <div className="flex justify-end gap-2 pt-3">
               <Button variant="ghost" onClick={() => setOpen(false)}>
-                Cancel
+                {tc("cancel")}
               </Button>
               <Button variant="primary" disabled={!form.code || !form.name || !canEdit} onClick={handleSave}>
-                Save
+                {tc("save")}
               </Button>
             </div>
           </div>

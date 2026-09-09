@@ -9,9 +9,9 @@ export default function ApTransactionTypesPage() {
     <TransactionTypesScreen
       module="ap"
       title={t("apTransactionTypes")}
-      description="Determination-chain defaults for supplier invoices, debit notes and payments"
-      codePlaceholder="SINV"
-      namePlaceholder="Supplier invoice"
+      description={t("apTransactionTypesSubtitle")}
+      codePlaceholder={t("apTransactionTypeCodePlaceholder")}
+      namePlaceholder={t("apTransactionTypeNamePlaceholder")}
     />
   );
 }
