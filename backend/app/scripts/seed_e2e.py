@@ -7,6 +7,10 @@ without an email round-trip: a second, already-active membership for the seconda
 period for real goes through year-end close, which needs prior periods closed too — for a
 fixture we just need *a* closed period to exercise the `period_closed` error path).
 
+Two extra non-owner members carry a single seeded role each: a Clerk who can only read
+(so a permission gate can be shown to be real) and an Accountant who can post AR/AP but
+holds no `*:credit_limit_override` (so the credit-limit block can be shown to fire).
+
 The cross-company membership goes on the *secondary* user, not the primary one, on purpose:
 `auth_service.select_membership()` only auto-selects a company on login when the user has
 exactly one membership, so PRIMARY_EMAIL — used by every spec except the switch-company one —
@@ -19,6 +23,7 @@ looked up by its fixed email/name first and only created if missing. Run with
 """
 
 import json
+import os
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
@@ -32,7 +37,28 @@ from app.models.membership import CompanyMembership, MembershipRole, MembershipS
 from app.models.user import User
 from app.services.provisioning import ProvisionedTenant, provision_tenant
 
-PASSWORD = "E2E-Sup3rSecret!1"
+PASSWORD_ENV = "E2E_PASSWORD"
+
+
+def fixture_password() -> str:
+    """The fixture password, from the environment — never written down here.
+
+    One value seeds these users *and* drives the Playwright login, so there is a single place
+    it exists and no literal in the tree for it to drift from (P4 step 9). CI generates a
+    fresh one per run; locally, export it (see `.env.example`) before `make db-reset`.
+    Resolved when the script runs, not at import, so importing this module never explodes.
+    """
+    password = os.environ.get(PASSWORD_ENV, "")
+    if not password:
+        raise SystemExit(
+            f"{PASSWORD_ENV} is not set. Export it before seeding, e.g.\n"
+            f'  export {PASSWORD_ENV}="$(openssl rand -base64 24)"\n'
+            "and pass it into the container:\n"
+            f"  docker compose exec -e {PASSWORD_ENV} -T backend "
+            "uv run python -m app.scripts.seed_e2e"
+        )
+    return password
+
 
 # `.example` (RFC 2606) — `email-validator` (backing Pydantic's EmailStr on the login/signup
 # routes) explicitly rejects `.test`/`.invalid`/`.localhost` as reserved, but allows `.example`.
@@ -45,9 +71,16 @@ SECONDARY_COMPANY = "Kivu Traders E2E"
 # A read-only member of the primary company, holding the seeded "Clerk" role: gl/ar/ap
 # `*_reports_view` and nothing that can write. Every screen that gates its actions on a
 # setup permission needs one of these to prove the gate is real rather than decorative
-# (P4 step 6's AR/AP defaults, and P4 step 9's credit-limit override).
+# (P4 step 6's AR/AP defaults).
 READONLY_EMAIL = "e2e.readonly@vinea.example"
 READONLY_ROLE_NAME = "Clerk"
+
+# A poster who cannot override a credit limit. The seeded "Accountant" role holds
+# `ar:transactions_post` and `ar:reports_view` but *not* `ar:credit_limit_override`, which is
+# the only way to see the block fire: the owner holds every permission, so an owner would sail
+# past the limit and the check would look decorative (P4 step 9's credit-limit tape).
+POSTER_EMAIL = "e2e.poster@vinea.example"
+POSTER_ROLE_NAME = "Accountant"
 
 # One supplier, so the Suppliers master is not an empty table in screenshots or in the AP
 # specs. Customers are created by the specs themselves (they assert on creation); nothing
@@ -98,7 +131,7 @@ def _existing_tenant(db, *, email: str) -> tuple[User, Company] | None:
 
 
 def _get_or_create_tenant(
-    db, *, company_name: str, email: str, full_name: str
+    db, *, company_name: str, email: str, full_name: str, password: str
 ) -> tuple[User, Company]:
     existing = _existing_tenant(db, email=email)
     if existing is not None:
@@ -108,7 +141,7 @@ def _get_or_create_tenant(
         company_name=company_name,
         full_name=full_name,
         email_address=email,
-        password=PASSWORD,
+        password=password,
     )
     db.commit()
     return tenant.user, tenant.company
@@ -148,7 +181,7 @@ def _ensure_cross_company_membership(db, *, user: User, company: Company) -> Non
 
 
 def _ensure_member_with_role(
-    db, *, company: Company, email: str, full_name: str, role_name: str
+    db, *, company: Company, email: str, full_name: str, role_name: str, password: str
 ) -> User:
     """An already-active, non-owner membership carrying exactly one seeded role. Created
     directly rather than through the invite flow, which needs a mailed token — the same
@@ -160,7 +193,7 @@ def _ensure_member_with_role(
         if user is None:
             user = User(
                 email=email,
-                hashed_password=hash_password(PASSWORD),
+                hashed_password=hash_password(password),
                 full_name=full_name,
                 email_verified_at=datetime.now(UTC),
             )
@@ -367,16 +400,24 @@ def _ensure_closed_period(db, *, company: Company) -> str | None:
 
 
 def main() -> None:
+    # Before the session: an unset credential should stop the script, not open a connection
+    # and then stop it.
+    password = fixture_password()
     db = SessionLocal()
     try:
         primary_user, primary_company = _get_or_create_tenant(
-            db, company_name=PRIMARY_COMPANY, email=PRIMARY_EMAIL, full_name="E2E Primary Owner"
+            db,
+            company_name=PRIMARY_COMPANY,
+            email=PRIMARY_EMAIL,
+            full_name="E2E Primary Owner",
+            password=password,
         )
         secondary_user, secondary_company = _get_or_create_tenant(
             db,
             company_name=SECONDARY_COMPANY,
             email=SECONDARY_EMAIL,
             full_name="E2E Secondary Owner",
+            password=password,
         )
         _ensure_cross_company_membership(db, user=secondary_user, company=primary_company)
         _ensure_member_with_role(
@@ -385,6 +426,15 @@ def main() -> None:
             email=READONLY_EMAIL,
             full_name="E2E Read Only",
             role_name=READONLY_ROLE_NAME,
+            password=password,
+        )
+        _ensure_member_with_role(
+            db,
+            company=primary_company,
+            email=POSTER_EMAIL,
+            full_name="E2E Poster",
+            role_name=POSTER_ROLE_NAME,
+            password=password,
         )
         supplier_code = _ensure_partners(db, company=primary_company, actor=primary_user)
         aged_customer_code = _ensure_aged_invoices(
@@ -401,9 +451,13 @@ def main() -> None:
                     "secondary_company": SECONDARY_COMPANY,
                     "readonly_email": READONLY_EMAIL,
                     "readonly_role": READONLY_ROLE_NAME,
+                    "poster_email": POSTER_EMAIL,
+                    "poster_role": POSTER_ROLE_NAME,
                     "supplier_code": supplier_code,
                     "aged_customer_code": aged_customer_code,
-                    "password": PASSWORD,
+                    # The value itself stays out of the log — it came from the environment
+                    # and the reader already has it there.
+                    "password_from": PASSWORD_ENV,
                     "closed_period": closed_period,
                 },
                 indent=2,

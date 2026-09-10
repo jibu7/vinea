@@ -9,6 +9,10 @@ import {
 } from "./support/fixtures";
 
 test.describe("journal batch: login, switch company, post, enquire", () => {
+  // PATH: sign in as the two-membership user → switch company → post → account enquiry →
+  // trial balance. CANNOT SEE: that the switch is enforced server-side. Everything after
+  // it reads the company the session holds, so a client-only switch would still look like
+  // this; the RLS linter and the tenancy tests are what make it real.
   test("switches company, posts a balanced journal, and it foots the trial balance", async ({ page }) => {
     // SECONDARY_EMAIL — not PRIMARY_EMAIL — is the user with two memberships (seed_e2e.py),
     // so it's the one whose login leaves no company auto-selected (select_membership only

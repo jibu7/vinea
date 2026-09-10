@@ -1,20 +1,17 @@
 import { expect, test } from "@playwright/test";
 import messages from "../src/i18n/messages/en.json";
-import { PRIMARY_EMAIL, login } from "./support/fixtures";
+import { PRIMARY_EMAIL, login, pickCombobox } from "./support/fixtures";
 
 /** P4 step 7 — the AR/AP transaction screens on the P3 DocumentWorkspace + LineGrid. */
 
 const REVENUE_ACCOUNT = "4100"; // Sales Revenue
 const BANK_ACCOUNT = "1120"; // Bank Account
 
-async function pickCombobox(page: import("@playwright/test").Page, name: string, needle: string) {
-  await page.getByRole("button", { name, exact: true }).click();
-  await page.locator("[cmdk-item]").first().waitFor({ state: "visible" });
-  await page.keyboard.type(needle);
-  await page.locator(`[cmdk-item]:has-text("${needle}")`).first().click();
-}
-
 test.describe("AR transaction screens", () => {
+  // PATH: /maintenance/customers → /ar/invoices/new → POST /subledger/ar/documents →
+  // /gl/entries/{id}. CANNOT SEE: the tax and the inclusive total, which the footer
+  // deliberately does not compute — the server owns them, and `ar-ap-acceptance` checks
+  // what it returned rather than what the footer guessed.
   test("posts an invoice from the document workspace and lands on its journal entry", async ({
     page,
   }) => {
@@ -71,6 +68,9 @@ test.describe("AR transaction screens", () => {
     await expect(page.getByText("Posted").first()).toBeVisible();
   });
 
+  // PATH: /ar/receipts/new, asserting the settlement shape and that an undated receipt
+  // shows no post-dated notice. CANNOT SEE: what a post-dated receipt actually posts —
+  // `ar-ap-acceptance` takes one through the post-dated account and out to the bank.
   test("a receipt dated ahead warns that the cash side is post-dated", async ({ page }) => {
     await login(page, PRIMARY_EMAIL);
     await page.goto("/ar/receipts/new");

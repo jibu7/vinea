@@ -135,6 +135,11 @@ class OpenItem:
     # document's own booking rate — the same arithmetic the PostingEngine did, so this is
     # exactly the document's remaining contribution to the control account.
     open_base_amount: Decimal = field(default=ZERO)
+    #: The settlement discount this document still qualifies for at the as-of date, in
+    #: document currency. Zero once the window has closed. Filled in by `enquiries`, not here:
+    #: the calculation lives in `allocations` (which imports this module), and the discount is
+    #: a fact of the *allocation date* rather than of the open item.
+    discount_available: Decimal = field(default=ZERO)
 
     @property
     def signed_base_amount(self) -> Decimal:

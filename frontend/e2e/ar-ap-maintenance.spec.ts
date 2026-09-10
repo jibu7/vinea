@@ -6,6 +6,9 @@ import { PRIMARY_EMAIL, assertNoSeriousViolations, login, setTheme } from "./sup
  * rename screen with its history. */
 
 test.describe("AR/AP maintenance", () => {
+  // PATH: /maintenance/customers → create → AR settings → rename, then the audit trail.
+  // CANNOT SEE: whether the credit limit it sets has any effect — that needs a document
+  // posted against it, which `ar-ap-acceptance` does.
   test("creates a customer, sets terms and a credit limit, then renames its code with history", async ({
     page,
   }) => {
@@ -65,6 +68,9 @@ test.describe("AR/AP maintenance", () => {
     await expect(historyRow).toContainText(renamed);
   });
 
+  // PATH: the two transaction-type screens → GET /subledger/transaction-types?module=.
+  // CANNOT SEE: whether the filter is the server's or the screen's. Either would satisfy
+  // this; the RLS and permission tests in `tests/subledger` are what pin it server-side.
   test("AR and AP transaction types are filtered by module", async ({ page }) => {
     await login(page, PRIMARY_EMAIL);
 
@@ -81,6 +87,9 @@ test.describe("AR/AP maintenance", () => {
     expect(new Set(apModules.map((m) => m.trim()))).toEqual(new Set(["ap"]));
   });
 
+  // PATH: /maintenance/ar-ap-defaults → the control-account combobox options.
+  // CANNOT SEE: that saving a *non*-control account is refused — the options are filtered
+  // here, and the DB-level guard against it lives in the posting-contract tests.
   test("AR/AP defaults offers only real control accounts for the control keys", async ({ page }) => {
     await login(page, PRIMARY_EMAIL);
 
@@ -101,6 +110,8 @@ test.describe("AR/AP maintenance", () => {
       ["ageing bucket sets", "/maintenance/ageing-bucket-sets", "Ageing bucket sets"],
       ["AR/AP defaults", "/maintenance/ar-ap-defaults", "AR/AP defaults"],
     ] as const) {
+      // PATH: axe over each maintenance screen at rest, in both themes.
+      // CANNOT SEE: the create dialogs and detail drawers, which is where the forms are.
       test(`${label} — light and dark`, async ({ page }) => {
         await login(page, PRIMARY_EMAIL);
         await page.goto(path);

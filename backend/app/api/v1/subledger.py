@@ -43,6 +43,7 @@ from app.schemas.subledger import (
     DocumentCreate,
     DocumentRead,
     DocumentSummary,
+    InstrumentRunRow,
     JobRead,
     JobSweepResult,
     MaturityRunRequest,
@@ -57,6 +58,7 @@ from app.schemas.subledger import (
     PartnerUpdate,
     PaymentTermsRead,
     PaymentTermsWrite,
+    PendingInstrumentRead,
     ReversalRequest,
     RoleSettingsRead,
     RoleSettingsWrite,
@@ -780,6 +782,38 @@ def reverse_document(
     return _document_read(db, document)
 
 
+@router.get("/{role}/instruments")
+def list_instruments(
+    as_of: date | None = None,
+    role: PartnerRole = RolePath,
+    auth: AuthContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+) -> list[PendingInstrumentRead]:
+    """Post-dated instruments whose cash has not landed. Read-only, so it takes the view
+    permission: seeing which cheques are outstanding is not the same right as banking them."""
+    _require(auth, VIEW_PERMISSION, role)
+    on = as_of or date.today()
+    return [
+        PendingInstrumentRead(
+            id=document.id,
+            number=document.number,
+            partner_id=document.partner_id,
+            document_date=document.document_date,
+            maturity_date=document.maturity_date,
+            instrument_type=document.instrument_type,
+            currency_id=document.currency_id,
+            total_amount=document.total_amount,
+            open_amount=document.open_amount,
+            cash_account_id=document.cash_account_id,
+            is_due=document.maturity_date is not None and document.maturity_date <= on,
+            description=document.description,
+        )
+        for document in documents_service.outstanding_instruments(
+            db, auth.company_id, role=role
+        )
+    ]
+
+
 @router.post("/{role}/instruments/mature")
 def mature_instruments(
     payload: MaturityRunRequest,
@@ -791,15 +825,30 @@ def mature_instruments(
     """Post-dated instruments reaching maturity move from the post-dated account to the
     bank. Exposed as an endpoint and driven by a scheduled job."""
     _require(auth, POST_PERMISSION, role)
-    matured = documents_service.mature_instruments(
+    run = documents_service.mature_instruments(
         db, auth.company_id, as_of=payload.as_of, actor=auth.user, role=role, request=request
     )
     db.commit()
     return MaturityRunResult(
-        as_of=payload.as_of,
-        matured_document_ids=[document.id for document in matured],
+        as_of=run.as_of,
+        matured_document_ids=[document.id for document in run.matured],
         journal_entry_ids=[
-            document.matured_entry_id for document in matured if document.matured_entry_id
+            document.matured_entry_id for document in run.matured if document.matured_entry_id
+        ],
+        waiting=[
+            InstrumentRunRow(
+                id=document.id, number=document.number, maturity_date=document.maturity_date
+            )
+            for document in run.waiting
+        ],
+        skipped=[
+            InstrumentRunRow(
+                id=entry.document.id,
+                number=entry.document.number,
+                maturity_date=entry.document.maturity_date,
+                reason=entry.reason,
+            )
+            for entry in run.skipped
         ],
     )
 
@@ -985,6 +1034,9 @@ def list_allocations(
             allocation_id=entry.allocation.id,
             number=entry.allocation.number,
             allocation_date=entry.allocation.allocation_date,
+            journal_entry_id=entry.allocation.journal_entry_id,
+            partner_id=entry.allocation.partner_id,
+            currency_id=entry.allocation.currency_id,
             debit_document_id=entry.line.debit_document_id,
             debit_number=entry.debit_number,
             credit_document_id=entry.line.credit_document_id,
@@ -1060,6 +1112,7 @@ def partner_enquiry(
                 total_amount=item.document.total_amount,
                 open_amount=item.open_amount,
                 open_base_amount=item.open_base_amount,
+                discount_available=item.discount_available,
                 direction=item.document.direction,
                 days_overdue=(
                     max((resolved - item.document.due_date).days, 0)

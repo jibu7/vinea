@@ -23,6 +23,9 @@ async function newCustomer(page: Page, code: string, name: string) {
 }
 
 test.describe("AR journal batches", () => {
+  // PATH: /ar/batches/new → POST /subledger/ar/batches → the AR journal number series.
+  // CANNOT SEE: that a refused line refuses the whole batch. The service is keyed as one
+  // unit and `tests/subledger` asserts the all-or-nothing; nothing here posts a bad line.
   test("charges two customers in one batch, on the journal number series", async ({ page }) => {
     await login(page, PRIMARY_EMAIL);
     const suffix = String(Date.now()).slice(-6);
@@ -66,6 +69,9 @@ test.describe("AR journal batches", () => {
     await expect(page.locator('td:has-text("ARJ-")').first()).toBeVisible();
   });
 
+  // PATH: /ap/batches/new, rendered from the same component with the role flipped.
+  // CANNOT SEE: an AP batch actually posting — this asserts the composition, and the AR
+  // test above asserts the posting they share.
   test("the AP batch screen is the same grid for suppliers", async ({ page }) => {
     await login(page, PRIMARY_EMAIL);
     await page.goto("/ap/batches/new");
@@ -78,6 +84,8 @@ test.describe("AR journal batches", () => {
     await expect(page.getByLabel(/^Quantity, row 1/)).toHaveCount(0);
   });
 
+  // PATH: axe over the batch grid in both themes.
+  // CANNOT SEE: the grid with rows filled and a server error pinned to one of them.
   test("batch screen — light and dark", async ({ page }) => {
     await login(page, PRIMARY_EMAIL);
     await page.goto("/ar/batches/new");

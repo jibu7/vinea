@@ -12,7 +12,9 @@ import type {
   AutoAllocatePayload,
   DocumentSummary,
   JobRecord,
+  MaturityRunResult,
   Page,
+  PendingInstrument,
   BatchPayload,
   BatchResult,
   DocumentCreatePayload,
@@ -409,5 +411,33 @@ export function useJob(jobId: number | null) {
       const status = query.state.data?.status;
       return status === "queued" || status === "running" ? 1000 : false;
     },
+  });
+}
+
+// --- Post-dated instruments -----------------------------------------------------------------
+
+/** Every instrument still waiting to be banked, due or not. `asOf` only decides which ones
+ * come back flagged `is_due`; the list itself is everything outstanding, so a cheque a month
+ * out is visible the day it is taken. */
+export function usePendingInstruments(role: PartnerRole, asOf: string) {
+  const search = new URLSearchParams({ as_of: asOf });
+  return useQuery({
+    queryKey: [ROOT, role, "instruments", asOf],
+    queryFn: () => api.get<PendingInstrument[]>(`/subledger/${role}/instruments?${search}`),
+  });
+}
+
+/** Banks every instrument matured on or before `as_of`, through the PostingEngine.
+ *
+ * No `Idempotency-Key`, deliberately: the run is idempotent by construction rather than by
+ * replay. It selects on `matured_entry_id IS NULL`, so an instrument it has already banked is
+ * not a candidate the second time and a re-run posts nothing. Sending a key the endpoint does
+ * not read would claim a guarantee that came from somewhere else. */
+export function useMatureInstruments(role: PartnerRole) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (as_of: string) =>
+      api.post<MaturityRunResult>(`/subledger/${role}/instruments/mature`, { as_of }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: [ROOT] }),
   });
 }

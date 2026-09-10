@@ -29,6 +29,8 @@ from app.models.partner import PartnerRole
 from app.models.subledger import DocumentKind, DocumentStatus, PartnerDocument
 from app.subledger import allocations as allocations_service
 from app.subledger import documents as documents_service
+from app.subledger import enquiries
+from app.subledger.common import exposure_direction
 from app.subledger.documents import DOCUMENT_MATRIX
 from tests.kernel.conftest import USD_RATE
 from tests.kernel.invariants import assert_ledger_invariants
@@ -309,6 +311,50 @@ def test_unallocation_returns_the_control_account_to_where_it_was(
     assert_subledger_invariants(db, subledger.company_id)
 
 
+@ROLES
+def test_the_enquiry_reports_the_discount_on_offer_at_the_allocation_date(
+    db: Session, subledger: Subledger, spec: RoleSpec
+) -> None:
+    """The discount is a fact of the *allocation date* (decision 6), so the allocation screen —
+    which reads this enquiry as at the date it is allocating on — has to be told what is still
+    on offer. Without it an operator had to know the terms, type a number, and learn from a
+    refusal whether the window had closed."""
+    set_terms(db, subledger, spec.role, subledger.discount_terms.id)  # 2/10 net 30
+    db.commit()
+    partner = spec.partner(subledger)
+    invoice, _ = post_invoice(db, subledger, role=spec.role, amount=Decimal(100_000))
+    db.commit()
+
+    inside = MARCH + timedelta(days=8)
+    outside = MARCH + timedelta(days=11)
+
+    on_day_8 = enquiries.partner_enquiry(
+        db, subledger.company_id, spec.role, partner.id, as_of=inside
+    )
+    offered = next(
+        item for item in on_day_8.open_items if item.document.id == invoice.id
+    )
+    assert offered.discount_available == Decimal(2000), "2% of 100,000, inside the window"
+
+    on_day_11 = enquiries.partner_enquiry(
+        db, subledger.company_id, spec.role, partner.id, as_of=outside
+    )
+    closed = next(item for item in on_day_11.open_items if item.document.id == invoice.id)
+    assert closed.discount_available == ZERO, "the window shut on day 10"
+
+    # And nothing that is not an invoice ever qualifies. A settlement carries the partner's
+    # terms too, so without the kind check it offered 2% of the cash paying the invoice off.
+    settlement = post_settlement(db, subledger, role=spec.role, amount=Decimal(50_000), on=inside)
+    db.commit()
+    with_cash = enquiries.partner_enquiry(
+        db, subledger.company_id, spec.role, partner.id, as_of=inside
+    )
+    cash_item = next(
+        item for item in with_cash.open_items if item.document.id == settlement.id
+    )
+    assert cash_item.discount_available == ZERO
+
+
 # --- Post-dated instruments -------------------------------------------------------------------
 
 
@@ -331,11 +377,12 @@ def test_a_post_dated_instrument_waits_in_its_own_account_until_maturity(
     assert ledger.acct("1120") not in accounts, "not in the bank until it matures"
     assert instrument.is_pending_instrument
 
-    matured = documents_service.mature_instruments(
+    run = documents_service.mature_instruments(
         db, subledger.company_id, as_of=maturity, actor=ledger.owner, role=spec.role
     )
     db.commit()
-    assert [document.id for document in matured] == [instrument.id]
+    assert [document.id for document in run.matured] == [instrument.id]
+    assert run.waiting == [] and run.skipped == []
 
     transfer = _lines(db, instrument.matured_entry_id)
     assert {line.gl_account_id for line in transfer} == {
@@ -347,6 +394,131 @@ def test_a_post_dated_instrument_waits_in_its_own_account_until_maturity(
     bank = next(line for line in transfer if line.gl_account_id == ledger.acct("1120"))
     assert bank.base_amount == -instrument.direction * Decimal(20000)
     assert sum(line.base_amount for line in transfer) == ZERO
+    assert_ledger_invariants(db, subledger.company_id)
+    assert_subledger_invariants(db, subledger.company_id)
+
+
+@ROLES
+def test_an_instrument_is_listed_before_it_is_due_not_only_once_it_is(
+    db: Session, subledger: Subledger, spec: RoleSpec
+) -> None:
+    """`pending_instruments` answers "what would a run move today?" — which is the wrong
+    question for a screen. A cheque a month out has to be visible the day it is banked, or
+    the only way to learn it exists is to run maturity and watch what happens."""
+    maturity = MARCH + timedelta(days=45)
+    instrument = post_settlement(
+        db, subledger, role=spec.role, amount=Decimal(20000), maturity_date=maturity
+    )
+    db.commit()
+
+    assert documents_service.pending_instruments(
+        db, subledger.company_id, as_of=MARCH, role=spec.role
+    ) == []
+    outstanding = documents_service.outstanding_instruments(
+        db, subledger.company_id, role=spec.role
+    )
+    assert [document.id for document in outstanding] == [instrument.id]
+
+    # Once matured it leaves both lists: the cash has landed, there is nothing left to bank.
+    documents_service.mature_instruments(
+        db, subledger.company_id, as_of=maturity, actor=subledger.ledger.owner, role=spec.role
+    )
+    db.commit()
+    assert documents_service.outstanding_instruments(
+        db, subledger.company_id, role=spec.role
+    ) == []
+
+
+@ROLES
+def test_exposure_direction_matches_the_invoice_row(
+    db: Session, subledger: Subledger, spec: RoleSpec
+) -> None:
+    """`exposure_direction` is declared in `common` because `documents` imports that module
+    and not the reverse, which makes it a second statement of a fact the document matrix
+    already holds. This is the seam where they would drift apart."""
+    assert exposure_direction(spec.role) == spec.invoice_direction
+
+
+@ROLES
+def test_credit_headroom_falls_as_the_partner_owes_more_in_both_roles(
+    db: Session, subledger: Subledger, spec: RoleSpec
+) -> None:
+    """Headroom is the limit less what is outstanding *in the role's own sense*. AP balances
+    are negative — the payable sits on the credit side — so subtracting one straight from the
+    limit made owing a supplier increase their headroom, on the AP enquiry and on the partner
+    typeahead that reads it."""
+    set_credit_limit(db, subledger, role=spec.role, limit=Decimal(100_000))
+    partner = spec.partner(subledger)
+    before = enquiries.partner_enquiry(
+        db, subledger.company_id, spec.role, partner.id, as_of=MARCH
+    )
+    assert before.credit_available == Decimal(100_000)
+
+    post_invoice(db, subledger, role=spec.role, amount=Decimal(30_000))
+    db.commit()
+
+    after = enquiries.partner_enquiry(
+        db, subledger.company_id, spec.role, partner.id, as_of=MARCH
+    )
+    assert after.exposure_base == Decimal(30_000), "outstanding, in the role's own sense"
+    assert after.credit_available == Decimal(70_000)
+
+
+@ROLES
+def test_a_run_banks_only_what_has_matured_and_reports_what_it_left(
+    db: Session, subledger: Subledger, spec: RoleSpec
+) -> None:
+    """Two cheques, one due and one not. The run is not a "bank everything" button: it takes a
+    date, moves what has matured by it, and hands back the rest untouched.
+
+    The date filter was always in `pending_instruments`; what was missing was the run *saying*
+    so. Returning only what it banked made "nothing was due" indistinguishable from "nothing
+    happened", which is the shape of failure a maturity run is most likely to have."""
+    ledger = subledger.ledger
+    due_on = MARCH + timedelta(days=10)
+    later_on = MARCH + timedelta(days=40)
+
+    due = post_settlement(
+        db, subledger, role=spec.role, amount=Decimal(20000), maturity_date=due_on
+    )
+    not_due = post_settlement(
+        db, subledger, role=spec.role, amount=Decimal(35000), maturity_date=later_on
+    )
+    db.commit()
+
+    run = documents_service.mature_instruments(
+        db, subledger.company_id, as_of=due_on, actor=ledger.owner, role=spec.role
+    )
+    db.commit()
+
+    assert [document.id for document in run.matured] == [due.id]
+    assert [document.id for document in run.waiting] == [not_due.id]
+    assert run.skipped == []
+
+    # One moved: its cash is in the bank, and it is off the outstanding list.
+    assert due.matured_entry_id is not None
+    assert ledger.acct("1120") in {
+        line.gl_account_id for line in _lines(db, due.matured_entry_id)
+    }
+
+    # The other did not move at all — no entry, still pending, still outstanding.
+    assert not_due.matured_entry_id is None
+    assert not_due.is_pending_instrument
+    assert [
+        document.id
+        for document in documents_service.outstanding_instruments(
+            db, subledger.company_id, role=spec.role
+        )
+    ] == [not_due.id]
+
+    # Its cash side is still in the post-dated account and nowhere near the bank.
+    assert ledger.acct(spec.post_dated) in {
+        line.gl_account_id for line in _lines(db, not_due.journal_entry_id)
+    }
+    assert ledger.acct("1120") not in {
+        line.gl_account_id for line in _lines(db, not_due.journal_entry_id)
+    }
+
     assert_ledger_invariants(db, subledger.company_id)
     assert_subledger_invariants(db, subledger.company_id)
 

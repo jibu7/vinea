@@ -14,6 +14,9 @@ async function openJanuary15th(page: import("@playwright/test").Page): Promise<v
 }
 
 test.describe("posting into a closed period", () => {
+  // PATH: /gl/journal-batches/new dated into the period `seed_e2e` closes → POST → 422 →
+  // the inline error. CANNOT SEE: reopening. The period is closed by the fixture rather
+  // than by year-end close, so nothing here exercises the reopen permission or its audit.
   test("shows the inline period-closed error instead of posting", async ({ page }) => {
     await login(page, PRIMARY_EMAIL);
     await page.goto("/gl/journal-batches/new");

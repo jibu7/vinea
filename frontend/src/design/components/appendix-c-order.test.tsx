@@ -10,6 +10,17 @@ import { navIntents, type IntentLabel } from "./module-nav";
  * Snapshot taken after P4 step 6, where the only edit was the AR/AP Maintenance block:
  * Customers, Sales reps and Suppliers lost their `P4` tag, and the seven other AR/AP
  * maintenance screens were added in place. Nothing outside that block moved.
+ *
+ * Amended at P4 step 9 with "Post-dated receipts" / "Post-dated payments" under Transactions,
+ * after Allocate. Not in the owner's tree — but neither is the document they act on: P4
+ * decision 7 books a receipt or payment dated ahead to the post-dated account, and the
+ * `mature_instruments` service that banks it shipped as an endpoint and a scheduled job with
+ * no screen. An instrument the product can raise and cannot mature is a hole in the phase,
+ * so the tree gains the screen that closes it.
+ *
+ * Recorded in the plan as **Appendix C.1.6**, on the same footing as C.1.5's additions: the
+ * tree is a contract, and a change to it belongs in the document the contract lives in rather
+ * than only in the code that happens to satisfy it.
  */
 const APPENDIX_C: Record<IntentLabel, Array<[string, string, string | null]>> = {
   "Maintenance": [
@@ -49,6 +60,7 @@ const APPENDIX_C: Record<IntentLabel, Array<[string, string, string | null]>> = 
     ["Accounts Receivable", "Credit note", null],
     ["Accounts Receivable", "Receipt", null],
     ["Accounts Receivable", "Allocate", null],
+    ["Accounts Receivable", "Post-dated receipts", null],
     ["Accounts Receivable", "Account receivable batches", null],
     ["Accounts Payable", "GRV", "P6"],
     ["Accounts Payable", "Purchase order", "P6"],
@@ -56,6 +68,7 @@ const APPENDIX_C: Record<IntentLabel, Array<[string, string, string | null]>> = 
     ["Accounts Payable", "Return to supplier", null],
     ["Accounts Payable", "Payment", null],
     ["Accounts Payable", "Allocate", null],
+    ["Accounts Payable", "Post-dated payments", null],
     ["Accounts Payable", "Account payable batches", null],
     ["Order Entry", "Sales order", "P6"],
     ["Inventory", "Adjustments", "P5"],

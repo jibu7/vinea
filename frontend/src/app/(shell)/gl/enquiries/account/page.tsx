@@ -28,6 +28,7 @@ import { formatDate } from "@/lib/format";
 
 function AccountEnquiryView() {
   const t = useTranslations("gl");
+  const tEntryTitle = useTranslations("gl.entryTitle");
   const searchParams = useSearchParams();
   const initialAccountId = searchParams.get("accountId") ?? "";
 
@@ -307,7 +308,13 @@ function AccountEnquiryView() {
           title={drawerEntry ? `${drawerEntry.number}` : t("entryDetails")}
           description={
             drawerEntry
-              ? `${formatDate(drawerEntry.entry_date)} · ${drawerEntry.doc_type === "CB" ? t("cashbookBatch") : t("journalBatch")}`
+              ? `${formatDate(drawerEntry.entry_date)} · ${
+                  // Same list the entry screen titles from: an AR invoice drilled into from
+                  // here is not a journal batch either.
+                  tEntryTitle.has(drawerEntry.doc_type)
+                    ? tEntryTitle(drawerEntry.doc_type)
+                    : tEntryTitle("fallback")
+                }`
               : undefined
           }
         >

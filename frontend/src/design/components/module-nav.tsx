@@ -78,6 +78,11 @@ export const navIntents: NavIntent[] = [
       { label: "Credit note", module: "Accounts Receivable", permission: "ar:transactions_post", href: "/ar/credit-notes/new" },
       { label: "Receipt", module: "Accounts Receivable", permission: "ar:transactions_post", href: "/ar/receipts/new" },
       { label: "Allocate", module: "Accounts Receivable", permission: "ar:transactions_post", href: "/ar/allocations/new" },
+      // Not in the owner's tree, and neither is the document it acts on: a receipt dated
+      // ahead books to the post-dated account and needs a person to bank it once it matures
+      // (P4 decision 7). The service shipped as an endpoint and a job with no screen, which
+      // made the instrument un-maturable by anyone using the product.
+      { label: "Post-dated receipts", module: "Accounts Receivable", permission: "ar:reports_view", href: "/ar/post-dated" },
       { label: "Account receivable batches", module: "Accounts Receivable", permission: "ar:transactions_post", href: "/ar/batches/new" },
       // GRV and Purchase order are P6: goods receipt and the three-way match are the
       // purchasing cycle, not the AP subledger P4 builds. Supplier invoice, Receipt and
@@ -88,6 +93,7 @@ export const navIntents: NavIntent[] = [
       { label: "Return to supplier", module: "Accounts Payable", permission: "ap:transactions_post", href: "/ap/returns/new" },
       { label: "Payment", module: "Accounts Payable", permission: "ap:transactions_post", href: "/ap/payments/new" },
       { label: "Allocate", module: "Accounts Payable", permission: "ap:transactions_post", href: "/ap/allocations/new" },
+      { label: "Post-dated payments", module: "Accounts Payable", permission: "ap:reports_view", href: "/ap/post-dated" },
       { label: "Account payable batches", module: "Accounts Payable", permission: "ap:transactions_post", href: "/ap/batches/new" },
       { label: "Sales order", module: "Order Entry", phase: "P6" },
       { label: "Adjustments", module: "Inventory", phase: "P5" },

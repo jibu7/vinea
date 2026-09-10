@@ -15,6 +15,7 @@ You are building **Vinea ERP**: a multi-tenant cloud ERP for East African SMEs (
 10. **Migrations apply from zero.** Never edit an applied migration; never add "emergency" fix scripts. `alembic upgrade head` on an empty DB must always succeed (CI gate).
 11. **Auth:** httpOnly cookies + refresh rotation. No tokens in localStorage.
 12. **Compliance:** fiscalization goes through the `FiscalizationAdapter` interface + durable outbox. Country logic never leaks into AR/POS code.
+13. **A screen is not done until a test has opened it with data in it, and a committed screenshot shows rows.** Rendering is not the same as working: P4 found six defects on screens that had shipped and passed review — a report that read the wrong field and showed "Nothing to report" over a full subledger, base amounts wearing a foreign currency's symbol, headroom that grew as the debt grew, a document type nothing could action. Every one of them was on a screen no test had ever opened with real data behind it. So: an e2e that puts data on the screen and asserts a **figure**, not just a heading; and a screenshot in `docs/screenshots/` with rows in it. An empty-state screenshot proves the route compiles and nothing else.
 
 ## Quality bar (every task)
 - `cd backend && uv run ruff check . && uv run pytest -q` must be green before you report done. Add tests with the code, including accounting-invariant assertions where money moves.

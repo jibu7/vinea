@@ -1,18 +1,17 @@
 import { expect, test, type Page } from "@playwright/test";
-import { PRIMARY_EMAIL, assertNoSeriousViolations, login, setTheme } from "./support/fixtures";
+import {
+  PRIMARY_EMAIL,
+  assertNoSeriousViolations,
+  login,
+  pickCombobox,
+  setTheme,
+} from "./support/fixtures";
 
 /** P4 step 7 — the allocation screen, and the AP side of the document screens. */
 
 const REVENUE = "4100";
 const EXPENSE = "6990";
 const BANK = "1120";
-
-async function pick(page: Page, name: string, needle: string) {
-  await page.getByRole("button", { name, exact: true }).click();
-  await page.locator("[cmdk-item]").first().waitFor({ state: "visible" });
-  await page.keyboard.type(needle);
-  await page.locator(`[cmdk-item]:has-text("${needle}")`).first().click();
-}
 
 async function pickLineAccount(page: Page, code: string) {
   await page.getByRole("button", { name: "Account, row 1" }).click();
@@ -34,6 +33,10 @@ async function makePartner(page: Page, role: "ar" | "ap", code: string, name: st
 }
 
 test.describe("AR allocation", () => {
+  // PATH: customer → invoice → receipt → /ar/allocations/new → preview → post → the open
+  // amount that remains. CANNOT SEE: an allocation that *posts* something. Both documents
+  // are in base currency with no discount, so the preview is legitimately empty —
+  // `ar-ap-acceptance` is where a realized difference goes through this screen.
   test("allocates a receipt to an invoice, previewing the postings before Post", async ({ page }) => {
     await login(page, PRIMARY_EMAIL);
     const suffix = String(Date.now()).slice(-6);
@@ -43,7 +46,7 @@ test.describe("AR allocation", () => {
     // An invoice to settle...
     await page.goto("/ar/invoices/new");
     await page.waitForSelector("h1:has-text('Invoice')");
-    await pick(page, "Customer", code);
+    await pickCombobox(page, "Customer", code);
     await page.getByLabel("Description", { exact: true }).fill(`Alloc invoice ${suffix}`);
     await pickLineAccount(page, REVENUE);
     await page.getByLabel("Unit price, row 1").fill("50000");
@@ -53,17 +56,17 @@ test.describe("AR allocation", () => {
     // ...and a receipt to settle it with.
     await page.goto("/ar/receipts/new");
     await page.waitForSelector("h1:has-text('Receipt')");
-    await pick(page, "Customer", code);
+    await pickCombobox(page, "Customer", code);
     await page.getByLabel("Description", { exact: true }).fill(`Alloc receipt ${suffix}`);
     await page.getByLabel("Amount", { exact: true }).fill("20000");
-    await pick(page, "Cash / bank account", BANK);
+    await pickCombobox(page, "Cash / bank account", BANK);
     await page.getByRole("button", { name: /^Post/ }).click();
     await page.waitForURL(/\/gl\/entries\/\d+/, { timeout: 20_000 });
 
     // --- allocate ---------------------------------------------------------------------
     await page.goto("/ar/allocations/new");
     await page.waitForSelector("h1:has-text('Allocate')");
-    await pick(page, "Partner", code);
+    await pickCombobox(page, "Partner", code);
 
     const preview = page.getByTestId("allocation-preview");
     await expect(preview.getByText("Enter an amount to allocate, then preview.")).toBeVisible();
@@ -88,10 +91,13 @@ test.describe("AR allocation", () => {
 
     // The invoice is now part-settled: 30,000 of the 50,000 remains open.
     await page.goto("/ar/allocations/new");
-    await pick(page, "Partner", code);
+    await pickCombobox(page, "Partner", code);
     await expect(page.getByText("FRw 30,000")).toBeVisible();
   });
 
+  // PATH: /ar/allocations/new, reading the claim the preview panel makes about itself.
+  // CANNOT SEE: the staleness it is named for. This asserts the provenance line only; the
+  // preview-then-Post ordering is asserted in the test above and in `ar-ap-acceptance`.
   test("editing an amount after previewing marks the preview stale and blocks Post", async ({
     page,
   }) => {
@@ -107,6 +113,9 @@ test.describe("AR allocation", () => {
 });
 
 test.describe("AP transaction screens", () => {
+  // PATH: /ap/supplier-invoices/new and /ap/payments/new → their journal entries.
+  // CANNOT SEE: what the payment settled — nothing is allocated here. The AP tape in
+  // `ar-ap-acceptance` carries it through allocation, FX and the supplier statement.
   test("posts a supplier invoice and a payment", async ({ page }) => {
     await login(page, PRIMARY_EMAIL);
     const suffix = String(Date.now()).slice(-6);
@@ -115,7 +124,7 @@ test.describe("AP transaction screens", () => {
 
     await page.goto("/ap/supplier-invoices/new");
     await page.waitForSelector("h1:has-text('Supplier invoice')");
-    await pick(page, "Supplier", code);
+    await pickCombobox(page, "Supplier", code);
     await page.getByLabel("Description", { exact: true }).fill(`AP invoice ${suffix}`);
     await pickLineAccount(page, EXPENSE);
     await page.getByLabel("Unit price, row 1").fill("15000");
@@ -125,15 +134,18 @@ test.describe("AP transaction screens", () => {
 
     await page.goto("/ap/payments/new");
     await page.waitForSelector("h1:has-text('Payment')");
-    await pick(page, "Supplier", code);
+    await pickCombobox(page, "Supplier", code);
     await page.getByLabel("Description", { exact: true }).fill(`AP payment ${suffix}`);
     await page.getByLabel("Amount", { exact: true }).fill("15000");
-    await pick(page, "Cash / bank account", BANK);
+    await pickCombobox(page, "Cash / bank account", BANK);
     await page.getByRole("button", { name: /^Post/ }).click();
     await page.waitForURL(/\/gl\/entries\/\d+/, { timeout: 20_000 });
     await expect(page.getByText("Posted").first()).toBeVisible();
   });
 
+  // PATH: /ap/returns/new, asserting it is line-shaped and supplier-scoped.
+  // CANNOT SEE: a return posting, or that it reduces exposure rather than building it —
+  // the credit-limit direction is asserted in the backend role matrix.
   test("the AP return-to-supplier screen is the AP credit note", async ({ page }) => {
     await login(page, PRIMARY_EMAIL);
     await page.goto("/ap/returns/new");
@@ -145,6 +157,9 @@ test.describe("AP transaction screens", () => {
 });
 
 test.describe("allocation accessibility", () => {
+  // PATH: axe over the allocation screen with no partner chosen, in both themes.
+  // CANNOT SEE: the screen with open items listed and a preview table rendered, which is
+  // most of its interactive surface.
   test("allocation screen — light and dark", async ({ page }) => {
     await login(page, PRIMARY_EMAIL);
     await page.goto("/ar/allocations/new");

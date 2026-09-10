@@ -216,7 +216,21 @@
     "allClasses": "All classes",
     "postableOnly": "Postable only",
     "printedOn": "Printed on {date}",
-    "filters": "Filters"
+    "filters": "Filters",
+    "entryTitle": {
+      "JE": "Journal Batch",
+      "CB": "Cashbook Batch",
+      "YE": "Year-end Close",
+      "ARIN": "Customer Invoice",
+      "ARCN": "Customer Credit Note",
+      "ARRC": "Receipt",
+      "APIN": "Supplier Invoice",
+      "APDN": "Return to Supplier",
+      "APPY": "Payment",
+      "ARJN": "AR Journal",
+      "APJN": "AP Journal",
+      "fallback": "Journal Entry"
+    }
   },
   "maintenance": {
     "companyDetails": "Company details",
@@ -724,7 +738,10 @@
       "discountAria": "Discount on {number}",
       "selectCreditAria": "Apply {number}",
       "creditRemaining": "{amount} left",
-      "previewNoPostings": "This allocation posts nothing to the ledger — it closes the open items and no more. There is no exchange difference and no discount to record."
+      "previewNoPostings": "This allocation posts nothing to the ledger — it closes the open items and no more. There is no exchange difference and no discount to record.",
+      "discountOffered": "{amount} on offer",
+      "discountClosed": "window closed",
+      "takeDiscount": "Take the {amount} discount on {number}"
     },
     "batches": {
       "titleAr": "Account receivable batches",
@@ -778,6 +795,36 @@
       "debit": "Debit",
       "credit": "Credit",
       "narrative": "Narrative"
+    },
+    "instruments": {
+      "titleAr": "Post-dated receipts",
+      "titleAp": "Post-dated payments",
+      "subtitleAr": "Cheques and other instruments taken but not yet banked. Each is a real claim and can be allocated while it waits — only the cash is pending.",
+      "subtitleAp": "Instruments issued but not yet cleared. Each is a real obligation and can be allocated while it waits — only the cash is pending.",
+      "asOfDate": "Mature up to",
+      "number": "Number",
+      "partner": "Partner",
+      "documentDate": "Dated",
+      "maturityDate": "Matures",
+      "instrument": "Instrument",
+      "amount": "Amount",
+      "open": "Open",
+      "status": "Status",
+      "due": "Due",
+      "waiting": "Waiting",
+      "none": "Nothing is waiting to be banked.",
+      "loading": "Loading…",
+      "markMatured": "Mark matured",
+      "maturing": "Banking…",
+      "nothingDue": "Nothing has matured on or before this date.",
+      "maturedNone": "Nothing matured",
+      "matured": "{count} banked, {waiting} still waiting",
+      "matureFailed": "Couldn't bank the matured instruments",
+      "dueCount": "{count} due on or before {date}",
+      "viewEntry": "Open journal entry for {number}",
+      "postedTo": "Held in",
+      "explainer": "Banking posts the transfer from the post-dated account to the cash account each instrument named, through the PostingEngine, dated at its maturity.",
+      "skippedWarning": "{count} were due but could not be banked — check the AR/AP defaults and the cash account on each."
     }
   },
   "lineGrid": {
@@ -873,6 +920,9 @@
     "stmtFailed": "The statement job failed",
     "stmtDownload": "Download PDF",
     "stmtSelectPartners": "Select at least one partner.",
-    "stmtJob": "Job {id}"
+    "stmtJob": "Job {id}",
+    "allocDrillDown": "Open journal entry for {number}",
+    "allocNoEntry": "(posts nothing)",
+    "allPartners": "All partners"
   }
 }

@@ -516,6 +516,9 @@ class OpenItemRead(BaseModel):
     total_amount: Decimal
     open_amount: Decimal
     open_base_amount: Decimal
+    #: Settlement discount still on offer at the as-of date, in document currency. Zero once
+    #: the discount window has closed — it is a fact of the allocation date, not the invoice.
+    discount_available: Decimal
     direction: int
     days_overdue: int
 
@@ -555,6 +558,13 @@ class PartnerAllocationRead(BaseModel):
     allocation_id: int
     number: str
     allocation_date: date
+    #: The entry the allocation wrote, or `None` when it wrote none — a same-currency
+    #: allocation with no discount closes open items and posts nothing. The Allocation report
+    #: drills through this, so an FX figure on screen leads to the ledger behind it.
+    journal_entry_id: int | None
+    partner_id: int
+    #: The allocation's currency. Allocated and discount amounts are in it, not in base.
+    currency_id: int
     debit_document_id: int
     debit_number: str
     credit_document_id: int
@@ -562,6 +572,26 @@ class PartnerAllocationRead(BaseModel):
     amount: Decimal
     discount_amount: Decimal
     fx_base_amount: Decimal
+
+
+class PendingInstrumentRead(ApiModel):
+    """A post-dated receipt or payment whose cash has not landed yet: posted, carrying a
+    maturity date, and with no maturity entry against it. `is_due` is relative to the as-of
+    date the caller asked about — an instrument is allocatable either way, it is only the
+    cash that waits."""
+
+    id: int
+    number: str
+    partner_id: int
+    document_date: date
+    maturity_date: date
+    instrument_type: str | None
+    currency_id: int
+    total_amount: Decimal
+    open_amount: Decimal
+    cash_account_id: int | None
+    is_due: bool
+    description: str
 
 
 class MaturityRunRequest(BaseModel):
@@ -573,10 +603,26 @@ class ReversalRequest(BaseModel):
     reason: str = Field(min_length=3, max_length=500)
 
 
+class InstrumentRunRow(BaseModel):
+    id: int
+    number: str
+    maturity_date: date
+    #: Only on skipped rows: why this one could not be banked.
+    reason: str | None = None
+
+
 class MaturityRunResult(BaseModel):
+    """What the run banked, and what it deliberately did not.
+
+    `waiting` is the point: a run takes a date and only touches instruments matured by it, so
+    the caller needs to see the ones still ahead of their maturity date rather than infer them
+    from a shorter list than expected."""
+
     as_of: date
     matured_document_ids: list[int]
     journal_entry_ids: list[int]
+    waiting: list[InstrumentRunRow] = []
+    skipped: list[InstrumentRunRow] = []
 
 
 class StatementRequest(BaseModel):

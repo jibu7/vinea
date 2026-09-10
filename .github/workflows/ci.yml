@@ -65,6 +65,13 @@ jobs:
       - run: npm run test
       - run: npm run build
 
+      # The e2e fixture credential. Generated per run rather than written down anywhere: the
+      # seed hashes it and the suite signs in with it, and neither has a literal to fall back
+      # to (P4 step 9). It has to exist before the seed step, and reach both the container
+      # that seeds and the Playwright process that logs in.
+      - name: generate the e2e fixture credential
+        run: echo "E2E_PASSWORD=$(openssl rand -base64 24)" >> "$GITHUB_ENV"
+
       # e2e: bring up the real stack (docker-compose.yml — db + backend + frontend, same
       # images/env dev uses) and run Playwright against it, per P3 step 8.
       - name: start database
@@ -87,16 +94,44 @@ jobs:
           curl -sf -o /dev/null http://localhost:3000/login
           # `next dev` compiles each route on its first hit — front-load that cost here,
           # outside any single Playwright test's timeout budget.
-          for route in / /gl/journal-batches/new /gl/enquiries/account /gl/enquiries/trial-balance /maintenance/chart-of-accounts; do
+          for route in / /gl/journal-batches/new /gl/enquiries/account /gl/enquiries/trial-balance \
+                       /maintenance/chart-of-accounts /maintenance/customers /maintenance/suppliers \
+                       /ar/invoices/new /ar/receipts/new /ar/allocations/new /ar/enquiry \
+                       /ar/batches/new /ar/post-dated \
+                       /ar/reports/age-analysis /ar/reports/statements /ar/reports/allocations \
+                       /ap/supplier-invoices/new /ap/payments/new /ap/allocations/new /ap/enquiry \
+                       /ap/post-dated /ar/reports/allocations \
+                       /ap/reports/age-analysis /ap/reports/statements /ap/reports/allocations; do
             curl -sf -o /dev/null "http://localhost:3000${route}" || true
           done
         working-directory: .
+      # `-e E2E_PASSWORD` rather than a compose entry: the value is this job's, and nothing in
+      # the running app needs it — only the seed does.
       - name: seed e2e fixtures
-        run: docker compose exec -T backend uv run python -m app.scripts.seed_e2e
+        run: docker compose exec -e E2E_PASSWORD -T backend uv run python -m app.scripts.seed_e2e
         working-directory: .
       # `--with-deps` shells out to apt-get, so the vendor sources have to be gone first.
       - uses: ./.github/actions/drop-vendor-apt-sources
+      # `pdftotext` — the discount tape reads the statement PDF it downloads, to check the
+      # figure reached the document rather than that a file arrived.
+      - name: install poppler-utils
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends poppler-utils
       - run: npx playwright install --with-deps chromium
+      # Both halves of the P4 step 9 tape have to be *there* before the suite runs. A spec that
+      # fails to compile, or whose describe block stops producing tests, is otherwise a silently
+      # shorter run that still reports green.
+      - name: prove the acceptance tape is collected
+        run: |
+          npx playwright test e2e/ar-ap-acceptance.spec.ts --list | tee /tmp/tape.txt
+          grep -q "AR · USD" /tmp/tape.txt
+          grep -q "AR · RWF" /tmp/tape.txt
+          grep -q "AP · USD" /tmp/tape.txt
+          grep -q "journal batch raises a debit that ages" /tmp/tape.txt
+          grep -q "AR — a settlement discount" /tmp/tape.txt
+          grep -q "AP — a settlement discount" /tmp/tape.txt
+        env:
+          PLAYWRIGHT_BASE_URL: http://localhost:3000
+          PLAYWRIGHT_API_URL: http://localhost:8000
       - run: npm run e2e
         env:
           PLAYWRIGHT_BASE_URL: http://localhost:3000
@@ -122,7 +157,7 @@ jobs:
       # e2e:regression afterward is the actual proof the reset DB is back to seed state: it
       # needs a real login and the seeded 6100 account, so it fails if either is missing.
       - name: reset dev DB (make db-reset)
-        run: make db-reset
+        run: make db-reset          # reseeds, so it needs E2E_PASSWORD from the job env
         working-directory: .
       - name: wait for backend and frontend after reset
         run: |

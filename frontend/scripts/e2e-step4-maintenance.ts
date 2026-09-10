@@ -1,5 +1,17 @@
 import { chromium } from "@playwright/test";
 
+// Credentials from the environment, never written down here. This script signs in to a
+// hand-made dev tenant rather than the `seed_e2e` fixtures, so it takes both from env:
+//   E2E_LOGIN_EMAIL=... E2E_PASSWORD=... npx tsx <this file>
+const EMAIL = requireEnv("E2E_LOGIN_EMAIL");
+const PASSWORD = requireEnv("E2E_PASSWORD");
+
+function requireEnv(name: string): string {
+  const value = process.env[name];
+  if (!value) throw new Error(`${name} is not set — this script signs in as a real user.`);
+  return value;
+}
+
 async function main() {
   const browser = await chromium.launch();
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
@@ -12,8 +24,8 @@ async function main() {
 
   console.log("1. Logging in...");
   await page.goto("http://localhost:3000/", { waitUntil: "networkidle" });
-  await page.fill('input[type="email"]', "aline@rugariwines.rw");
-  await page.fill('input[type="password"]', "SuperSecret123!");
+  await page.fill('input[type="email"]', EMAIL);
+  await page.fill('input[type="password"]', PASSWORD);
   await page.click('button[type="submit"]');
   await page.waitForURL("http://localhost:3000/");
   await page.waitForSelector("text=Good morning");
@@ -160,7 +172,7 @@ async function main() {
   console.log("10. Verifying Administration -> Users & memberships...");
   await page.goto("http://localhost:3000/administration/users", { waitUntil: "networkidle" });
   await page.waitForSelector("text=Team Members & Invitations");
-  await page.waitForSelector("text=aline@rugariwines.rw");
+  await page.waitForSelector(`text=${EMAIL}`);
   await page.waitForSelector("text=Owner");
   console.log("    Users and memberships verified.");
   await page.screenshot({ path: "screenshots/32-users-and-memberships.png", fullPage: true });

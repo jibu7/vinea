@@ -10,13 +10,17 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium, type Page } from "@playwright/test";
+// The seeded logins and the one credential the seed and the suite share — no literal here
+// to drift from `E2E_PASSWORD`.
+import {
+  PASSWORD,
+  PRIMARY_EMAIL as OWNER,
+  READONLY_EMAIL as READONLY,
+} from "../e2e/support/fixtures";
 
 const OUT = process.env.OUT ?? "screenshots";
 const BASE = process.env.BASE_URL ?? "http://localhost:3000";
 const API = `${process.env.API_URL ?? "http://localhost:8000"}/api/v1`;
-const PASSWORD = "E2E-Sup3rSecret!1";
-const OWNER = "e2e.primary@vinea.example";
-const READONLY = "e2e.readonly@vinea.example";
 /** Seeded by `seed_e2e` with two overdue invoices — the only partner with anything to age. */
 const AGED_CUSTOMER = "Gisenyi Hotel Group";
 
@@ -72,23 +76,47 @@ async function pick(page: Page, name: string, needle: string) {
  * screens: those have their own shots and their own e2e — what this fixture exists for is to
  * give the *allocation* screen something worth photographing. Every call is a real endpoint
  * with the signed-in user as actor. */
+/** One authenticated request, made by the page itself.
+ *
+ * Declared here rather than inside a `page.evaluate` body: `tsx` compiles named arrow
+ * functions with an `__name` helper that exists in Node and not in the browser, so a helper
+ * defined inside the evaluated function throws `ReferenceError: __name is not defined`. */
+async function apiCall(
+  page: Page,
+  path: string,
+  body?: unknown,
+  method = "POST",
+): Promise<{ status: number; json: unknown }> {
+  return page.evaluate(
+    async ({ url, body, method }) => {
+      const res = await fetch(url, {
+        method,
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": crypto.randomUUID(),
+        },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+      return { status: res.status, json: await res.json().catch(() => null) };
+    },
+    { url: `${API}${path}`, body, method },
+  );
+}
+
+/** `apiCall` that refuses to fail quietly. A fixture that 4xx's and says nothing produces a
+ * screenshot of the *previous* run's data, which is worse than no screenshot. */
+async function apiOk(page: Page, path: string, body?: unknown, method = "POST"): Promise<unknown> {
+  const res = await apiCall(page, path, body, method);
+  if (res.status >= 300) {
+    throw new Error(`${method} ${path} -> ${res.status}: ${JSON.stringify(res.json)}`);
+  }
+  return res.json;
+}
+
 async function seedFxAllocation(page: Page, code: string): Promise<void> {
-  const api = async (path: string, body?: unknown, method = "POST") =>
-    page.evaluate(
-      async ({ url, body, method }) => {
-        const res = await fetch(url, {
-          method,
-          credentials: "include",
-          headers: {
-            "Content-Type": "application/json",
-            "Idempotency-Key": crypto.randomUUID(),
-          },
-          body: body === undefined ? undefined : JSON.stringify(body),
-        });
-        return { status: res.status, json: await res.json().catch(() => null) };
-      },
-      { url: `${API}${path}`, body, method },
-    );
+  const api = (path: string, body?: unknown, method = "POST") =>
+    apiCall(page, path, body, method);
 
   const currencies = (await api("/gl/currencies", undefined, "GET")).json as Array<{
     id: number;
@@ -342,6 +370,117 @@ async function main() {
       console.log("captured", "10b-statement-page1-light (from the PDF)");
     }
     await repCtx.close();
+  }
+
+  // The document workspace, and the journal entry it posts to. Deliberately a *foreign
+  // currency* invoice: the workspace shows the currency and the booking rate, and the entry
+  // behind it shows the base amounts — which is where P4 step 9 found the entry screen
+  // formatting `base_amount` with the document's own currency, rendering a USD 1,000 invoice
+  // as "$ 1,300,000.00". The pair is the review record for that fix.
+  if (wanted("11-document-workspace", "12-fx-invoice-entry")) {
+    const docCtx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    const doc = await docCtx.newPage();
+    await login(doc, OWNER);
+
+    const partners = await doc.evaluate(async (url) => {
+      const res = await fetch(url, { credentials: "include" });
+      return (await res.json()) as Array<{ customer_code: string | null }>;
+    }, `${API}/subledger/ar/partners`);
+    const customer = partners.find((p) => p.customer_code)!.customer_code!;
+
+    for (const theme of ["light", "dark"] as const) {
+      // A restored draft would put someone else's half-typed invoice in the review record.
+      await doc.goto(`${BASE}/`);
+      await doc.evaluate(() => {
+        for (const key of Object.keys(window.localStorage)) {
+          if (key.startsWith("vinea.draft.")) window.localStorage.removeItem(key);
+        }
+      });
+      await doc.goto(`${BASE}/ar/invoices/new`);
+      await doc.waitForSelector("h1:has-text('Invoice')");
+      await pick(doc, "Customer", customer);
+      await doc.getByLabel("Description", { exact: true }).fill("Export consignment — 20 cases");
+      await pick(doc, "Currency", "USD");
+      await doc.getByLabel("Exchange rate").fill("1300");
+      await doc.getByRole("button", { name: "Account, row 1" }).click();
+      await doc.locator("[cmdk-item]").first().waitFor({ state: "visible" });
+      await doc.keyboard.type("4100");
+      await doc.locator('[cmdk-item]:has-text("4100")').first().click();
+      await doc.getByLabel("Quantity, row 1").fill("20");
+      await doc.getByLabel("Unit price, row 1").fill("50");
+      await doc.waitForTimeout(400);
+      await shoot(doc, "11-document-workspace", theme);
+    }
+
+    // Post once, from the state the dark shot left, and photograph the entry in both themes.
+    if (wanted("12-fx-invoice-entry")) {
+      await doc.getByRole("button", { name: /^Post/ }).click();
+      await doc.waitForURL(/\/gl\/entries\/\d+/, { timeout: 30_000 });
+      // Toasts sit over the footer totals and time out after a few seconds; wait them out
+      // rather than photographing the entry through them.
+      await doc.getByText(/posted$/).first().waitFor({ state: "hidden", timeout: 30_000 });
+      for (const theme of ["light", "dark"] as const) {
+        await doc.waitForTimeout(400);
+        await shoot(doc, "12-fx-invoice-entry", theme);
+      }
+    }
+    await docCtx.close();
+  }
+
+  // The two screens P4 step 9 fixed or added, each with rows in them — an empty-state shot
+  // proves the route compiles and nothing else (copilot-instructions #13).
+  if (wanted("13-post-dated", "14-allocation-report")) {
+    const lateCtx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    const late = await lateCtx.newPage();
+    await login(late, OWNER);
+
+    if (wanted("13-post-dated")) {
+      // A cheque taken today and maturing later this month, so the list is not empty and the
+      // instrument is genuinely still waiting rather than already banked.
+      const suffix = String(Date.now()).slice(-6);
+      const code = `PDC${suffix}`;
+      const ahead = new Date();
+      ahead.setDate(ahead.getDate() + 20);
+      const maturity = ahead.toISOString().slice(0, 10);
+      const accounts = (await apiOk(late, "/gl/accounts", undefined, "GET")) as Array<{
+        id: number;
+        code: string;
+      }>;
+      const bank = accounts.find((a) => a.code === "1120")!.id;
+      const partner = (await apiOk(late, "/subledger/ar/partners", {
+        name: `Cheque Customer ${code}`,
+        customer_code: code,
+      })) as { id: number };
+      await apiOk(late, "/subledger/ar/documents", {
+        kind: "settlement",
+        partner_id: partner.id,
+        document_date: new Date().toISOString().slice(0, 10),
+        description: "Cheque, banked on maturity",
+        amount: "250000",
+        cash_account_id: bank,
+        instrument_type: "cheque",
+        maturity_date: maturity,
+      });
+
+      for (const theme of ["light", "dark"] as const) {
+        await late.goto(`${BASE}/ar/post-dated`);
+        await late.waitForSelector("h1:has-text('Post-dated receipts')");
+        await late.locator("table tbody tr").first().waitFor({ state: "visible" });
+        await late.waitForTimeout(400);
+        await shoot(late, "13-post-dated", theme);
+      }
+    }
+
+    if (wanted("14-allocation-report")) {
+      for (const theme of ["light", "dark"] as const) {
+        await late.goto(`${BASE}/ar/reports/allocations`);
+        await late.waitForSelector("h1:has-text('Allocation report')");
+        await late.locator("table tbody tr").first().waitFor({ state: "visible" });
+        await late.waitForTimeout(400);
+        await shoot(late, "14-allocation-report", theme);
+      }
+    }
+    await lateCtx.close();
   }
 
   if (wanted("5-ar-defaults-readonly")) {

@@ -1,5 +1,11 @@
-import { expect, test, type Page } from "@playwright/test";
-import { PRIMARY_EMAIL, assertNoSeriousViolations, login, setTheme } from "./support/fixtures";
+import { expect, test } from "@playwright/test";
+import {
+  PRIMARY_EMAIL,
+  assertNoSeriousViolations,
+  login,
+  pickCombobox,
+  setTheme,
+} from "./support/fixtures";
 
 /**
  * P4 step 8 — the two enquiries and the ten reports.
@@ -11,15 +17,6 @@ import { PRIMARY_EMAIL, assertNoSeriousViolations, login, setTheme } from "./sup
  * revision where its subject did not exist, and the acceptance figure that agreed because
  * nothing had been posted. In each case the test passed and saw nothing.
  */
-
-const AS_OF = "2026-09-30";
-
-async function pick(page: Page, name: string, needle: string) {
-  await page.getByRole("button", { name, exact: true }).click();
-  await page.locator("[cmdk-item]").first().waitFor({ state: "visible" });
-  await page.keyboard.type(needle);
-  await page.locator(`[cmdk-item]:has-text("${needle}")`).first().click();
-}
 
 test.describe("customer enquiry", () => {
   // PATH: /ar/enquiry -> GET /subledger/ar/enquiry/{id}, open items tab, drill into the entry.
@@ -33,7 +30,7 @@ test.describe("customer enquiry", () => {
     await page.waitForSelector("h1:has-text('Customer enquiry')");
     await expect(page.getByText("Choose a partner to see their account.")).toBeVisible();
 
-    await pick(page, "Customer", "E2E");
+    await pickCombobox(page, "Customer", "E2E");
     await expect(page.getByText("Open balance")).toBeVisible();
 
     const drill = page.getByRole("button", { name: /^Open journal entry / }).first();
@@ -84,7 +81,7 @@ test.describe("customer enquiry", () => {
 
     await page.goto("/ar/enquiry");
     await page.waitForSelector("h1:has-text('Customer enquiry')");
-    await pick(page, "Customer", code);
+    await pickCombobox(page, "Customer", code);
 
     // Invoice-shaped in the ledger, and it must not say so on screen. "Customer invoice" is a
     // legitimate label for a real invoice — the assertion is about *this* partner's row.

@@ -61,8 +61,23 @@ test.describe("cashbook batch: post a receipt and see it in the enquiry", () => 
       .waitFor({ state: "visible" });
     await page.keyboard.press("Enter");
     await page.waitForSelector("text=Opening balance");
-    await expect(page.locator(`table tbody tr:has-text("${description}")`)).toBeVisible({
-      timeout: 20_000,
-    });
+
+    // The enquiry pages at 100 rows and offers "Load more"; a busy bank account runs past that
+    // long before a real one would. Page until the row appears rather than assuming it landed
+    // on the first page — which is true of an empty database and of nothing else.
+    const row = page.locator(`table tbody tr:has-text("${description}")`);
+    const rows = page.locator("table tbody tr");
+    for (let i = 0; i < 20 && (await row.count()) === 0; i += 1) {
+      const more = page.getByRole("button", { name: /Load more/i });
+      // The button is removed once the last page is in, so its absence is the end of the
+      // list rather than a failure.
+      if ((await more.count()) === 0) break;
+      const before = await rows.count();
+      await more.click();
+      await expect
+        .poll(() => rows.count(), { timeout: 20_000 })
+        .toBeGreaterThan(before);
+    }
+    await expect(row).toBeVisible({ timeout: 20_000 });
   });
 });

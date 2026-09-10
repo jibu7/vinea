@@ -2,6 +2,9 @@ import { expect, test } from "@playwright/test";
 import { DEBIT_ACCOUNT_CODE, PRIMARY_EMAIL, login, pickAccount } from "./support/fixtures";
 
 test.describe("journal batch: unbalanced entries are blocked", () => {
+  // PATH: /gl/journal-batches/new, watching the Post button as the amounts change.
+  // CANNOT SEE: the server's own refusal — this is the client guard, and it is exactly
+  // the guard `gl-inline-errors` has to route *around* to reach `unbalanced_entry`.
   test("Post stays disabled while the two lines don't balance", async ({ page }) => {
     await login(page, PRIMARY_EMAIL);
     await page.goto("/gl/journal-batches/new");

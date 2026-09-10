@@ -42,7 +42,13 @@ from app.models.subledger import (
 )
 from app.models.user import User
 from app.subledger import masters
-from app.subledger.common import PARTNER_TYPE_FOR_ROLE, audit, control_account_for, role_accounts
+from app.subledger.common import (
+    PARTNER_TYPE_FOR_ROLE,
+    audit,
+    control_account_for,
+    exposure_direction,
+    role_accounts,
+)
 from app.subledger.openitems import open_items_as_of
 
 ONE = Decimal(1)
@@ -638,7 +644,7 @@ def _check_credit_limit(
     # supplier (-1). Testing `direction < 0` instead read AR's signs on both sides, which
     # left the AP limit dead on supplier invoices while blocking returns to supplier — the
     # only two documents it could reach, and both the wrong way round.
-    builds_exposure = DOCUMENT_MATRIX[(role, DocumentKind.INVOICE)].direction
+    builds_exposure = exposure_direction(role)
     if limit is None or direction != builds_exposure:
         return  # no limit, or a document that reduces exposure
 
@@ -747,16 +753,58 @@ def reverse_document(
 def pending_instruments(
     db: Session, company_id: int, *, as_of: date, role: PartnerRole | None = None
 ) -> list[PartnerDocument]:
+    """Instruments *due* on or before `as_of` — what a maturity run would move."""
+    return _outstanding_instruments(db, company_id, role=role, due_by=as_of)
+
+
+def outstanding_instruments(
+    db: Session, company_id: int, *, role: PartnerRole | None = None
+) -> list[PartnerDocument]:
+    """Every post-dated instrument whose cash has not landed, due or not.
+
+    `pending_instruments` answers "what would a run as at this date move?"; a screen has to
+    show the ones still ahead of their maturity date too, or the only way to know a cheque
+    exists is to run maturity and see whether anything happens."""
+    return _outstanding_instruments(db, company_id, role=role, due_by=None)
+
+
+def _outstanding_instruments(
+    db: Session, company_id: int, *, role: PartnerRole | None, due_by: date | None
+) -> list[PartnerDocument]:
     statement = select(PartnerDocument).where(
         PartnerDocument.company_id == company_id,
         PartnerDocument.status == DocumentStatus.POSTED,
         PartnerDocument.maturity_date.is_not(None),
-        PartnerDocument.maturity_date <= as_of,
         PartnerDocument.matured_entry_id.is_(None),
     )
+    if due_by is not None:
+        statement = statement.where(PartnerDocument.maturity_date <= due_by)
     if role is not None:
         statement = statement.where(PartnerDocument.role == role)
     return list(db.scalars(statement.order_by(PartnerDocument.maturity_date, PartnerDocument.id)))
+
+
+@dataclass(frozen=True)
+class SkippedInstrument:
+    document: PartnerDocument
+    #: `no_post_dated_account` (the company has no post-dated account configured for the role)
+    #: or `no_cash_account` (the instrument names none, so there is nowhere to move it to).
+    reason: str
+
+
+@dataclass(frozen=True)
+class MaturityRun:
+    """What a run did, and — just as importantly — what it left alone.
+
+    A run used to return only the documents it banked, which made "nothing happened" and
+    "nothing was due" and "three cheques have no cash account" the same empty list. Callers
+    get all three now: `matured` moved, `skipped` were due but unbankable and say why, and
+    `waiting` had not matured at `as_of` and were never candidates."""
+
+    as_of: date
+    matured: list[PartnerDocument]
+    skipped: list[SkippedInstrument]
+    waiting: list[PartnerDocument]
 
 
 def mature_instruments(
@@ -767,13 +815,29 @@ def mature_instruments(
     actor: User,
     role: PartnerRole | None = None,
     request: Request | None = None,
-) -> list[PartnerDocument]:
+) -> MaturityRun:
     """Move matured post-dated instruments from the post-dated account into the bank. The
-    transfer uses the document's own booking rate, so it produces no exchange difference."""
+    transfer uses the document's own booking rate, so it produces no exchange difference.
+
+    Only instruments with `maturity_date <= as_of` are touched. Everything else outstanding is
+    returned in `waiting`, untouched — a run is not a "bank everything" button."""
+    due_ids = {
+        document.id for document in pending_instruments(db, company_id, as_of=as_of, role=role)
+    }
+    waiting = [
+        document
+        for document in outstanding_instruments(db, company_id, role=role)
+        if document.id not in due_ids
+    ]
     matured: list[PartnerDocument] = []
+    skipped: list[SkippedInstrument] = []
     for document in pending_instruments(db, company_id, as_of=as_of, role=role):
         accounts = role_accounts(db, company_id, document.role)
-        if accounts.post_dated_account_id is None or document.cash_account_id is None:
+        if accounts.post_dated_account_id is None:
+            skipped.append(SkippedInstrument(document, "no_post_dated_account"))
+            continue
+        if document.cash_account_id is None:
+            skipped.append(SkippedInstrument(document, "no_cash_account"))
             continue
         # Mirror of the original settlement: clear the post-dated account, debit/credit bank.
         sign = -document.direction
@@ -829,7 +893,7 @@ def mature_instruments(
             request=request,
         )
     db.flush()
-    return matured
+    return MaturityRun(as_of=as_of, matured=matured, skipped=skipped, waiting=waiting)
 
 
 # --- Journal batches -------------------------------------------------------------------------
