@@ -23,6 +23,10 @@ export function AgeAnalysisReport({ role }: { role: PartnerRole }) {
   const t = useTranslations("reports");
   const [asOf, setAsOf] = useState(today);
   const [bucketSetId, setBucketSetId] = useState("");
+  // Off by default: a partner with nothing outstanding has nothing to age, and on a real
+  // customer master those rows are most of the report. The filter is the server's, so the
+  // CSV below and the printed page carry exactly the rows on screen.
+  const [includeZeroBalances, setIncludeZeroBalances] = useState(false);
 
   const bucketSets = useAgeingBucketSets();
   // Land on the company's default set rather than an empty picker reading "Loading…" after the
@@ -35,6 +39,7 @@ export function AgeAnalysisReport({ role }: { role: PartnerRole }) {
   const ageing = useAgeing(role, {
     asOf,
     bucketSetId: bucketSetId ? Number(bucketSetId) : undefined,
+    includeZeroBalances,
   });
   const currencies = useCurrencies();
   const company = useCompanyDetails();
@@ -91,6 +96,15 @@ export function AgeAnalysisReport({ role }: { role: PartnerRole }) {
               placeholder={t("loading")}
             />
           </Field>
+          <label className="flex items-center gap-2 self-end pb-2.5 text-xs text-[var(--vinea-ink-muted)]">
+            <input
+              type="checkbox"
+              checked={includeZeroBalances}
+              onChange={(e) => setIncludeZeroBalances(e.target.checked)}
+              className="size-3.5"
+            />
+            {t("includeZeroBalances")}
+          </label>
         </div>
       }
     >

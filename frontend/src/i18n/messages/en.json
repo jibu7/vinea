@@ -856,6 +856,7 @@
     "active": "Active",
     "inactive": "Inactive",
     "includeInactive": "Include inactive",
+    "includeZeroBalances": "Include zero balances",
     "txTitleAr": "Transaction listing — customers",
     "txTitleAp": "Transaction listing — suppliers",
     "txSubtitle": "Documents posted in the period, paged from the server.",

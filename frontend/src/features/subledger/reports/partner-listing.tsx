@@ -14,7 +14,10 @@ import { partnerCode, type PartnerRole } from "../types";
 export function PartnerListingReport({ role }: { role: PartnerRole }) {
   const t = useTranslations("reports");
   const [includeInactive, setIncludeInactive] = useState(false);
-  const partners = usePartners(role, { includeInactive });
+  // Same filter as the age analysis, and applied by the same endpoint, so the CSV matches
+  // the table. Partners with nothing outstanding are the bulk of a real master.
+  const [includeZeroBalances, setIncludeZeroBalances] = useState(false);
+  const partners = usePartners(role, { includeInactive, includeZeroBalances });
   const company = useCompanyDetails();
   const rows = partners.data ?? [];
 
@@ -40,15 +43,26 @@ export function PartnerListingReport({ role }: { role: PartnerRole }) {
       companyName={company.data?.name}
       onExportCsv={rows.length ? handleExport : undefined}
       filters={
-        <label className="flex items-center gap-2 rounded-[var(--radius-card)] border border-[var(--vinea-border)] bg-[var(--vinea-surface-raised)] p-4 text-xs text-[var(--vinea-ink-muted)]">
-          <input
-            type="checkbox"
-            checked={includeInactive}
-            onChange={(e) => setIncludeInactive(e.target.checked)}
-            className="size-3.5"
-          />
-          {t("includeInactive")}
-        </label>
+        <div className="flex flex-wrap items-center gap-6 rounded-[var(--radius-card)] border border-[var(--vinea-border)] bg-[var(--vinea-surface-raised)] p-4 text-xs text-[var(--vinea-ink-muted)]">
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={includeInactive}
+              onChange={(e) => setIncludeInactive(e.target.checked)}
+              className="size-3.5"
+            />
+            {t("includeInactive")}
+          </label>
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={includeZeroBalances}
+              onChange={(e) => setIncludeZeroBalances(e.target.checked)}
+              className="size-3.5"
+            />
+            {t("includeZeroBalances")}
+          </label>
+        </div>
       }
     >
       <ReportPanel>

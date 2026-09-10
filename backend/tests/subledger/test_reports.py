@@ -7,10 +7,12 @@ from sqlalchemy.orm import Session
 
 from app.models.job import JobStatus
 from app.models.partner import AgeingBasis, PartnerRole
+from app.models.subledger import DocumentKind
 from app.services import jobs as jobs_service
 from app.subledger import allocations as allocations_service
 from app.subledger import documents as documents_service
 from app.subledger import enquiries as enquiries_service
+from app.subledger import masters
 from app.subledger.ageing import age_analysis
 from app.subledger.openitems import open_items_as_of
 from app.subledger.statements import STATEMENT_JOB, render_statement_html
@@ -217,3 +219,89 @@ def test_activity_statement_variant(db: Session, subledger: Subledger) -> None:
         variant="activity",
     )
     assert "Balance" in html and "2,500" in html
+
+
+def _post_ar_invoice(db: Session, sub: Subledger, partner_id: int, kind: DocumentKind) -> None:
+    documents_service.post_document(
+        db,
+        sub.company_id,
+        PartnerRole.AR,
+        documents_service.DocumentInput(
+            kind=kind,
+            partner_id=partner_id,
+            document_date=MARCH,
+            description="Returned in full",
+            lines=(
+                documents_service.LineInput(
+                    unit_price=Decimal(9000), gl_account_id=sub.ledger.acct("4100")
+                ),
+            ),
+        ),
+        actor=sub.owner,
+    )
+
+
+def test_zero_balance_partners_drop_out_of_the_ageing_unless_asked_for(
+    db: Session, subledger: Subledger
+) -> None:
+    """Two customers: one owing 12,000, one holding an invoice and a credit note of the same
+    size — two open items that net to nothing, so the partner has a row but no balance.
+
+    Path: `age_analysis` over `open_items_as_of`, filtered on the row total. It cannot see
+    the endpoint's default (`test_ageing_endpoint_hides_zero_balances_by_default`), nor the
+    CSV export, which the client builds from whatever rows this returns.
+    """
+    post_invoice(db, subledger, amount=Decimal(12000), on=MARCH)
+    netting = masters.create_partner(
+        db,
+        subledger.company_id,
+        masters.PartnerInput(name="Zero Sum Traders", customer_code="CUST-ZERO"),
+        actor=subledger.owner,
+    )
+    db.flush()
+    _post_ar_invoice(db, subledger, netting.id, DocumentKind.INVOICE)
+    _post_ar_invoice(db, subledger, netting.id, DocumentKind.CREDIT_NOTE)
+    db.commit()
+
+    as_of = MARCH + timedelta(days=10)
+    included = age_analysis(db, subledger.company_id, PartnerRole.AR, as_of=as_of)
+    by_id = {row.partner_id: row for row in included.rows}
+    # Present, and genuinely zero — not absent for want of open items.
+    assert by_id[netting.id].total == Decimal(0)
+    assert len(by_id[netting.id].buckets) == len(included.buckets)
+
+    excluded = age_analysis(
+        db, subledger.company_id, PartnerRole.AR, as_of=as_of, include_zero_balance=False
+    )
+    assert [row.partner_id for row in excluded.rows] == [subledger.customer.id]
+    # Dropping rows that sum to nothing cannot move the figure the step 8 acceptance test
+    # reconciles against the control account.
+    assert excluded.grand_total == included.grand_total == Decimal(12000)
+
+
+def test_partner_listing_can_hide_partners_with_nothing_outstanding(
+    db: Session, subledger: Subledger
+) -> None:
+    """Path: `list_partners` filtered on the same derived open items the ageing reads — no
+    stored balance column is consulted. It cannot see the picker screens, which depend on the
+    default staying inclusive; the unfiltered call here is what asserts that default."""
+    post_invoice(db, subledger, amount=Decimal(5000), on=MARCH)
+    quiet = masters.create_partner(
+        db,
+        subledger.company_id,
+        masters.PartnerInput(name="Dormant Holdings", customer_code="CUST-QUIET"),
+        actor=subledger.owner,
+    )
+    db.commit()
+
+    everyone = masters.list_partners(db, subledger.company_id, role=PartnerRole.AR)
+    assert quiet.id in {partner.id for partner in everyone}
+
+    owing = masters.list_partners(
+        db,
+        subledger.company_id,
+        role=PartnerRole.AR,
+        include_zero_balance=False,
+        as_of=MARCH + timedelta(days=10),
+    )
+    assert [partner.id for partner in owing] == [subledger.customer.id]

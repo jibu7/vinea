@@ -41,14 +41,21 @@ const ROOT = "subledger";
 
 // --- Partners -------------------------------------------------------------------------------
 
-export function usePartners(role: PartnerRole, opts: { includeInactive?: boolean } = {}) {
+export function usePartners(
+  role: PartnerRole,
+  opts: { includeInactive?: boolean; includeZeroBalances?: boolean } = {},
+) {
   const includeInactive = opts.includeInactive ?? false;
+  // Undefined, not `true`, is the default: the pickers want every partner and the endpoint
+  // already gives them that, so only the listing report sends the parameter at all.
+  const includeZeroBalances = opts.includeZeroBalances;
+  const search = new URLSearchParams();
+  if (includeInactive) search.set("include_inactive", "true");
+  if (includeZeroBalances === false) search.set("include_zero_balance", "false");
+  const query = search.toString();
   return useQuery({
-    queryKey: [ROOT, role, "partners", { includeInactive }],
-    queryFn: () =>
-      api.get<Partner[]>(
-        `/subledger/${role}/partners${includeInactive ? "?include_inactive=true" : ""}`,
-      ),
+    queryKey: [ROOT, role, "partners", { includeInactive, includeZeroBalances }],
+    queryFn: () => api.get<Partner[]>(`/subledger/${role}/partners${query ? `?${query}` : ""}`),
     staleTime: 60_000,
   });
 }
@@ -336,13 +343,24 @@ export function usePostBatch(role: PartnerRole) {
 
 export function useAgeing(
   role: PartnerRole,
-  params: { asOf?: string; bucketSetId?: number } = {},
+  params: { asOf?: string; bucketSetId?: number; includeZeroBalances?: boolean } = {},
 ) {
+  const includeZeroBalances = params.includeZeroBalances ?? false;
   const search = new URLSearchParams();
   if (params.asOf) search.set("as_of", params.asOf);
   if (params.bucketSetId) search.set("bucket_set_id", String(params.bucketSetId));
+  // Always sent, so the request the CSV and the print view are built from is the request the
+  // screen made — the server decides which rows exist, not the table.
+  search.set("include_zero_balance", String(includeZeroBalances));
   return useQuery({
-    queryKey: [ROOT, role, "ageing", params.asOf ?? null, params.bucketSetId ?? null],
+    queryKey: [
+      ROOT,
+      role,
+      "ageing",
+      params.asOf ?? null,
+      params.bucketSetId ?? null,
+      includeZeroBalances,
+    ],
     queryFn: () => api.get<AgeingReport>(`/subledger/${role}/ageing?${search}`),
     enabled: !!params.asOf,
   });

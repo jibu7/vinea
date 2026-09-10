@@ -82,7 +82,13 @@ def age_analysis(
     as_of: date,
     bucket_set_id: int | None = None,
     partner_id: int | None = None,
+    include_zero_balance: bool = True,
 ) -> Ageing:
+    """`include_zero_balance=False` drops partners whose open items net to nothing at
+    `as_of`. They carry no balance to age, and on a real customer master they are most of
+    the report — the rows that matter are unreadable underneath them. Defaults to including
+    them so every existing caller (statements builds its per-partner ageing summary from
+    this) keeps the rows it looks up; the report endpoint is what turns it off."""
     bucket_set = (
         masters.get_bucket_set(db, company_id, bucket_set_id)
         if bucket_set_id is not None
@@ -118,10 +124,14 @@ def age_analysis(
         row.buckets[index].amount += item.signed_base_amount
         row.total += item.signed_base_amount
 
+    listed = sorted(rows.values(), key=lambda row: row.partner_name)
+    if not include_zero_balance:
+        listed = [row for row in listed if row.total != ZERO]
+
     return Ageing(
         role=role,
         as_of=as_of,
         bucket_set=bucket_set,
         buckets=buckets,
-        rows=sorted(rows.values(), key=lambda row: row.partner_name),
+        rows=listed,
     )
