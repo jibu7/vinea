@@ -16,7 +16,11 @@ import { navIntents, type IntentLabel } from "./module-nav";
  * decision 7 books a receipt or payment dated ahead to the post-dated account, and the
  * `mature_instruments` service that banks it shipped as an endpoint and a scheduled job with
  * no screen. An instrument the product can raise and cannot mature is a hole in the phase,
- * so the tree gains the screen that closes it, on the same footing as C.1.5's additions.
+ * so the tree gains the screen that closes it.
+ *
+ * Recorded in the plan as **Appendix C.1.6**, on the same footing as C.1.5's additions: the
+ * tree is a contract, and a change to it belongs in the document the contract lives in rather
+ * than only in the code that happens to satisfy it.
  */
 const APPENDIX_C: Record<IntentLabel, Array<[string, string, string | null]>> = {
   "Maintenance": [

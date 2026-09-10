@@ -314,6 +314,8 @@ export interface OpenItem {
   total_amount: string;
   open_amount: string;
   open_base_amount: string;
+  /** Settlement discount on offer at the allocation date. "0" once the window has closed. */
+  discount_available: string;
   direction: number;
   days_overdue: number;
 }
@@ -426,10 +428,22 @@ export interface PendingInstrument {
   description: string;
 }
 
+export interface InstrumentRunRow {
+  id: number;
+  number: string;
+  maturity_date: string;
+  /** Only on skipped rows: why this one could not be banked. */
+  reason: string | null;
+}
+
 export interface MaturityRunResult {
   as_of: string;
   matured_document_ids: number[];
   journal_entry_ids: number[];
+  /** Not matured at `as_of`, and left exactly as they were. */
+  waiting: InstrumentRunRow[];
+  /** Due, but unbankable — no post-dated account configured, or none named on the document. */
+  skipped: InstrumentRunRow[];
 }
 
 // --- Journal batches ------------------------------------------------------------------------

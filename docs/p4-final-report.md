@@ -15,8 +15,8 @@ with the thing you can go and run rather than a claim.
 | 3 | …and nets correctly across full settlement | `test_full_settlement_realizes_exactly_the_booking_rate_difference` — Hypothesis sweeps the closing rate 1000–1600 either side of the booking rate and requires the control account at exactly zero, both roles. |
 | 4 | `assert_subledger_invariants` passes, so control accounts reconcile to open items at any date | Asserted in `test_documents`, `test_allocations`, `test_reports`, `test_role_matrix`, and after every step of the arbitrary-sequence property test `test_the_subledger_survives_an_arbitrary_sequence`. |
 | 5 | The credit-limit block fires and the override permission clears it | All three tapes: the seeded Accountant (`ar/ap:transactions_post`, no `*:credit_limit_override`) is refused inline on `partner_id`, the owner posts the same document. `test_the_credit_limit_override_audit_names_the_actor_and_the_excess` covers the audit row. |
-| 6 | Settlement discount posts at allocation | Backend only: `test_settlement_discount_signs_follow_the_invoice_direction`, `test_a_discount_beyond_the_terms_is_refused`, `test_the_discount_window_closes`. The allocation screen has the discount column and includes it in the preview; **no e2e drives it** — see Deviations. |
-| 7 | A post-dated receipt stays out of bank until matured | `AR · USD` and `AR · RWF` tapes: posted to `1250` with no bank line, allocated **while pending**, then banked from the new Post-dated receipts screen and the transfer entry checked. `test_a_post_dated_instrument_waits_in_its_own_account_until_maturity` on both roles. |
+| 6 | Settlement discount posts at allocation | The fifth tape, both roles: on 2/10 net 30, an invoice settled on **day 8** shows the 2,000 on offer, takes it, previews the posting, and the discount account moves — followed to the entry through the Allocation report. The same invoice at **day 11** offers nothing, refuses input, and leaves the 2,000 outstanding. Server-side: `test_settlement_discount_signs_follow_the_invoice_direction`, `test_a_discount_beyond_the_terms_is_refused`, `test_the_discount_window_closes`, `test_the_enquiry_reports_the_discount_on_offer_at_the_allocation_date`. |
+| 7 | A post-dated receipt stays out of bank until matured | `AR · USD` and `AR · RWF` tapes: posted to `1250` with no bank line, allocated **while pending**, then banked from the new Post-dated receipts screen and the transfer entry checked. `test_a_post_dated_instrument_waits_in_its_own_account_until_maturity` and `test_a_run_banks_only_what_has_matured_and_reports_what_it_left` (two cheques, one due, one not) on both roles. |
 | 8 | Every P4 item in the Appendix C tree is live and untagged | `module-nav.tsx` carries zero `P4` tags; `appendix-c-order.test.tsx` pins the whole tree in the owner's order and failed when this step added the two post-dated entries. |
 | 9 | Nothing writes to the ledger outside the PostingEngine | `test_4f_direct_insert_outside_the_posting_engine_is_rejected` and its per-line sibling — the `app.posting_engine='on'` GUC trigger, not convention. |
 | 10 | Every audited call passes a real actor | `test_audit_log_records_who_and_when` (schema-level), plus the per-feature audits: credit-limit override, AR/AP defaults, partner rename. |
@@ -26,13 +26,13 @@ with the thing you can go and run rather than a claim.
 
 ```
 backend   ruff check .            All checks passed!
-backend   pytest -q               389 passed
+backend   pytest -q               393 passed
 backend   alembic check           No new upgrade operations detected.
 frontend  lint                    0 errors (2 pre-existing react-hooks warnings)
 frontend  typecheck               clean
 frontend  test (vitest)           102 passed (8 files)
 frontend  build                   ok
-frontend  npm run e2e             42 passed, incl. axe in both themes
+frontend  npm run e2e             44 passed, incl. axe in both themes
           e2e:regression          PASSED
           e2e:print-preview       COMPLETE
 ```
@@ -50,6 +50,11 @@ AP gain account, and the bank line before maturity. Each failed as intended.
   Inclusive footer saying tax is the server's.
 - `12-fx-invoice-entry-{light,dark}.png` — the entry it posts: `FRw 1,300,000` on both legs, and
   titled "Customer Invoice". Both of those are step-9 fixes; see below.
+- `13-post-dated-{light,dark}.png` — instruments waiting to be banked, with the run disabled
+  because none is due at the chosen date.
+- `14-allocation-report-{light,dark}.png` — the report that used to render nothing, with rows,
+  per-currency formatting, drill-down links, and "(posts nothing)" where an allocation wrote
+  no entry.
 
 `docs/screenshots/p4-step-6/` — the allocation screen with a realized difference in its preview
 (`6-allocation-preview-*`) and the age analysis with real figures (`9-age-analysis-*`).
@@ -72,9 +77,16 @@ Four defects, each surfaced by writing a test that looked at something no test h
 4. **A post-dated instrument could be raised and never matured.** `mature_instruments` shipped
    as an endpoint and a scheduled job with no screen at all.
 
-Plus two smaller ones: allocated and discount amounts printed at NUMERIC wire scale
-(`200000.000000`), and every entry that was not a cashbook batch was titled "Journal Batch" —
-including customer invoices.
+Plus four smaller ones: allocated and discount amounts printed at NUMERIC wire scale
+(`200000.000000`); every entry that was not a cashbook batch titled "Journal Batch", including
+customer invoices; the Allocation report's "all partners" filter option labelled with its own
+empty-state message ("Nothing to report for this selection.") while listing every allocation
+beneath it; and `max_discount` returning a discount for *any* document, so once the enquiry
+started asking about every open item a receipt was offered 2% of itself.
+
+And one the maturity run needed: it returned only what it banked, which made "nothing was
+due", "nothing happened" and "three cheques have no cash account" the same empty list. It now
+returns `matured`, `waiting` and `skipped` (with a reason), and the screen reports all three.
 
 ## Decisions worth review
 
@@ -94,7 +106,11 @@ including customer invoices.
    alternative considered was a committed `e2e.env`, which is the same literal in a tracked file.
 5. **Settlement discount has no VAT adjustment**, as P4 decision 6 directs. Posted gross; the
    credit-note-based treatment is a fiscalization-phase question.
-6. **The AP tape runs in USD only.** A base-currency AP pass would exercise no exchange
+6. **The allocation screen now shows the discount on offer**, read from the pair's *invoice*
+   whichever side of the control account it sits on — the same rule `_discount_side` uses. Before,
+   an operator had to know the terms, type a number, and learn from a refusal whether the window
+   had closed.
+7. **The AP tape runs in USD only.** A base-currency AP pass would exercise no exchange
    difference, and the role matrix already covers both roles in both currencies server-side.
 
 ## Deviations from the plan, with reasons
@@ -102,10 +118,11 @@ including customer invoices.
 1. **Drafts are `localStorage`, not IndexedDB** (P3 step 8's wording, inherited by P4 step 7).
    Recorded as a decision in `src/lib/drafts.ts`: drafts are small, per-device and disposable, and
    the synchronous API is what makes save-on-every-keystroke trivial. The quota cap is explicit.
-2. **No e2e for the settlement discount.** The tape covers the discount *column* only by not using
-   it. Taking a discount needs terms inside their discount window and a settlement dated within it;
-   that is a fifth tape and it was cut for scope. Backend coverage is listed under DoD 6. This is
-   the weakest clause in this report.
+2. **The discount tape reaches eleven days into the past.** The discount is a fact of the
+   allocation date, that date has to be in an open period, and the kernel refuses a `future` one —
+   so the invoice is dated back rather than the allocation dated forward. Those eleven days must
+   also fall in open periods. It fails loudly with `period_closed` if the fixture's closed period
+   ever lands inside that window; it is the one date-dependency in the suite.
 3. **`GET /subledger/{role}/instruments` is new API surface in a "tests and CI" step.** Listing
    what is outstanding is a precondition for a screen that can mature anything, and `pending_instruments`
    answers a different question ("what would a run move today?").

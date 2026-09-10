@@ -516,6 +516,9 @@ class OpenItemRead(BaseModel):
     total_amount: Decimal
     open_amount: Decimal
     open_base_amount: Decimal
+    #: Settlement discount still on offer at the as-of date, in document currency. Zero once
+    #: the discount window has closed — it is a fact of the allocation date, not the invoice.
+    discount_available: Decimal
     direction: int
     days_overdue: int
 
@@ -600,10 +603,26 @@ class ReversalRequest(BaseModel):
     reason: str = Field(min_length=3, max_length=500)
 
 
+class InstrumentRunRow(BaseModel):
+    id: int
+    number: str
+    maturity_date: date
+    #: Only on skipped rows: why this one could not be banked.
+    reason: str | None = None
+
+
 class MaturityRunResult(BaseModel):
+    """What the run banked, and what it deliberately did not.
+
+    `waiting` is the point: a run takes a date and only touches instruments matured by it, so
+    the caller needs to see the ones still ahead of their maturity date rather than infer them
+    from a shorter list than expected."""
+
     as_of: date
     matured_document_ids: list[int]
     journal_entry_ids: list[int]
+    waiting: list[InstrumentRunRow] = []
+    skipped: list[InstrumentRunRow] = []
 
 
 class StatementRequest(BaseModel):

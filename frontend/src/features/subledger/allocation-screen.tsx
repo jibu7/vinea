@@ -91,6 +91,17 @@ export function AllocationScreen({ role }: { role: PartnerRole }) {
   };
 
   const openItems = enquiry.data?.open_items ?? [];
+  /** The document a pair's discount belongs to: the invoice, whichever side it sits on.
+   *
+   * AR pairs an invoice (debit) with a receipt (credit); AP pairs a payment (debit) with a
+   * supplier invoice (credit). Reading the offer off the debit row worked for AR and offered
+   * 2% of the *payment* for AP — the service has always taken it from `_discount_side`, and
+   * this is that rule on the client. */
+  function invoiceOfPair(debit: OpenItem, credit: OpenItem | undefined): OpenItem | null {
+    if (debit.kind === "invoice") return debit;
+    if (credit && credit.kind === "invoice") return credit;
+    return null;
+  }
   // `direction` is the document's side of the control account: debits are what the partner
   // owes, credits are what has been paid or credited against it.
   const debits = useMemo(() => openItems.filter((item) => item.direction > 0), [openItems]);
@@ -377,6 +388,9 @@ export function AllocationScreen({ role }: { role: PartnerRole }) {
                 <TBody>
                   {debits.map((item) => {
                     const entry = entries[item.document_id] ?? { amount: "", discount: "" };
+                    const invoice = invoiceOfPair(item, selectedCredit);
+                    const offered =
+                      invoice && Number(invoice.discount_available) > 0 ? invoice : null;
                     return (
                       <TR key={item.document_id}>
                         <TD className="font-mono text-xs font-semibold text-[var(--vinea-brand)]">
@@ -407,9 +421,15 @@ export function AllocationScreen({ role }: { role: PartnerRole }) {
                           />
                         </TD>
                         <TD>
+                          {/* What is on offer, at *this* allocation date. The discount is a
+                              fact of the date, not of the invoice (decision 6), so this
+                              recomputes whenever the date above changes. Without it the only
+                              way to learn the window had closed was to type a number and be
+                              refused. */}
                           <Input
                             value={entry.discount}
                             inputMode="decimal"
+                            disabled={offered === null}
                             aria-label={t("discountAria", { number: item.number })}
                             onChange={(e) => {
                               setEntries((current) => ({
@@ -418,8 +438,44 @@ export function AllocationScreen({ role }: { role: PartnerRole }) {
                               }));
                               invalidate();
                             }}
-                            className="text-right font-mono tabular-nums"
+                            className="text-right font-mono tabular-nums disabled:opacity-40"
                           />
+                          {offered !== null ? (
+                            <button
+                              type="button"
+                              data-testid="discount-on-offer"
+                              aria-label={t("takeDiscount", {
+                                number: offered.number,
+                                amount: formatMoney(
+                                  Number(offered.discount_available),
+                                  currencyLikeFor(offered),
+                                ),
+                              })}
+                              onClick={() => {
+                                setEntries((current) => ({
+                                  ...current,
+                                  [item.document_id]: {
+                                    ...entry,
+                                    discount: offered.discount_available,
+                                  },
+                                }));
+                                invalidate();
+                              }}
+                              className="mt-1 block w-full text-right text-[10px] text-[var(--vinea-brand)] underline"
+                            >
+                              {t("discountOffered", {
+                                amount: formatMoney(
+                                  Number(offered.discount_available),
+                                  currencyLikeFor(offered),
+                                  { showCode: false },
+                                ),
+                              })}
+                            </button>
+                          ) : (
+                            <span className="mt-1 block text-right text-[10px] text-[var(--vinea-ink-subtle)]">
+                              {t("discountClosed")}
+                            </span>
+                          )}
                         </TD>
                       </TR>
                     );

@@ -83,10 +83,21 @@ export function InstrumentsScreen({ role }: { role: PartnerRole }) {
         return;
       }
       setBanked(result.journal_entry_ids);
+      // What it left alone is as much the answer as what it banked: a run takes a date, and
+      // saying "3 banked" without "2 still waiting" invites the reading that it banks all.
       toast.show({
-        title: t("matured", { count: result.matured_document_ids.length }),
+        title: t("matured", {
+          count: result.matured_document_ids.length,
+          waiting: result.waiting.length,
+        }),
         tone: "success",
       });
+      if (result.skipped.length > 0) {
+        toast.show({
+          title: t("skippedWarning", { count: result.skipped.length }),
+          tone: "danger",
+        });
+      }
     } catch (err) {
       if (isApiError(err)) showApiError(err, t("matureFailed"));
       else showApiError(err, t("matureFailed"));

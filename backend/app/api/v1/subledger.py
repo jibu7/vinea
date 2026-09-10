@@ -43,6 +43,7 @@ from app.schemas.subledger import (
     DocumentCreate,
     DocumentRead,
     DocumentSummary,
+    InstrumentRunRow,
     JobRead,
     JobSweepResult,
     MaturityRunRequest,
@@ -824,15 +825,30 @@ def mature_instruments(
     """Post-dated instruments reaching maturity move from the post-dated account to the
     bank. Exposed as an endpoint and driven by a scheduled job."""
     _require(auth, POST_PERMISSION, role)
-    matured = documents_service.mature_instruments(
+    run = documents_service.mature_instruments(
         db, auth.company_id, as_of=payload.as_of, actor=auth.user, role=role, request=request
     )
     db.commit()
     return MaturityRunResult(
-        as_of=payload.as_of,
-        matured_document_ids=[document.id for document in matured],
+        as_of=run.as_of,
+        matured_document_ids=[document.id for document in run.matured],
         journal_entry_ids=[
-            document.matured_entry_id for document in matured if document.matured_entry_id
+            document.matured_entry_id for document in run.matured if document.matured_entry_id
+        ],
+        waiting=[
+            InstrumentRunRow(
+                id=document.id, number=document.number, maturity_date=document.maturity_date
+            )
+            for document in run.waiting
+        ],
+        skipped=[
+            InstrumentRunRow(
+                id=entry.document.id,
+                number=entry.document.number,
+                maturity_date=entry.document.maturity_date,
+                reason=entry.reason,
+            )
+            for entry in run.skipped
         ],
     )
 
@@ -1096,6 +1112,7 @@ def partner_enquiry(
                 total_amount=item.document.total_amount,
                 open_amount=item.open_amount,
                 open_base_amount=item.open_base_amount,
+                discount_available=item.discount_available,
                 direction=item.document.direction,
                 days_overdue=(
                     max((resolved - item.document.due_date).days, 0)

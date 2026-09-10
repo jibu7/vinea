@@ -100,7 +100,7 @@ jobs:
                        /ar/batches/new /ar/post-dated \
                        /ar/reports/age-analysis /ar/reports/statements /ar/reports/allocations \
                        /ap/supplier-invoices/new /ap/payments/new /ap/allocations/new /ap/enquiry \
-                       /ap/post-dated \
+                       /ap/post-dated /ar/reports/allocations \
                        /ap/reports/age-analysis /ap/reports/statements /ap/reports/allocations; do
             curl -sf -o /dev/null "http://localhost:3000${route}" || true
           done
@@ -112,6 +112,10 @@ jobs:
         working-directory: .
       # `--with-deps` shells out to apt-get, so the vendor sources have to be gone first.
       - uses: ./.github/actions/drop-vendor-apt-sources
+      # `pdftotext` — the discount tape reads the statement PDF it downloads, to check the
+      # figure reached the document rather than that a file arrived.
+      - name: install poppler-utils
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends poppler-utils
       - run: npx playwright install --with-deps chromium
       # Both halves of the P4 step 9 tape have to be *there* before the suite runs. A spec that
       # fails to compile, or whose describe block stops producing tests, is otherwise a silently
@@ -119,8 +123,12 @@ jobs:
       - name: prove the acceptance tape is collected
         run: |
           npx playwright test e2e/ar-ap-acceptance.spec.ts --list | tee /tmp/tape.txt
-          grep -q "credit limit — USD" /tmp/tape.txt
-          grep -q "credit limit — RWF" /tmp/tape.txt
+          grep -q "AR · USD" /tmp/tape.txt
+          grep -q "AR · RWF" /tmp/tape.txt
+          grep -q "AP · USD" /tmp/tape.txt
+          grep -q "journal batch raises a debit that ages" /tmp/tape.txt
+          grep -q "AR — a settlement discount" /tmp/tape.txt
+          grep -q "AP — a settlement discount" /tmp/tape.txt
         env:
           PLAYWRIGHT_BASE_URL: http://localhost:3000
           PLAYWRIGHT_API_URL: http://localhost:8000

@@ -125,7 +125,14 @@ def max_discount(
     db: Session, document: PartnerDocument, *, on: date, currency: Currency
 ) -> Decimal:
     """The settlement discount a document still qualifies for on `on` (decision 6). Zero once
-    the discount window has closed — the discount is a fact of the *allocation date*."""
+    the discount window has closed — the discount is a fact of the *allocation date*.
+
+    Zero for anything that is not an invoice. A settlement carries the partner's terms like
+    any other document, so without this it cheerfully offered 2% of a receipt; `prepare` only
+    ever asked about `_discount_side`'s invoice and never saw it, but the enquiry asks about
+    every open item so the screen can show what is on offer."""
+    if document.kind != DocumentKind.INVOICE:
+        return ZERO
     terms = _terms_of(db, document)
     if terms is None or terms.discount_percent <= ZERO:
         return ZERO

@@ -738,7 +738,10 @@
       "discountAria": "Discount on {number}",
       "selectCreditAria": "Apply {number}",
       "creditRemaining": "{amount} left",
-      "previewNoPostings": "This allocation posts nothing to the ledger — it closes the open items and no more. There is no exchange difference and no discount to record."
+      "previewNoPostings": "This allocation posts nothing to the ledger — it closes the open items and no more. There is no exchange difference and no discount to record.",
+      "discountOffered": "{amount} on offer",
+      "discountClosed": "window closed",
+      "takeDiscount": "Take the {amount} discount on {number}"
     },
     "batches": {
       "titleAr": "Account receivable batches",
@@ -815,12 +818,13 @@
       "maturing": "Banking…",
       "nothingDue": "Nothing has matured on or before this date.",
       "maturedNone": "Nothing matured",
-      "matured": "{count} banked",
+      "matured": "{count} banked, {waiting} still waiting",
       "matureFailed": "Couldn't bank the matured instruments",
       "dueCount": "{count} due on or before {date}",
       "viewEntry": "Open journal entry for {number}",
       "postedTo": "Held in",
-      "explainer": "Banking posts the transfer from the post-dated account to the cash account each instrument named, through the PostingEngine, dated at its maturity."
+      "explainer": "Banking posts the transfer from the post-dated account to the cash account each instrument named, through the PostingEngine, dated at its maturity.",
+      "skippedWarning": "{count} were due but could not be banked — check the AR/AP defaults and the cash account on each."
     }
   },
   "lineGrid": {
@@ -918,6 +922,7 @@
     "stmtSelectPartners": "Select at least one partner.",
     "stmtJob": "Job {id}",
     "allocDrillDown": "Open journal entry for {number}",
-    "allocNoEntry": "(posts nothing)"
+    "allocNoEntry": "(posts nothing)",
+    "allPartners": "All partners"
   }
 }

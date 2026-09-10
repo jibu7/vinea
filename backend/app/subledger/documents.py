@@ -784,6 +784,29 @@ def _outstanding_instruments(
     return list(db.scalars(statement.order_by(PartnerDocument.maturity_date, PartnerDocument.id)))
 
 
+@dataclass(frozen=True)
+class SkippedInstrument:
+    document: PartnerDocument
+    #: `no_post_dated_account` (the company has no post-dated account configured for the role)
+    #: or `no_cash_account` (the instrument names none, so there is nowhere to move it to).
+    reason: str
+
+
+@dataclass(frozen=True)
+class MaturityRun:
+    """What a run did, and — just as importantly — what it left alone.
+
+    A run used to return only the documents it banked, which made "nothing happened" and
+    "nothing was due" and "three cheques have no cash account" the same empty list. Callers
+    get all three now: `matured` moved, `skipped` were due but unbankable and say why, and
+    `waiting` had not matured at `as_of` and were never candidates."""
+
+    as_of: date
+    matured: list[PartnerDocument]
+    skipped: list[SkippedInstrument]
+    waiting: list[PartnerDocument]
+
+
 def mature_instruments(
     db: Session,
     company_id: int,
@@ -792,13 +815,29 @@ def mature_instruments(
     actor: User,
     role: PartnerRole | None = None,
     request: Request | None = None,
-) -> list[PartnerDocument]:
+) -> MaturityRun:
     """Move matured post-dated instruments from the post-dated account into the bank. The
-    transfer uses the document's own booking rate, so it produces no exchange difference."""
+    transfer uses the document's own booking rate, so it produces no exchange difference.
+
+    Only instruments with `maturity_date <= as_of` are touched. Everything else outstanding is
+    returned in `waiting`, untouched — a run is not a "bank everything" button."""
+    due_ids = {
+        document.id for document in pending_instruments(db, company_id, as_of=as_of, role=role)
+    }
+    waiting = [
+        document
+        for document in outstanding_instruments(db, company_id, role=role)
+        if document.id not in due_ids
+    ]
     matured: list[PartnerDocument] = []
+    skipped: list[SkippedInstrument] = []
     for document in pending_instruments(db, company_id, as_of=as_of, role=role):
         accounts = role_accounts(db, company_id, document.role)
-        if accounts.post_dated_account_id is None or document.cash_account_id is None:
+        if accounts.post_dated_account_id is None:
+            skipped.append(SkippedInstrument(document, "no_post_dated_account"))
+            continue
+        if document.cash_account_id is None:
+            skipped.append(SkippedInstrument(document, "no_cash_account"))
             continue
         # Mirror of the original settlement: clear the post-dated account, debit/credit bank.
         sign = -document.direction
@@ -854,7 +893,7 @@ def mature_instruments(
             request=request,
         )
     db.flush()
-    return matured
+    return MaturityRun(as_of=as_of, matured=matured, skipped=skipped, waiting=waiting)
 
 
 # --- Journal batches -------------------------------------------------------------------------

@@ -76,23 +76,47 @@ async function pick(page: Page, name: string, needle: string) {
  * screens: those have their own shots and their own e2e — what this fixture exists for is to
  * give the *allocation* screen something worth photographing. Every call is a real endpoint
  * with the signed-in user as actor. */
+/** One authenticated request, made by the page itself.
+ *
+ * Declared here rather than inside a `page.evaluate` body: `tsx` compiles named arrow
+ * functions with an `__name` helper that exists in Node and not in the browser, so a helper
+ * defined inside the evaluated function throws `ReferenceError: __name is not defined`. */
+async function apiCall(
+  page: Page,
+  path: string,
+  body?: unknown,
+  method = "POST",
+): Promise<{ status: number; json: unknown }> {
+  return page.evaluate(
+    async ({ url, body, method }) => {
+      const res = await fetch(url, {
+        method,
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": crypto.randomUUID(),
+        },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+      return { status: res.status, json: await res.json().catch(() => null) };
+    },
+    { url: `${API}${path}`, body, method },
+  );
+}
+
+/** `apiCall` that refuses to fail quietly. A fixture that 4xx's and says nothing produces a
+ * screenshot of the *previous* run's data, which is worse than no screenshot. */
+async function apiOk(page: Page, path: string, body?: unknown, method = "POST"): Promise<unknown> {
+  const res = await apiCall(page, path, body, method);
+  if (res.status >= 300) {
+    throw new Error(`${method} ${path} -> ${res.status}: ${JSON.stringify(res.json)}`);
+  }
+  return res.json;
+}
+
 async function seedFxAllocation(page: Page, code: string): Promise<void> {
-  const api = async (path: string, body?: unknown, method = "POST") =>
-    page.evaluate(
-      async ({ url, body, method }) => {
-        const res = await fetch(url, {
-          method,
-          credentials: "include",
-          headers: {
-            "Content-Type": "application/json",
-            "Idempotency-Key": crypto.randomUUID(),
-          },
-          body: body === undefined ? undefined : JSON.stringify(body),
-        });
-        return { status: res.status, json: await res.json().catch(() => null) };
-      },
-      { url: `${API}${path}`, body, method },
-    );
+  const api = (path: string, body?: unknown, method = "POST") =>
+    apiCall(page, path, body, method);
 
   const currencies = (await api("/gl/currencies", undefined, "GET")).json as Array<{
     id: number;
@@ -401,6 +425,62 @@ async function main() {
       }
     }
     await docCtx.close();
+  }
+
+  // The two screens P4 step 9 fixed or added, each with rows in them — an empty-state shot
+  // proves the route compiles and nothing else (copilot-instructions #13).
+  if (wanted("13-post-dated", "14-allocation-report")) {
+    const lateCtx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    const late = await lateCtx.newPage();
+    await login(late, OWNER);
+
+    if (wanted("13-post-dated")) {
+      // A cheque taken today and maturing later this month, so the list is not empty and the
+      // instrument is genuinely still waiting rather than already banked.
+      const suffix = String(Date.now()).slice(-6);
+      const code = `PDC${suffix}`;
+      const ahead = new Date();
+      ahead.setDate(ahead.getDate() + 20);
+      const maturity = ahead.toISOString().slice(0, 10);
+      const accounts = (await apiOk(late, "/gl/accounts", undefined, "GET")) as Array<{
+        id: number;
+        code: string;
+      }>;
+      const bank = accounts.find((a) => a.code === "1120")!.id;
+      const partner = (await apiOk(late, "/subledger/ar/partners", {
+        name: `Cheque Customer ${code}`,
+        customer_code: code,
+      })) as { id: number };
+      await apiOk(late, "/subledger/ar/documents", {
+        kind: "settlement",
+        partner_id: partner.id,
+        document_date: new Date().toISOString().slice(0, 10),
+        description: "Cheque, banked on maturity",
+        amount: "250000",
+        cash_account_id: bank,
+        instrument_type: "cheque",
+        maturity_date: maturity,
+      });
+
+      for (const theme of ["light", "dark"] as const) {
+        await late.goto(`${BASE}/ar/post-dated`);
+        await late.waitForSelector("h1:has-text('Post-dated receipts')");
+        await late.locator("table tbody tr").first().waitFor({ state: "visible" });
+        await late.waitForTimeout(400);
+        await shoot(late, "13-post-dated", theme);
+      }
+    }
+
+    if (wanted("14-allocation-report")) {
+      for (const theme of ["light", "dark"] as const) {
+        await late.goto(`${BASE}/ar/reports/allocations`);
+        await late.waitForSelector("h1:has-text('Allocation report')");
+        await late.locator("table tbody tr").first().waitFor({ state: "visible" });
+        await late.waitForTimeout(400);
+        await shoot(late, "14-allocation-report", theme);
+      }
+    }
+    await lateCtx.close();
   }
 
   if (wanted("5-ar-defaults-readonly")) {

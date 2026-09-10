@@ -76,7 +76,10 @@ export function AllocationReport({ role }: { role: PartnerRole }) {
           <Field label={t("partner")}>
             <Combobox
               options={[
-                { value: "", label: t("noRows") },
+                // "no filter", not "no rows" — this option was labelled with the empty-state
+                // message, so an unfiltered report announced "Nothing to report for this
+                // selection." in its own filter while listing every allocation below it.
+                { value: "", label: t("allPartners") },
                 ...(partners.data ?? []).map((p) => ({
                   value: String(p.id),
                   label: `${partnerCode(p, role)} · ${p.name}`,

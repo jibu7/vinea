@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { formatMoney, type CurrencyLike } from "../src/lib/format";
 import {
@@ -31,6 +32,9 @@ import {
  * assertions quietly stop being run.
  */
 
+const DISCOUNT_GRANTED = "6960"; // Settlement Discount Granted — AR
+const DISCOUNT_RECEIVED = "4350"; // Settlement Discount Received — AP
+const DISCOUNT_TERMS = "2/10N30"; // 2% within 10 days, net 30 — seeded by `seed_rwanda`
 const REVENUE = "4100"; // Sales Revenue
 const EXPENSE = "6990"; // Sundry Expenses
 const BANK = "1120"; // Bank Account
@@ -68,6 +72,7 @@ const ROLE = {
     statementsHeading: "Customer statements",
     /** AR books the receivable at the invoice's rate; settling below it realizes a loss. */
     fxAccount: FX_LOSS,
+    discountAccount: DISCOUNT_GRANTED,
   },
   ap: {
     partner: "Supplier",
@@ -89,6 +94,7 @@ const ROLE = {
     statementsHeading: "Supplier statements",
     /** AP is the mirror: owing at the higher rate and paying at the lower one is a gain. */
     fxAccount: FX_GAIN,
+    discountAccount: DISCOUNT_RECEIVED,
   },
 } as const satisfies Record<Role, Record<string, unknown>>;
 
@@ -190,7 +196,12 @@ function invoiceBase(tape: Tape): number {
 async function makePartner(
   page: Page,
   role: Role,
-  { code, name, creditLimit }: { code: string; name: string; creditLimit?: number },
+  { code, name, creditLimit, terms = TERMS }: {
+    code: string;
+    name: string;
+    creditLimit?: number;
+    terms?: string;
+  },
 ): Promise<void> {
   const r = ROLE[role];
   await page.goto(r.masterPath);
@@ -206,7 +217,7 @@ async function makePartner(
   const drawer = page.getByRole("dialog").filter({ hasText: name });
   await expect(drawer).toBeVisible();
   await drawer.getByRole("tab", { name: r.settingsTab }).click();
-  await pickCombobox(page, "Payment terms", TERMS, { within: drawer });
+  await pickCombobox(page, "Payment terms", terms, { within: drawer });
   if (creditLimit !== undefined) {
     await drawer.getByLabel(/^Credit limit/).fill(String(creditLimit));
   }
@@ -230,7 +241,12 @@ async function setCurrency(page: Page, tape: Tape, rate: string | null): Promise
 async function postInvoice(
   page: Page,
   tape: Tape,
-  { code, description, amount }: { code: string; description: string; amount: number },
+  { code, description, amount, documentDate }: {
+    code: string;
+    description: string;
+    amount: number;
+    documentDate?: string;
+  },
 ): Promise<void> {
   const r = ROLE[tape.role];
   await clearDrafts(page);
@@ -238,6 +254,7 @@ async function postInvoice(
   await page.waitForSelector(`h1:has-text('${r.invoiceHeading}')`);
   await pickCombobox(page, r.partner, code);
   await page.getByLabel("Description", { exact: true }).fill(description);
+  if (documentDate) await pickDate(page, "Document date", documentDate);
   await setCurrency(page, tape, tape.invoiceRate);
   await page.getByRole("button", { name: "Account, row 1" }).click();
   await page.locator("[cmdk-item]").first().waitFor({ state: "visible" });
@@ -319,6 +336,36 @@ async function drillFromAllocationReport(
   const row = page.locator("table tbody tr", { hasText: number });
   await expect(row).toHaveCount(1);
   return row;
+}
+
+/** Queues a statement, downloads the PDF and returns its text.
+ *
+ * `pdftotext` rather than a rendered comparison: what is being asserted is that a figure
+ * reached the document, not how it is laid out. Poppler is installed in CI alongside the
+ * WeasyPrint libraries that produce the PDF in the first place. */
+async function statementText(
+  page: Page,
+  role: Role,
+  name: string,
+  variant: "Open item" | "Activity",
+): Promise<string> {
+  const r = ROLE[role];
+  await page.goto(r.statementsPath);
+  await page.waitForSelector(`h1:has-text('${r.statementsHeading}')`);
+  // A Radix Select: its trigger takes `role="combobox"`, not `button`, and the options render
+  // in a portal outside the field.
+  await page.getByRole("combobox", { name: "Variant" }).click();
+  await page.getByRole("option", { name: variant }).click();
+  await page.getByLabel(name, { exact: true }).check();
+  await page.getByRole("button", { name: /Queue statement/ }).click();
+  const download = page.getByTestId("statement-download");
+  await expect(download).toBeVisible({ timeout: 60_000 });
+  const [file] = await Promise.all([
+    page.waitForEvent("download", { timeout: 30_000 }),
+    download.click(),
+  ]);
+  const path = await file.path();
+  return execFileSync("pdftotext", ["-layout", path, "-"], { encoding: "utf8" });
 }
 
 async function queueStatement(page: Page, role: Role, name: string): Promise<void> {
@@ -574,4 +621,152 @@ test.describe("P4 acceptance tape", () => {
     await expect(row.locator("td").nth(4)).toHaveText(bareBase(0));
     await expect(row.locator("td").last()).toHaveText(bareBase(amount));
   });
+
+  for (const role of ["ar", "ap"] as const) {
+    test(`${role.toUpperCase()} — a settlement discount is taken on day 8 and gone on day 11`, async ({
+      page,
+    }) => {
+      test.setTimeout(420_000);
+      // PATH: partner on 2/10 net 30 → invoice → settlement → the allocation screen at two
+      // different allocation dates → the discount posting → the statement PDF.
+      //
+      // CANNOT SEE: any VAT consequence of the discount. P4 decision 6 posts it gross and
+      // defers the credit-note treatment to fiscalization, so there is nothing to assert yet.
+      //
+      // The invoice is dated *back* rather than the allocation dated forward: the discount is
+      // a fact of the allocation date, that date has to sit in an open period, and the kernel
+      // refuses a `future` one. The eleven days it reaches back must also be open — the one
+      // date-dependency in this suite, and it fails loudly with `period_closed` if the
+      // fixture's closed period ever lands inside that window.
+      const r = ROLE[role];
+      const tape = TAPES.find((t) => t.role === role && t.currency === null) ?? {
+        ...TAPES[0],
+        role,
+        currency: null,
+        invoiceRate: null,
+        settlementRate: null,
+      };
+      const suffix = `${role.toUpperCase()}DSC${String(Date.now()).slice(-6)}`;
+      const total = 100_000;
+      const discount = 2_000; // 2% of the invoice
+      const cash = total - discount;
+
+      await login(page, PRIMARY_EMAIL);
+
+      // --- inside the window: day 8 ---------------------------------------------------
+      const insideCode = `E2EDSC${suffix}`;
+      const insideName = `Discount ${suffix}`;
+      await makePartner(page, role, {
+        code: insideCode,
+        name: insideName,
+        terms: DISCOUNT_TERMS,
+      });
+      await postInvoice(page, tape, {
+        code: insideCode,
+        description: `Discount invoice ${suffix}`,
+        amount: total,
+        documentDate: isoDaysFromNow(-8),
+      });
+      await page.waitForURL(/\/gl\/entries\/\d+/, { timeout: 30_000 });
+      await postSettlement(page, tape, {
+        code: insideCode,
+        description: `Discount settlement ${suffix}`,
+        amount: cash,
+      });
+      await page.waitForURL(/\/gl\/entries\/\d+/, { timeout: 30_000 });
+
+      await page.goto(r.allocationsPath);
+      await page.waitForSelector("h1:has-text('Allocate')");
+      await pickCombobox(page, "Partner", insideCode);
+      await page.getByRole("button", { name: /^Apply / }).first().click();
+      await page.getByLabel(/^Allocate against /).first().fill(String(cash));
+
+      // The screen says what is on offer at this allocation date, and taking it fills the
+      // cell — the operator no longer has to know the terms and type the number.
+      // The offer hangs off the pair's invoice, whichever side it is on: for AR that is the
+      // debit row itself, for AP the supplier invoice applied a moment ago.
+      const offer = page.getByTestId("discount-on-offer").first();
+      await expect(offer).toContainText(bareBase(discount));
+      await offer.click();
+      await expect(page.getByLabel(/^Discount on /).first()).toHaveValue(/^2000/);
+
+      await page.getByRole("button", { name: "Preview", exact: true }).click();
+      const preview = page.getByTestId("allocation-preview");
+      await expect(preview.getByText(r.discountAccount)).toBeVisible();
+      await expect(page.getByText(`Discount ${baseMoney(discount)}`)).toBeVisible();
+
+      await page.getByRole("button", { name: /^Post/ }).click();
+      const toast = page.getByText(/ALC-\d+ posted/).first();
+      await expect(toast).toBeVisible({ timeout: 30_000 });
+      const number = (await toast.innerText()).replace(/\s*posted\s*$/, "").trim();
+
+      // The discount account moved, and the Allocation report leads to the entry that moved it.
+      const reportRow = await drillFromAllocationReport(page, role, insideCode, number);
+      await reportRow.getByRole("link", { name: /^Open journal entry/ }).click();
+      await page.waitForURL(/\/gl\/entries\/\d+/, { timeout: 30_000 });
+      const discountRow = page.locator("table tbody tr", { hasText: r.discountAccount });
+      await expect(discountRow).toHaveCount(1);
+      await expect(discountRow).toContainText(bareBase(discount));
+
+      // Cash plus discount closed the invoice, so the statement has nothing outstanding on it.
+      // Without the discount the last 2,000 would still be sitting there.
+      await page.goto(r.enquiryPath);
+      await page.waitForSelector("h1:has-text('enquiry')");
+      await pickCombobox(page, r.partner, insideCode);
+      await expect(page.getByText(`Open balance ${baseMoney(0)}`)).toBeVisible();
+
+      const text = await statementText(page, role, insideName, "Activity");
+      expect(text, "the statement names the invoice it settled").toMatch(/INV-|SIN-/);
+      expect(
+        text.split("\n").find((line) => line.includes("Balance")),
+        "the statement's closing balance is nil",
+      ).toMatch(/\b0\b/);
+
+      // --- outside the window: day 11 -------------------------------------------------
+      const lateCode = `E2ELTE${suffix}`;
+      const lateName = `Late ${suffix}`;
+      await makePartner(page, role, {
+        code: lateCode,
+        name: lateName,
+        terms: DISCOUNT_TERMS,
+      });
+      await postInvoice(page, tape, {
+        code: lateCode,
+        description: `Late invoice ${suffix}`,
+        amount: total,
+        documentDate: isoDaysFromNow(-11),
+      });
+      await page.waitForURL(/\/gl\/entries\/\d+/, { timeout: 30_000 });
+      await postSettlement(page, tape, {
+        code: lateCode,
+        description: `Late settlement ${suffix}`,
+        amount: cash,
+      });
+      await page.waitForURL(/\/gl\/entries\/\d+/, { timeout: 30_000 });
+
+      await page.goto(r.allocationsPath);
+      await page.waitForSelector("h1:has-text('Allocate')");
+      await pickCombobox(page, "Partner", lateCode);
+      await page.getByRole("button", { name: /^Apply / }).first().click();
+      await page.getByLabel(/^Allocate against /).first().fill(String(cash));
+
+      // Eleven days out, the window has shut: nothing on offer, and the cell refuses input
+      // rather than letting someone type a number the server will reject.
+      await expect(page.getByTestId("discount-on-offer")).toHaveCount(0);
+      await expect(page.getByText("window closed").first()).toBeVisible();
+      await expect(page.getByLabel(/^Discount on /).first()).toBeDisabled();
+
+      await page.getByRole("button", { name: "Preview", exact: true }).click();
+      await expect(preview.getByText(r.discountAccount)).toHaveCount(0);
+      await page.getByRole("button", { name: /^Post/ }).click();
+      await expect(page.getByText(/ALC-\d+ posted/).first()).toBeVisible({ timeout: 30_000 });
+
+      // The 2,000 the discount would have closed is still outstanding.
+      await page.goto(r.enquiryPath);
+      await page.waitForSelector("h1:has-text('enquiry')");
+      await pickCombobox(page, r.partner, lateCode);
+      const expected = role === "ar" ? discount : -discount;
+      await expect(page.getByText(`Open balance ${baseMoney(expected)}`)).toBeVisible();
+    });
+  }
 });
