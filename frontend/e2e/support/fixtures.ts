@@ -1,15 +1,37 @@
 import type { Page } from "@playwright/test";
 
-/** Must match backend/app/scripts/seed_e2e.py — run once before the suite. `.example` (RFC
- * 2606), not `.test`: email-validator rejects `.test`/`.invalid`/`.localhost` as reserved,
- * which surfaced as every login POST 422ing even though the seeded user was real. */
-export const PRIMARY_EMAIL = "e2e.primary@vinea.example";
-export const PRIMARY_COMPANY = "Rugari Wines E2E";
-export const SECONDARY_EMAIL = "e2e.secondary@vinea.example";
-export const SECONDARY_COMPANY = "Kivu Traders E2E";
+/** Fixture credentials come from the environment, never from a literal here — `e2e.env` at
+ * the repo root is the one source of truth, loaded by `playwright.config.ts` and handed to
+ * `seed_e2e` through docker-compose's `env_file`. A missing variable fails loudly and by
+ * name: the alternative is a login that 401s and a suite that reads as a product bug.
+ *
+ * The seeded addresses use `.example` (RFC 2606), not `.test`: email-validator rejects
+ * `.test`/`.invalid`/`.localhost` as reserved, which surfaced as every login POST 422ing
+ * even though the seeded user was real. */
+function required(name: string): string {
+  const value = process.env[name];
+  if (!value) {
+    throw new Error(
+      `${name} is not set. The e2e suite reads its credentials from the environment; ` +
+        `see e2e.env at the repo root, which playwright.config.ts loads automatically.`,
+    );
+  }
+  return value;
+}
+
+export const PRIMARY_EMAIL = required("E2E_PRIMARY_EMAIL");
+export const SECONDARY_EMAIL = required("E2E_SECONDARY_EMAIL");
 /** Clerk role in PRIMARY_COMPANY: `*:reports_view` only, no setup or posting rights. */
-export const READONLY_EMAIL = "e2e.readonly@vinea.example";
-export const PASSWORD = "E2E-Sup3rSecret!1";
+export const READONLY_EMAIL = required("E2E_READONLY_EMAIL");
+/** Sales Manager role in PRIMARY_COMPANY: can set up customers and post AR documents, but
+ * holds no `ar:credit_limit_override` — the only seeded identity the credit-limit block can
+ * actually fire for, since an owner implicitly holds every permission. */
+export const SALES_EMAIL = required("E2E_SALES_EMAIL");
+export const PASSWORD = required("E2E_PASSWORD");
+
+/** Company names are fixture *data*, not credentials — they stay here. */
+export const PRIMARY_COMPANY = "Rugari Wines E2E";
+export const SECONDARY_COMPANY = "Kivu Traders E2E";
 
 export const API_URL = process.env.PLAYWRIGHT_API_URL ?? "http://localhost:8000";
 export const API_BASE = `${API_URL}/api/v1`;

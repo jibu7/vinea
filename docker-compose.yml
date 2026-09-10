@@ -32,6 +32,10 @@ services:
       GIT_CONFIG_COUNT: "1"
       GIT_CONFIG_KEY_0: safe.directory
       GIT_CONFIG_VALUE_0: /repo
+    # The e2e fixture credentials, so `seed_e2e` reads them from the environment rather than
+    # carrying them as literals. Anything already exported wins (compose resolves the host
+    # environment after env_file).
+    env_file: [./e2e.env]
     volumes:
       - ./backend:/app
       # Read-only, and only so the schema-invariant test that shells out to git has a work

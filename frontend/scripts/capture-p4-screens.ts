@@ -14,9 +14,18 @@ import { chromium, type Page } from "@playwright/test";
 const OUT = process.env.OUT ?? "screenshots";
 const BASE = process.env.BASE_URL ?? "http://localhost:3000";
 const API = `${process.env.API_URL ?? "http://localhost:8000"}/api/v1`;
-const PASSWORD = "E2E-Sup3rSecret!1";
-const OWNER = "e2e.primary@vinea.example";
-const READONLY = "e2e.readonly@vinea.example";
+/** Same rule as the e2e suite: fixture credentials come from the environment, from `e2e.env`
+ * at the repo root. Run this with `set -a; . ../e2e.env; set +a` or let docker-compose export
+ * them; a missing one stops here rather than failing as a login that looks like a bug. */
+function required(name: string): string {
+  const value = process.env[name];
+  if (!value) throw new Error(`${name} is not set — source e2e.env at the repo root first.`);
+  return value;
+}
+
+const PASSWORD = required("E2E_PASSWORD");
+const OWNER = required("E2E_PRIMARY_EMAIL");
+const READONLY = required("E2E_READONLY_EMAIL");
 /** Seeded by `seed_e2e` with two overdue invoices — the only partner with anything to age. */
 const AGED_CUSTOMER = "Gisenyi Hotel Group";
 

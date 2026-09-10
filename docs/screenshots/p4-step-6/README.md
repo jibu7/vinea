@@ -5,6 +5,7 @@
 
 ```sh
 cd frontend
+set -a; . ../e2e.env; set +a          # fixture credentials come from the environment
 OUT=../docs/screenshots/p4-step-6 npx tsx scripts/capture-p4-screens.ts
 ```
 

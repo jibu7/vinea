@@ -19,6 +19,7 @@ looked up by its fixed email/name first and only created if missing. Run with
 """
 
 import json
+import os
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
@@ -32,22 +33,45 @@ from app.models.membership import CompanyMembership, MembershipRole, MembershipS
 from app.models.user import User
 from app.services.provisioning import ProvisionedTenant, provision_tenant
 
-PASSWORD = "E2E-Sup3rSecret!1"
+
+def _required_env(name: str) -> str:
+    """Fixture credentials come from the environment, never from a literal here. `e2e.env` at
+    the repo root is the one source of truth; docker-compose hands it to this container via
+    `env_file`. Missing means stop, by name — a fixture seeded under the wrong address fails
+    later, in a Playwright login, where it reads as a product bug rather than a setup one."""
+    value = os.environ.get(name)
+    if not value:
+        raise RuntimeError(
+            f"{name} is not set. seed_e2e reads its credentials from the environment; see "
+            f"e2e.env at the repo root, which docker-compose loads into this service."
+        )
+    return value
+
+
+PASSWORD = _required_env("E2E_PASSWORD")
 
 # `.example` (RFC 2606) — `email-validator` (backing Pydantic's EmailStr on the login/signup
 # routes) explicitly rejects `.test`/`.invalid`/`.localhost` as reserved, but allows `.example`.
-PRIMARY_EMAIL = "e2e.primary@vinea.example"
+PRIMARY_EMAIL = _required_env("E2E_PRIMARY_EMAIL")
 PRIMARY_COMPANY = "Rugari Wines E2E"
 
-SECONDARY_EMAIL = "e2e.secondary@vinea.example"
+SECONDARY_EMAIL = _required_env("E2E_SECONDARY_EMAIL")
 SECONDARY_COMPANY = "Kivu Traders E2E"
 
 # A read-only member of the primary company, holding the seeded "Clerk" role: gl/ar/ap
 # `*_reports_view` and nothing that can write. Every screen that gates its actions on a
 # setup permission needs one of these to prove the gate is real rather than decorative
-# (P4 step 6's AR/AP defaults, and P4 step 9's credit-limit override).
-READONLY_EMAIL = "e2e.readonly@vinea.example"
+# (P4 step 6's AR/AP defaults).
+READONLY_EMAIL = _required_env("E2E_READONLY_EMAIL")
 READONLY_ROLE_NAME = "Clerk"
+
+# The credit-limit block cannot fire for either of the owners: `permissions_for()` gives an
+# owner every permission, `ar:credit_limit_override` included, so the block is always waived
+# for them. The seeded "Sales Manager" role is the one identity that can set up a customer
+# and post AR documents while holding no override — which is what makes P4 step 9's
+# "the block fires, and the override clears it" a real pair rather than one assertion twice.
+SALES_EMAIL = _required_env("E2E_SALES_EMAIL")
+SALES_ROLE_NAME = "Sales Manager"
 
 # One supplier, so the Suppliers master is not an empty table in screenshots or in the AP
 # specs. Customers are created by the specs themselves (they assert on creation); nothing
@@ -386,6 +410,13 @@ def main() -> None:
             full_name="E2E Read Only",
             role_name=READONLY_ROLE_NAME,
         )
+        _ensure_member_with_role(
+            db,
+            company=primary_company,
+            email=SALES_EMAIL,
+            full_name="E2E Sales Manager",
+            role_name=SALES_ROLE_NAME,
+        )
         supplier_code = _ensure_partners(db, company=primary_company, actor=primary_user)
         aged_customer_code = _ensure_aged_invoices(
             db, company=primary_company, actor=primary_user
@@ -401,9 +432,10 @@ def main() -> None:
                     "secondary_company": SECONDARY_COMPANY,
                     "readonly_email": READONLY_EMAIL,
                     "readonly_role": READONLY_ROLE_NAME,
+                    "sales_email": SALES_EMAIL,
+                    "sales_role": SALES_ROLE_NAME,
                     "supplier_code": supplier_code,
                     "aged_customer_code": aged_customer_code,
-                    "password": PASSWORD,
                     "closed_period": closed_period,
                 },
                 indent=2,
