@@ -32,7 +32,9 @@
     "commandPalette": "Command palette",
     "esc": "Esc",
     "ctrlK": "Ctrl K",
-    "emDash": "—"
+    "emDash": "—",
+    "labelColon": "{label}:",
+    "parenthesised": "({text})"
   },
   "design": {
     "title": "Design System",
@@ -270,7 +272,29 @@
     "docNumber": "Doc #",
     "loadingEntryDetails": "Loading entry details…",
     "ref": "Ref:",
-    "journalLinesCount": "Journal Lines ({count})"
+    "journalLinesCount": "Journal Lines ({count})",
+    "printed": "Printed",
+    "period": "Period",
+    "dateRange": "{from} – {to}",
+    "accountHeading": "Account: {code} — {name} ({accountClass})",
+    "codeName": "{code} - {name}",
+    "closingBalanceAsOf": "Closing balance (as of {date})",
+    "loadingReportData": "Loading report data…",
+    "accountCountSummary": "{count} accounts ({postable} postable, {control} control)",
+    "totalAccounts": "Total Accounts",
+    "searchAccountsPlaceholder": "Search by code or name…",
+    "accountClasses": {
+      "asset": "Asset",
+      "liability": "Liability",
+      "equity": "Equity",
+      "income": "Income",
+      "expense": "Expense"
+    },
+    "loadingChartOfAccounts": "Loading chart of accounts…",
+    "noAccountsMatch": "No accounts match the current filter.",
+    "accountType": "Type",
+    "controlType": "Control Type",
+    "status": "Status"
   },
   "maintenance": {
     "companyDetails": "Company details",
