@@ -133,3 +133,36 @@ describe("the arap message catalogue", () => {
     }
   });
 });
+
+/**
+ * The scan above matches `t("literal")`. A key assembled from a template literal is
+ * invisible to it, and equally invisible to lint — so the four in the app are pinned by
+ * hand. Each list is the exact set of values its call site can produce; adding a fifth
+ * `mode` to LineGrid, or a ControlType to the backend enum, should fail here.
+ */
+describe("keys built from a template literal still resolve", () => {
+  const resolveKey = (path: string): unknown =>
+    path
+      .split(".")
+      .reduce<unknown>(
+        (node, part) =>
+          typeof node === "object" && node !== null ? (node as Record<string, unknown>)[part] : undefined,
+        messages,
+      );
+
+  const dynamic: Array<[string, string[]]> = [
+    // date-picker.tsx: t(`weekday.${d}`) over WEEKDAY_KEYS
+    ["datePicker.weekday", ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]],
+    // (shell)/page.tsx: t(`kpi.${kpi.key}`) over the dashboard KPI list
+    ["dashboard.kpi", ["cashPosition", "receivables", "payables", "netIncome"]],
+    // features/gl/types.ts: controlTypeLabel() over CONTROL_TYPE_KEYS, plus the null case
+    ["gl.controlTypeShort", ["none", "bank", "cash", "ar", "ap", "inventory"]],
+    // line-grid.tsx: t(`${mode}Lines`) over the grid's four modes
+    ["lineGrid", ["journalLines", "cashbookLines", "documentLines", "batchLines"]],
+  ];
+
+  it.each(dynamic)("%s resolves for every value the call site can produce", (prefix, keys) => {
+    const missing = keys.filter((key) => typeof resolveKey(`${prefix}.${key}`) !== "string");
+    expect(missing).toEqual([]);
+  });
+});
