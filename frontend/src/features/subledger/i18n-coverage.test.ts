@@ -4,27 +4,21 @@ import { describe, expect, it } from "vitest";
 import messages from "@/i18n/messages/en.json";
 
 /**
- * `react/jsx-no-literals` (see .eslintrc.json) covers JSX *children* on the P4 AR/AP screens.
- * It cannot cover attributes: its `noAttributeStrings` mode flags every `className` too,
- * which is unusable in a Tailwind codebase. So the props a user actually reads are checked
- * here instead, over the same file list the lint rule is scoped to.
+ * Both lint rules in `.eslintrc.json` — `react/jsx-no-literals` for JSX children and the
+ * `no-restricted-syntax` selector for user-visible attributes — now run over the whole app,
+ * so this file is no longer the only thing standing between the AR/AP screens and a stray
+ * `placeholder="Code"`. What lint still cannot do is tell whether `t("branchesSubtitle")`
+ * names a key that exists: to ESLint every `t()` call looks the same. That is this file's
+ * job, and it is why the scans below cover `src` rather than a hand-kept list.
+ *
+ * The attribute scan is kept as well. It is redundant with lint by design — cheap insurance
+ * that survives someone switching a rule off.
  */
-const SCREEN_FILES = [
-  "src/app/(shell)/maintenance/customers",
-  "src/app/(shell)/maintenance/suppliers",
-  "src/app/(shell)/maintenance/sales-reps",
-  "src/app/(shell)/maintenance/payment-terms",
-  "src/app/(shell)/maintenance/ageing-bucket-sets",
-  "src/app/(shell)/maintenance/ar-ap-defaults",
-  "src/app/(shell)/maintenance/ar-transaction-types",
-  "src/app/(shell)/maintenance/ap-transaction-types",
-  "src/app/(shell)/maintenance/rename-partner-code",
-  "src/features/subledger",
-  "src/features/gl/transaction-types-screen.tsx",
-  "src/app/(shell)/ar",
-  "src/app/(shell)/ap",
-  "src/design/components/report-page.tsx",
-];
+const SCREEN_FILES = ["src"];
+
+/** The design gallery is exempt from the i18n rules and 404s outside development —
+ * see `src/app/design/layout.tsx` and `.eslintrc.README.md`. */
+const EXEMPT = ["src/app/design/"];
 
 /** Props whose value reaches the screen or a screen reader. `label` covers `Field`, `title`
  * and `description` cover MaintenancePage / MaintenanceCard / Dialog / Drawer. */
@@ -37,6 +31,7 @@ const USER_VISIBLE_PROPS = [
 ] as const;
 
 function tsxFilesUnder(path: string): string[] {
+  if (EXEMPT.some((prefix) => path.startsWith(prefix))) return [];
   const full = join(process.cwd(), path);
   if (statSync(full).isFile()) return full.endsWith(".tsx") ? [full] : [];
   return readdirSync(full)
@@ -46,10 +41,10 @@ function tsxFilesUnder(path: string): string[] {
 
 const FILES = SCREEN_FILES.flatMap(tsxFilesUnder);
 
-describe("P4 AR/AP screens are fully externalised", () => {
+describe("every screen is fully externalised", () => {
   it("finds the screen files it claims to check", () => {
     // Anti-vacuity: a renamed directory must fail here, not silently check nothing.
-    expect(FILES.length).toBeGreaterThanOrEqual(11);
+    expect(FILES.length).toBeGreaterThanOrEqual(40);
   });
 
   it.each(USER_VISIBLE_PROPS)("has no literal %s= anywhere in them", (prop) => {
@@ -58,9 +53,12 @@ describe("P4 AR/AP screens are fully externalised", () => {
       readFileSync(file, "utf8")
         .split("\n")
         .forEach((line, index) => {
-          // `prop="..."` with a non-empty literal. `prop={t("…")}` and `prop={expr}` pass.
+          // `prop="..."` with a literal that has something in it. `prop={t("…")}` and
+          // `prop={expr}` pass, and so does a whitespace-only value — `<Field label=" ">`
+          // is a layout spacer, not copy, and the lint selector ignores it for the same
+          // reason.
           const match = new RegExp(`\\b${prop}="([^"]+)"`).exec(line);
-          if (match) {
+          if (match && match[1].trim() !== "") {
             offenders.push(`${file.replace(process.cwd() + "/", "")}:${index + 1} ${match[0]}`);
           }
         });
@@ -86,7 +84,7 @@ describe("the arap message catalogue", () => {
       // one of them. Which alias maps to which namespace is the typechecker's job — this
       // catches the case the typechecker cannot see: a key that exists in no catalogue at all.
       const namespaces = [
-        ...source.matchAll(/useTranslations\("((?:arap|maintenance)[a-zA-Z.]*)"\)/g),
+        ...source.matchAll(/useTranslations\("([a-zA-Z][a-zA-Z.]*)"\)/g),
       ].map((m) => m[1]);
       // Some namespaces are built from a template literal — `arap.role.${role}`,
       // `arap.documents.${spec.messages}`. Expand the literal prefix to every child it has
@@ -103,7 +101,10 @@ describe("the arap message catalogue", () => {
         }
       }
       if (namespaces.length === 0) continue;
-      for (const [, key] of source.matchAll(/\bt[a-z]?(?:\.rich)?\("([a-zA-Z][\w]*)"/g)) {
+      // Any alias, not just `t` and `tc` — screens that pull two or three namespaces name
+      // them `tGl`, `tApp`, `tCommon`. Dotted keys ("controlTypes.bank") are checked too;
+      // keys built from a template literal cannot be, and are simply not matched.
+      for (const [, key] of source.matchAll(/\bt[A-Za-z]*(?:\.rich)?\("([a-zA-Z][\w.]*)"/g)) {
         referenced.add(namespaces.map((ns) => `${ns}.${key}`).join("|"));
       }
     }

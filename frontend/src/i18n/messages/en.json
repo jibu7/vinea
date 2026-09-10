@@ -302,7 +302,8 @@
       "ar": "AR",
       "ap": "AP",
       "inventory": "Inventory"
-    }
+    },
+    "selectAccount": "Select account…"
   },
   "maintenance": {
     "companyDetails": "Company details",

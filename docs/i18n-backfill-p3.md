@@ -6,7 +6,7 @@ inherited quietly by later phases; the full clause-by-clause check is in
 
 | Claim in P3's DoD | What shipped | Decision |
 |---|---|---|
-| "next-intl with every string externalised" | 28 files, 327 violations of `react/jsx-no-literals` | Backfill — the rest of this document, tracked as [issue #6](https://github.com/jibu7/vinea/issues/6) |
+| "next-intl with every string externalised" | 28 files, 327 violations of `react/jsx-no-literals` | **Done.** Backfilled on `claude/p3-i18n-backfill-issue-6`; see "How it closed" below. [Issue #6](https://github.com/jibu7/vinea/issues/6) |
 | "IndexedDB drafts keyed by draft UUID as `Idempotency-Key`" — **P4 step 7's wording, not P3's** | `localStorage` autosave; the draft UUID *is* the `Idempotency-Key`, so only the storage engine differs | **Keep localStorage.** Decided at P4 step 7 |
 
 > **Correction.** An earlier version of this file, and a comment on issue #6, said P3's DoD
@@ -39,6 +39,10 @@ so they cannot regress. Everything below still fails that same rule.
 Tracked as [issue #6](https://github.com/jibu7/vinea/issues/6). This file is the snapshot taken when P4 step 6 was accepted (2026-09-09). It is the checklist
 for the backfill, not a description of current state once work starts — the authoritative
 count is always the rule itself.
+
+> **Closed on 2026-09-10.** Both rules now run over the whole of `src` and report zero. The
+> list below is kept as the record of what the debt was, not as a description of the tree.
+> See "How it closed" at the end of this file.
 
 ## Reproducing this list
 
@@ -109,3 +113,65 @@ AR/AP screens already meet. The companion attribute check in
 `frontend/src/features/subledger/i18n-coverage.test.ts` should widen its file list at the
 same time.
 
+
+---
+
+# How it closed
+
+Both rules are in top-level `rules` and report zero over `src`. The only `overrides` entry
+left turns them **off** for `src/app/design/**`, and that is the one decision worth knowing
+about.
+
+## The design gallery is exempt, and unreachable
+
+88 of the 327 lived in the gallery and its three prototypes. They are an internal
+design-system reference, not product surface, so they are exempt rather than translated — as
+this document suggested. An exemption is only safe while the routes cannot be served, so
+`src/app/design/layout.tsx` now returns `notFound()` outside development, `layout.test.tsx`
+holds the gate, and a real build was checked: `.next/server/app/design.meta` carries
+`"status": 404`. Nothing links there from the nav tree or the e2e suite;
+`scripts/capture-prototypes.ts` shoots it against `next dev` and is unaffected.
+
+## Attributes are lint's job now, not a scan's
+
+The 91 attribute strings this document counted separately were the load-bearing half: a scan
+finds what is already there, but it does not fail the *next* screen that lands with
+`placeholder="Code"`. `react/jsx-no-literals` cannot help — its `noAttributeStrings` mode
+flags every `className` — so a `no-restricted-syntax` AST selector names the five props whose
+values reach a screen or a screen reader and ignores the rest. No new dependency. A second
+selector catches `placeholder={"…"}`, which the first misses because the value is an
+expression container; there was exactly one of those, and both rules had been blind to it.
+
+`i18n-coverage.test.ts` widened from a fourteen-entry list to `src`, and its key-resolution
+check now accepts any namespace and any `t`-alias, so every `t("…")` in the app is resolved
+against `en.json`. That is the part lint genuinely cannot do — to ESLint every `t()` call
+looks the same — and it is what protects the ~300 keys this backfill added from a typo.
+
+## What the rules still cannot see
+
+The counts in this document were always going to be low, and not only because of attributes.
+Six categories of user-visible English are invisible to both rules, and every one turned up
+during the backfill:
+
+| Hiding place | Example found |
+|---|---|
+| Toast and error copy | `toast.show({ title: "Branch created" })` — about thirty of them |
+| Template literals in attributes | ``aria-label={`Edit ${p.name}`}`` |
+| Default parameter values | `placeholder = "Search…"` in `Combobox` |
+| Literals inside JSX expressions | `{me.company?.name ?? "Select company"}` |
+| Strings from a plain module | `controlTypeLabel()` returning "Bank"/"AR" from `features/gl/types.ts` |
+| Module-level constants | `WEEKDAYS = ["Mo", "Tu", …]` in the date picker |
+
+They are listed in `frontend/.eslintrc.README.md` as things to look for in review, since lint
+will not.
+
+## Verification
+
+Every assertion was checked by breaking it. A bare JSX literal, `placeholder="MUS"` and
+`placeholder={"MUS"}` each fail lint on a product screen; the same literal in
+`src/app/design/` stays silent; the clean tree is silent. The nine new ICU messages were each
+formatted through intl-messageformat and compared to the string they replaced — identical
+output, en dash, em dash and hyphen preserved.
+
+The English is byte-identical throughout. Nothing was reworded, so no Playwright tape and no
+vitest snapshot moves.

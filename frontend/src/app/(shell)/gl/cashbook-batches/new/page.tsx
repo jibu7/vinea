@@ -200,7 +200,7 @@ export default function NewCashbookBatchPage() {
             options={toOptions(cashAccounts, (a) => `${a.code} \u00b7 ${a.name}`)}
             value={cashAccountId}
             onValueChange={setCashAccountId}
-            placeholder={"Select account\u2026"}
+            placeholder={t("selectAccount")}
           />
         </Field>
         <Field label=" ">
