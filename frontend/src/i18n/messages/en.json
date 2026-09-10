@@ -550,7 +550,22 @@
     "fiscalYearCreateFailed": "Couldn't create fiscal year",
     "fiscalYearReopened": "Fiscal year reopened",
     "periodReopened": "Period reopened",
-    "reopenFailed": "Couldn't reopen"
+    "reopenFailed": "Couldn't reopen",
+    "usersSubtitle": "Manage organization memberships, invitations, and role assignments (ADR-02)",
+    "teamMembersAndInvitations": "Team Members & Invitations",
+    "memberEmail": "Member / Email",
+    "joinedInvited": "Joined / Invited",
+    "invitedOn": "Invited {date}",
+    "emailPlaceholder": "colleague@rugariwines.rw",
+    "sendInvitation": "Send Invitation",
+    "invitationSent": "Invitation sent",
+    "invitationSendFailed": "Couldn't send invitation",
+    "rolesUpdated": "Roles updated",
+    "rolesUpdateFailed": "Couldn't update roles",
+    "cannotDeactivateOwner": "Cannot deactivate owner",
+    "memberDeactivated": "Member deactivated",
+    "memberActivated": "Member activated",
+    "statusChangeFailed": "Couldn't change status"
   },
   "arap": {
     "role": {
