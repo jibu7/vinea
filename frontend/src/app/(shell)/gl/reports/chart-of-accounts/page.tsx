@@ -54,7 +54,7 @@ export default function ChartOfAccountsReportPage() {
       a.name,
       a.class,
       a.is_postable ? "Postable" : "Header",
-      controlTypeLabel(a.control_type),
+      controlTypeLabel(a.control_type, t),
       a.is_active ? "Active" : "Inactive",
     ]);
     exportToCsv(`chart-of-accounts-${new Date().toISOString().slice(0, 10)}`, headers, rows);
@@ -200,7 +200,7 @@ export default function ChartOfAccountsReportPage() {
                       <TD className="text-xs text-[var(--vinea-ink-subtle)] print:text-black">
                         {acc.control_type ? (
                           <span className="rounded bg-[var(--vinea-surface-sunken)] px-1.5 py-0.5 font-mono text-[11px] text-[var(--vinea-ink)]">
-                            {controlTypeLabel(acc.control_type)}
+                            {controlTypeLabel(acc.control_type, t)}
                           </span>
                         ) : (
                           "—"

@@ -17,6 +17,7 @@ import { useApiErrorToast } from "@/lib/use-api-error-toast";
 
 export default function BranchesPage() {
   const t = useTranslations("maintenance");
+  const tc = useTranslations("common");
   const toast = useToast();
   const showApiError = useApiErrorToast();
 
@@ -53,14 +54,14 @@ export default function BranchesPage() {
           branchId: editingBranch.id,
           payload: { name, is_main: isMain },
         });
-        toast.show({ title: "Branch updated", tone: "success" });
+        toast.show({ title: t("branchUpdated"), tone: "success" });
       } else {
         await createBranch.mutateAsync({ code, name, is_main: isMain });
-        toast.show({ title: "Branch created", tone: "success" });
+        toast.show({ title: t("branchCreated"), tone: "success" });
       }
       setOpen(false);
     } catch (err) {
-      showApiError(err, "Couldn't save branch");
+      showApiError(err, t("branchSaveFailed"));
     }
   }
 
@@ -72,11 +73,11 @@ export default function BranchesPage() {
       });
       toast.show({
         title: b.code,
-        description: b.is_active ? "Deactivated" : "Activated",
+        description: b.is_active ? t("deactivated") : t("activated"),
         tone: "success",
       });
     } catch (err) {
-      showApiError(err, "Couldn't update branch");
+      showApiError(err, t("branchUpdateFailed"));
     }
   }
 
@@ -84,14 +85,12 @@ export default function BranchesPage() {
     <div className="flex min-h-screen flex-col" data-density="dense">
       <header className="flex items-center justify-between border-b border-[var(--vinea-border)] bg-[var(--vinea-surface-raised)] px-6 py-3">
         <div className="flex items-center gap-3">
-          <Link href="/" className="text-[var(--vinea-ink-subtle)] hover:text-[var(--vinea-ink)]" aria-label="Back">
+          <Link href="/" className="text-[var(--vinea-ink-subtle)] hover:text-[var(--vinea-ink)]" aria-label={tc("back")}>
             <ArrowLeft className="size-4" />
           </Link>
           <div>
             <h1 className="font-display text-lg font-semibold">{t("branches")}</h1>
-            <p className="text-xs text-[var(--vinea-ink-muted)]">
-              Operational locations and costing centers
-            </p>
+            <p className="text-xs text-[var(--vinea-ink-muted)]">{t("branchesSubtitle")}</p>
           </div>
         </div>
 
@@ -114,10 +113,10 @@ export default function BranchesPage() {
             <Table>
               <THead>
                 <TR>
-                  <TH className="w-24">Code</TH>
-                  <TH>Branch Name</TH>
-                  <TH className="w-32">Type</TH>
-                  <TH className="w-32 text-right">Status</TH>
+                  <TH className="w-24">{t("code")}</TH>
+                  <TH>{t("branchName")}</TH>
+                  <TH className="w-32">{t("branchType")}</TH>
+                  <TH className="w-32 text-right">{t("status")}</TH>
                 </TR>
               </THead>
               <TBody>
@@ -129,7 +128,7 @@ export default function BranchesPage() {
                       {b.is_main ? (
                         <StatusChip tone="warning">{t("isMainBranch")}</StatusChip>
                       ) : (
-                        <StatusChip tone="neutral">Branch</StatusChip>
+                        <StatusChip tone="neutral">{t("branchChip")}</StatusChip>
                       )}
                     </TD>
                     <TD className="text-right">
@@ -137,7 +136,7 @@ export default function BranchesPage() {
                         <button
                           type="button"
                           onClick={() => startEdit(b)}
-                          aria-label={`Edit ${b.name}`}
+                          aria-label={t("editLabel", { name: b.name })}
                           className="p-1 text-[var(--vinea-ink-subtle)] hover:text-[var(--vinea-ink)] rounded"
                         >
                           <Edit2 className="size-3.5" />
@@ -145,11 +144,11 @@ export default function BranchesPage() {
                         {!b.is_main ? (
                           <button type="button" onClick={() => handleToggleActive(b)}>
                             <StatusChip tone={b.is_active ? "success" : "neutral"}>
-                              {b.is_active ? "Active" : "Inactive"}
+                              {b.is_active ? t("active") : t("inactive")}
                             </StatusChip>
                           </button>
                         ) : (
-                          <StatusChip tone="success">Active</StatusChip>
+                          <StatusChip tone="success">{t("active")}</StatusChip>
                         )}
                       </div>
                     </TD>
@@ -162,13 +161,13 @@ export default function BranchesPage() {
       </main>
 
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent title={editingBranch ? "Edit Branch" : t("newBranch")}>
+        <DialogContent title={editingBranch ? t("editBranchTitle") : t("newBranch")}>
           <div className="space-y-3 pt-2">
             <Field label={t("code")}>
-              <Input value={code} onChange={(e) => setCode(e.target.value)} disabled={!!editingBranch} placeholder="MUS" />
+              <Input value={code} onChange={(e) => setCode(e.target.value)} disabled={!!editingBranch} placeholder={t("branchCodePlaceholder")} />
             </Field>
             <Field label={t("name")}>
-              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Musanze Branch" />
+              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder={t("branchNamePlaceholder")} />
             </Field>
             <div className="pt-2">
               <label className="flex items-center gap-2 text-sm font-medium cursor-pointer">
@@ -183,7 +182,7 @@ export default function BranchesPage() {
             </div>
 
             <div className="flex justify-end gap-2 pt-3">
-              <Button variant="ghost" onClick={() => setOpen(false)}>Cancel</Button>
+              <Button variant="ghost" onClick={() => setOpen(false)}>{t("cancel")}</Button>
               <Button variant="primary" disabled={!code || !name} onClick={handleSave}>
                 {t("save")}
               </Button>

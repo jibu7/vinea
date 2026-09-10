@@ -58,6 +58,8 @@ function buildTree(accounts: GLAccount[]): AccountNode[] {
 
 export default function ChartOfAccountsPage() {
   const t = useTranslations("maintenance");
+  const tc = useTranslations("common");
+  const tGl = useTranslations("gl");
   const router = useRouter();
   const toast = useToast();
   const showApiError = useApiErrorToast();
@@ -120,7 +122,7 @@ export default function ChartOfAccountsPage() {
       setParentId("");
       toast.show({ title: t("newAccount"), description: `${code} · ${name}`, tone: "success" });
     } catch (err) {
-      showApiError(err, "Couldn't create account");
+      showApiError(err, t("accountCreateFailed"));
     }
   }
 
@@ -151,7 +153,7 @@ export default function ChartOfAccountsPage() {
         msg = "Account has a non-zero balance; cannot be deactivated";
       }
       setNodeErrors((prev) => ({ ...prev, [acc.id]: msg }));
-      showApiError(err, "Couldn't update account");
+      showApiError(err, t("accountUpdateFailed"));
     }
   }
 
@@ -206,7 +208,7 @@ export default function ChartOfAccountsPage() {
 
             {acc.is_control && (
               <span className="rounded bg-[var(--vinea-info-soft)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--vinea-info)]">
-                Control: {controlTypeLabel(acc.control_type)}
+                {tc("labelColon", { label: t("controlType") })} {controlTypeLabel(acc.control_type, tGl)}
               </span>
             )}
           </div>
@@ -235,7 +237,7 @@ export default function ChartOfAccountsPage() {
             className="flex items-center gap-2 border-b border-[var(--vinea-border)] bg-[var(--vinea-danger-soft)]/60 px-4 py-1.5 text-xs text-[var(--vinea-danger)] font-medium"
             style={{ paddingLeft: `${depth * 20 + 36}px` }}
           >
-            <span>• {nodeErrors[acc.id]}</span>
+            <span>{t("bulletedError", { message: nodeErrors[acc.id] })}</span>
           </div>
         )}
 
@@ -250,13 +252,16 @@ export default function ChartOfAccountsPage() {
     <div className="flex min-h-screen flex-col" data-density="dense">
       <header className="flex items-center justify-between border-b border-[var(--vinea-border)] bg-[var(--vinea-surface-raised)] px-6 py-3">
         <div className="flex items-center gap-3">
-          <Link href="/" className="text-[var(--vinea-ink-subtle)] hover:text-[var(--vinea-ink)]" aria-label="Back">
+          <Link href="/" className="text-[var(--vinea-ink-subtle)] hover:text-[var(--vinea-ink)]" aria-label={tc("back")}>
             <ArrowLeft className="size-4" />
           </Link>
           <div>
             <h1 className="font-display text-lg font-semibold">{t("chartOfAccounts")}</h1>
             <p className="text-xs text-[var(--vinea-ink-muted)]">
-              Tree hierarchy by parent account · {filteredAccounts.length} of {accounts?.length ?? 0} accounts
+              {t("chartOfAccountsSubtitle", {
+                shown: filteredAccounts.length,
+                total: accounts?.length ?? 0,
+              })}
             </p>
           </div>
         </div>
@@ -272,7 +277,7 @@ export default function ChartOfAccountsPage() {
               <div className="space-y-3 pt-2">
                 <div className="grid grid-cols-2 gap-3">
                   <Field label={t("code")}>
-                    <Input value={code} onChange={(e) => setCode(e.target.value)} placeholder="6150" />
+                    <Input value={code} onChange={(e) => setCode(e.target.value)} placeholder={t("accountCodePlaceholder")} />
                   </Field>
                   <Field label={t("accountClass")}>
                     <select
@@ -281,16 +286,16 @@ export default function ChartOfAccountsPage() {
                       aria-label={t("accountClass")}
                       className="h-10 w-full rounded-[var(--radius-control)] border border-[var(--vinea-border-strong)] bg-[var(--vinea-surface-raised)] px-3 text-sm"
                     >
-                      <option value="asset">Asset</option>
-                      <option value="liability">Liability</option>
-                      <option value="equity">Equity</option>
-                      <option value="income">Income</option>
-                      <option value="expense">Expense</option>
+                      <option value="asset">{t("accountClasses.asset")}</option>
+                      <option value="liability">{t("accountClasses.liability")}</option>
+                      <option value="equity">{t("accountClasses.equity")}</option>
+                      <option value="income">{t("accountClasses.income")}</option>
+                      <option value="expense">{t("accountClasses.expense")}</option>
                     </select>
                   </Field>
                 </div>
                 <Field label={t("name")}>
-                  <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Staff Welfare" />
+                  <Input value={name} onChange={(e) => setName(e.target.value)} placeholder={t("accountNamePlaceholder")} />
                 </Field>
                 <Field label={t("parentAccount")}>
                   <Combobox
@@ -300,7 +305,7 @@ export default function ChartOfAccountsPage() {
                     )}
                     value={parentId}
                     onValueChange={setParentId}
-                    placeholder="None (Root level)"
+                    placeholder={t("noParentAccount")}
                   />
                 </Field>
                 <div className="flex items-center gap-6 pt-1 text-sm">
@@ -331,18 +336,18 @@ export default function ChartOfAccountsPage() {
                       aria-label={t("controlType")}
                       className="h-10 w-full rounded-[var(--radius-control)] border border-[var(--vinea-border-strong)] bg-[var(--vinea-surface-raised)] px-3 text-sm"
                     >
-                      <option value="">Select control type…</option>
-                      <option value="bank">Bank</option>
-                      <option value="cash">Cash</option>
-                      <option value="ar">Accounts Receivable (AR)</option>
-                      <option value="ap">Accounts Payable (AP)</option>
-                      <option value="inventory">Inventory</option>
+                      <option value="">{t("selectControlType")}</option>
+                      <option value="bank">{t("controlTypes.bank")}</option>
+                      <option value="cash">{t("controlTypes.cash")}</option>
+                      <option value="ar">{t("controlTypes.ar")}</option>
+                      <option value="ap">{t("controlTypes.ap")}</option>
+                      <option value="inventory">{t("controlTypes.inventory")}</option>
                     </select>
                   </Field>
                 )}
                 <div className="mt-4 flex justify-end gap-2">
                   <Button variant="ghost" onClick={() => setNewOpen(false)}>
-                    Cancel
+                    {t("cancel")}
                   </Button>
                   <Button
                     variant="primary"
@@ -369,8 +374,8 @@ export default function ChartOfAccountsPage() {
                 type="text"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Filter accounts by code or name…"
-                aria-label="Filter accounts by code or name"
+                placeholder={t("filterAccountsPlaceholder")}
+                aria-label={t("filterAccountsAria")}
                 className="h-10 w-full rounded-[var(--radius-control)] border border-[var(--vinea-border-strong)] bg-[var(--vinea-surface-raised)] pl-9 pr-3 text-sm text-[var(--vinea-ink)]"
               />
             </div>
@@ -395,11 +400,11 @@ export default function ChartOfAccountsPage() {
           {/* Tree View */}
           {isLoading ? (
             <div className="flex h-48 items-center justify-center text-sm text-[var(--vinea-ink-subtle)]">
-              Loading Chart of Accounts…
+              {t("loadingChartOfAccounts")}
             </div>
           ) : tree.length === 0 ? (
             <div className="rounded-[var(--radius-card)] border border-dashed border-[var(--vinea-border)] p-12 text-center text-sm text-[var(--vinea-ink-subtle)]">
-              No accounts match the current filter.
+              {t("noAccountsMatch")}
             </div>
           ) : (
             <div className="overflow-hidden rounded-[var(--radius-card)] border border-[var(--vinea-border)] bg-[var(--vinea-surface-raised)]">
