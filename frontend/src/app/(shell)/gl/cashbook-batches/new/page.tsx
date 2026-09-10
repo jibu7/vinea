@@ -222,7 +222,7 @@ export default function NewCashbookBatchPage() {
           <Input
             value={description}
             onChange={(e) => setDescription(e.target.value)}
-            placeholder="MTN MoMo settlement"
+            placeholder={t("cashbookDescriptionPlaceholder")}
             className="sm:col-span-2 lg:col-span-4"
           />
         </Field>

@@ -31,7 +31,8 @@
     "noMatches": "No matches",
     "commandPalette": "Command palette",
     "esc": "Esc",
-    "ctrlK": "Ctrl K"
+    "ctrlK": "Ctrl K",
+    "emDash": "—"
   },
   "design": {
     "title": "Design System",
@@ -246,7 +247,30 @@
       "ARJN": "AR Journal",
       "APJN": "AP Journal",
       "fallback": "Journal Entry"
-    }
+    },
+    "emptyValue": "—",
+    "referencePlaceholder": "e.g. CHQ-1002",
+    "journalDescriptionPlaceholder": "September payroll accrual",
+    "cashbookDescriptionPlaceholder": "MTN MoMo settlement",
+    "loadingTrialBalance": "Loading trial balance…",
+    "noBalancesAsOf": "No balances found as of {date}.",
+    "code": "Code",
+    "accountName": "Account Name",
+    "accountClass": "Class",
+    "debit": "Debit",
+    "credit": "Credit",
+    "net": "Net",
+    "viewReversal": "view reversal",
+    "viewOriginal": "view original",
+    "reasonPlaceholder": "Duplicate posting",
+    "chooseAccount": "Choose an account…",
+    "selectAccountHint": "Select an account above to inspect all posted ledger movements and running balance.",
+    "loadingAccountTransactions": "Loading account transactions…",
+    "openingBalanceAsOf": "Opening balance (as of {date})",
+    "docNumber": "Doc #",
+    "loadingEntryDetails": "Loading entry details…",
+    "ref": "Ref:",
+    "journalLinesCount": "Journal Lines ({count})"
   },
   "maintenance": {
     "companyDetails": "Company details",

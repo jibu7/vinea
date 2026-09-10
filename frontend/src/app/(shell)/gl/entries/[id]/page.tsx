@@ -18,12 +18,13 @@ import { useGLLookups, byId } from "@/features/gl/lookups";
 import { useApiErrorToast } from "@/lib/use-api-error-toast";
 import { useToast } from "@/design/components/toast";
 import { newDraftId } from "@/lib/drafts";
-import { formatDate } from "@/lib/format";
+import { DOT, dotted, formatDate } from "@/lib/format";
 
 export default function EntryViewPage() {
   const params = useParams<{ id: string }>();
   const entryId = Number(params.id);
   const t = useTranslations("gl");
+  const tc = useTranslations("common");
   const tEntryTitle = useTranslations("gl.entryTitle");
   const router = useRouter();
   const toast = useToast();
@@ -44,7 +45,7 @@ export default function EntryViewPage() {
   const reverseEntry = useReverseEntry();
 
   if (isLoading || !entry) {
-    return <div className="flex min-h-screen items-center justify-center text-sm text-[var(--vinea-ink-subtle)]">Loading…</div>;
+    return <div className="flex min-h-screen items-center justify-center text-sm text-[var(--vinea-ink-subtle)]">{tc("loading")}</div>;
   }
 
   // Every entry that was not a cashbook batch was titled "Journal Batch", which was true
@@ -88,13 +89,13 @@ export default function EntryViewPage() {
     <div className="flex min-h-screen flex-col" data-density="dense">
       <header className="flex items-center justify-between border-b border-[var(--vinea-border)] bg-[var(--vinea-surface-raised)] px-6 py-3">
         <div className="flex items-center gap-3">
-          <Link href="/" className="text-[var(--vinea-ink-subtle)] hover:text-[var(--vinea-ink)]" aria-label="Back">
+          <Link href="/" className="text-[var(--vinea-ink-subtle)] hover:text-[var(--vinea-ink)]" aria-label={tc("back")}>
             <ArrowLeft className="size-4" />
           </Link>
           <div>
             <h1 className="font-display text-lg font-semibold">{title}</h1>
             <p className="text-xs text-[var(--vinea-ink-muted)]">
-              {entry.number} · {formatDate(entry.entry_date)}
+              {dotted(entry.number, formatDate(entry.entry_date))}
               {entry.reference && ` · Ref: ${entry.reference}`}
             </p>
           </div>
@@ -120,18 +121,18 @@ export default function EntryViewPage() {
                 {t("reversedBy", { number: entry.reversed_by_number ?? entry.reversed_by_entry_id })}
               </span>
               <Link href={`/gl/entries/${entry.reversed_by_entry_id}`} className="font-medium underline">
-                view reversal
+                {t("viewReversal")}
               </Link>
             </div>
           )}
 
           {entry.reverses_entry_id && (
             <div className="rounded-[var(--radius-control)] border border-[var(--vinea-info)] bg-[var(--vinea-info-soft)] px-4 py-2 text-sm text-[var(--vinea-info)]">
-              {t("reversalOf", { number: entry.reverses_entry_number ?? entry.reverses_entry_id })} —{" "}
+              {t("reversalOf", { number: entry.reverses_entry_number ?? entry.reverses_entry_id })} {tc("emDash")}{" "}
               <Link href={`/gl/entries/${entry.reverses_entry_id}`} className="underline">
-                view original
+                {t("viewOriginal")}
               </Link>
-              {entry.reversal_reason && <span> · {entry.reversal_reason}</span>}
+              {entry.reversal_reason && <span>{DOT}{entry.reversal_reason}</span>}
             </div>
           )}
 
@@ -142,11 +143,11 @@ export default function EntryViewPage() {
           <Table>
             <THead>
               <TR>
-                <TH>Account</TH>
-                <TH>Branch</TH>
-                <TH>Project</TH>
-                <TH className="text-right">Debit</TH>
-                <TH className="text-right">Credit</TH>
+                <TH>{t("account")}</TH>
+                <TH>{t("branch")}</TH>
+                <TH>{t("project")}</TH>
+                <TH className="text-right">{t("debit")}</TH>
+                <TH className="text-right">{t("credit")}</TH>
               </TR>
             </THead>
             <TBody>
@@ -216,7 +217,7 @@ export default function EntryViewPage() {
                     <DatePicker value={reverseDate} onValueChange={setReverseDate} />
                   </Field>
                   <Field label={t("reason")}>
-                    <Input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Duplicate posting" />
+                    <Input value={reason} onChange={(e) => setReason(e.target.value)} placeholder={t("reasonPlaceholder")} />
                   </Field>
                 </div>
                 <div className="mt-4 flex justify-end gap-2">

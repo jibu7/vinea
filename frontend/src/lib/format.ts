@@ -53,3 +53,15 @@ export function trimDecimalString(value: string): string {
   if (!value.includes(".")) return value;
   return value.replace(/0+$/, "").replace(/\.$/, "");
 }
+
+/** The " · " that separates a code from its name in every picker label, and a document
+ * number from its date. Punctuation, not copy — there is nothing here to translate — but
+ * it cannot sit in JSX as a literal or a template string without tripping
+ * `react/jsx-no-literals`, and the AR/AP screens already build these labels in callbacks
+ * rather than inline. This is the same thing, named once. */
+export const DOT = " · ";
+
+/** Joins with `DOT`, skipping parts that are absent — `dotted("1000", null)` is "1000". */
+export function dotted(...parts: Array<string | number | null | undefined>): string {
+  return parts.filter((p) => p !== null && p !== undefined && p !== "").join(DOT);
+}
