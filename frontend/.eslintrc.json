@@ -26,6 +26,13 @@
             "noStrings": true,
             "ignoreProps": true
           }
+        ],
+        "no-restricted-syntax": [
+          "error",
+          {
+            "selector": "JSXAttribute[name.name=/^(placeholder|title|description|label|aria-label)$/] > Literal[value=/\\S/]",
+            "message": "User-visible attribute copy must come from next-intl: use placeholder={t(\"…\")}, not placeholder=\"…\"."
+          }
         ]
       }
     }
