@@ -37,9 +37,23 @@ frontend  npm run e2e             44 passed, incl. axe in both themes
           e2e:print-preview       COMPLETE
 ```
 
-Every load-bearing assertion added in step 9 was checked by breaking it: wrong FX, wrong open
-balance, an under-limit "breach", the base-currency fix reverted, the batch debit's bucket, the
-AP gain account, and the bank line before maturity. Each failed as intended.
+Every load-bearing assertion added in step 9 was checked by breaking it, and each failed as
+intended:
+
+| Mutation | Test that caught it |
+|---|---|
+| Realized FX off by 1,000 | `AR · USD` tape, allocation preview |
+| Open balance off by 80,000 | `AR · USD` tape, enquiry |
+| Credit-limit "breach" reduced below the limit | `AR · USD` tape, the block never fires |
+| Entry amounts back to the document's currency | `AR · USD` tape, the control-account row |
+| Batch debit read from `Current` instead of `31 - 60` | AR batch tape |
+| AP's realized difference expected in the loss account | `AP · USD` tape, allocation preview |
+| A bank line expected before maturity | `AR · RWF` tape, post-dated step |
+| Discount invoice dated 12 days back instead of 8 | AR discount tape — nothing on offer |
+| AP's discount expected in the AR discount account | AP discount tape, allocation preview |
+| Maturity run over *every* outstanding instrument, ignoring the date | `test_a_run_banks_only_what_has_matured_and_reports_what_it_left`, both roles |
+| `max_discount` without its invoice check | `test_the_enquiry_reports_the_discount_on_offer_at_the_allocation_date`, both roles |
+| AP headroom back to `credit_limit - balance_base` | `test_credit_headroom_falls_as_the_partner_owes_more_in_both_roles[ap]` |
 
 ## Screenshots
 
