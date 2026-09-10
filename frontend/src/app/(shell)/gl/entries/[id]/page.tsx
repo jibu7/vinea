@@ -33,7 +33,6 @@ export default function EntryViewPage() {
   const accountById = byId(accounts.data);
   const branchById = byId(branches.data);
   const projectById = byId(projects.data);
-  const currencyById = byId(currencies.data);
   const baseCurrency = useMemo(() => currencies.data?.find((c) => c.is_base), [currencies.data]);
 
   const [reverseOpen, setReverseOpen] = useState(false);
@@ -149,7 +148,12 @@ export default function EntryViewPage() {
                 const account = accountById.get(line.gl_account_id);
                 const branch = branchById.get(line.branch_id);
                 const project = line.project_id ? projectById.get(line.project_id) : undefined;
-                const currency = currencyById.get(line.currency_id) ?? baseCurrency;
+                // Debit and Credit are `base_amount`, and the footer totals them as base — so
+                // they render in the *base* currency. Formatting them with the line's own
+                // currency showed a USD 1,000 invoice as "$ 1,300,000.00": the base figure
+                // wearing the document's symbol and decimals. Nothing surfaced it until P4
+                // put foreign-currency documents in the ledger.
+                const currency = baseCurrency;
                 const base = Number(line.base_amount);
                 return (
                   <TR key={line.id} className={line.is_rounding_line ? "bg-[var(--vinea-warning-soft)]/40" : undefined}>

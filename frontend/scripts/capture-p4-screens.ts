@@ -10,13 +10,17 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium, type Page } from "@playwright/test";
+// The seeded logins and the one credential the seed and the suite share — no literal here
+// to drift from `E2E_PASSWORD`.
+import {
+  PASSWORD,
+  PRIMARY_EMAIL as OWNER,
+  READONLY_EMAIL as READONLY,
+} from "../e2e/support/fixtures";
 
 const OUT = process.env.OUT ?? "screenshots";
 const BASE = process.env.BASE_URL ?? "http://localhost:3000";
 const API = `${process.env.API_URL ?? "http://localhost:8000"}/api/v1`;
-const PASSWORD = "E2E-Sup3rSecret!1";
-const OWNER = "e2e.primary@vinea.example";
-const READONLY = "e2e.readonly@vinea.example";
 /** Seeded by `seed_e2e` with two overdue invoices — the only partner with anything to age. */
 const AGED_CUSTOMER = "Gisenyi Hotel Group";
 

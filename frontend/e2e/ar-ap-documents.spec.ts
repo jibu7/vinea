@@ -1,18 +1,11 @@
 import { expect, test } from "@playwright/test";
 import messages from "../src/i18n/messages/en.json";
-import { PRIMARY_EMAIL, login } from "./support/fixtures";
+import { PRIMARY_EMAIL, login, pickCombobox } from "./support/fixtures";
 
 /** P4 step 7 — the AR/AP transaction screens on the P3 DocumentWorkspace + LineGrid. */
 
 const REVENUE_ACCOUNT = "4100"; // Sales Revenue
 const BANK_ACCOUNT = "1120"; // Bank Account
-
-async function pickCombobox(page: import("@playwright/test").Page, name: string, needle: string) {
-  await page.getByRole("button", { name, exact: true }).click();
-  await page.locator("[cmdk-item]").first().waitFor({ state: "visible" });
-  await page.keyboard.type(needle);
-  await page.locator(`[cmdk-item]:has-text("${needle}")`).first().click();
-}
 
 test.describe("AR transaction screens", () => {
   test("posts an invoice from the document workspace and lands on its journal entry", async ({

@@ -1,18 +1,17 @@
 import { expect, test, type Page } from "@playwright/test";
-import { PRIMARY_EMAIL, assertNoSeriousViolations, login, setTheme } from "./support/fixtures";
+import {
+  PRIMARY_EMAIL,
+  assertNoSeriousViolations,
+  login,
+  pickCombobox,
+  setTheme,
+} from "./support/fixtures";
 
 /** P4 step 7 — the allocation screen, and the AP side of the document screens. */
 
 const REVENUE = "4100";
 const EXPENSE = "6990";
 const BANK = "1120";
-
-async function pick(page: Page, name: string, needle: string) {
-  await page.getByRole("button", { name, exact: true }).click();
-  await page.locator("[cmdk-item]").first().waitFor({ state: "visible" });
-  await page.keyboard.type(needle);
-  await page.locator(`[cmdk-item]:has-text("${needle}")`).first().click();
-}
 
 async function pickLineAccount(page: Page, code: string) {
   await page.getByRole("button", { name: "Account, row 1" }).click();
@@ -43,7 +42,7 @@ test.describe("AR allocation", () => {
     // An invoice to settle...
     await page.goto("/ar/invoices/new");
     await page.waitForSelector("h1:has-text('Invoice')");
-    await pick(page, "Customer", code);
+    await pickCombobox(page, "Customer", code);
     await page.getByLabel("Description", { exact: true }).fill(`Alloc invoice ${suffix}`);
     await pickLineAccount(page, REVENUE);
     await page.getByLabel("Unit price, row 1").fill("50000");
@@ -53,17 +52,17 @@ test.describe("AR allocation", () => {
     // ...and a receipt to settle it with.
     await page.goto("/ar/receipts/new");
     await page.waitForSelector("h1:has-text('Receipt')");
-    await pick(page, "Customer", code);
+    await pickCombobox(page, "Customer", code);
     await page.getByLabel("Description", { exact: true }).fill(`Alloc receipt ${suffix}`);
     await page.getByLabel("Amount", { exact: true }).fill("20000");
-    await pick(page, "Cash / bank account", BANK);
+    await pickCombobox(page, "Cash / bank account", BANK);
     await page.getByRole("button", { name: /^Post/ }).click();
     await page.waitForURL(/\/gl\/entries\/\d+/, { timeout: 20_000 });
 
     // --- allocate ---------------------------------------------------------------------
     await page.goto("/ar/allocations/new");
     await page.waitForSelector("h1:has-text('Allocate')");
-    await pick(page, "Partner", code);
+    await pickCombobox(page, "Partner", code);
 
     const preview = page.getByTestId("allocation-preview");
     await expect(preview.getByText("Enter an amount to allocate, then preview.")).toBeVisible();
@@ -88,7 +87,7 @@ test.describe("AR allocation", () => {
 
     // The invoice is now part-settled: 30,000 of the 50,000 remains open.
     await page.goto("/ar/allocations/new");
-    await pick(page, "Partner", code);
+    await pickCombobox(page, "Partner", code);
     await expect(page.getByText("FRw 30,000")).toBeVisible();
   });
 
@@ -115,7 +114,7 @@ test.describe("AP transaction screens", () => {
 
     await page.goto("/ap/supplier-invoices/new");
     await page.waitForSelector("h1:has-text('Supplier invoice')");
-    await pick(page, "Supplier", code);
+    await pickCombobox(page, "Supplier", code);
     await page.getByLabel("Description", { exact: true }).fill(`AP invoice ${suffix}`);
     await pickLineAccount(page, EXPENSE);
     await page.getByLabel("Unit price, row 1").fill("15000");
@@ -125,10 +124,10 @@ test.describe("AP transaction screens", () => {
 
     await page.goto("/ap/payments/new");
     await page.waitForSelector("h1:has-text('Payment')");
-    await pick(page, "Supplier", code);
+    await pickCombobox(page, "Supplier", code);
     await page.getByLabel("Description", { exact: true }).fill(`AP payment ${suffix}`);
     await page.getByLabel("Amount", { exact: true }).fill("15000");
-    await pick(page, "Cash / bank account", BANK);
+    await pickCombobox(page, "Cash / bank account", BANK);
     await page.getByRole("button", { name: /^Post/ }).click();
     await page.waitForURL(/\/gl\/entries\/\d+/, { timeout: 20_000 });
     await expect(page.getByText("Posted").first()).toBeVisible();

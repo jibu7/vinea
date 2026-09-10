@@ -12,12 +12,13 @@ import { PASSWORD, PRIMARY_EMAIL, pickAccount } from "../e2e/support/fixtures";
  * jsdom unit test (src/design/components/line-grid.test.tsx) that runs on every `npm run
  * test`; this script additionally proves it end-to-end against a real browser and backend.
  *
- * BASE_URL/EMAIL/PASSWORD default to the same `seed_e2e.py` fixture the rest of the e2e suite
- * uses, so this runs unattended in CI; override via env vars to point at a different stack.
+ * The login is the same `seed_e2e.py` fixture the rest of the e2e suite uses, so this runs
+ * unattended in CI. `E2E_PASSWORD` is required (there is no literal anywhere to fall back
+ * to — see `e2e/support/fixtures.ts`); point at a different stack with PLAYWRIGHT_BASE_URL
+ * and a different user with E2E_LOGIN_EMAIL.
  */
 const BASE_URL = process.env.PLAYWRIGHT_BASE_URL ?? "http://localhost:3000";
 const EMAIL = process.env.E2E_LOGIN_EMAIL ?? PRIMARY_EMAIL;
-const PASSWORD_ENV = process.env.E2E_LOGIN_PASSWORD ?? PASSWORD;
 
 async function main() {
   const browser = await chromium.launch();
@@ -30,7 +31,7 @@ async function main() {
   // to /login (no client-side redirect to race) instead of relying on root `/` to redirect.
   await page.goto("/login");
   await page.fill('input[type="email"]', EMAIL);
-  await page.fill('input[type="password"]', PASSWORD_ENV);
+  await page.fill('input[type="password"]', PASSWORD);
   await page.click('button[type="submit"]');
   await page.waitForURL("/");
   await page.waitForSelector("text=Good morning");

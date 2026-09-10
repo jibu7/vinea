@@ -1,5 +1,17 @@
 import { chromium } from "@playwright/test";
 
+// Credentials from the environment, never written down here. This script signs in to a
+// hand-made dev tenant rather than the `seed_e2e` fixtures, so it takes both from env:
+//   E2E_LOGIN_EMAIL=... E2E_PASSWORD=... npx tsx <this file>
+const EMAIL = requireEnv("E2E_LOGIN_EMAIL");
+const PASSWORD = requireEnv("E2E_PASSWORD");
+
+function requireEnv(name: string): string {
+  const value = process.env[name];
+  if (!value) throw new Error(`${name} is not set — this script signs in as a real user.`);
+  return value;
+}
+
 async function main() {
   const browser = await chromium.launch();
   const page = await (await browser.newContext({ viewport: { width: 1440, height: 900 } })).newPage();
@@ -10,8 +22,8 @@ async function main() {
 
   // Login
   await page.goto("http://localhost:3000/", { waitUntil: "networkidle" });
-  await page.fill('input[type="email"]', "aline@rugariwines.rw");
-  await page.fill('input[type="password"]', "SuperSecret123!");
+  await page.fill('input[type="email"]', EMAIL);
+  await page.fill('input[type="password"]', PASSWORD);
   await page.click('button[type="submit"]');
   await page.waitForURL("http://localhost:3000/");
   await page.waitForSelector("text=Good morning");

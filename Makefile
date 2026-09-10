@@ -9,16 +9,21 @@ fe-dev: ; cd frontend && npm run dev
 # Postgres' pgdata — MinIO's miniodata goes too, so this is a full dev-stack data wipe.
 # Brings db back up from scratch — re-running docker/init-app-role.sql so the vinea_app
 # role and its grants exist again — then migrates and seeds the e2e fixture tenants
-# (e2e.primary@vinea.example / e2e.secondary@vinea.example, password from
-# backend/app/scripts/seed_e2e.py). A DROP DATABASE + CREATE DATABASE in place would skip
-# that re-init, since GRANT/ALTER DEFAULT PRIVILEGES are per-database, not per-cluster —
-# recreating the volume is what actually gets the app role's permissions back.
+# (e2e.primary@vinea.example / e2e.secondary@vinea.example). A DROP DATABASE + CREATE
+# DATABASE in place would skip that re-init, since GRANT/ALTER DEFAULT PRIVILEGES are
+# per-database, not per-cluster — recreating the volume is what actually gets the app role's
+# permissions back.
+#
+# **Export E2E_PASSWORD first.** The seed hashes it and the Playwright suite signs in with it;
+# neither has a literal to fall back to, so an unset variable stops the seed with a message
+# rather than creating users nothing can log in as:
+#   export E2E_PASSWORD="$$(openssl rand -base64 24)"
 db-reset:
 	docker compose down -v
 	docker compose up -d --wait db
 	docker compose run --rm backend uv run alembic upgrade head
 	docker compose up -d backend frontend
-	docker compose exec -T backend uv run python -m app.scripts.seed_e2e
+	docker compose exec -e E2E_PASSWORD -T backend uv run python -m app.scripts.seed_e2e
 
 # The migration gate, run against a throwaway database — up from nothing, models-vs-migrations
 # check, then all the way back down. Use this rather than hand-rolling it: `alembic/env.py`

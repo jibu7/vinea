@@ -1,4 +1,4 @@
-import type { Page } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
 
 /** Must match backend/app/scripts/seed_e2e.py — run once before the suite. `.example` (RFC
  * 2606), not `.test`: email-validator rejects `.test`/`.invalid`/`.localhost` as reserved,
@@ -9,7 +9,25 @@ export const SECONDARY_EMAIL = "e2e.secondary@vinea.example";
 export const SECONDARY_COMPANY = "Kivu Traders E2E";
 /** Clerk role in PRIMARY_COMPANY: `*:reports_view` only, no setup or posting rights. */
 export const READONLY_EMAIL = "e2e.readonly@vinea.example";
-export const PASSWORD = "E2E-Sup3rSecret!1";
+/** Accountant role in PRIMARY_COMPANY: can post AR/AP, holds no `*:credit_limit_override`. */
+export const POSTER_EMAIL = "e2e.poster@vinea.example";
+
+/** The fixture password comes from the environment, and there is no literal to fall back to.
+ * `seed_e2e.py` hashes whatever `E2E_PASSWORD` holds when it runs and these specs log in with
+ * the same value, so one variable is the single source and CI can generate a fresh credential
+ * per run (P4 step 9). Missing means the seed and the suite would disagree silently — a wall
+ * of `invalid_credentials` — so fail here, naming the variable. */
+export const PASSWORD = ((): string => {
+  const value = process.env.E2E_PASSWORD;
+  if (!value) {
+    throw new Error(
+      "E2E_PASSWORD is not set. Seed and suite share it, e.g.\n" +
+        '  export E2E_PASSWORD="$(openssl rand -base64 24)"\n' +
+        "  docker compose exec -e E2E_PASSWORD -T backend uv run python -m app.scripts.seed_e2e",
+    );
+  }
+  return value;
+})();
 
 export const API_URL = process.env.PLAYWRIGHT_API_URL ?? "http://localhost:8000";
 export const API_BASE = `${API_URL}/api/v1`;
@@ -65,6 +83,44 @@ export async function pickAccount(page: Page, rowIndex: number, code: string): P
   await page.locator(`[cmdk-item]:has-text("${code}")`).first().waitFor({ state: "visible" });
   await page.keyboard.press("Enter");
   await searchInput.waitFor({ state: "hidden" });
+}
+
+/** Signs `email` in on a page that may already hold a session. `/login` redirects to `/` as
+ * soon as `useMe()` resolves, so a second `login()` on the same context lands on the
+ * dashboard as the *previous* user and every later assertion reads their data. Dropping the
+ * cookies first is what makes the next navigation an actual sign-in — the session lives in
+ * httpOnly cookies, so this is the only handle the test has on it. */
+export async function switchUser(page: Page, email: string): Promise<void> {
+  await page.context().clearCookies();
+  await login(page, email);
+}
+
+/** Drops every autosaved document draft for this origin. Drafts survive a failed post (that
+ * is their whole point), so a test that deliberately posts a *rejected* document leaves one
+ * behind, and the next visit to that screen restores it over whatever the next test types. */
+export async function clearDrafts(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    for (const key of Object.keys(window.localStorage)) {
+      if (key.startsWith("vinea.draft.")) window.localStorage.removeItem(key);
+    }
+  });
+}
+
+/** Picks an option in a `Combobox` by its field label, typing `needle` into the typeahead.
+ * `within` scopes the *trigger* only: the popover renders through a Radix portal at the top
+ * of the document, so its `[cmdk-item]`s are never inside the drawer or dialog that opened
+ * it. Waiting for one unfiltered item first matters — the option lists load asynchronously,
+ * and typing into a list that is still empty can never produce a match. */
+export async function pickCombobox(
+  page: Page,
+  label: string,
+  needle: string,
+  opts: { within?: Locator } = {},
+): Promise<void> {
+  await (opts.within ?? page).getByRole("button", { name: label, exact: true }).click();
+  await page.locator("[cmdk-item]").first().waitFor({ state: "visible" });
+  await page.keyboard.type(needle);
+  await page.locator(`[cmdk-item]:has-text("${needle}")`).first().click();
 }
 
 export interface FetchResult {
