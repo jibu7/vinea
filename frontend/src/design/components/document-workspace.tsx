@@ -72,7 +72,15 @@ export function DocumentWorkspaceShell({
       <main className="flex-1 overflow-auto px-6 py-6">
         <div className="mx-auto max-w-5xl space-y-4">
           {errorBanner && (
-            <div className="flex items-start gap-2 rounded-[var(--radius-control)] border border-[var(--vinea-danger)] bg-[var(--vinea-danger-soft)] px-4 py-3 text-sm text-[var(--vinea-danger)]">
+            // `role="alert"` so a screen reader is told without having to find it, and a
+            // testid so a test can assert the refusal landed *here* — in the workspace, above
+            // the grid — rather than in a toast that scrolls away. Errors inline, not toasts,
+            // is a P3 rule; this is the surface that has to be nameable for it to be testable.
+            <div
+              role="alert"
+              data-testid="workspace-error"
+              className="flex items-start gap-2 rounded-[var(--radius-control)] border border-[var(--vinea-danger)] bg-[var(--vinea-danger-soft)] px-4 py-3 text-sm text-[var(--vinea-danger)]"
+            >
               <AlertTriangle className="mt-0.5 size-4 shrink-0" />
               {errorBanner}
             </div>
