@@ -14,9 +14,11 @@ import { partnerCode, type PartnerRole } from "../types";
 export function PartnerListingReport({ role }: { role: PartnerRole }) {
   const t = useTranslations("reports");
   const [includeInactive, setIncludeInactive] = useState(false);
-  // Same filter as the age analysis, and applied by the same endpoint, so the CSV matches
-  // the table. Partners with nothing outstanding are the bulk of a real master.
-  const [includeZeroBalances, setIncludeZeroBalances] = useState(false);
+  // On by default here, unlike the age analysis. This screen is "the partner master as it
+  // stands": a customer created a moment ago carries no balance, and a master listing that
+  // hides them until someone invoices them is lying about the master. The filter is still
+  // the server's, so unticking it narrows the CSV export too.
+  const [includeZeroBalances, setIncludeZeroBalances] = useState(true);
   const partners = usePartners(role, { includeInactive, includeZeroBalances });
   const company = useCompanyDetails();
   const rows = partners.data ?? [];
