@@ -1,7 +1,8 @@
 {
   "app": {
     "name": "Vinea ERP",
-    "tagline": "Cloud ERP for East African SMEs"
+    "tagline": "Cloud ERP for East African SMEs",
+    "shortName": "Vinea"
   },
   "nav": {
     "administration": "Administration",
@@ -62,8 +63,8 @@
     "unbalanced": "Unbalanced"
   },
   "dashboard": {
-    "welcome": "Good morning, Aline",
-    "subtitle": "Here's how Rugari Wines is tracking this period.",
+    "welcome": "Good morning",
+    "subtitle": "Here's how {company} is tracking this period.",
     "kpi": {
       "cashPosition": "Cash position",
       "receivables": "Receivables",
@@ -74,7 +75,10 @@
     "quickActions": "Quick actions",
     "newJournal": "New journal entry",
     "newCashbook": "New cashbook entry",
-    "viewTrialBalance": "View trial balance"
+    "viewTrialBalance": "View trial balance",
+    "welcomeNamed": "Good morning, {name}",
+    "yourCompany": "your company",
+    "vsLastMonth": "vs last month"
   },
   "workspace": {
     "journalBatch": "Journal Batch",
@@ -122,7 +126,10 @@
     "administration": "Administration",
     "usersAndMemberships": "Users & memberships",
     "switchCompany": "Switch company",
-    "signedInAs": "Signed in as"
+    "signedInAs": "Signed in as",
+    "selectCompany": "Select company",
+    "activeCompanyMark": "✓",
+    "signOut": "Sign out"
   },
   "errors": {
     "unauthenticated": "Your session has expired. Please sign in again.",
@@ -154,7 +161,10 @@
     "entry_not_posted": "Only posted entries can be reversed.",
     "cannot_reverse_a_reversal": "A reversal can't itself be reversed.",
     "entry_already_reversed": "This entry has already been reversed.",
-    "generic": "Something went wrong. Please try again."
+    "generic": "Something went wrong. Please try again.",
+    "pageTitle": "Something went wrong",
+    "pageBody": "The page hit an unexpected error. You can try again, or head back to the dashboard.",
+    "tryAgain": "Try again"
   },
   "gl": {
     "journalBatch": "Journal Batch",
