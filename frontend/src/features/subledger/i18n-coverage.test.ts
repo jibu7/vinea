@@ -166,3 +166,52 @@ describe("keys built from a template literal still resolve", () => {
     expect(missing).toEqual([]);
   });
 });
+
+/**
+ * The scan above accepts a key that resolves under *any* namespace the file declares,
+ * because it cannot tell which alias is which. That is one bug short: on a screen holding
+ * both `t = useTranslations("maintenance")` and `tc = useTranslations("common")`, writing
+ * `t("back")` for `tc("back")` resolves under "one of the file's namespaces" and passes,
+ * while the screen renders a missing message. TypeScript cannot see it either — the
+ * catalogue is untyped, so every alias has the same signature.
+ *
+ * So bind each alias to the namespace it was declared with and resolve keys against that
+ * one. Aliases built from a template literal keep the looser treatment above; there is
+ * nothing static to bind them to.
+ */
+describe("every key resolves under its own alias's namespace", () => {
+  const resolve = (path: string): unknown =>
+    path
+      .split(".")
+      .reduce<unknown>(
+        (node, part) =>
+          typeof node === "object" && node !== null ? (node as Record<string, unknown>)[part] : undefined,
+        messages,
+      );
+
+  const unresolved: string[] = [];
+  let checked = 0;
+
+  for (const file of FILES) {
+    const source = readFileSync(file, "utf8");
+    const aliases = [...source.matchAll(/const\s+(\w+)\s*=\s*useTranslations\("([\w.]+)"\)/g)];
+    for (const [, alias, namespace] of aliases) {
+      const calls = source.matchAll(new RegExp(`\\b${alias}(?:\\.rich)?\\("([A-Za-z][\\w.]*)"`, "g"));
+      for (const [, key] of calls) {
+        checked += 1;
+        if (typeof resolve(`${namespace}.${key}`) !== "string") {
+          unresolved.push(`${namespace}.${key} — ${alias}() in ${file.replace(process.cwd() + "/", "")}`);
+        }
+      }
+    }
+  }
+
+  it("checks a meaningful number of them", () => {
+    // Anti-vacuity: a change to how aliases are declared must fail here, not check nothing.
+    expect(checked).toBeGreaterThan(500);
+  });
+
+  it("finds no key missing from its own namespace", () => {
+    expect(unresolved).toEqual([]);
+  });
+});
