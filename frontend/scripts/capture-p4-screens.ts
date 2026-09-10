@@ -348,6 +348,61 @@ async function main() {
     await repCtx.close();
   }
 
+  // The document workspace, and the journal entry it posts to. Deliberately a *foreign
+  // currency* invoice: the workspace shows the currency and the booking rate, and the entry
+  // behind it shows the base amounts — which is where P4 step 9 found the entry screen
+  // formatting `base_amount` with the document's own currency, rendering a USD 1,000 invoice
+  // as "$ 1,300,000.00". The pair is the review record for that fix.
+  if (wanted("11-document-workspace", "12-fx-invoice-entry")) {
+    const docCtx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    const doc = await docCtx.newPage();
+    await login(doc, OWNER);
+
+    const partners = await doc.evaluate(async (url) => {
+      const res = await fetch(url, { credentials: "include" });
+      return (await res.json()) as Array<{ customer_code: string | null }>;
+    }, `${API}/subledger/ar/partners`);
+    const customer = partners.find((p) => p.customer_code)!.customer_code!;
+
+    for (const theme of ["light", "dark"] as const) {
+      // A restored draft would put someone else's half-typed invoice in the review record.
+      await doc.goto(`${BASE}/`);
+      await doc.evaluate(() => {
+        for (const key of Object.keys(window.localStorage)) {
+          if (key.startsWith("vinea.draft.")) window.localStorage.removeItem(key);
+        }
+      });
+      await doc.goto(`${BASE}/ar/invoices/new`);
+      await doc.waitForSelector("h1:has-text('Invoice')");
+      await pick(doc, "Customer", customer);
+      await doc.getByLabel("Description", { exact: true }).fill("Export consignment — 20 cases");
+      await pick(doc, "Currency", "USD");
+      await doc.getByLabel("Exchange rate").fill("1300");
+      await doc.getByRole("button", { name: "Account, row 1" }).click();
+      await doc.locator("[cmdk-item]").first().waitFor({ state: "visible" });
+      await doc.keyboard.type("4100");
+      await doc.locator('[cmdk-item]:has-text("4100")').first().click();
+      await doc.getByLabel("Quantity, row 1").fill("20");
+      await doc.getByLabel("Unit price, row 1").fill("50");
+      await doc.waitForTimeout(400);
+      await shoot(doc, "11-document-workspace", theme);
+    }
+
+    // Post once, from the state the dark shot left, and photograph the entry in both themes.
+    if (wanted("12-fx-invoice-entry")) {
+      await doc.getByRole("button", { name: /^Post/ }).click();
+      await doc.waitForURL(/\/gl\/entries\/\d+/, { timeout: 30_000 });
+      // Toasts sit over the footer totals and time out after a few seconds; wait them out
+      // rather than photographing the entry through them.
+      await doc.getByText(/posted$/).first().waitFor({ state: "hidden", timeout: 30_000 });
+      for (const theme of ["light", "dark"] as const) {
+        await doc.waitForTimeout(400);
+        await shoot(doc, "12-fx-invoice-entry", theme);
+      }
+    }
+    await docCtx.close();
+  }
+
   if (wanted("5-ar-defaults-readonly")) {
     const clerkCtx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
     const clerk = await clerkCtx.newPage();

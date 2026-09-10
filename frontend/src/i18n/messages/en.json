@@ -216,7 +216,21 @@
     "allClasses": "All classes",
     "postableOnly": "Postable only",
     "printedOn": "Printed on {date}",
-    "filters": "Filters"
+    "filters": "Filters",
+    "entryTitle": {
+      "JE": "Journal Batch",
+      "CB": "Cashbook Batch",
+      "YE": "Year-end Close",
+      "ARIN": "Customer Invoice",
+      "ARCN": "Customer Credit Note",
+      "ARRC": "Receipt",
+      "APIN": "Supplier Invoice",
+      "APDN": "Return to Supplier",
+      "APPY": "Payment",
+      "ARJN": "AR Journal",
+      "APJN": "AP Journal",
+      "fallback": "Journal Entry"
+    }
   },
   "maintenance": {
     "companyDetails": "Company details",

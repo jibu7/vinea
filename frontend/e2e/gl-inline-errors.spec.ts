@@ -90,6 +90,12 @@ test.describe("server-side posting refusals arrive inline", () => {
     await expect(page.locator("table tbody tr").nth(0).locator('input[placeholder="0"]').first()).toHaveValue("100");
   });
 
+  // PATH: the same screen, but with a rate typed so the two sides balance *as typed* and
+  // not once converted — the only route to `unbalanced_entry` from here, since Post is
+  // otherwise disabled whenever the typed columns disagree.
+  //
+  // CANNOT SEE: whether the banner is the right home for every entry-level refusal. It
+  // asserts this one lands there rather than in a toast, not that the rule generalises.
   test("unbalanced_entry from the server lands in the workspace, not a toast", async ({ page }) => {
     test.setTimeout(120_000);
     await login(page, PRIMARY_EMAIL);

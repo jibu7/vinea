@@ -24,6 +24,7 @@ export default function EntryViewPage() {
   const params = useParams<{ id: string }>();
   const entryId = Number(params.id);
   const t = useTranslations("gl");
+  const tEntryTitle = useTranslations("gl.entryTitle");
   const router = useRouter();
   const toast = useToast();
   const showApiError = useApiErrorToast();
@@ -46,8 +47,13 @@ export default function EntryViewPage() {
     return <div className="flex min-h-screen items-center justify-center text-sm text-[var(--vinea-ink-subtle)]">Loading…</div>;
   }
 
-  const isCashbook = entry.doc_type === "CB";
-  const title = isCashbook ? t("cashbookBatch") : t("journalBatch");
+  // Every entry that was not a cashbook batch was titled "Journal Batch", which was true
+  // while P2/P3 only ever produced those two. P4 sends customer invoices, receipts, supplier
+  // payments and AR/AP journals through this same screen, and calling a customer invoice a
+  // journal batch is wrong in the one place a reader checks what they are looking at.
+  const title = tEntryTitle.has(entry.doc_type)
+    ? tEntryTitle(entry.doc_type)
+    : tEntryTitle("fallback");
   const totalDebit = entry.lines.filter((l) => !l.is_rounding_line && Number(l.base_amount) > 0).reduce((s, l) => s + Number(l.base_amount), 0);
   const totalCredit = entry.lines.filter((l) => !l.is_rounding_line && Number(l.base_amount) < 0).reduce((s, l) => s - Number(l.base_amount), 0);
   const isReversed = !!entry.reversed_by_entry_id;

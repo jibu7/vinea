@@ -17,6 +17,10 @@ import {
  * (see `pageFetch`), reusing the authenticated session's cookies exactly as the app does.
  */
 test.describe("journal posting is idempotent on retry", () => {
+  // PATH: POST /gl/journal-entries twice with one key, through the page's own `fetch`.
+  // CANNOT SEE: the UI's half of it — that the draft UUID is what the screens send as the
+  // key. The document and allocation screens send theirs, and only `tests/subledger`
+  // asserts a replay through them.
   test("resending the same Idempotency-Key + body replays the original entry", async ({ page }) => {
     await login(page, PRIMARY_EMAIL);
 
@@ -62,6 +66,8 @@ test.describe("journal posting is idempotent on retry", () => {
     expect(matches).toHaveLength(1);
   });
 
+  // PATH: the same key with a changed body → 409. CANNOT SEE: what the *screen* does with
+  // that conflict, which is a toast path no spec drives.
   test("the same key with a different body is refused, not silently posted", async ({ page }) => {
     await login(page, PRIMARY_EMAIL);
     const debitAccountId = await accountIdByCode(page, DEBIT_ACCOUNT_CODE);

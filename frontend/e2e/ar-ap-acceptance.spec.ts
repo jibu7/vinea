@@ -338,6 +338,10 @@ async function queueStatement(page: Page, role: Role, name: string): Promise<voi
 
 test.describe("P4 acceptance tape", () => {
   for (const tape of TAPES) {
+    // PATH: the eleven screens named in the file header, for one role and one currency.
+    // CANNOT SEE: the *other* role's screens on a base-currency pass — AP runs in USD
+    // only, so an AP-specific break that needs no exchange rate would show up in the
+    // backend role matrix rather than here.
     test(`${tape.label} — invoice, part settlement at a second rate, allocation, statement, credit limit`, async ({
       page,
     }) => {

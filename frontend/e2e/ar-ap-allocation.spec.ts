@@ -33,6 +33,10 @@ async function makePartner(page: Page, role: "ar" | "ap", code: string, name: st
 }
 
 test.describe("AR allocation", () => {
+  // PATH: customer → invoice → receipt → /ar/allocations/new → preview → post → the open
+  // amount that remains. CANNOT SEE: an allocation that *posts* something. Both documents
+  // are in base currency with no discount, so the preview is legitimately empty —
+  // `ar-ap-acceptance` is where a realized difference goes through this screen.
   test("allocates a receipt to an invoice, previewing the postings before Post", async ({ page }) => {
     await login(page, PRIMARY_EMAIL);
     const suffix = String(Date.now()).slice(-6);
@@ -91,6 +95,9 @@ test.describe("AR allocation", () => {
     await expect(page.getByText("FRw 30,000")).toBeVisible();
   });
 
+  // PATH: /ar/allocations/new, reading the claim the preview panel makes about itself.
+  // CANNOT SEE: the staleness it is named for. This asserts the provenance line only; the
+  // preview-then-Post ordering is asserted in the test above and in `ar-ap-acceptance`.
   test("editing an amount after previewing marks the preview stale and blocks Post", async ({
     page,
   }) => {
@@ -106,6 +113,9 @@ test.describe("AR allocation", () => {
 });
 
 test.describe("AP transaction screens", () => {
+  // PATH: /ap/supplier-invoices/new and /ap/payments/new → their journal entries.
+  // CANNOT SEE: what the payment settled — nothing is allocated here. The AP tape in
+  // `ar-ap-acceptance` carries it through allocation, FX and the supplier statement.
   test("posts a supplier invoice and a payment", async ({ page }) => {
     await login(page, PRIMARY_EMAIL);
     const suffix = String(Date.now()).slice(-6);
@@ -133,6 +143,9 @@ test.describe("AP transaction screens", () => {
     await expect(page.getByText("Posted").first()).toBeVisible();
   });
 
+  // PATH: /ap/returns/new, asserting it is line-shaped and supplier-scoped.
+  // CANNOT SEE: a return posting, or that it reduces exposure rather than building it —
+  // the credit-limit direction is asserted in the backend role matrix.
   test("the AP return-to-supplier screen is the AP credit note", async ({ page }) => {
     await login(page, PRIMARY_EMAIL);
     await page.goto("/ap/returns/new");
@@ -144,6 +157,9 @@ test.describe("AP transaction screens", () => {
 });
 
 test.describe("allocation accessibility", () => {
+  // PATH: axe over the allocation screen with no partner chosen, in both themes.
+  // CANNOT SEE: the screen with open items listed and a preview table rendered, which is
+  // most of its interactive surface.
   test("allocation screen — light and dark", async ({ page }) => {
     await login(page, PRIMARY_EMAIL);
     await page.goto("/ar/allocations/new");

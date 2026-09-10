@@ -14,6 +14,7 @@ apart from one that was assumed.
 | P4 | 2 | Posting contract and control-account guard | `partner_documents` schema, PostingEngine guard, `assert_subledger_invariants` | `ffffe52` | "Continue" — owner approved the step-2 report and the phase proceeded to documents. Recorded retrospectively at step 7 from this conversation; the message was not captured verbatim at the time. |
 | P4 | 5 | Ageing, statements, listings, enquiries | ageing by bucket set, statement PDF jobs, transaction listings, partner enquiries | `ffffe52` | "Continue" — owner approved the step-5 report and the phase proceeded to UI. Recorded retrospectively at step 7; not captured verbatim. |
 | P4 | 6 | Maintenance UI (review, not a plan gate) | eight AR/AP maintenance screens | `f65581e` | "Step 6 accepted with these closes" — accepted with seven follow-up items, all delivered. |
+| P4 | 9 | Tests, CI and phase close (review, not a plan gate) | the acceptance tape (`frontend/e2e/ar-ap-acceptance.spec.ts`), the post-dated instruments screen, `docs/p4-final-report.md` | `claude/p4-step-9` @ HEAD | **Awaiting the owner.** The row is opened at submission, not filled in on the author's behalf: the point of this file is that an approval nobody wrote down cannot later be told apart from one that was assumed. Replace this cell with the owner's words when they arrive, and pin the commit they were looking at. |
 
 ## What a good row looks like
 
