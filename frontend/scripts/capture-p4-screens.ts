@@ -144,44 +144,44 @@ async function main() {
     "4-bucket-set-editor",
   ];
   if (wanted(...maintenanceShots)) {
-  const ownerCtx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
-  const page = await ownerCtx.newPage();
-  await login(page, OWNER);
+    const ownerCtx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    const page = await ownerCtx.newPage();
+    await login(page, OWNER);
 
-  for (const theme of ["light", "dark"] as const) {
-    await page.goto(`${BASE}/maintenance/customers`);
-    await page.waitForSelector("h1:has-text('Customers')");
-    await page.locator('button[aria-label^="Edit "]').first().click();
-    await page.getByRole("tab", { name: "AR settings" }).click();
-    await page.waitForTimeout(500);
-    await shoot(page, "1-customer-ar-settings", theme);
-    await page.keyboard.press("Escape");
+    for (const theme of ["light", "dark"] as const) {
+      await page.goto(`${BASE}/maintenance/customers`);
+      await page.waitForSelector("h1:has-text('Customers')");
+      await page.locator('button[aria-label^="Edit "]').first().click();
+      await page.getByRole("tab", { name: "AR settings" }).click();
+      await page.waitForTimeout(500);
+      await shoot(page, "1-customer-ar-settings", theme);
+      await page.keyboard.press("Escape");
 
-    // The list with its seeded row, then the drawer open on the AP settings tab — the two
-    // halves of the supplier master.
-    await page.goto(`${BASE}/maintenance/suppliers`);
-    await page.waitForSelector("h1:has-text('Suppliers')");
-    await page.locator('button[aria-label^="Edit "]').first().waitFor({ state: "visible" });
-    await shoot(page, "2-supplier-master", theme);
-    await page.locator('button[aria-label^="Edit "]').first().click();
-    await page.getByRole("tab", { name: "AP settings" }).click();
-    await page.waitForTimeout(500);
-    await shoot(page, "2b-supplier-ap-settings", theme);
-    await page.keyboard.press("Escape");
+      // The list with its seeded row, then the drawer open on the AP settings tab — the two
+      // halves of the supplier master.
+      await page.goto(`${BASE}/maintenance/suppliers`);
+      await page.waitForSelector("h1:has-text('Suppliers')");
+      await page.locator('button[aria-label^="Edit "]').first().waitFor({ state: "visible" });
+      await shoot(page, "2-supplier-master", theme);
+      await page.locator('button[aria-label^="Edit "]').first().click();
+      await page.getByRole("tab", { name: "AP settings" }).click();
+      await page.waitForTimeout(500);
+      await shoot(page, "2b-supplier-ap-settings", theme);
+      await page.keyboard.press("Escape");
 
-    await page.goto(`${BASE}/maintenance/payment-terms`);
-    await page.waitForSelector("h1:has-text('Payment terms')");
-    await shoot(page, "3-payment-terms", theme);
+      await page.goto(`${BASE}/maintenance/payment-terms`);
+      await page.waitForSelector("h1:has-text('Payment terms')");
+      await shoot(page, "3-payment-terms", theme);
 
-    await page.goto(`${BASE}/maintenance/ageing-bucket-sets`);
-    await page.waitForSelector("h1:has-text('Ageing bucket sets')");
-    await page.locator('button[aria-label^="Edit "]').first().click();
-    await page.waitForSelector("text=Buckets");
-    await page.waitForTimeout(400);
-    await shoot(page, "4-bucket-set-editor", theme);
-    await page.keyboard.press("Escape");
-  }
-  await ownerCtx.close();
+      await page.goto(`${BASE}/maintenance/ageing-bucket-sets`);
+      await page.waitForSelector("h1:has-text('Ageing bucket sets')");
+      await page.locator('button[aria-label^="Edit "]').first().click();
+      await page.waitForSelector("text=Buckets");
+      await page.waitForTimeout(400);
+      await shoot(page, "4-bucket-set-editor", theme);
+      await page.keyboard.press("Escape");
+    }
+    await ownerCtx.close();
   }
 
   // The allocation screen, with the preview panel showing real postings. A same-currency
