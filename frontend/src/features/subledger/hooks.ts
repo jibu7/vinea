@@ -8,6 +8,8 @@ import type {
   AllocationPayload,
   AllocationPreview,
   AutoAllocatePayload,
+  BatchPayload,
+  BatchResult,
   DocumentCreatePayload,
   PartnerDocument,
   PartnerEnquiry,
@@ -300,6 +302,25 @@ export function usePostAllocation(role: PartnerRole) {
       idempotencyKey: string;
     }) =>
       api.post<Allocation>(`/subledger/${role}/allocations`, payload, {
+        "Idempotency-Key": idempotencyKey,
+      }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: [ROOT] }),
+  });
+}
+
+/** A batch is one unit of work: the key covers the whole thing, and a refused line refuses
+ * all of them, so a retry replays rather than posting the good lines twice. */
+export function usePostBatch(role: PartnerRole) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      payload,
+      idempotencyKey,
+    }: {
+      payload: BatchPayload;
+      idempotencyKey: string;
+    }) =>
+      api.post<BatchResult>(`/subledger/${role}/batches`, payload, {
         "Idempotency-Key": idempotencyKey,
       }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: [ROOT] }),

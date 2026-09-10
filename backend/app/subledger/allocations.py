@@ -10,7 +10,7 @@ Unallocation posts a mirror allocation with negated lines and a frozen-base jour
 — one reversal only, matching the P2 rule for journal entries.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date
 from decimal import Decimal
 
@@ -57,7 +57,13 @@ class _Pair:
     amount: Decimal
     discount_amount: Decimal
     discount_document: PartnerDocument | None
+    #: What posts to realized FX: the cumulative rate difference, rounded once (see
+    #: `_true_up_fx`).
     fx_base_amount: Decimal
+    #: The gap between that and the base amounts actually booked on the two documents. It is a
+    #: conversion residue, not an exchange movement, so it posts to the rounding account —
+    #: keeping the FX figure exactly the booking-rate difference and nothing else.
+    fx_rounding_amount: Decimal = ZERO
 
 
 @dataclass(frozen=True)
@@ -133,6 +139,78 @@ def max_discount(
         recompute_open_amount(db, document),
     )
 
+
+
+def _prior_fx_state(db: Session, debit: PartnerDocument) -> tuple[Decimal, Decimal]:
+    """What earlier allocations already did to this document: the un-rounded rate-difference
+    product they covered, and the FX they actually posted.
+
+    Reversals write negated `amount` and `fx_base_amount`, so a plain sum nets an unallocation
+    out of both figures — the true-up is reversal-safe without filtering.
+    """
+    rows = db.execute(
+        select(AllocationLine.amount, AllocationLine.fx_base_amount, PartnerDocument.exchange_rate)
+        .join(
+            PartnerDocument,
+            (PartnerDocument.id == AllocationLine.credit_document_id)
+            & (PartnerDocument.company_id == AllocationLine.company_id),
+        )
+        .where(
+            AllocationLine.company_id == debit.company_id,
+            AllocationLine.debit_document_id == debit.id,
+        )
+    ).all()
+    product = sum(
+        (amount * (debit.exchange_rate - credit_rate) for amount, _fx, credit_rate in rows), ZERO
+    )
+    posted = sum((fx for _amount, fx, _rate in rows), ZERO)
+    return product, posted
+
+
+def _true_up_fx(db: Session, prepared: list[_Pair], decimals: int) -> list[_Pair]:
+    """Realized FX on a document is the *cumulative* rate difference on everything settled
+    against it, rounded once, less whatever previous allocations already posted.
+
+    Rounding each pair on its own and summing does not give that: three receipts against one
+    invoice carry three roundings, so the FX line can land a minor unit off the booking-rate
+    difference — and that unit then sits inside the FX figure, indistinguishable from a real
+    exchange movement. This is the same complaint that gave rounding its own account, one
+    layer up (P4 step 4: "FX ... equal the booking-rate difference and nothing else").
+
+    Trueing up cumulatively also fixes the case a single-allocation formula cannot: an invoice
+    settled by three receipts on three days at three rates, in three separate allocations. Each
+    allocation posts the difference between the rounded cumulative target and what is already
+    on the document, so the running total is exact after every one of them — not just the last.
+    """
+    by_debit: dict[int, list[int]] = {}
+    for index, pair in enumerate(prepared):
+        by_debit.setdefault(pair.debit.id, []).append(index)
+
+    out = list(prepared)
+    for indexes in by_debit.values():
+        debit = out[indexes[0]].debit
+        prior_product, prior_posted = _prior_fx_state(db, debit)
+        new_product = sum(
+            (out[i].amount * (debit.exchange_rate - out[i].credit.exchange_rate) for i in indexes),
+            ZERO,
+        )
+        target = round_amount(prior_product + new_product, decimals)
+        needed = target - prior_posted
+        assigned = sum((out[i].fx_base_amount for i in indexes), ZERO)
+        correction = needed - assigned
+        if correction != ZERO:
+            # The correction lands on the document's last pair in this allocation, so the
+            # per-line figures stay close to their own rate difference and only one carries
+            # the adjustment. Its negation goes to the rounding account: the control account
+            # must still net to exactly what was booked on the two documents, which is the
+            # pre-true-up figure, so FX and rounding together have to come to that.
+            last = indexes[-1]
+            out[last] = replace(
+                out[last],
+                fx_base_amount=out[last].fx_base_amount + correction,
+                fx_rounding_amount=out[last].fx_rounding_amount - correction,
+            )
+    return out
 
 def prepare(
     db: Session,
@@ -255,6 +333,7 @@ def prepare(
         )
 
     assert currency is not None
+    prepared = _true_up_fx(db, prepared, base.decimal_places)
     residuals = _settlement_residuals(db, involved, remaining, new_slices, base.decimal_places)
     return Preview(
         currency=currency,
@@ -349,6 +428,15 @@ def _postings(
                 "Realized exchange gain" if gain else "Realized exchange loss",
             )
             control_totals[control_id] -= pair.fx_base_amount
+        if pair.fx_rounding_amount != ZERO:
+            if accounts.rounding_account_id is None:
+                raise PostingError(
+                    "Set the rounding difference account in GL settings before settling a "
+                    "foreign-currency document",
+                    code="rounding_account_unset",
+                )
+            add(accounts.rounding_account_id, pair.fx_rounding_amount, "Settlement rounding")
+            control_totals[control_id] -= pair.fx_rounding_amount
         if pair.discount_amount != ZERO and pair.discount_document is not None:
             assert accounts.discount_account_id is not None
             discount_base = round_amount(

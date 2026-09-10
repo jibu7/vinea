@@ -68,6 +68,13 @@ class PartnerDocument(AuditedMixin, CompanyScopedMixin, Base):
     __table_args__ = (
         UniqueConstraint("company_id", "id", name="uq_partner_documents_company_id_id"),
         UniqueConstraint("company_id", "number", name="uq_partner_documents_company_number"),
+        # Sales/purchase figures key on the transaction type, never on `kind` — see 0011.
+        Index(
+            "ix_partner_documents_company_transaction_type",
+            "company_id",
+            "role",
+            "transaction_type",
+        ),
         ForeignKeyConstraint(
             ["company_id", "partner_id"],
             ["partners.company_id", "partners.id"],
@@ -163,6 +170,11 @@ class PartnerDocument(AuditedMixin, CompanyScopedMixin, Base):
     kind: Mapped[DocumentKind] = mapped_column(document_kind_type, nullable=False)
     number: Mapped[str] = mapped_column(String(30), nullable=False)
     doc_type: Mapped[str] = mapped_column(String(10), nullable=False)
+    #: The `gl_transaction_types` code this document was posted under, within the role's
+    #: module. Stored rather than derived from `kind`, because a journal batch posts an
+    #: invoice-shaped document under JNL: everything a *user* sees, and every figure keyed on
+    #: what kind of business a document represents, reads this and not `kind`.
+    transaction_type: Mapped[str] = mapped_column(String(30), nullable=False)
     partner_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     journal_entry_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     document_date: Mapped[date] = mapped_column(Date, nullable=False)

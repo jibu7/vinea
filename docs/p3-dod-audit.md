@@ -12,7 +12,7 @@ Source: `.github/prompts/phase-3-frontend-foundation.prompt.md`.
 
 | # | Clause | Verdict | Evidence |
 |---|---|---|---|
-| 1 | Owner approved the step-2 prototypes | **unverifiable** → see below | An owner action outside the repository. No approval record is committed. |
+| 1 | Owner approved the step-2 prototypes | **closed** → see below | An owner action outside the repository. No approval record is committed. |
 | 2 | The sidebar renders the **complete** Appendix C tree in the owner's order, later phases tagged | **false** | Eighteen entries were missing: Receipt, Supplier invoice, Payment, AP Allocate, both batch screens, the Allocation report, both partner listings, the Transaction listings and every AP report. Order and tagging were correct for what was there. Fixed on this PR; the whole tree is now pinned in `appendix-c-order.test.tsx`. |
 | 3 | Every string is externalised; one locale (`en`) | **false** | 28 files, 327 `react/jsx-no-literals` violations. One locale is correct. Tracked as [#6](https://github.com/jibu7/vinea/issues/6); the P4 AR/AP screens are clean and lint-enforced. |
 | 4 | RWF renders with no decimals everywhere money is shown | **true** | `formatMoney` honours `decimal_places`, covered in `format.test.ts`. The only other numeric formatter in the app is LineGrid's editing display (`line-grid.tsx:60`), which formats raw entry digits, not a currency amount. |
@@ -51,8 +51,9 @@ commit. A STOP-gate approval that is not written down cannot be distinguished la
 that was assumed. P4's two gates (after steps 2 and 5) should record the approving message and
 the commit it approved, in the phase report; that costs one line and settles the clause for good.
 
-**Retroactively:** ask the owner to confirm, and record the answer. Not something the repository
-can answer on its own.
+**Retroactively:** done — `approvals.md` now carries a row for it reading "approved outside
+record, owner confirmed", which closes this line as answered rather than open. Future gates are
+recorded when they happen.
 
 ### #10 — "Final report with screenshots of the six main screens"
 

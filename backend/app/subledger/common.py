@@ -107,3 +107,23 @@ def control_account_for(
             field_errors={"control_account_id": ["not an AR/AP control account"]},
         )
     return account.id
+
+
+def transaction_type_names(db: Session, company_id: int, role: PartnerRole) -> dict[str, str]:
+    """`{code: name}` for a role's module, so a read can label documents by what they *are*.
+
+    A journal debit is invoice-shaped, so `kind` would call it "Customer invoice". Every
+    user-facing surface reads the transaction type instead — and so must any figure derived
+    from sales or purchases, which is why documents store the code rather than deriving it.
+    """
+    from app.models.gl import GLTransactionType
+
+    return {
+        row.code: row.name
+        for row in db.scalars(
+            select(GLTransactionType).where(
+                GLTransactionType.company_id == company_id,
+                GLTransactionType.module == role.value,
+            )
+        )
+    }

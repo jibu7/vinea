@@ -317,10 +317,37 @@ class DocumentLineRead(ApiModel):
     gross_amount: Decimal
 
 
+class BatchLineIn(BaseModel):
+    partner_id: int
+    contra_account_id: int
+    #: Signed in the partner's normal direction; negative is the credit side.
+    amount: Money
+    description: str = Field(min_length=1, max_length=500)
+    tax_code_id: int | None = None
+    branch_id: int | None = None
+    project_id: int | None = None
+    due_date: date | None = None
+
+
+class BatchCreate(BaseModel):
+    batch_date: date
+    reference: str | None = Field(default=None, max_length=500)
+    lines: list[BatchLineIn] = Field(min_length=1)
+
+
+class BatchRead(ApiModel):
+    batch_date: date
+    reference: str | None
+    documents: list["DocumentSummary"] = []
+
+
 class DocumentRead(ApiModel):
     id: int
     role: str
     kind: str
+    #: What the document *is*, for display and for any sales/purchase figure. `kind` is its
+    #: shape in the ledger; a journal debit is invoice-shaped and is not an invoice.
+    transaction_type: str
     number: str
     doc_type: str
     partner_id: int
@@ -357,6 +384,7 @@ class DocumentSummary(ApiModel):
     id: int
     role: str
     kind: str
+    transaction_type: str
     number: str
     partner_id: int
     document_date: date
@@ -478,7 +506,10 @@ class AgeingReport(BaseModel):
 class OpenItemRead(BaseModel):
     document_id: int
     number: str
+    #: Shape in the ledger. Present for machines; screens show the transaction type instead.
     kind: str
+    transaction_type: str
+    transaction_type_name: str
     document_date: date
     due_date: date | None
     currency_id: int
@@ -492,7 +523,10 @@ class OpenItemRead(BaseModel):
 class PartnerEnquiryEntry(BaseModel):
     document_id: int
     number: str
+    #: Shape in the ledger. Present for machines; screens show the transaction type instead.
     kind: str
+    transaction_type: str
+    transaction_type_name: str
     document_date: date
     due_date: date | None
     currency_id: int

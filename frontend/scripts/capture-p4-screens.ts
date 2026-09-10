@@ -179,6 +179,59 @@ async function main() {
     await allocCtx.close();
   }
 
+  // The AR batch screen with lines entered, so the partner column and the atomicity note are
+  // both visible.
+  if (process.env.SKIP_BATCH !== "1") {
+    const batchCtx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    const batch = await batchCtx.newPage();
+    await login(batch, OWNER);
+    // Both roles: the same component, and the record should show it working for each.
+    const batchScreens = [
+      {
+        name: "7-ar-batch",
+        path: "/ar/batches/new",
+        heading: "Account receivable batches",
+        partner: "E2EALC",
+        narrative: "Interest on overdue account",
+      },
+      {
+        name: "7-ap-batch",
+        path: "/ap/batches/new",
+        heading: "Account payable batches",
+        partner: "E2ESUP001",
+        narrative: "Rebate due from supplier",
+      },
+    ];
+    for (const theme of ["light", "dark"] as const) {
+      for (const screen of batchScreens) {
+        // Drop any draft an earlier pass autosaved, from a page that has no draft of its own:
+        // clearing while the batch screen is mounted loses the race with its autosave effect,
+        // which re-saves before the reload and brings the "Draft restored" toast back over the
+        // footer.
+        await batch.goto(`${BASE}/`);
+        await batch.evaluate(() => {
+          try {
+            for (const key of Object.keys(window.localStorage)) {
+              if (key.startsWith("vinea.draft.")) window.localStorage.removeItem(key);
+            }
+          } catch {
+            /* private windows make the accessor throw; nothing to clear there */
+          }
+        });
+        await batch.goto(`${BASE}${screen.path}`);
+        await batch.waitForSelector(`h1:has-text('${screen.heading}')`);
+        await batch.waitForSelector(`h1:has-text('${screen.heading}')`);
+        await batch.getByLabel("Reference").fill("Monthly interest run");
+        await pick(batch, "Partner, row 1", screen.partner);
+        await batch.getByLabel(/^Description, row 1/).fill(screen.narrative);
+        await batch.getByLabel(/^Amount, row 1/).fill("1200");
+        await batch.waitForTimeout(300);
+        await shoot(batch, screen.name, theme);
+      }
+    }
+    await batchCtx.close();
+  }
+
   const clerkCtx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const clerk = await clerkCtx.newPage();
   await login(clerk, READONLY);

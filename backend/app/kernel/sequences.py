@@ -30,6 +30,12 @@ class DocType(enum.StrEnum):
     AP_INVOICE = "APIN"
     AP_DEBIT_NOTE = "APDN"
     AP_PAYMENT = "APPY"
+    # Journal batches post ordinary invoice/credit-note documents under the JNL transaction
+    # type, but they must never consume an invoice number — a journal debit is not an invoice
+    # and an audit that follows INV- numbering would find a hole. Separate sequences, and
+    # separate prefixes because `partner_documents.number` is unique per company.
+    AR_JOURNAL = "ARJN"
+    AP_JOURNAL = "APJN"
     ALLOCATION = "ALC"
     # The realized-FX / settlement-discount entry an allocation posts, and the transfer
     # that moves a matured post-dated instrument into the bank.
@@ -47,6 +53,8 @@ DEFAULT_PREFIXES: dict[str, str] = {
     DocType.AP_INVOICE: "SIN-",
     DocType.AP_DEBIT_NOTE: "DBN-",
     DocType.AP_PAYMENT: "PMT-",
+    DocType.AR_JOURNAL: "ARJ-",
+    DocType.AP_JOURNAL: "APJ-",
     DocType.ALLOCATION: "ALC-",
     DocType.ALLOCATION_JOURNAL: "ALJ-",
     DocType.INSTRUMENT_MATURITY: "MAT-",
