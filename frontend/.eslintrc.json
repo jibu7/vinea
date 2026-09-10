@@ -13,7 +13,11 @@
         "src/app/(shell)/maintenance/ap-transaction-types/**/*.tsx",
         "src/app/(shell)/maintenance/rename-partner-code/**/*.tsx",
         "src/features/subledger/**/*.tsx",
-        "src/features/gl/transaction-types-screen.tsx"
+        "src/features/gl/transaction-types-screen.tsx",
+        "src/app/(shell)/ar/**/*.tsx",
+        "src/app/(shell)/ap/**/*.tsx",
+        "src/features/subledger/reports/**/*.tsx",
+        "src/design/components/report-page.tsx"
       ],
       "rules": {
         "react/jsx-no-literals": [

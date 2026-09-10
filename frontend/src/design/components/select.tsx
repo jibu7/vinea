@@ -3,6 +3,7 @@
 import * as SelectPrimitive from "@radix-ui/react-select";
 import { Check, ChevronDown } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { useFieldLabelId } from "./input";
 
 export interface SelectOption {
   value: string;
@@ -15,16 +16,26 @@ export function Select({
   onValueChange,
   placeholder = "Select…",
   className,
+  ariaLabel,
 }: {
   options: SelectOption[];
   value?: string;
   onValueChange?: (value: string) => void;
   placeholder?: string;
   className?: string;
+  /** Accessible name for contexts with no `Field` wrapper to supply one. */
+  ariaLabel?: string;
 }) {
+  // Radix renders the trigger as a `role="combobox"` button. Unlike `Input`, `Combobox` and
+  // `DatePicker`, this component never read the `Field` label id, so its only accessible name
+  // was whatever text happened to be selected — and none at all before a value resolves. axe
+  // scored that `button-name`, critical. Name it the same way its siblings do.
+  const labelId = useFieldLabelId();
   return (
     <SelectPrimitive.Root value={value} onValueChange={onValueChange}>
       <SelectPrimitive.Trigger
+        aria-label={ariaLabel}
+        aria-labelledby={ariaLabel ? undefined : labelId}
         className={cn(
           "flex h-10 w-full items-center justify-between gap-2 rounded-[var(--radius-control)]",
           "border border-[var(--vinea-border-strong)] bg-[var(--vinea-surface-raised)] px-3 text-sm",

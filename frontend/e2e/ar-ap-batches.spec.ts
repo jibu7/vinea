@@ -35,7 +35,7 @@ test.describe("AR journal batches", () => {
 
     // Line 1 — the grid carries a partner column, which the journal grid does not.
     await pickCell(page, /^Partner, row 1/, `BAT1${suffix}`);
-    await pickCell(page, /^Contra account, row 1|^Account, row 1/, "4300");
+    await pickCell(page, /^Contra account, row 1/, "4300");
     await page.getByLabel(/^Description, row 1/).fill("Interest on overdue account");
     await page.getByLabel(/^Amount, row 1/).fill("1200");
 
@@ -44,7 +44,7 @@ test.describe("AR journal batches", () => {
     await expect(page.getByLabel(/^Partner, row 2/)).toBeVisible();
 
     await pickCell(page, /^Partner, row 2/, `BAT2${suffix}`);
-    await pickCell(page, /^Contra account, row 2|^Account, row 2/, "4300");
+    await pickCell(page, /^Contra account, row 2/, "4300");
     await page.getByLabel(/^Description, row 2/).fill("Interest on overdue account");
     await page.getByLabel(/^Amount, row 2/).fill("800");
 

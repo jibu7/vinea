@@ -7,7 +7,12 @@ import type {
   Allocation,
   AllocationPayload,
   AllocationPreview,
+  AgeingReport,
+  AllocationRecord,
   AutoAllocatePayload,
+  DocumentSummary,
+  JobRecord,
+  Page,
   BatchPayload,
   BatchResult,
   DocumentCreatePayload,
@@ -324,5 +329,67 @@ export function usePostBatch(role: PartnerRole) {
         "Idempotency-Key": idempotencyKey,
       }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: [ROOT] }),
+  });
+}
+
+// --- Reports --------------------------------------------------------------------------------
+
+export function useAgeing(
+  role: PartnerRole,
+  params: { asOf?: string; bucketSetId?: number } = {},
+) {
+  const search = new URLSearchParams();
+  if (params.asOf) search.set("as_of", params.asOf);
+  if (params.bucketSetId) search.set("bucket_set_id", String(params.bucketSetId));
+  return useQuery({
+    queryKey: [ROOT, role, "ageing", params.asOf ?? null, params.bucketSetId ?? null],
+    queryFn: () => api.get<AgeingReport>(`/subledger/${role}/ageing?${search}`),
+    enabled: !!params.asOf,
+  });
+}
+
+export function useAllocations(role: PartnerRole, params: { partnerId?: number } = {}) {
+  const search = new URLSearchParams();
+  if (params.partnerId) search.set("partner_id", String(params.partnerId));
+  return useQuery({
+    queryKey: [ROOT, role, "allocations", params.partnerId ?? null],
+    queryFn: () => api.get<AllocationRecord[]>(`/subledger/${role}/allocations?${search}`),
+  });
+}
+
+/** Server pagination: the cursor is the last id of the previous page, never an offset. */
+export function useDocumentPage(
+  role: PartnerRole,
+  params: { cursor?: number | null; dateFrom?: string; dateTo?: string; partnerId?: number },
+) {
+  const search = new URLSearchParams();
+  if (params.cursor) search.set("cursor", String(params.cursor));
+  if (params.dateFrom) search.set("date_from", params.dateFrom);
+  if (params.dateTo) search.set("date_to", params.dateTo);
+  if (params.partnerId) search.set("partner_id", String(params.partnerId));
+  return useQuery({
+    queryKey: [ROOT, role, "documents", params],
+    queryFn: () => api.get<Page<DocumentSummary>>(`/subledger/${role}/documents?${search}`),
+  });
+}
+
+export function useQueueStatement(role: PartnerRole) {
+  return useMutation({
+    mutationFn: (payload: { partner_ids: number[]; as_of: string; variant?: string }) =>
+      api.post<JobRecord>(`/subledger/${role}/statements`, payload),
+  });
+}
+
+/** Polls until the job leaves the queue — statements are jobs, and there is no synchronous
+ * PDF endpoint to fall back on. */
+export function useJob(jobId: number | null) {
+  return useQuery({
+    queryKey: [ROOT, "job", jobId],
+    queryFn: () => api.get<JobRecord>(`/subledger/jobs/${jobId}`),
+    enabled: jobId !== null,
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      return status === "queued" || status === "running" ? 1000 : false;
+    },
   });
 }

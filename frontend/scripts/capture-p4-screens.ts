@@ -232,6 +232,40 @@ async function main() {
     await batchCtx.close();
   }
 
+  // Step 8: the customer enquiry with its drill-down open, the age analysis, and the statement
+  // job at the point the PDF is downloadable.
+  if (process.env.SKIP_REPORTS !== "1") {
+    const repCtx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    const rep = await repCtx.newPage();
+    await login(rep, OWNER);
+    for (const theme of ["light", "dark"] as const) {
+      await rep.goto(`${BASE}/ar/enquiry`);
+      await rep.waitForSelector("h1:has-text('Customer enquiry')");
+      await pick(rep, "Customer", "E2E");
+      const drill = rep.getByRole("button", { name: /^Open journal entry / }).first();
+      await drill.waitFor();
+      await drill.click();
+      await rep.getByRole("dialog").waitFor();
+      await rep.waitForTimeout(400);
+      await shoot(rep, "8-customer-enquiry-drilldown", theme);
+      await rep.keyboard.press("Escape");
+
+      await rep.goto(`${BASE}/ar/reports/age-analysis`);
+      await rep.waitForSelector("h1:has-text('Age analysis')");
+      await rep.waitForTimeout(500);
+      await shoot(rep, "9-age-analysis", theme);
+
+      await rep.goto(`${BASE}/ar/reports/statements`);
+      await rep.waitForSelector("h1:has-text('Customer statements')");
+      await rep.locator('input[type="checkbox"]').first().check();
+      await rep.getByRole("button", { name: /Queue statement/ }).click();
+      await rep.getByTestId("statement-download").waitFor({ timeout: 30_000 });
+      await rep.waitForTimeout(300);
+      await shoot(rep, "10-statement-ready", theme);
+    }
+    await repCtx.close();
+  }
+
   const clerkCtx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const clerk = await clerkCtx.newPage();
   await login(clerk, READONLY);
