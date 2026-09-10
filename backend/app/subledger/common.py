@@ -66,6 +66,23 @@ def _required(settings: GLSettings, field: str, label: str) -> int:
     return int(value)
 
 
+#: Which way a role's exposure points on its control account. An AR invoice debits the
+#: customer (+1); a supplier invoice credits the supplier (-1). Balances and open items are
+#: signed by the control account's side, so this is the turn that puts both roles into their
+#: own sense — what the customer owes us, what we owe the supplier — and both the posting-time
+#: credit-limit check and the enquiry's headroom go through it.
+#:
+#: It must agree with `DOCUMENT_MATRIX[(role, INVOICE)].direction`, which is the authoritative
+#: statement of the same fact; `test_exposure_direction_matches_the_invoice_row` holds them
+#: together. Declared here rather than derived from the matrix because `documents` imports
+#: this module, not the other way round.
+_EXPOSURE_DIRECTION: dict[PartnerRole, int] = {PartnerRole.AR: 1, PartnerRole.AP: -1}
+
+
+def exposure_direction(role: PartnerRole) -> int:
+    return _EXPOSURE_DIRECTION[role]
+
+
 def role_accounts(db: Session, company_id: int, role: PartnerRole) -> RoleAccounts:
     settings = gl_settings_for(db, company_id)
     if role == PartnerRole.AR:

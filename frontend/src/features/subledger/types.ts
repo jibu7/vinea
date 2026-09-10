@@ -407,6 +407,31 @@ export interface Allocation {
   journal_entry_id: number | null;
 }
 
+/** A post-dated receipt or payment whose cash has not landed: posted, dated ahead, and with
+ * no maturity entry against it. It is allocatable while it waits — it is a real claim; only
+ * the cash is pending. */
+export interface PendingInstrument {
+  id: number;
+  number: string;
+  partner_id: number;
+  document_date: string;
+  maturity_date: string;
+  instrument_type: string | null;
+  currency_id: number;
+  total_amount: string;
+  open_amount: string;
+  cash_account_id: number | null;
+  /** Relative to the as-of date asked for: a maturity run on that date would bank it. */
+  is_due: boolean;
+  description: string;
+}
+
+export interface MaturityRunResult {
+  as_of: string;
+  matured_document_ids: number[];
+  journal_entry_ids: number[];
+}
+
 // --- Journal batches ------------------------------------------------------------------------
 
 export interface BatchLinePayload {
@@ -472,17 +497,26 @@ export interface AllocationLine {
   fx_base_amount: string;
 }
 
+/** One row per allocation *line*, as `GET /subledger/{role}/allocations` returns it — the
+ * pairing is the unit of interest ("what settled what"), so the endpoint flattens rather than
+ * nesting. It was declared here as a nested `{ ...allocation, lines: [] }` for a while, and
+ * the Allocation report read `.lines` off it: undefined on every row, so the report rendered
+ * "Nothing to report" over a subledger with allocations in it. */
 export interface AllocationRecord {
-  id: number;
+  allocation_id: number;
   number: string;
-  role: string;
+  allocation_date: string;
+  /** `null` when the allocation posted nothing — same currency, no discount, no difference. */
+  journal_entry_id: number | null;
   partner_id: number;
   currency_id: number;
-  allocation_date: string;
-  journal_entry_id: number | null;
-  reverses_allocation_id: number | null;
-  description: string | null;
-  lines: AllocationLine[];
+  debit_document_id: number;
+  debit_number: string;
+  credit_document_id: number;
+  credit_number: string;
+  amount: string;
+  discount_amount: string;
+  fx_base_amount: string;
 }
 
 export interface DocumentSummary {

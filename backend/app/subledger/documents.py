@@ -42,7 +42,13 @@ from app.models.subledger import (
 )
 from app.models.user import User
 from app.subledger import masters
-from app.subledger.common import PARTNER_TYPE_FOR_ROLE, audit, control_account_for, role_accounts
+from app.subledger.common import (
+    PARTNER_TYPE_FOR_ROLE,
+    audit,
+    control_account_for,
+    exposure_direction,
+    role_accounts,
+)
 from app.subledger.openitems import open_items_as_of
 
 ONE = Decimal(1)
@@ -638,7 +644,7 @@ def _check_credit_limit(
     # supplier (-1). Testing `direction < 0` instead read AR's signs on both sides, which
     # left the AP limit dead on supplier invoices while blocking returns to supplier — the
     # only two documents it could reach, and both the wrong way round.
-    builds_exposure = DOCUMENT_MATRIX[(role, DocumentKind.INVOICE)].direction
+    builds_exposure = exposure_direction(role)
     if limit is None or direction != builds_exposure:
         return  # no limit, or a document that reduces exposure
 
@@ -747,13 +753,32 @@ def reverse_document(
 def pending_instruments(
     db: Session, company_id: int, *, as_of: date, role: PartnerRole | None = None
 ) -> list[PartnerDocument]:
+    """Instruments *due* on or before `as_of` — what a maturity run would move."""
+    return _outstanding_instruments(db, company_id, role=role, due_by=as_of)
+
+
+def outstanding_instruments(
+    db: Session, company_id: int, *, role: PartnerRole | None = None
+) -> list[PartnerDocument]:
+    """Every post-dated instrument whose cash has not landed, due or not.
+
+    `pending_instruments` answers "what would a run as at this date move?"; a screen has to
+    show the ones still ahead of their maturity date too, or the only way to know a cheque
+    exists is to run maturity and see whether anything happens."""
+    return _outstanding_instruments(db, company_id, role=role, due_by=None)
+
+
+def _outstanding_instruments(
+    db: Session, company_id: int, *, role: PartnerRole | None, due_by: date | None
+) -> list[PartnerDocument]:
     statement = select(PartnerDocument).where(
         PartnerDocument.company_id == company_id,
         PartnerDocument.status == DocumentStatus.POSTED,
         PartnerDocument.maturity_date.is_not(None),
-        PartnerDocument.maturity_date <= as_of,
         PartnerDocument.matured_entry_id.is_(None),
     )
+    if due_by is not None:
+        statement = statement.where(PartnerDocument.maturity_date <= due_by)
     if role is not None:
         statement = statement.where(PartnerDocument.role == role)
     return list(db.scalars(statement.order_by(PartnerDocument.maturity_date, PartnerDocument.id)))

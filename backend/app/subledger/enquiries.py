@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.models.partner import Partner, PartnerRole
 from app.models.subledger import Allocation, AllocationLine, DocumentStatus, PartnerDocument
 from app.subledger import masters
+from app.subledger.common import exposure_direction
 from app.subledger.openitems import OpenItem, open_items_as_of
 
 ZERO = Decimal(0)
@@ -33,10 +34,19 @@ class PartnerEnquiry:
     credit_limit: Decimal | None
 
     @property
+    def exposure_base(self) -> Decimal:
+        """The balance in the *role's* own sense: what the customer owes us, what we owe the
+        supplier. `balance_base` is signed by the control account's side, so AP's is negative
+        — subtracting it straight from the limit made owing a supplier *increase* their
+        headroom. The posting-time check in `documents.py` has always turned the sign this
+        way; this is the same turn, so screen and server answer the same question."""
+        return exposure_direction(self.role) * self.balance_base
+
+    @property
     def credit_available(self) -> Decimal | None:
         if self.credit_limit is None:
             return None
-        return self.credit_limit - self.balance_base
+        return self.credit_limit - self.exposure_base
 
 
 def partner_enquiry(

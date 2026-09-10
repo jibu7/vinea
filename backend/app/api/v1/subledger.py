@@ -57,6 +57,7 @@ from app.schemas.subledger import (
     PartnerUpdate,
     PaymentTermsRead,
     PaymentTermsWrite,
+    PendingInstrumentRead,
     ReversalRequest,
     RoleSettingsRead,
     RoleSettingsWrite,
@@ -780,6 +781,38 @@ def reverse_document(
     return _document_read(db, document)
 
 
+@router.get("/{role}/instruments")
+def list_instruments(
+    as_of: date | None = None,
+    role: PartnerRole = RolePath,
+    auth: AuthContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+) -> list[PendingInstrumentRead]:
+    """Post-dated instruments whose cash has not landed. Read-only, so it takes the view
+    permission: seeing which cheques are outstanding is not the same right as banking them."""
+    _require(auth, VIEW_PERMISSION, role)
+    on = as_of or date.today()
+    return [
+        PendingInstrumentRead(
+            id=document.id,
+            number=document.number,
+            partner_id=document.partner_id,
+            document_date=document.document_date,
+            maturity_date=document.maturity_date,
+            instrument_type=document.instrument_type,
+            currency_id=document.currency_id,
+            total_amount=document.total_amount,
+            open_amount=document.open_amount,
+            cash_account_id=document.cash_account_id,
+            is_due=document.maturity_date is not None and document.maturity_date <= on,
+            description=document.description,
+        )
+        for document in documents_service.outstanding_instruments(
+            db, auth.company_id, role=role
+        )
+    ]
+
+
 @router.post("/{role}/instruments/mature")
 def mature_instruments(
     payload: MaturityRunRequest,
@@ -985,6 +1018,9 @@ def list_allocations(
             allocation_id=entry.allocation.id,
             number=entry.allocation.number,
             allocation_date=entry.allocation.allocation_date,
+            journal_entry_id=entry.allocation.journal_entry_id,
+            partner_id=entry.allocation.partner_id,
+            currency_id=entry.allocation.currency_id,
             debit_document_id=entry.line.debit_document_id,
             debit_number=entry.debit_number,
             credit_document_id=entry.line.credit_document_id,

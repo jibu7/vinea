@@ -29,6 +29,8 @@ from app.models.partner import PartnerRole
 from app.models.subledger import DocumentKind, DocumentStatus, PartnerDocument
 from app.subledger import allocations as allocations_service
 from app.subledger import documents as documents_service
+from app.subledger import enquiries
+from app.subledger.common import exposure_direction
 from app.subledger.documents import DOCUMENT_MATRIX
 from tests.kernel.conftest import USD_RATE
 from tests.kernel.invariants import assert_ledger_invariants
@@ -349,6 +351,72 @@ def test_a_post_dated_instrument_waits_in_its_own_account_until_maturity(
     assert sum(line.base_amount for line in transfer) == ZERO
     assert_ledger_invariants(db, subledger.company_id)
     assert_subledger_invariants(db, subledger.company_id)
+
+
+@ROLES
+def test_an_instrument_is_listed_before_it_is_due_not_only_once_it_is(
+    db: Session, subledger: Subledger, spec: RoleSpec
+) -> None:
+    """`pending_instruments` answers "what would a run move today?" — which is the wrong
+    question for a screen. A cheque a month out has to be visible the day it is banked, or
+    the only way to learn it exists is to run maturity and watch what happens."""
+    maturity = MARCH + timedelta(days=45)
+    instrument = post_settlement(
+        db, subledger, role=spec.role, amount=Decimal(20000), maturity_date=maturity
+    )
+    db.commit()
+
+    assert documents_service.pending_instruments(
+        db, subledger.company_id, as_of=MARCH, role=spec.role
+    ) == []
+    outstanding = documents_service.outstanding_instruments(
+        db, subledger.company_id, role=spec.role
+    )
+    assert [document.id for document in outstanding] == [instrument.id]
+
+    # Once matured it leaves both lists: the cash has landed, there is nothing left to bank.
+    documents_service.mature_instruments(
+        db, subledger.company_id, as_of=maturity, actor=subledger.ledger.owner, role=spec.role
+    )
+    db.commit()
+    assert documents_service.outstanding_instruments(
+        db, subledger.company_id, role=spec.role
+    ) == []
+
+
+@ROLES
+def test_exposure_direction_matches_the_invoice_row(
+    db: Session, subledger: Subledger, spec: RoleSpec
+) -> None:
+    """`exposure_direction` is declared in `common` because `documents` imports that module
+    and not the reverse, which makes it a second statement of a fact the document matrix
+    already holds. This is the seam where they would drift apart."""
+    assert exposure_direction(spec.role) == spec.invoice_direction
+
+
+@ROLES
+def test_credit_headroom_falls_as_the_partner_owes_more_in_both_roles(
+    db: Session, subledger: Subledger, spec: RoleSpec
+) -> None:
+    """Headroom is the limit less what is outstanding *in the role's own sense*. AP balances
+    are negative — the payable sits on the credit side — so subtracting one straight from the
+    limit made owing a supplier increase their headroom, on the AP enquiry and on the partner
+    typeahead that reads it."""
+    set_credit_limit(db, subledger, role=spec.role, limit=Decimal(100_000))
+    partner = spec.partner(subledger)
+    before = enquiries.partner_enquiry(
+        db, subledger.company_id, spec.role, partner.id, as_of=MARCH
+    )
+    assert before.credit_available == Decimal(100_000)
+
+    post_invoice(db, subledger, role=spec.role, amount=Decimal(30_000))
+    db.commit()
+
+    after = enquiries.partner_enquiry(
+        db, subledger.company_id, spec.role, partner.id, as_of=MARCH
+    )
+    assert after.exposure_base == Decimal(30_000), "outstanding, in the role's own sense"
+    assert after.credit_available == Decimal(70_000)
 
 
 # --- Credit limit -----------------------------------------------------------------------------

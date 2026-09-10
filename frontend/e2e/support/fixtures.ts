@@ -123,6 +123,42 @@ export async function pickCombobox(
   await page.locator(`[cmdk-item]:has-text("${needle}")`).first().click();
 }
 
+/** Sets an `IsoDatePicker` by clicking through its calendar.
+ *
+ * There is no text input to type into: the app replaced `<input type="date">` everywhere with
+ * a button that opens a month grid, so `fill()` fails on it with "Element is not an <input>".
+ * This walks the month header to the target month and clicks the day, which is also the only
+ * way a person can set one of these — a test that reached past the calendar would not be
+ * exercising the control the product ships. */
+export async function pickDate(
+  page: Page,
+  label: string | RegExp,
+  iso: string,
+  opts: { within?: Locator } = {},
+): Promise<void> {
+  const [year, month, day] = iso.split("-").map(Number);
+  const target = new Date(year, month - 1, day);
+  const wanted = target.toLocaleString("en-GB", { month: "long" }) + " " + year;
+
+  await (opts.within ?? page).getByLabel(label).click();
+  const popover = page.locator("[data-radix-popper-content-wrapper]").last();
+  await popover.waitFor({ state: "visible" });
+
+  // The header is the only place the grid says which month it is showing; step towards the
+  // target rather than assuming a starting point, and bound the walk so a mismatch fails as
+  // a clear error instead of spinning to the test timeout.
+  for (let step = 0; step < 60; step += 1) {
+    const heading = (await popover.locator("span.font-medium").first().innerText()).trim();
+    if (heading === wanted) break;
+    const shown = new Date(`${heading} 1`);
+    const forward = shown.getTime() < new Date(year, month - 1, 1).getTime();
+    await popover.getByRole("button", { name: forward ? "Next month" : "Previous month" }).click();
+    if (step === 59) throw new Error(`calendar never reached ${wanted} (stuck on ${heading})`);
+  }
+  await popover.getByRole("button", { name: String(day), exact: true }).click();
+  await popover.waitFor({ state: "hidden" });
+}
+
 export interface FetchResult {
   status: number;
   ok: boolean;
