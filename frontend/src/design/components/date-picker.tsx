@@ -1,13 +1,15 @@
 "use client";
 
 import { useState } from "react";
+import { useTranslations } from "next-intl";
 import * as PopoverPrimitive from "@radix-ui/react-popover";
 import { Calendar, ChevronLeft, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { useFieldLabelId } from "./input";
 import { formatDate } from "@/lib/format";
 
-const WEEKDAYS = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"];
+/** Monday-first, and the catalogue's to translate — abbreviations differ by locale. */
+const WEEKDAY_KEYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as const;
 
 function daysInMonth(year: number, month: number) {
   return new Date(year, month + 1, 0).getDate();
@@ -27,7 +29,7 @@ function isSameDay(a: Date, b: Date) {
 export function DatePicker({
   value,
   onValueChange,
-  placeholder = "Select date…",
+  placeholder,
   className,
 }: {
   value?: Date | null;
@@ -35,7 +37,9 @@ export function DatePicker({
   placeholder?: string;
   className?: string;
 }) {
+  const t = useTranslations("datePicker");
   const [open, setOpen] = useState(false);
+  const hint = placeholder ?? t("placeholder");
   const [cursor, setCursor] = useState(() => value ?? new Date());
   const year = cursor.getFullYear();
   const month = cursor.getMonth();
@@ -64,7 +68,7 @@ export function DatePicker({
             className,
           )}
         >
-          <span className={value ? "" : "text-[var(--vinea-ink-subtle)]"}>{value ? formatDate(value) : placeholder}</span>
+          <span className={value ? "" : "text-[var(--vinea-ink-subtle)]"}>{value ? formatDate(value) : hint}</span>
           <Calendar className="size-4 shrink-0 text-[var(--vinea-ink-subtle)]" />
         </button>
       </PopoverPrimitive.Trigger>
@@ -75,19 +79,19 @@ export function DatePicker({
           className="z-50 w-72 rounded-[var(--radius-control)] border border-[var(--vinea-border)] bg-[var(--vinea-surface-raised)] p-3 shadow-[var(--elevation-2)]"
         >
           <div className="mb-2 flex items-center justify-between">
-            <button type="button" onClick={() => changeMonth(-1)} aria-label="Previous month" className="rounded-[var(--radius-control)] p-1 hover:bg-[var(--vinea-surface-sunken)]">
+            <button type="button" onClick={() => changeMonth(-1)} aria-label={t("previousMonth")} className="rounded-[var(--radius-control)] p-1 hover:bg-[var(--vinea-surface-sunken)]">
               <ChevronLeft className="size-4" />
             </button>
             <span className="text-sm font-medium">
               {cursor.toLocaleString("en-GB", { month: "long" })} {year}
             </span>
-            <button type="button" onClick={() => changeMonth(1)} aria-label="Next month" className="rounded-[var(--radius-control)] p-1 hover:bg-[var(--vinea-surface-sunken)]">
+            <button type="button" onClick={() => changeMonth(1)} aria-label={t("nextMonth")} className="rounded-[var(--radius-control)] p-1 hover:bg-[var(--vinea-surface-sunken)]">
               <ChevronRight className="size-4" />
             </button>
           </div>
           <div className="grid grid-cols-7 gap-1 text-center text-xs text-[var(--vinea-ink-subtle)]">
-            {WEEKDAYS.map((d) => (
-              <span key={d} className="py-1">{d}</span>
+            {WEEKDAY_KEYS.map((d) => (
+              <span key={d} className="py-1">{t(`weekday.${d}`)}</span>
             ))}
             {cells.map((date, i) => (
               <button

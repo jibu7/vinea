@@ -259,22 +259,22 @@ export function LineGrid({
           <thead className="bg-[var(--vinea-surface-sunken)] text-xs uppercase tracking-wide text-[var(--vinea-ink-subtle)]">
             <tr>
               {mode === "batch" && <th className="px-3 py-2 text-left">{t("partner")}</th>}
-              <th className="px-3 py-2 text-left">{mode === "batch" ? t("contraAccount") : "Account"}</th>
-              <th className="px-3 py-2 text-left">Description</th>
-              {showExtra && <th className="px-3 py-2 text-left">Branch</th>}
-              {showExtra && <th className="px-3 py-2 text-left">Project</th>}
-              {showExtra && <th className="px-3 py-2 text-left">Currency / rate</th>}
-              {showExtra && <th className="px-3 py-2 text-left">Tax code</th>}
+              <th className="px-3 py-2 text-left">{mode === "batch" ? t("contraAccount") : t("account")}</th>
+              <th className="px-3 py-2 text-left">{t("description")}</th>
+              {showExtra && <th className="px-3 py-2 text-left">{t("branch")}</th>}
+              {showExtra && <th className="px-3 py-2 text-left">{t("project")}</th>}
+              {showExtra && <th className="px-3 py-2 text-left">{t("currencyRate")}</th>}
+              {showExtra && <th className="px-3 py-2 text-left">{t("taxCode")}</th>}
               {mode === "journal" && (
                 <>
-                  <th className="px-3 py-2 text-right">Debit</th>
-                  <th className="px-3 py-2 text-right">Credit</th>
+                  <th className="px-3 py-2 text-right">{t("debit")}</th>
+                  <th className="px-3 py-2 text-right">{t("credit")}</th>
                 </>
               )}
               {mode === "cashbook" && (
                 <>
-                  <th className="px-3 py-2 text-right">Amount</th>
-                  <th className="px-3 py-2 text-center">Tax incl.</th>
+                  <th className="px-3 py-2 text-right">{t("amount")}</th>
+                  <th className="px-3 py-2 text-center">{t("taxInclusive")}</th>
                 </>
               )}
               {mode === "batch" && (
@@ -360,7 +360,7 @@ export function LineGrid({
                         "h-8 w-full rounded-[var(--radius-control)] border border-transparent bg-transparent px-2 focus:border-[var(--vinea-brand)]",
                         descErr && "border-[var(--vinea-danger)]",
                       )}
-                      placeholder="Line description"
+                      placeholder={t("descriptionPlaceholder")}
                     />
                     {descErr && <p className="mt-0.5 px-1 text-xs text-[var(--vinea-danger)]">{descErr}</p>}
                   </td>
@@ -370,7 +370,7 @@ export function LineGrid({
                         options={branchOptions}
                         value={row.branchId}
                         onValueChange={(v) => updateRow(r, { branchId: v })}
-                        placeholder="Branch…"
+                        placeholder={t("branchPlaceholder")}
                         ariaLabel={`Branch, row ${r + 1}`}
                         className={cn("h-8", branchErr && "border-[var(--vinea-danger)]")}
                         onFocus={() => startCellEdit(r, COL.branch, "branchId", row.branchId)}
@@ -385,7 +385,7 @@ export function LineGrid({
                         options={projectOptions}
                         value={row.projectId}
                         onValueChange={(v) => updateRow(r, { projectId: v })}
-                        placeholder="Project…"
+                        placeholder={t("projectPlaceholder")}
                         ariaLabel={`Project, row ${r + 1}`}
                         className={cn("h-8", projectErr && "border-[var(--vinea-danger)]")}
                         onFocus={() => startCellEdit(r, COL.project, "projectId", row.projectId)}
@@ -401,7 +401,7 @@ export function LineGrid({
                           options={currencyOptions}
                           value={row.currencyId}
                           onValueChange={(v) => onCurrencyChange(r, row, v)}
-                          placeholder="Currency…"
+                          placeholder={t("currencyPlaceholder")}
                           ariaLabel={`Currency, row ${r + 1}`}
                           className={cn("h-8 w-24", currencyErr && "border-[var(--vinea-danger)]")}
                           onFocus={() => startCellEdit(r, COL.currency, "currencyId", row.currencyId)}
@@ -414,7 +414,7 @@ export function LineGrid({
                             onKeyDown={(e) => onCellKeyDown(e, r, COL.currency, "exchangeRate")}
                             onFocus={() => startCellEdit(r, COL.currency, "exchangeRate", row.exchangeRate)}
                             inputMode="decimal"
-                            placeholder="Rate"
+                            placeholder={t("ratePlaceholder")}
                             aria-label={`Exchange rate, row ${r + 1}`}
                             className="h-8 w-20 rounded-[var(--radius-control)] border border-[var(--vinea-border-strong)] bg-transparent px-2 text-right font-mono text-xs"
                           />
@@ -429,7 +429,7 @@ export function LineGrid({
                         options={taxCodeOptions}
                         value={row.taxCodeId}
                         onValueChange={(v) => updateRow(r, { taxCodeId: v })}
-                        placeholder="Tax code…"
+                        placeholder={t("taxCodePlaceholder")}
                         ariaLabel={`Tax code, row ${r + 1}`}
                         className={cn("h-8", taxErr && "border-[var(--vinea-danger)]")}
                         onFocus={() => startCellEdit(r, COL.taxCode, "taxCodeId", row.taxCodeId)}
@@ -453,7 +453,7 @@ export function LineGrid({
                             "h-8 w-full rounded-[var(--radius-control)] border border-transparent bg-transparent px-2 text-right font-mono tabular-nums focus:border-[var(--vinea-brand)]",
                             debitErr && "border-[var(--vinea-danger)]",
                           )}
-                          placeholder="0"
+                          placeholder={t("zeroPlaceholder")}
                         />
                         {debitErr && <p className="mt-0.5 text-right text-xs text-[var(--vinea-danger)]">{debitErr}</p>}
                       </td>
@@ -470,7 +470,7 @@ export function LineGrid({
                             "h-8 w-full rounded-[var(--radius-control)] border border-transparent bg-transparent px-2 text-right font-mono tabular-nums focus:border-[var(--vinea-brand)]",
                             creditErr && "border-[var(--vinea-danger)]",
                           )}
-                          placeholder="0"
+                          placeholder={t("zeroPlaceholder")}
                         />
                         {creditErr && <p className="mt-0.5 text-right text-xs text-[var(--vinea-danger)]">{creditErr}</p>}
                       </td>
@@ -491,7 +491,7 @@ export function LineGrid({
                             "h-8 w-full rounded-[var(--radius-control)] border border-transparent bg-transparent px-2 text-right font-mono tabular-nums focus:border-[var(--vinea-brand)]",
                             amountErr && "border-[var(--vinea-danger)]",
                           )}
-                          placeholder="0"
+                          placeholder={t("zeroPlaceholder")}
                         />
                         {amountErr && <p className="mt-0.5 text-right text-xs text-[var(--vinea-danger)]">{amountErr}</p>}
                       </td>
@@ -521,7 +521,7 @@ export function LineGrid({
                           "h-8 w-full rounded-[var(--radius-control)] border border-transparent bg-transparent px-2 text-right font-mono tabular-nums focus:border-[var(--vinea-brand)]",
                           amountErr && "border-[var(--vinea-danger)]",
                         )}
-                        placeholder="0"
+                        placeholder={t("zeroPlaceholder")}
                       />
                       {amountErr && <p className="mt-0.5 text-right text-xs text-[var(--vinea-danger)]">{amountErr}</p>}
                     </td>
@@ -541,7 +541,7 @@ export function LineGrid({
                             "h-8 w-full rounded-[var(--radius-control)] border border-transparent bg-transparent px-2 text-right font-mono tabular-nums focus:border-[var(--vinea-brand)]",
                             quantityErr && "border-[var(--vinea-danger)]",
                           )}
-                          placeholder="1"
+                          placeholder={t("onePlaceholder")}
                         />
                         {quantityErr && <p className="mt-0.5 text-right text-xs text-[var(--vinea-danger)]">{quantityErr}</p>}
                       </td>
@@ -558,7 +558,7 @@ export function LineGrid({
                             "h-8 w-full rounded-[var(--radius-control)] border border-transparent bg-transparent px-2 text-right font-mono tabular-nums focus:border-[var(--vinea-brand)]",
                             unitPriceErr && "border-[var(--vinea-danger)]",
                           )}
-                          placeholder="0"
+                          placeholder={t("zeroPlaceholder")}
                         />
                         {unitPriceErr && <p className="mt-0.5 text-right text-xs text-[var(--vinea-danger)]">{unitPriceErr}</p>}
                       </td>
@@ -575,7 +575,7 @@ export function LineGrid({
                             "h-8 w-full rounded-[var(--radius-control)] border border-transparent bg-transparent px-2 text-right font-mono tabular-nums focus:border-[var(--vinea-brand)]",
                             discountErr && "border-[var(--vinea-danger)]",
                           )}
-                          placeholder="0"
+                          placeholder={t("zeroPlaceholder")}
                         />
                         {discountErr && <p className="mt-0.5 text-right text-xs text-[var(--vinea-danger)]">{discountErr}</p>}
                       </td>

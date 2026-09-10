@@ -2,6 +2,7 @@
 
 import { useEffect } from "react";
 import Link from "next/link";
+import { useTranslations } from "next-intl";
 import { AlertTriangle, ArrowLeft, Command as CommandIcon } from "lucide-react";
 import { ThemeToggle } from "./theme-toggle";
 
@@ -47,11 +48,12 @@ export function DocumentWorkspaceShell({
   children: React.ReactNode;
   footer: React.ReactNode;
 }) {
+  const t = useTranslations("common");
   return (
     <div className="flex min-h-screen flex-col" data-density="dense">
       <header className="flex items-center justify-between border-b border-[var(--vinea-border)] bg-[var(--vinea-surface-raised)] px-6 py-3">
         <div className="flex items-center gap-3">
-          <Link href={backHref} className="text-[var(--vinea-ink-subtle)] hover:text-[var(--vinea-ink)]" aria-label="Back">
+          <Link href={backHref} className="text-[var(--vinea-ink-subtle)] hover:text-[var(--vinea-ink)]" aria-label={t("back")}>
             <ArrowLeft className="size-4" />
           </Link>
           <div>
@@ -62,8 +64,8 @@ export function DocumentWorkspaceShell({
         </div>
         <div className="flex items-center gap-2">
           <button className="flex items-center gap-2 rounded-[var(--radius-control)] border border-[var(--vinea-border-strong)] px-3 py-1.5 text-sm text-[var(--vinea-ink-subtle)]">
-            <CommandIcon className="size-3.5" /> Search
-            <kbd className="rounded border border-[var(--vinea-border)] px-1 text-[10px]">Ctrl K</kbd>
+            <CommandIcon className="size-3.5" /> {t("search")}
+            <kbd className="rounded border border-[var(--vinea-border)] px-1 text-[10px]">{t("ctrlK")}</kbd>
           </button>
           <ThemeToggle />
         </div>

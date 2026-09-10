@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import * as PopoverPrimitive from "@radix-ui/react-popover";
+import { useTranslations } from "next-intl";
 import { Command as CommandPrimitive } from "cmdk";
 import { Check, ChevronsUpDown } from "lucide-react";
 import { cn } from "@/lib/cn";
@@ -13,7 +14,7 @@ export function Combobox({
   options,
   value,
   onValueChange,
-  placeholder = "Search…",
+  placeholder,
   className,
   onKeyDown,
   onFocus,
@@ -29,7 +30,9 @@ export function Combobox({
   /** Accessible name for contexts with no `Field` wrapper to supply one (e.g. LineGrid cells). */
   ariaLabel?: string;
 }) {
+  const t = useTranslations("common");
   const [open, setOpen] = useState(false);
+  const hint = placeholder ?? t("searchPlaceholder");
   const selected = options.find((o) => o.value === value);
   const labelId = useFieldLabelId();
 
@@ -50,7 +53,7 @@ export function Combobox({
           )}
         >
           <span className={selected ? "" : "text-[var(--vinea-ink-subtle)]"}>
-            {selected?.label ?? placeholder}
+            {selected?.label ?? hint}
           </span>
           <ChevronsUpDown className="size-4 shrink-0 text-[var(--vinea-ink-subtle)]" />
         </button>
@@ -64,12 +67,12 @@ export function Combobox({
           <CommandPrimitive>
             <CommandPrimitive.Input
               autoFocus
-              placeholder={placeholder}
+              placeholder={hint}
               className="w-full border-b border-[var(--vinea-border)] px-3 py-2 text-sm outline-none"
             />
             <CommandPrimitive.List className="max-h-64 overflow-auto p-1">
               <CommandPrimitive.Empty className="px-3 py-2 text-sm text-[var(--vinea-ink-subtle)]">
-                No matches
+                {t("noMatches")}
               </CommandPrimitive.Empty>
               {options.map((opt) => (
                 <CommandPrimitive.Item

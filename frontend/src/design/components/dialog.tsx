@@ -1,6 +1,7 @@
 "use client";
 
 import * as DialogPrimitive from "@radix-ui/react-dialog";
+import { useTranslations } from "next-intl";
 import { X } from "lucide-react";
 import { cn } from "@/lib/cn";
 
@@ -18,6 +19,7 @@ export function DialogContent({
   title: string;
   description?: string;
 }) {
+  const t = useTranslations("common");
   return (
     <DialogPrimitive.Portal>
       <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/40 data-[state=open]:animate-in data-[state=open]:fade-in" />
@@ -39,7 +41,7 @@ export function DialogContent({
               </DialogPrimitive.Description>
             )}
           </div>
-          <DialogPrimitive.Close aria-label="Close" className="rounded-[var(--radius-control)] p-1 text-[var(--vinea-ink-subtle)] hover:bg-[var(--vinea-surface-sunken)]">
+          <DialogPrimitive.Close aria-label={t("close")} className="rounded-[var(--radius-control)] p-1 text-[var(--vinea-ink-subtle)] hover:bg-[var(--vinea-surface-sunken)]">
             <X className="size-4" />
           </DialogPrimitive.Close>
         </div>

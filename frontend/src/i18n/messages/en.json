@@ -24,7 +24,13 @@
     "today": "Today",
     "commandPalettePlaceholder": "Type a command or search…",
     "switchCompany": "Switch company",
-    "toggleTheme": "Toggle theme"
+    "toggleTheme": "Toggle theme",
+    "back": "Back",
+    "searchPlaceholder": "Search…",
+    "noMatches": "No matches",
+    "commandPalette": "Command palette",
+    "esc": "Esc",
+    "ctrlK": "Ctrl K"
   },
   "design": {
     "title": "Design System",
@@ -849,7 +855,24 @@
     "amount": "Amount",
     "amountAria": "Amount, row {row}",
     "contraAccountAria": "Contra account, row {row}",
-    "contraAccountPlaceholder": "Account…"
+    "contraAccountPlaceholder": "Account…",
+    "account": "Account",
+    "description": "Description",
+    "branch": "Branch",
+    "project": "Project",
+    "currencyRate": "Currency / rate",
+    "taxCode": "Tax code",
+    "debit": "Debit",
+    "credit": "Credit",
+    "taxInclusive": "Tax incl.",
+    "descriptionPlaceholder": "Line description",
+    "branchPlaceholder": "Branch…",
+    "projectPlaceholder": "Project…",
+    "currencyPlaceholder": "Currency…",
+    "ratePlaceholder": "Rate",
+    "taxCodePlaceholder": "Tax code…",
+    "zeroPlaceholder": "0",
+    "onePlaceholder": "1"
   },
   "reports": {
     "back": "Back",
@@ -924,5 +947,19 @@
     "allocDrillDown": "Open journal entry for {number}",
     "allocNoEntry": "(posts nothing)",
     "allPartners": "All partners"
+  },
+  "datePicker": {
+    "placeholder": "Select date…",
+    "previousMonth": "Previous month",
+    "nextMonth": "Next month",
+    "weekday": {
+      "mon": "Mo",
+      "tue": "Tu",
+      "wed": "We",
+      "thu": "Th",
+      "fri": "Fr",
+      "sat": "Sa",
+      "sun": "Su"
+    }
   }
 }
