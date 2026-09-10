@@ -111,12 +111,21 @@ def list_partners(
     role: PartnerRole = RolePath,
     search: str | None = None,
     include_inactive: bool = False,
+    # Defaults to true, unlike the ageing report below: every partner picker on the document,
+    # batch, allocation and enquiry screens reads this endpoint, and a partner created a
+    # moment ago carries no balance yet. The listing report is what asks for false.
+    include_zero_balance: bool = True,
     auth: AuthContext = Depends(get_tenant_context),
     db: Session = Depends(get_db),
 ) -> list[PartnerRead]:
     _require(auth, VIEW_PERMISSION, role)
     rows = masters.list_partners(
-        db, auth.company_id, role=role, search=search, include_inactive=include_inactive
+        db,
+        auth.company_id,
+        role=role,
+        search=search,
+        include_inactive=include_inactive,
+        include_zero_balance=include_zero_balance,
     )
     return [PartnerRead.model_validate(row) for row in rows]
 
@@ -1069,6 +1078,10 @@ def age_analysis(
     as_of: date | None = None,
     bucket_set_id: int | None = None,
     partner_id: int | None = None,
+    # Off by default: a partner with nothing outstanding has nothing to age, and on a real
+    # master those rows are the report. Applied here rather than in the client so the CSV
+    # export and the printed page show exactly the rows the screen does.
+    include_zero_balance: bool = False,
     auth: AuthContext = Depends(get_tenant_context),
     db: Session = Depends(get_db),
 ) -> AgeingReport:
@@ -1081,6 +1094,7 @@ def age_analysis(
         as_of=resolved,
         bucket_set_id=bucket_set_id,
         partner_id=partner_id,
+        include_zero_balance=include_zero_balance,
     )
     return AgeingReport(
         role=role.value,

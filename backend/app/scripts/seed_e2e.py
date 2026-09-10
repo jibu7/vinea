@@ -19,7 +19,8 @@ looked up by its fixed email/name first and only created if missing. Run with
 """
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 
 from sqlalchemy import select
 
@@ -53,6 +54,32 @@ READONLY_ROLE_NAME = "Clerk"
 # asserts on creating a supplier, so the fixture provides one.
 SUPPLIER_CODE = "E2ESUP001"
 SUPPLIER_NAME = "Musanze Packaging Ltd"
+
+# One customer carrying two *aged* invoices, so the age analysis is a report with figures in
+# it rather than a table of zeroes (P4 step 8, shot 9).
+#
+# The default bucket set is `STD` (30/60/90/120+) and it ages on **due date**, not document
+# date — so the due dates, not the document dates, are what place these amounts. Both are set
+# explicitly rather than left to payment terms, because the bucket has to be exact:
+#
+#     dated 100 days back, due 75 days back  -> age 75 -> "61 - 90"
+#     dated  45 days back, due on receipt    -> age 45 -> "31 - 60"
+#
+# Both ages sit mid-bucket, so the seeded data still lands in the same two columns if the
+# database is seeded a fortnight before the report is run.
+AGED_CUSTOMER_CODE = "E2EAGED01"
+AGED_CUSTOMER_NAME = "Gisenyi Hotel Group"
+AGED_REVENUE_ACCOUNT = "4100"
+
+# (days back to the document date, days back to the due date, amount, description)
+AGED_INVOICES: tuple[tuple[int, int, Decimal, str], ...] = (
+    (100, 75, Decimal(450_000), "Conference catering"),
+    (45, 45, Decimal(275_000), "Function room hire"),
+)
+
+
+def _aged_document_dates(today: date) -> list[date]:
+    return [today - timedelta(days=doc_days) for doc_days, _, _, _ in AGED_INVOICES]
 
 
 def _existing_tenant(db, *, email: str) -> tuple[User, Company] | None:
@@ -209,13 +236,127 @@ def _ensure_partners(db, *, company: Company, actor: User) -> str | None:
     return supplier.supplier_code
 
 
+def _ensure_open_period(db, *, company: Company, on: date) -> None:
+    """The aged invoices are dated months back, which can fall outside the fiscal year the
+    company was provisioned with (`seed_fiscal_year` creates the calendar year it was signed
+    up in, and nothing before it). Create the missing year, and open the period if it is
+    sitting in `future` — the periods after today are seeded `future`, and a fixture dated
+    into one of those would otherwise be unpostable."""
+    from app.db import set_tenant
+    from app.kernel.periods import create_fiscal_year
+
+    set_tenant(db, company.id)
+    period = db.scalar(
+        select(AccountingPeriod).where(
+            AccountingPeriod.company_id == company.id,
+            AccountingPeriod.start_date <= on,
+            AccountingPeriod.end_date >= on,
+        )
+    )
+    if period is None:
+        create_fiscal_year(
+            db,
+            company.id,
+            name=str(on.year),
+            start_date=date(on.year, 1, 1),
+            end_date=date(on.year, 12, 31),
+            open_through=date.today(),
+        )
+        db.commit()
+        return
+    if period.status != PeriodStatus.OPEN:
+        period.status = PeriodStatus.OPEN
+        db.commit()
+
+
+def _ensure_aged_invoices(db, *, company: Company, actor: User) -> str | None:
+    """A customer with two invoices already overdue, posted through `post_document` with a
+    real actor — the same path the AR invoice screen takes, so the open items, the control
+    account and the ageing all see exactly what the application would have written."""
+    from app.db import set_tenant
+    from app.models.gl import GLAccount
+    from app.models.partner import PartnerRole
+    from app.models.subledger import DocumentKind
+    from app.subledger import documents as documents_service
+    from app.subledger import masters
+
+    set_tenant(db, company.id)
+    existing = masters.list_partners(db, company.id, role=PartnerRole.AR, include_inactive=True)
+    customer = next((p for p in existing if p.customer_code == AGED_CUSTOMER_CODE), None)
+    if customer is not None:
+        return customer.customer_code  # already seeded — the invoices went in with it
+
+    revenue = db.scalar(
+        select(GLAccount).where(
+            GLAccount.company_id == company.id, GLAccount.code == AGED_REVENUE_ACCOUNT
+        )
+    )
+    if revenue is None:
+        raise RuntimeError(
+            f"revenue account {AGED_REVENUE_ACCOUNT} missing for company {company.id}"
+        )
+
+    customer = masters.create_partner(
+        db,
+        company.id,
+        masters.PartnerInput(
+            name=AGED_CUSTOMER_NAME,
+            customer_code=AGED_CUSTOMER_CODE,
+            tin="103456789",
+            email="accounts@gisenyi-hotels.example",
+            phone="+250788000222",
+        ),
+        actor=actor,
+    )
+    db.commit()
+
+    today = date.today()
+    for doc_days, due_days, amount, description in AGED_INVOICES:
+        document_date = today - timedelta(days=doc_days)
+        _ensure_open_period(db, company=company, on=document_date)
+        set_tenant(db, company.id)
+        documents_service.post_document(
+            db,
+            company.id,
+            PartnerRole.AR,
+            documents_service.DocumentInput(
+                kind=DocumentKind.INVOICE,
+                partner_id=customer.id,
+                document_date=document_date,
+                due_date=today - timedelta(days=due_days),
+                description=description,
+                lines=(
+                    documents_service.LineInput(
+                        unit_price=amount,
+                        gl_account_id=revenue.id,
+                        description=description,
+                    ),
+                ),
+            ),
+            actor=actor,
+        )
+        db.commit()
+    return customer.customer_code
+
+
 def _ensure_closed_period(db, *, company: Company) -> str | None:
+    """The earliest period that none of the aged invoices needs. Closing the first period
+    unconditionally would, whenever `today - 100 days` lands in it, close the period one of
+    those invoices posts into and the fixture could not seed itself."""
+    aged = _aged_document_dates(date.today())
     with platform_scope(db):
-        period = db.scalar(
+        periods = db.scalars(
             select(AccountingPeriod)
             .where(AccountingPeriod.company_id == company.id)
             .order_by(AccountingPeriod.period_no)
-            .limit(1)
+        ).all()
+        period = next(
+            (
+                candidate
+                for candidate in periods
+                if not any(candidate.start_date <= day <= candidate.end_date for day in aged)
+            ),
+            None,
         )
         if period is None:
             return None
@@ -246,6 +387,9 @@ def main() -> None:
             role_name=READONLY_ROLE_NAME,
         )
         supplier_code = _ensure_partners(db, company=primary_company, actor=primary_user)
+        aged_customer_code = _ensure_aged_invoices(
+            db, company=primary_company, actor=primary_user
+        )
         closed_period = _ensure_closed_period(db, company=primary_company)
 
         print(
@@ -258,6 +402,7 @@ def main() -> None:
                     "readonly_email": READONLY_EMAIL,
                     "readonly_role": READONLY_ROLE_NAME,
                     "supplier_code": supplier_code,
+                    "aged_customer_code": aged_customer_code,
                     "password": PASSWORD,
                     "closed_period": closed_period,
                 },

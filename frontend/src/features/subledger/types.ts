@@ -303,7 +303,11 @@ export interface PartnerDocument {
 export interface OpenItem {
   document_id: number;
   number: string;
+  /** Shape in the ledger. Screens show `transaction_type_name` instead — a journal debit is
+   * invoice-shaped and reads "AR journal". */
   kind: string;
+  transaction_type: string;
+  transaction_type_name: string;
   document_date: string;
   due_date: string | null;
   currency_id: number;
@@ -312,6 +316,24 @@ export interface OpenItem {
   open_base_amount: string;
   direction: number;
   days_overdue: number;
+}
+
+export interface PartnerEnquiryEntry {
+  document_id: number;
+  number: string;
+  kind: string;
+  transaction_type: string;
+  transaction_type_name: string;
+  document_date: string;
+  due_date: string | null;
+  currency_id: number;
+  total_amount: string;
+  open_amount: string;
+  direction: number;
+  journal_entry_id: number;
+  /** Balance after this document, in base currency — the statement's running column. */
+  running_base: string;
+  status: string;
 }
 
 export interface PartnerEnquiry {
@@ -323,6 +345,7 @@ export interface PartnerEnquiry {
   balance_base: string;
   credit_limit: string | null;
   credit_available: string | null;
+  entries: PartnerEnquiryEntry[];
   open_items: OpenItem[];
 }
 
@@ -408,4 +431,90 @@ export interface BatchResult {
   batch_date: string;
   reference: string | null;
   documents: PartnerDocument[];
+}
+
+// --- Reports --------------------------------------------------------------------------------
+
+export interface AgeingBucketAmount {
+  label: string;
+  from_days: number;
+  to_days: number | null;
+  amount: string;
+}
+
+export interface AgeingRow {
+  partner_id: number;
+  partner_code: string | null;
+  partner_name: string;
+  total: string;
+  buckets: AgeingBucketAmount[];
+}
+
+export interface AgeingReport {
+  role: string;
+  as_of: string;
+  bucket_set_id: number;
+  bucket_set_code: string;
+  basis: AgeingBasis;
+  rows: AgeingRow[];
+  totals: AgeingBucketAmount[];
+  grand_total: string;
+}
+
+export interface AllocationLine {
+  id: number;
+  line_no: number;
+  debit_document_id: number;
+  credit_document_id: number;
+  amount: string;
+  discount_amount: string;
+  discount_document_id: number | null;
+  fx_base_amount: string;
+}
+
+export interface AllocationRecord {
+  id: number;
+  number: string;
+  role: string;
+  partner_id: number;
+  currency_id: number;
+  allocation_date: string;
+  journal_entry_id: number | null;
+  reverses_allocation_id: number | null;
+  description: string | null;
+  lines: AllocationLine[];
+}
+
+export interface DocumentSummary {
+  id: number;
+  role: string;
+  kind: string;
+  transaction_type: string;
+  number: string;
+  partner_id: number;
+  document_date: string;
+  due_date: string | null;
+  currency_id: number;
+  total_amount: string;
+  open_amount: string;
+  direction: number;
+  status: string;
+  reference: string | null;
+  description: string;
+}
+
+/** Cursor pagination (ADR-11): `next_cursor` is the last id of this page. */
+export interface Page<T> {
+  items: T[];
+  next_cursor: number | null;
+}
+
+export type JobStatus = "queued" | "running" | "succeeded" | "failed";
+
+export interface JobRecord {
+  id: number;
+  kind: string;
+  status: JobStatus;
+  error: string | null;
+  created_at: string;
 }

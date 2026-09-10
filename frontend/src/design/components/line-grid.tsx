@@ -334,8 +334,15 @@ export function LineGrid({
                       options={accountOptions}
                       value={row.accountId}
                       onValueChange={(v) => updateRow(r, { accountId: v })}
-                      placeholder="Account…"
-                      ariaLabel={`Account, row ${r + 1}`}
+                      placeholder={mode === "batch" ? t("contraAccountPlaceholder") : "Account…"}
+                      // Batch mode's header calls this column "Contra account"; the accessible
+                      // name has to say the same, or a screen-reader user is hunting for a
+                      // column that does not exist by that name.
+                      ariaLabel={
+                        mode === "batch"
+                          ? t("contraAccountAria", { row: r + 1 })
+                          : `Account, row ${r + 1}`
+                      }
                       className={cn("h-8", accountErr && "border-[var(--vinea-danger)]")}
                       onFocus={() => startCellEdit(r, COL.account, "accountId", row.accountId)}
                       onKeyDown={(e) => onCellKeyDown(e, r, COL.account, "accountId")}

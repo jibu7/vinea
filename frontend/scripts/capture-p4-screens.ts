@@ -5,6 +5,10 @@
  * The read-only shot logs in as the seeded Clerk-role user, so the disabled Save and its
  * `gl:setup_manage` note are real permission state, not a styled mock.
  */
+import { execFileSync } from "node:child_process";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { chromium, type Page } from "@playwright/test";
 
 const OUT = process.env.OUT ?? "screenshots";
@@ -13,6 +17,20 @@ const API = `${process.env.API_URL ?? "http://localhost:8000"}/api/v1`;
 const PASSWORD = "E2E-Sup3rSecret!1";
 const OWNER = "e2e.primary@vinea.example";
 const READONLY = "e2e.readonly@vinea.example";
+/** Seeded by `seed_e2e` with two overdue invoices — the only partner with anything to age. */
+const AGED_CUSTOMER = "Gisenyi Hotel Group";
+
+/** `ONLY=9-age-analysis,10b-statement-page1` re-captures just those, leaving the rest of the
+ * directory untouched. Re-shooting all twelve to change one is how a review record ends up
+ * with twelve files changed and one of them meaningful. Empty means everything. */
+const ONLY = (process.env.ONLY ?? "")
+  .split(",")
+  .map((name) => name.trim())
+  .filter(Boolean);
+
+function wanted(...names: string[]): boolean {
+  return ONLY.length === 0 || names.some((name) => ONLY.includes(name));
+}
 
 async function hydrated(page: Page, selector: string) {
   await page.waitForFunction((sel) => {
@@ -35,6 +53,7 @@ async function login(page: Page, email: string) {
 }
 
 async function shoot(page: Page, name: string, theme: "light" | "dark") {
+  if (!wanted(name)) return;
   await page.evaluate((t) => document.documentElement.setAttribute("data-theme", t), theme);
   await page.waitForTimeout(400);
   await page.screenshot({ path: `${OUT}/${name}-${theme}.png` });
@@ -117,49 +136,58 @@ async function seedFxAllocation(page: Page, code: string): Promise<void> {
 
 async function main() {
   const browser = await chromium.launch();
-  const ownerCtx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
-  const page = await ownerCtx.newPage();
-  await login(page, OWNER);
+  const maintenanceShots = [
+    "1-customer-ar-settings",
+    "2-supplier-master",
+    "2b-supplier-ap-settings",
+    "3-payment-terms",
+    "4-bucket-set-editor",
+  ];
+  if (wanted(...maintenanceShots)) {
+    const ownerCtx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    const page = await ownerCtx.newPage();
+    await login(page, OWNER);
 
-  for (const theme of ["light", "dark"] as const) {
-    await page.goto(`${BASE}/maintenance/customers`);
-    await page.waitForSelector("h1:has-text('Customers')");
-    await page.locator('button[aria-label^="Edit "]').first().click();
-    await page.getByRole("tab", { name: "AR settings" }).click();
-    await page.waitForTimeout(500);
-    await shoot(page, "1-customer-ar-settings", theme);
-    await page.keyboard.press("Escape");
+    for (const theme of ["light", "dark"] as const) {
+      await page.goto(`${BASE}/maintenance/customers`);
+      await page.waitForSelector("h1:has-text('Customers')");
+      await page.locator('button[aria-label^="Edit "]').first().click();
+      await page.getByRole("tab", { name: "AR settings" }).click();
+      await page.waitForTimeout(500);
+      await shoot(page, "1-customer-ar-settings", theme);
+      await page.keyboard.press("Escape");
 
-    // The list with its seeded row, then the drawer open on the AP settings tab — the two
-    // halves of the supplier master.
-    await page.goto(`${BASE}/maintenance/suppliers`);
-    await page.waitForSelector("h1:has-text('Suppliers')");
-    await page.locator('button[aria-label^="Edit "]').first().waitFor({ state: "visible" });
-    await shoot(page, "2-supplier-master", theme);
-    await page.locator('button[aria-label^="Edit "]').first().click();
-    await page.getByRole("tab", { name: "AP settings" }).click();
-    await page.waitForTimeout(500);
-    await shoot(page, "2b-supplier-ap-settings", theme);
-    await page.keyboard.press("Escape");
+      // The list with its seeded row, then the drawer open on the AP settings tab — the two
+      // halves of the supplier master.
+      await page.goto(`${BASE}/maintenance/suppliers`);
+      await page.waitForSelector("h1:has-text('Suppliers')");
+      await page.locator('button[aria-label^="Edit "]').first().waitFor({ state: "visible" });
+      await shoot(page, "2-supplier-master", theme);
+      await page.locator('button[aria-label^="Edit "]').first().click();
+      await page.getByRole("tab", { name: "AP settings" }).click();
+      await page.waitForTimeout(500);
+      await shoot(page, "2b-supplier-ap-settings", theme);
+      await page.keyboard.press("Escape");
 
-    await page.goto(`${BASE}/maintenance/payment-terms`);
-    await page.waitForSelector("h1:has-text('Payment terms')");
-    await shoot(page, "3-payment-terms", theme);
+      await page.goto(`${BASE}/maintenance/payment-terms`);
+      await page.waitForSelector("h1:has-text('Payment terms')");
+      await shoot(page, "3-payment-terms", theme);
 
-    await page.goto(`${BASE}/maintenance/ageing-bucket-sets`);
-    await page.waitForSelector("h1:has-text('Ageing bucket sets')");
-    await page.locator('button[aria-label^="Edit "]').first().click();
-    await page.waitForSelector("text=Buckets");
-    await page.waitForTimeout(400);
-    await shoot(page, "4-bucket-set-editor", theme);
-    await page.keyboard.press("Escape");
+      await page.goto(`${BASE}/maintenance/ageing-bucket-sets`);
+      await page.waitForSelector("h1:has-text('Ageing bucket sets')");
+      await page.locator('button[aria-label^="Edit "]').first().click();
+      await page.waitForSelector("text=Buckets");
+      await page.waitForTimeout(400);
+      await shoot(page, "4-bucket-set-editor", theme);
+      await page.keyboard.press("Escape");
+    }
+    await ownerCtx.close();
   }
-  await ownerCtx.close();
 
   // The allocation screen, with the preview panel showing real postings. A same-currency
   // allocation posts nothing, so the fixture is a USD invoice settled at a different rate:
   // the panel then shows the control leg and the realized exchange difference.
-  if (process.env.SKIP_ALLOCATION !== "1") {
+  if (process.env.SKIP_ALLOCATION !== "1" && wanted("6-allocation-preview")) {
     const allocCtx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
     const alloc = await allocCtx.newPage();
     await login(alloc, OWNER);
@@ -181,7 +209,7 @@ async function main() {
 
   // The AR batch screen with lines entered, so the partner column and the atomicity note are
   // both visible.
-  if (process.env.SKIP_BATCH !== "1") {
+  if (process.env.SKIP_BATCH !== "1" && wanted("7-ar-batch", "7-ap-batch")) {
     const batchCtx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
     const batch = await batchCtx.newPage();
     await login(batch, OWNER);
@@ -232,17 +260,103 @@ async function main() {
     await batchCtx.close();
   }
 
-  const clerkCtx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
-  const clerk = await clerkCtx.newPage();
-  await login(clerk, READONLY);
-  for (const theme of ["light", "dark"] as const) {
-    await clerk.goto(`${BASE}/maintenance/ar-ap-defaults`);
-    await clerk.waitForSelector("h1:has-text('AR/AP defaults')");
-    await clerk.getByRole("button", { name: "Save changes" }).scrollIntoViewIfNeeded();
-    await clerk.waitForTimeout(400);
-    await shoot(clerk, "5-ar-defaults-readonly", theme);
+  // Step 8: the customer enquiry with its drill-down open, the age analysis, and the statement
+  // job at the point the PDF is downloadable.
+  if (
+    process.env.SKIP_REPORTS !== "1" &&
+    wanted(
+      "8-customer-enquiry-drilldown",
+      "9-age-analysis",
+      "10-statement-ready",
+      "10b-statement-page1",
+    )
+  ) {
+    const repCtx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    const rep = await repCtx.newPage();
+    await login(rep, OWNER);
+    for (const theme of ["light", "dark"] as const) {
+      if (wanted("8-customer-enquiry-drilldown")) {
+        await rep.goto(`${BASE}/ar/enquiry`);
+        await rep.waitForSelector("h1:has-text('Customer enquiry')");
+        await pick(rep, "Customer", "E2E");
+        const drill = rep.getByRole("button", { name: /^Open journal entry / }).first();
+        await drill.waitFor();
+        await drill.click();
+        await rep.getByRole("dialog").waitFor();
+        await rep.waitForTimeout(400);
+        await shoot(rep, "8-customer-enquiry-drilldown", theme);
+        await rep.keyboard.press("Escape");
+      }
+
+      if (wanted("9-age-analysis")) {
+        await rep.goto(`${BASE}/ar/reports/age-analysis`);
+        await rep.waitForSelector("h1:has-text('Age analysis')");
+        await rep.waitForTimeout(500);
+        await shoot(rep, "9-age-analysis", theme);
+      }
+
+      if (wanted("10-statement-ready")) {
+        await rep.goto(`${BASE}/ar/reports/statements`);
+        await rep.waitForSelector("h1:has-text('Customer statements')");
+        await rep.getByRole("checkbox", { name: AGED_CUSTOMER }).check();
+        await rep.getByRole("button", { name: /Queue statement/ }).click();
+        await rep.getByTestId("statement-download").waitFor({ timeout: 30_000 });
+        await rep.waitForTimeout(300);
+        await shoot(rep, "10-statement-ready", theme);
+      }
+    }
+
+    // 10b: the statement itself. Shot 10 proves the queue -> poll -> download plumbing
+    // reaches a downloadable artifact; it cannot show what is *in* the artifact, and the PDF
+    // is the thing a customer actually receives. So: take the download, rasterise page 1 and
+    // commit that. No theme pair — WeasyPrint renders a print document, which has one look.
+    if (wanted("10b-statement-page1")) {
+      await rep.goto(`${BASE}/ar/reports/statements`);
+      await rep.waitForSelector("h1:has-text('Customer statements')");
+      await rep.getByRole("checkbox", { name: AGED_CUSTOMER }).check();
+      await rep.getByRole("button", { name: /Queue statement/ }).click();
+      const link = rep.getByTestId("statement-download");
+      await link.waitFor({ timeout: 30_000 });
+      const [download] = await Promise.all([
+        rep.waitForEvent("download"),
+        link.click(),
+      ]);
+      const pdf = join(mkdtempSync(join(tmpdir(), "vinea-stmt-")), "statement.pdf");
+      await download.saveAs(pdf);
+      // `-singlefile` so the output is exactly `<prefix>.png` rather than `<prefix>-1.png`;
+      // `-scale-to-y -1` keeps the page's aspect ratio at the 1440 width the other shots use.
+      execFileSync("pdftoppm", [
+        "-png",
+        "-f",
+        "1",
+        "-l",
+        "1",
+        "-singlefile",
+        "-scale-to-x",
+        "1440",
+        "-scale-to-y",
+        "-1",
+        pdf,
+        `${OUT}/10b-statement-page1-light`,
+      ]);
+      console.log("captured", "10b-statement-page1-light (from the PDF)");
+    }
+    await repCtx.close();
   }
-  await clerkCtx.close();
+
+  if (wanted("5-ar-defaults-readonly")) {
+    const clerkCtx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    const clerk = await clerkCtx.newPage();
+    await login(clerk, READONLY);
+    for (const theme of ["light", "dark"] as const) {
+      await clerk.goto(`${BASE}/maintenance/ar-ap-defaults`);
+      await clerk.waitForSelector("h1:has-text('AR/AP defaults')");
+      await clerk.getByRole("button", { name: "Save changes" }).scrollIntoViewIfNeeded();
+      await clerk.waitForTimeout(400);
+      await shoot(clerk, "5-ar-defaults-readonly", theme);
+    }
+    await clerkCtx.close();
+  }
   await browser.close();
 }
 main();

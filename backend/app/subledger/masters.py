@@ -34,6 +34,7 @@ from app.models.partner import (
 )
 from app.models.user import User
 from app.subledger.common import audit
+from app.subledger.openitems import open_items_as_of
 
 RoleSettings = PartnerArSettings | PartnerApSettings
 
@@ -69,7 +70,15 @@ def list_partners(
     role: PartnerRole | None = None,
     search: str | None = None,
     include_inactive: bool = False,
+    include_zero_balance: bool = True,
+    as_of: date | None = None,
 ) -> list[Partner]:
+    """`include_zero_balance=False` keeps only partners carrying an outstanding balance in
+    `role` at `as_of`. It needs a role to know which control account to weigh, so it is
+    ignored without one. The default includes everyone: this is the same endpoint every
+    partner picker reads, and a newly created customer has no documents yet — filtering it
+    by default would make new partners unselectable on the document, batch and allocation
+    screens."""
     statement = select(Partner).where(Partner.company_id == company_id)
     if role == PartnerRole.AR:
         statement = statement.where(Partner.is_customer)
@@ -84,7 +93,17 @@ def list_partners(
         )
     if not include_inactive:
         statement = statement.where(Partner.is_active)
-    return list(db.scalars(statement.order_by(Partner.name)))
+    partners = list(db.scalars(statement.order_by(Partner.name)))
+    if include_zero_balance or role is None:
+        return partners
+
+    # Derived from open items, never from a stored balance column (architecture rule 1), so
+    # this is the arithmetic the age analysis and the control account already agree on.
+    outstanding: dict[int, Decimal] = {}
+    for item in open_items_as_of(db, company_id, role=role, as_of=as_of or date.today()):
+        partner_id = item.document.partner_id
+        outstanding[partner_id] = outstanding.get(partner_id, Decimal(0)) + item.signed_base_amount
+    return [partner for partner in partners if outstanding.get(partner.id, Decimal(0)) != 0]
 
 
 def get_partner(db: Session, company_id: int, partner_id: int) -> Partner:

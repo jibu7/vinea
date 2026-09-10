@@ -68,8 +68,8 @@ const APPENDIX_C: Record<IntentLabel, Array<[string, string, string | null]>> = 
   "Enquiries": [
     ["General Ledger", "Account enquiry", null],
     ["General Ledger", "Trial balance enquiry", null],
-    ["Accounts Receivable", "Customer enquiry", "P4"],
-    ["Accounts Payable", "Supplier enquiry", "P4"],
+    ["Accounts Receivable", "Customer enquiry", null],
+    ["Accounts Payable", "Supplier enquiry", null],
     ["Inventory", "Item enquiry", "P5"],
   ],
   "Reports": [
@@ -80,16 +80,16 @@ const APPENDIX_C: Record<IntentLabel, Array<[string, string, string | null]>> = 
     ["General Ledger", "Cashbooks", "P8"],
     ["General Ledger", "Balance sheet", "P10"],
     ["General Ledger", "Income statement", "P10"],
-    ["Accounts Receivable", "Age analysis", "P4"],
-    ["Accounts Receivable", "Allocation", "P4"],
-    ["Accounts Receivable", "Customer listing", "P4"],
-    ["Accounts Receivable", "Statements", "P4"],
-    ["Accounts Receivable", "Transaction listing", "P4"],
-    ["Accounts Payable", "Age analysis", "P4"],
-    ["Accounts Payable", "Allocation", "P4"],
-    ["Accounts Payable", "Supplier listing", "P4"],
-    ["Accounts Payable", "Statements", "P4"],
-    ["Accounts Payable", "Transaction listing", "P4"],
+    ["Accounts Receivable", "Age analysis", null],
+    ["Accounts Receivable", "Allocation", null],
+    ["Accounts Receivable", "Customer listing", null],
+    ["Accounts Receivable", "Statements", null],
+    ["Accounts Receivable", "Transaction listing", null],
+    ["Accounts Payable", "Age analysis", null],
+    ["Accounts Payable", "Allocation", null],
+    ["Accounts Payable", "Supplier listing", null],
+    ["Accounts Payable", "Statements", null],
+    ["Accounts Payable", "Transaction listing", null],
     ["Inventory", "Valuation", "P5"],
     ["Inventory", "Movement", "P5"],
     ["Inventory", "Sales analyses", "P10"],
@@ -123,18 +123,7 @@ describe("the Appendix C navigation contract", () => {
         .map((item) => `${intent.label}/${item.module}/${item.label}`),
     );
     expect(stillTagged).toEqual([
-      "Enquiries/Accounts Receivable/Customer enquiry",
-      "Enquiries/Accounts Payable/Supplier enquiry",
-      "Reports/Accounts Receivable/Age analysis",
-      "Reports/Accounts Receivable/Allocation",
-      "Reports/Accounts Receivable/Customer listing",
-      "Reports/Accounts Receivable/Statements",
-      "Reports/Accounts Receivable/Transaction listing",
-      "Reports/Accounts Payable/Age analysis",
-      "Reports/Accounts Payable/Allocation",
-      "Reports/Accounts Payable/Supplier listing",
-      "Reports/Accounts Payable/Statements",
-      "Reports/Accounts Payable/Transaction listing",
+
     ]);
   });
 

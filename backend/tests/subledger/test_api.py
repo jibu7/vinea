@@ -1304,3 +1304,57 @@ def test_fx_trues_up_across_three_separate_allocations(api: Api, db: Session) ->
     # Bounded by a minor unit per allocation: a residue, not a share of the rate movement.
     assert abs(Decimal(rounding)) <= len(schedule), f"rounding account holds {rounding}"
     assert by_id[accounts["6970"]] == "6970"
+
+
+def test_ageing_endpoint_hides_zero_balances_by_default(api: Api) -> None:
+    """The filter has to be the server's, not the table component's: the CSV export and the
+    print layout are built from the rows the endpoint returns, so a client-side filter would
+    leave both showing rows the screen does not. Path: `GET /ar/ageing`. It cannot see the
+    bucket arithmetic, which `test_ageing_buckets_match_the_open_items` covers."""
+    accounts = _accounts(api)
+    owing = api.client.post(
+        "/api/v1/subledger/ar/partners",
+        json={"name": "Owing Ltd", "customer_code": "CUST-OWES"},
+    ).json()
+    netting = api.client.post(
+        "/api/v1/subledger/ar/partners",
+        json={"name": "Zero Sum Traders", "customer_code": "CUST-ZERO"},
+    ).json()
+
+    def document(kind: str, partner_id: int, amount: str, key: str) -> None:
+        response = api.client.post(
+            "/api/v1/subledger/ar/documents",
+            headers={"Idempotency-Key": key},
+            json={
+                "kind": kind,
+                "partner_id": partner_id,
+                "document_date": MARCH.isoformat(),
+                "description": "Reported",
+                "lines": [{"unit_price": amount, "gl_account_id": accounts["4100"]["id"]}],
+            },
+        )
+        assert response.status_code == 201, response.text
+
+    document("invoice", owing["id"], "12000", "zb-inv-1")
+    document("invoice", netting["id"], "9000", "zb-inv-2")
+    document("credit_note", netting["id"], "9000", "zb-crn-1")
+
+    as_of = {"as_of": (MARCH + timedelta(days=10)).isoformat()}
+    default = api.client.get("/api/v1/subledger/ar/ageing", params=as_of)
+    assert default.status_code == 200, default.text
+    assert [row["partner_id"] for row in default.json()["rows"]] == [owing["id"]]
+
+    everyone = api.client.get(
+        "/api/v1/subledger/ar/ageing", params={**as_of, "include_zero_balance": "true"}
+    ).json()
+    assert {row["partner_id"] for row in everyone["rows"]} == {owing["id"], netting["id"]}
+    # The toggle changes which rows are listed, never the reconciled total.
+    assert Decimal(everyone["grand_total"]) == Decimal(default.json()["grand_total"])
+
+    # The same endpoint feeds every partner picker, so its own default must stay inclusive.
+    pickable = api.client.get("/api/v1/subledger/ar/partners").json()
+    assert {row["id"] for row in pickable} >= {owing["id"], netting["id"]}
+    listed = api.client.get(
+        "/api/v1/subledger/ar/partners", params={"include_zero_balance": "false"}
+    ).json()
+    assert [row["id"] for row in listed] == [owing["id"]]

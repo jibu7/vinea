@@ -21,6 +21,9 @@ const SCREEN_FILES = [
   "src/app/(shell)/maintenance/rename-partner-code",
   "src/features/subledger",
   "src/features/gl/transaction-types-screen.tsx",
+  "src/app/(shell)/ar",
+  "src/app/(shell)/ap",
+  "src/design/components/report-page.tsx",
 ];
 
 /** Props whose value reaches the screen or a screen reader. `label` covers `Field`, `title`
