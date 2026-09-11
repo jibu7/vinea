@@ -274,6 +274,9 @@ def update_item(
         code=payload.code,
         name=payload.name,
         description=payload.description,
+        item_type=payload.item_type,
+        uom_category_id=payload.uom_category_id,
+        base_uom_id=payload.base_uom_id,
         inventory_account_id=_optional(
             payload.inventory_account_id, payload.clear_inventory_account
         ),

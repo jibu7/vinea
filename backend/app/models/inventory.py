@@ -1,11 +1,12 @@
-"""Inventory masters (Master Plan §5 P5 step 1): units of measure, items, barcodes and
-warehouses.
+"""Inventory (Master Plan §5 P5): the masters — units of measure, items, barcodes and
+warehouses — and, from step 2, the stock ledger they describe.
 
-Nothing here stores a quantity or a cost. `qty_on_hand` is the column this rebuild exists to
-delete (architecture rule 1): from P5 step 2 on, quantities and values are derived from
-`stock_moves` and cached only in tables the stock service writes and `verify_stock_balances()`
-proves. An item is a *description* of a thing, a warehouse is a *place*; what is in the place
-is an arithmetic fact about the move ledger, never a field on the master.
+No master here stores a quantity or a cost. `qty_on_hand` is the column this rebuild exists
+to delete (architecture rule 1): quantities and values are derived from `stock_moves` and
+cached only in `stock_balances` / `item_cost_state`, which the stock service alone writes
+and `verify_stock_balances()` proves. An item is a *description* of a thing, a warehouse is a
+*place*; what is in the place is an arithmetic fact about the move ledger, never a field on
+the master.
 
 Tenant consistency is declarative, as everywhere else: every intra-tenant reference is a
 composite foreign key `(company_id, x_id) → (company_id, id)`, so a row can never point at
@@ -13,12 +14,14 @@ another tenant's item, unit or branch even though FK checks bypass RLS.
 """
 
 import enum
+from datetime import date
 from decimal import Decimal
 
 from sqlalchemy import (
     BigInteger,
     Boolean,
     CheckConstraint,
+    Date,
     ForeignKeyConstraint,
     Index,
     Numeric,
@@ -36,6 +39,12 @@ from app.models.mixins import AuditedMixin, CompanyScopedMixin, pg_enum
 MONEY = Numeric(20, 6)
 QUANTITY = Numeric(20, 6)
 FACTOR = Numeric(20, 10)
+#: A per-unit cost is a rate, and rates carry ten decimals everywhere in this codebase
+#: (ADR-06) — the entered cost of a receipt is not money until it is multiplied by a
+#: quantity and rounded.
+COST = Numeric(20, 10)
+#: The weighted average, to the six decimals decision 4 fixes it at.
+AVERAGE = Numeric(20, 6)
 
 #: `journal_entries.module` / `gl_transaction_types.module` for everything inventory posts.
 #: It is the module half of the `('inventory', 'inv')` row P4 seeded into
@@ -306,3 +315,219 @@ class Warehouse(AuditedMixin, CompanyScopedMixin, Base):
     is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     is_in_transit: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+
+# --- The stock ledger (P5 step 2) ---------------------------------------------------------
+
+
+#: Posting-order counter for `stock_moves.sequence_no`. A plain Postgres sequence, claimed
+#: by the stock service inside the posting transaction. Gaps are expected and harmless: this
+#: is an *order*, not a document number, and a rolled-back posting must not make the next one
+#: wait. Gaplessness belongs to `document_sequences` and to the numbers auditors follow.
+STOCK_SEQUENCE = "stock_moves_sequence_no_seq"
+
+#: The weighted average is carried to six decimals (decision 4) — the same scale as a
+#: quantity, so `average × quantity` is exact arithmetic before it is rounded to the base
+#: currency.
+AVERAGE_SCALE = 6
+
+
+class StockMove(AuditedMixin, CompanyScopedMixin, Base):
+    """The inventory ledger. `stock_moves` is to inventory what `journal_lines` is to the GL:
+    append-only, signed, and the only source of truth for what is on hand and what it is
+    worth (decision 1).
+
+    Every column here is a *fact of a posting*, never a running total. `quantity` is signed
+    and always in the item's base unit; `value` is signed, in base currency, rounded to the
+    base currency's decimals; `unit_cost` is the per-unit rate that was actually applied —
+    the cost entered on a receipt, the average charged to an issue, the frozen rate of a
+    transfer's receive leg — and is NULL exactly when the move carries no quantity, which is
+    what a revaluation is.
+
+    **Value and the journal agree by construction.** A move with a non-zero value carries the
+    journal line that posted it, and `value` equals that line's `base_amount`; a check
+    constraint refuses a valued move without its line. That is the whole of "stock valuation
+    == inventory GL balance": not a reconciliation job, a foreign key.
+
+    A move with `value = 0` (stock received at no cost, or issued while the average is zero)
+    has no line, because the Posting Engine will not write a zero-amount line and the ledger
+    has nothing to say about it. The quantity still moved, so the move still exists — this is
+    the one place where "one line per move" is a correspondence rather than an identity, and
+    `assert_stock_invariants` states it in exactly those terms.
+    """
+
+    __tablename__ = "stock_moves"
+    __table_args__ = (
+        UniqueConstraint("company_id", "id", name="uq_stock_moves_company_id_id"),
+        UniqueConstraint("company_id", "sequence_no", name="uq_stock_moves_company_sequence"),
+        # One move per journal line, both ways: the line cannot be shared and the move
+        # cannot invent one.
+        UniqueConstraint("journal_line_id", name="uq_stock_moves_journal_line_id"),
+        ForeignKeyConstraint(
+            ["company_id", "item_id"],
+            ["items.company_id", "items.id"],
+            name="fk_stock_moves_item",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "warehouse_id"],
+            ["warehouses.company_id", "warehouses.id"],
+            name="fk_stock_moves_warehouse",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "period_id"],
+            ["accounting_periods.company_id", "accounting_periods.id"],
+            name="fk_stock_moves_period",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "project_id"],
+            ["projects.company_id", "projects.id"],
+            name="fk_stock_moves_project",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "journal_entry_id"],
+            ["journal_entries.company_id", "journal_entries.id"],
+            name="fk_stock_moves_journal_entry",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "journal_line_id"],
+            ["journal_lines.company_id", "journal_lines.id"],
+            name="fk_stock_moves_journal_line",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "transaction_type_id"],
+            ["gl_transaction_types.company_id", "gl_transaction_types.id"],
+            name="fk_stock_moves_transaction_type",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "reverses_move_id"],
+            ["stock_moves.company_id", "stock_moves.id"],
+            name="fk_stock_moves_reverses_move",
+            ondelete="RESTRICT",
+        ),
+        # A move with value has its line; a move without value has neither entry nor line.
+        # This is the constraint that makes the valuation/GL identity impossible to break by
+        # writing a move the ledger never saw.
+        CheckConstraint(
+            "(value = 0 AND journal_entry_id IS NULL AND journal_line_id IS NULL) "
+            "OR (value <> 0 AND journal_entry_id IS NOT NULL AND journal_line_id IS NOT NULL)",
+            name="value_matches_journal_link",
+        ),
+        # A move moves something: a quantity, a value, or both.
+        CheckConstraint("quantity <> 0 OR value <> 0", name="move_is_not_empty"),
+        # `unit_cost` is the rate applied to a quantity; a revaluation has no quantity and
+        # therefore no rate (decision 1).
+        CheckConstraint(
+            "(unit_cost IS NULL) = (quantity = 0)", name="unit_cost_accompanies_quantity"
+        ),
+        Index("ix_stock_moves_company_item", "company_id", "item_id", "warehouse_id"),
+        Index("ix_stock_moves_company_date", "company_id", "move_date"),
+        Index("ix_stock_moves_company_entry", "company_id", "journal_entry_id"),
+        Index(
+            "ix_stock_moves_company_source",
+            "company_id",
+            "source_doc_type",
+            "source_doc_id",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    item_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    warehouse_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    move_date: Mapped[date] = mapped_column(Date, nullable=False)
+    period_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    #: Posting order — the order the costing engine saw these moves in, which is *not*
+    #: `move_date` order. A backdated receipt changes the average from here on and restates
+    #: nothing behind it (decision 4).
+    sequence_no: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    quantity: Mapped[Decimal] = mapped_column(QUANTITY, nullable=False)
+    unit_cost: Mapped[Decimal | None] = mapped_column(COST)
+    value: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
+    journal_entry_id: Mapped[int | None] = mapped_column(BigInteger)
+    journal_line_id: Mapped[int | None] = mapped_column(BigInteger)
+    transaction_type_id: Mapped[int | None] = mapped_column(BigInteger)
+    source_doc_type: Mapped[str | None] = mapped_column(String(50))
+    source_doc_id: Mapped[int | None] = mapped_column(BigInteger)
+    source_line_id: Mapped[int | None] = mapped_column(BigInteger)
+    project_id: Mapped[int | None] = mapped_column(BigInteger)
+    #: Costed at the last positive average because the location had nothing to cost against
+    #: (decision 5). Never corrected later; the flag is the review trail.
+    cost_provisional: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    reverses_move_id: Mapped[int | None] = mapped_column(BigInteger)
+
+
+class StockBalance(AuditedMixin, CompanyScopedMixin, Base):
+    """Quantity and value per (item, warehouse) — a cache, written only by the stock service
+    and proved by `verify_stock_balances()` against the moves it summarises.
+
+    It exists for the same reason `period_balances` does: reading a location's position must
+    not cost a full scan of the move ledger. It is never consulted for an as-of question —
+    those reconstruct from moves.
+    """
+
+    __tablename__ = "stock_balances"
+    __table_args__ = (
+        UniqueConstraint(
+            "company_id", "item_id", "warehouse_id", name="uq_stock_balances_location"
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "item_id"],
+            ["items.company_id", "items.id"],
+            name="fk_stock_balances_item",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "warehouse_id"],
+            ["warehouses.company_id", "warehouses.id"],
+            name="fk_stock_balances_warehouse",
+            ondelete="RESTRICT",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    item_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    warehouse_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    quantity: Mapped[Decimal] = mapped_column(QUANTITY, nullable=False, default=Decimal(0))
+    value: Mapped[Decimal] = mapped_column(MONEY, nullable=False, default=Decimal(0))
+
+
+class ItemCostState(AuditedMixin, CompanyScopedMixin, Base):
+    """The weighted average per item, and the last average that was taken while the item had
+    stock (decision 4).
+
+    `last_positive_average_cost` is what an issue is costed at once the total quantity has
+    reached or passed zero — without it, an issue under the `allow` policy would have to be
+    costed at nothing, and the value it took out of stock would be a number no one chose. It
+    is a cache like the other two: `verify_stock_balances()` replays the moves in posting
+    order and recomputes it.
+
+    This row is also the **costing lock**: the service takes it `FOR UPDATE` before valuing
+    anything, so two concurrent postings against one item queue up instead of both reading
+    the same average.
+    """
+
+    __tablename__ = "item_cost_state"
+    __table_args__ = (
+        UniqueConstraint("company_id", "item_id", name="uq_item_cost_state_item"),
+        ForeignKeyConstraint(
+            ["company_id", "item_id"],
+            ["items.company_id", "items.id"],
+            name="fk_item_cost_state_item",
+            ondelete="RESTRICT",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    item_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    average_cost: Mapped[Decimal] = mapped_column(AVERAGE, nullable=False, default=Decimal(0))
+    last_positive_average_cost: Mapped[Decimal] = mapped_column(
+        AVERAGE, nullable=False, default=Decimal(0)
+    )

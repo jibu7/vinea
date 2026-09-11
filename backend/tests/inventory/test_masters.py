@@ -18,7 +18,8 @@ from app.kernel.errors import LedgerStateError
 from app.models.audit import AuditLog
 from app.models.gl import ControlType, GLAccount
 from app.models.inventory import ItemType, NegativeStockPolicy, Uom
-from tests.inventory.conftest import Inventory
+from tests.inventory.conftest import Inventory, Stock, receive
+from tests.subledger.conftest import MARCH
 
 
 def _stock_item(db: Session, inventory: Inventory, code: str = "WINE-001") -> object:
@@ -530,3 +531,119 @@ def test_the_in_transit_warehouse_cannot_be_the_default_warehouse(
             actor=inventory.owner,
         )
     assert excinfo.value.code == "in_transit_warehouse_locked"
+
+
+# --- Step 2: the three fields that lock once the item has moved -------------------------------
+#
+# Step 1 left `item_type`, the unit of measure and the inventory account out of `update_item`
+# altogether, because the check that makes them safe needs `stock_moves`. It exists now, so
+# they are back — free while the item is still a draft, refused from the first posted move.
+
+
+def test_an_items_type_and_unit_change_freely_before_anything_has_moved(
+    db: Session, inventory: Inventory
+) -> None:
+    category = masters.create_uom_category(
+        db,
+        inventory.company_id,
+        code="MASS",
+        name="Mass",
+        base_uom_code="G",
+        base_uom_name="Gram",
+        base_uom_decimal_places=3,
+        actor=inventory.owner,
+    )
+    item = _stock_item(db, inventory, code="DRAFT-1")
+    db.flush()
+
+    masters.update_item(
+        db,
+        item,
+        item_type=ItemType.NON_STOCK,
+        uom_category_id=category[0].id,
+        base_uom_id=category[1].id,
+        actor=inventory.owner,
+    )
+
+    assert item.item_type == ItemType.NON_STOCK
+    assert (item.uom_category_id, item.base_uom_id) == (category[0].id, category[1].id)
+
+
+def test_the_type_locks_once_stock_has_been_posted(db: Session, stock: Stock) -> None:
+    """A stock item that became a service would strand every move it has."""
+    receive(db, stock, quantity=Decimal(3), unit_cost=Decimal(500), on=MARCH)
+
+    with pytest.raises(LedgerStateError) as excinfo:
+        masters.update_item(db, stock.item, item_type=ItemType.SERVICE, actor=stock.owner)
+
+    assert excinfo.value.code == "item_has_moves"
+    assert excinfo.value.field_errors == {"item_type": ["locked once stock has been posted"]}
+    db.rollback()
+
+
+def test_the_unit_of_measure_locks_once_stock_has_been_posted(
+    db: Session, stock: Stock
+) -> None:
+    """A move is stored in the item's base unit and nothing records which unit it was typed
+    in, so a new category would change what every posted quantity *means*."""
+    category, base = masters.create_uom_category(
+        db,
+        stock.company_id,
+        code="MASS",
+        name="Mass",
+        base_uom_code="G",
+        base_uom_name="Gram",
+        base_uom_decimal_places=3,
+        actor=stock.owner,
+    )
+    receive(db, stock, quantity=Decimal(3), unit_cost=Decimal(500), on=MARCH)
+
+    with pytest.raises(LedgerStateError) as excinfo:
+        masters.update_item(
+            db,
+            stock.item,
+            uom_category_id=category.id,
+            base_uom_id=base.id,
+            actor=stock.owner,
+        )
+
+    assert excinfo.value.code == "item_has_moves"
+    db.rollback()
+
+
+def test_the_inventory_account_locks_once_stock_has_been_posted(
+    db: Session, stock: Stock
+) -> None:
+    """The valuation report maps a location to an account through this field. Changing it
+    after the fact would move the item's stock in the report while its posted lines stayed
+    where they were — which is precisely the reconciliation `assert_stock_invariants` refuses
+    to let drift."""
+    receive(db, stock, quantity=Decimal(3), unit_cost=Decimal(500), on=MARCH)
+    in_transit = stock.inventory.settings.inventory_in_transit_account_id
+
+    with pytest.raises(LedgerStateError) as excinfo:
+        masters.update_item(db, stock.item, inventory_account_id=in_transit, actor=stock.owner)
+
+    assert excinfo.value.code == "item_has_moves"
+    db.rollback()
+
+
+def test_a_field_that_is_set_to_what_it_already_says_is_not_a_change(
+    db: Session, stock: Stock
+) -> None:
+    """The lock is on *changing* the field. A round-tripped form that posts every field back
+    unchanged — which is how the maintenance screens work — must not be refused."""
+    receive(db, stock, quantity=Decimal(3), unit_cost=Decimal(500), on=MARCH)
+
+    masters.update_item(
+        db,
+        stock.item,
+        name="Rugari Red 750ml (case)",
+        item_type=stock.item.item_type,
+        uom_category_id=stock.item.uom_category_id,
+        base_uom_id=stock.item.base_uom_id,
+        inventory_account_id=stock.item.inventory_account_id,
+        actor=stock.owner,
+    )
+
+    assert stock.item.name == "Rugari Red 750ml (case)"

@@ -162,6 +162,9 @@ class JournalLine(AuditedMixin, CompanyScopedMixin, Base):
             ondelete="RESTRICT",
         ),
         UniqueConstraint("entry_id", "line_no", name="uq_journal_lines_entry_line_no"),
+        # P5: the composite-FK target `stock_moves.journal_line_id` points at. A move
+        # names the line that posted its value, and it may not name another tenant's.
+        UniqueConstraint("company_id", "id", name="uq_journal_lines_company_id_id"),
         CheckConstraint("exchange_rate > 0", name="positive_exchange_rate"),
         CheckConstraint(
             "(partner_type IS NULL) = (partner_id IS NULL)", name="partner_type_with_id"

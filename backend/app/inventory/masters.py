@@ -559,6 +559,39 @@ def create_item(
     return item
 
 
+def _assert_no_moves(db: Session, item: Item, field: str) -> None:
+    """Refuse a change that would reinterpret history rather than change the future."""
+    from app.inventory.stock import has_moves
+
+    if has_moves(db, item.company_id, item.id):
+        raise LedgerStateError(
+            f"{item.code} has stock movements; its "
+            f"{field.removesuffix('_id').replace('_', ' ')} can no longer be changed",
+            code="item_has_moves",
+            field_errors={field: ["locked once stock has been posted"]},
+        )
+
+
+def _set_unit_of_measure(
+    db: Session, item: Item, category_id: int | None, base_uom_id: int | None
+) -> None:
+    """The category and its base unit move together: the item's base unit must be a unit of
+    the item's category, which is a three-column foreign key, not an opinion."""
+    category = get_uom_category(db, item.company_id, category_id or item.uom_category_id)
+    base_uom = get_uom(db, item.company_id, base_uom_id or item.base_uom_id)
+    if base_uom.category_id != category.id:
+        raise LedgerStateError(
+            f"{base_uom.code} is not a unit of {category.name}",
+            code="uom_category_mismatch",
+            field_errors={"base_uom_id": ["not in the chosen category"]},
+        )
+    if category.id == item.uom_category_id and base_uom.id == item.base_uom_id:
+        return
+    _assert_no_moves(db, item, "base_uom_id")
+    item.uom_category_id = category.id
+    item.base_uom_id = base_uom.id
+
+
 def update_item(
     db: Session,
     item: Item,
@@ -566,6 +599,9 @@ def update_item(
     code: str | None = None,
     name: str | None = None,
     description: str | None = None,
+    item_type: ItemType | None = None,
+    uom_category_id: int | None = None,
+    base_uom_id: int | None = None,
     inventory_account_id: int | None | object = ...,
     cogs_account_id: int | None | object = ...,
     sales_account_id: int | None | object = ...,
@@ -580,19 +616,29 @@ def update_item(
     """Codes are renameable — history hangs off `item_id`, never off the code, so the
     "Rename Item Code" screen is a code change plus an audit row and nothing else.
 
-    `item_type` and the unit of measure are absent from this signature *for now*. Both are
-    unsafe once the item has stock behind it — a stock item that became a service would
-    strand its moves, and moving an item to another UoM category would change what every
-    quantity already posted against it means. The right rule is the one the tax codes and
-    currencies already use (`_tax_code_has_postings`): free to change until something has
-    been posted against it, locked from then on. That test needs `stock_moves`, which lands
-    in P5 step 2 — so these fields open up there, behind that check, rather than being
-    frozen at creation as they are today. Recorded in the step-1 report and in the step-2
-    scope so it is a scheduled change, not a forgotten one.
+    **Three fields lock the moment the item has history.** `item_type`, the unit of measure
+    and the inventory account are free to change while the item is still, in effect, a draft;
+    from the first posted move they are refused with `item_has_moves`. Each would otherwise
+    rewrite the past rather than change the future:
+
+    * a stock item that became a service would strand its moves — only stock items have any;
+    * a new UoM category would change what every quantity already posted against the item
+      *means*, since a move is stored in the base unit and nothing records which unit it was
+      typed in;
+    * a new inventory account would move the item's stock to another account in the valuation
+      report while its posted lines stayed where they were, and `assert_stock_invariants` maps
+      locations to accounts through exactly this field.
+
+    This is the rule the tax codes and currencies already follow — free until something is
+    posted against it, fixed from then on — and it was scheduled here in the step-1 report
+    because it needs `stock_moves` to be able to ask the question.
     """
     before = {
         "code": item.code,
         "name": item.name,
+        "item_type": item.item_type.value,
+        "uom_category_id": item.uom_category_id,
+        "base_uom_id": item.base_uom_id,
         "selling_price": str(item.selling_price),
         "is_active": item.is_active,
     }
@@ -603,7 +649,14 @@ def update_item(
         item.name = name
     if description is not None:
         item.description = description
+    if item_type is not None and item_type != item.item_type:
+        _assert_no_moves(db, item, "item_type")
+        item.item_type = item_type
+    if uom_category_id is not None or base_uom_id is not None:
+        _set_unit_of_measure(db, item, uom_category_id, base_uom_id)
     if inventory_account_id is not ...:
+        if inventory_account_id != item.inventory_account_id:
+            _assert_no_moves(db, item, "inventory_account_id")
         _assert_inventory_control_account(
             db,
             item.company_id,
@@ -642,6 +695,9 @@ def update_item(
     after = {
         "code": item.code,
         "name": item.name,
+        "item_type": item.item_type.value,
+        "uom_category_id": item.uom_category_id,
+        "base_uom_id": item.base_uom_id,
         "selling_price": str(item.selling_price),
         "is_active": item.is_active,
     }
@@ -1052,6 +1108,14 @@ def _settings_value(settings: GLSettings, field: str) -> object:
 def _assert_inventory_control_setting(
     db: Session, company_id: int, account_id: int | None, field: str
 ) -> None:
+    """The two control keys may only point at an account that carries the INV control type.
+
+    A tenant whose 1300 migration 0012 declined to mark cannot satisfy this from any screen,
+    and that is deliberate: narrowing an account permanently is a decision for a person with
+    the company's history in front of them. `docs/ops/inventory-control-account.md` is the
+    documented path — journal the old balance to suspense while the account is still
+    ordinary, mark it, set this key, then bring the stock back through the opening batch.
+    """
     if account_id is None:
         return
     account = db.scalar(

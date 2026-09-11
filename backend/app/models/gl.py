@@ -209,6 +209,11 @@ class GLTransactionType(AuditedMixin, CompanyScopedMixin, Base):
 
     __tablename__ = "gl_transaction_types"
     __table_args__ = (
+        # P5: the composite-FK target `stock_moves.transaction_type_id` points at — a move
+        # records which type produced it, and may not point at another tenant's.
+        UniqueConstraint(
+            "company_id", "id", name="uq_gl_transaction_types_company_id_id"
+        ),
         UniqueConstraint(
             "company_id", "module", "code", name="uq_gl_transaction_types_company_module_code"
         ),
