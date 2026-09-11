@@ -28,6 +28,7 @@ from app.models.audit import AuditLog
 from app.models.currency import ExchangeRate
 from app.models.fiscal import AccountingPeriod, FiscalYear, PeriodStatus
 from app.models.gl import GLSettings
+from app.models.inventory import INVENTORY_MODULE
 from app.models.journal import JournalEntry
 from app.schemas.common import Page
 from app.schemas.gl import (
@@ -870,10 +871,12 @@ def reopen_period(
 MODULE_VIEW_PERMISSIONS: dict[str, tuple[str, ...]] = {
     "ar": (permissions.AR_REPORTS_VIEW, permissions.AR_SETUP_MANAGE),
     "ap": (permissions.AP_REPORTS_VIEW, permissions.AP_SETUP_MANAGE),
+    INVENTORY_MODULE: (permissions.INV_REPORTS_VIEW, permissions.INV_SETUP_MANAGE),
 }
 MODULE_SETUP_PERMISSIONS: dict[str, tuple[str, ...]] = {
     "ar": (permissions.AR_SETUP_MANAGE,),
     "ap": (permissions.AP_SETUP_MANAGE,),
+    INVENTORY_MODULE: (permissions.INV_SETUP_MANAGE,),
 }
 
 
@@ -928,6 +931,7 @@ def create_transaction_type(
         module=payload.module,
         code=payload.code,
         name=payload.name,
+        kind=payload.kind,
         default_gl_account_id=payload.default_gl_account_id,
         actor=auth.user,
         request=request,

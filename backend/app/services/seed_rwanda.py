@@ -9,6 +9,7 @@ open — the template is data, so swapping it is a seed change, not a schema cha
 from datetime import date
 from decimal import Decimal
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.permissions import SYSTEM_ROLES
@@ -18,6 +19,14 @@ from app.models.company import Branch, Company
 from app.models.currency import Currency
 from app.models.fiscal import FiscalYear
 from app.models.gl import AccountClass, ControlType, GLAccount, GLSettings, GLTransactionType
+from app.models.inventory import (
+    INVENTORY_MODULE,
+    InventoryTransactionKind,
+    NegativeStockPolicy,
+    Uom,
+    UomCategory,
+    Warehouse,
+)
 from app.models.membership import Role
 from app.models.partner import (
     AgeingBasis,
@@ -57,6 +66,15 @@ ACCOUNT_DISCOUNT_GRANTED = "6960"
 ACCOUNT_SALES_REVENUE = "4100"
 ACCOUNT_BANK = "1120"
 ACCOUNT_SUNDRY_EXPENSES = "6990"
+# P5 inventory defaults.
+ACCOUNT_INVENTORY = "1300"
+ACCOUNT_STOCK_IN_TRANSIT = "1350"
+ACCOUNT_COGS = "5100"
+ACCOUNT_INVENTORY_ADJUSTMENTS = "5200"
+# Opening stock cannot arrive as a GL journal (decision 2: the inventory account is a control
+# account), so it comes through the inventory journal batch — and its contra is an equity
+# suspense account, the same place an opening trial balance lands.
+ACCOUNT_OPENING_BALANCE_SUSPENSE = "3400"
 
 RWANDA_TAX_CODES = [
     {
@@ -110,6 +128,9 @@ RW_SME_V1_ACCOUNTS: tuple[
     # Post-dated instruments are a real claim but not yet cash — never a control account.
     ("1250", "Post-dated Receivables", _A, "1100", True, None),
     ("1300", "Inventory", _A, "1100", True, ControlType.INVENTORY),
+    # Stock dispatched on a transfer and not yet received is still ours and still an asset;
+    # it is a place with a balance, not a gap between two postings (P5 decision 6).
+    ("1350", "Stock in Transit", _A, "1100", True, ControlType.INVENTORY),
     (ACCOUNT_VAT_INPUT, "VAT Input (Receivable)", _A, "1100", True, None),
     ("1500", "Prepayments & Deposits", _A, "1100", True, None),
     ("1600", "Non-current Assets", _A, "1000", False, None),
@@ -126,6 +147,7 @@ RW_SME_V1_ACCOUNTS: tuple[
     ("3100", "Share Capital", _E, "3000", True, None),
     (ACCOUNT_RETAINED_EARNINGS, "Retained Earnings", _E, "3000", True, None),
     ("3300", "Owner's Drawings", _E, "3000", True, None),
+    ("3400", "Opening Balance Suspense", _E, "3000", True, None),
     ("4000", "Income", _I, None, False, None),
     ("4100", "Sales Revenue", _I, "4000", True, None),
     ("4200", "Service Revenue", _I, "4000", True, None),
@@ -164,6 +186,34 @@ SUBLEDGER_TRANSACTION_TYPES: tuple[tuple[str, str, str, str | None], ...] = (
     ("ap", "PMT", "Supplier payment", ACCOUNT_BANK),
     ("ap", "JNL", "AP journal", None),
 )
+
+# (module, code, name, kind, default account code) — every inventory type carries a kind,
+# because the kind is what the posting map keys off; the code is only what users call it.
+_K = InventoryTransactionKind
+INVENTORY_TRANSACTION_TYPES: tuple[
+    tuple[str, str, InventoryTransactionKind, str | None], ...
+] = (
+    ("ADJIN", "Adjustment in", _K.ADJUSTMENT_IN, ACCOUNT_INVENTORY_ADJUSTMENTS),
+    ("ADJOUT", "Adjustment out", _K.ADJUSTMENT_OUT, ACCOUNT_INVENTORY_ADJUSTMENTS),
+    ("REVAL", "Stock revaluation", _K.REVALUATION, ACCOUNT_INVENTORY_ADJUSTMENTS),
+    # The contra of a transfer leg is the in-transit account itself: dispatch moves value
+    # from the source warehouse into transit, receive takes it back out again.
+    ("TRF", "Warehouse transfer", _K.TRANSFER, ACCOUNT_STOCK_IN_TRANSIT),
+    ("CNTV", "Count variance", _K.COUNT_VARIANCE, ACCOUNT_INVENTORY_ADJUSTMENTS),
+    ("OPEN", "Opening stock", _K.OPENING_BALANCE, ACCOUNT_OPENING_BALANCE_SUSPENSE),
+)
+
+# (code, name, base unit code, base unit name, base unit decimals). The base unit is what
+# `stock_moves.quantity` is always expressed in, so its decimals are the item's granularity.
+UOM_CATEGORIES: tuple[tuple[str, str, str, str, int], ...] = (
+    ("COUNT", "Count", "EA", "Each", 0),
+    ("WEIGHT", "Weight", "KG", "Kilogram", 3),
+    ("VOLUME", "Volume", "L", "Litre", 3),
+    ("LENGTH", "Length", "M", "Metre", 2),
+)
+
+MAIN_WAREHOUSE_CODE = "MAIN"
+IN_TRANSIT_WAREHOUSE_CODE = "TRANSIT"
 
 # (code, name, basis, due days, discount %, discount days)
 DEFAULT_PAYMENT_TERMS: tuple[tuple[str, str, DueBasis, int, Decimal, int], ...] = (
@@ -230,6 +280,13 @@ def seed_chart_of_accounts(db: Session, company: Company) -> dict[str, GLAccount
             post_dated_payable_account_id=accounts[ACCOUNT_POST_DATED_PAYABLE].id,
             ar_control_account_id=accounts[ACCOUNT_AR_CONTROL].id,
             ap_control_account_id=accounts[ACCOUNT_AP_CONTROL].id,
+            inventory_account_id=accounts[ACCOUNT_INVENTORY].id,
+            inventory_in_transit_account_id=accounts[ACCOUNT_STOCK_IN_TRANSIT].id,
+            inventory_adjustment_account_id=accounts[ACCOUNT_INVENTORY_ADJUSTMENTS].id,
+            # Allowed to equal the adjustment account (decision 10) — and it does by default.
+            stock_count_variance_account_id=accounts[ACCOUNT_INVENTORY_ADJUSTMENTS].id,
+            cogs_account_id=accounts[ACCOUNT_COGS].id,
+            negative_stock_policy=NegativeStockPolicy.BLOCK,
         )
     )
     db.flush()
@@ -253,6 +310,86 @@ def seed_subledger_transaction_types(
     db.add_all(types)
     db.flush()
     return types
+
+
+def seed_inventory_transaction_types(
+    db: Session, company: Company, accounts: dict[str, GLAccount]
+) -> list[GLTransactionType]:
+    types = [
+        GLTransactionType(
+            company_id=company.id,
+            module=INVENTORY_MODULE,
+            code=code,
+            name=name,
+            kind=kind,
+            default_gl_account_id=accounts[account_code].id if account_code else None,
+            is_active=True,
+        )
+        for code, name, kind, account_code in INVENTORY_TRANSACTION_TYPES
+    ]
+    db.add_all(types)
+    db.flush()
+    return types
+
+
+def seed_uom_categories(db: Session, company: Company) -> dict[str, Uom]:
+    """Four categories, each with its base unit. Returns the base units by category code."""
+    base_units: dict[str, Uom] = {}
+    for code, name, unit_code, unit_name, decimals in UOM_CATEGORIES:
+        category = UomCategory(company_id=company.id, code=code, name=name, is_active=True)
+        db.add(category)
+        db.flush()
+        base = Uom(
+            company_id=company.id,
+            category_id=category.id,
+            code=unit_code,
+            name=unit_name,
+            factor_to_base=Decimal(1),
+            decimal_places=decimals,
+            is_base=True,
+            is_active=True,
+        )
+        db.add(base)
+        db.flush()
+        base_units[code] = base
+    return base_units
+
+
+def seed_warehouses(db: Session, company: Company, branch: Branch) -> dict[str, Warehouse]:
+    """Main, plus the single system in-transit warehouse (decision 6). Both sit on the main
+    branch: the in-transit legs of a transfer carry the branch of their physical warehouse,
+    so the transit warehouse's own branch is only ever a fallback."""
+    main = Warehouse(
+        company_id=company.id,
+        code=MAIN_WAREHOUSE_CODE,
+        name="Main Warehouse",
+        branch_id=branch.id,
+        is_default=True,
+        is_in_transit=False,
+        is_active=True,
+    )
+    transit = Warehouse(
+        company_id=company.id,
+        code=IN_TRANSIT_WAREHOUSE_CODE,
+        name="Stock in Transit",
+        branch_id=branch.id,
+        is_default=False,
+        is_in_transit=True,
+        is_active=True,
+    )
+    db.add_all([main, transit])
+    db.flush()
+    return {MAIN_WAREHOUSE_CODE: main, IN_TRANSIT_WAREHOUSE_CODE: transit}
+
+
+def set_default_warehouse(db: Session, company: Company, warehouse: Warehouse) -> None:
+    """`default_warehouse_id` lives on `gl_settings` like every other module default — there
+    is one settings store, not one per module (decision 10)."""
+    settings = db.scalars(
+        select(GLSettings).where(GLSettings.company_id == company.id)
+    ).one()
+    settings.default_warehouse_id = warehouse.id
+    db.flush()
 
 
 def seed_payment_terms(db: Session, company: Company) -> list[PaymentTerms]:
@@ -365,10 +502,14 @@ def seed_company(db: Session, company: Company, *, year: int | None = None) -> l
     """Apply the full seed pack. Returns the seeded roles (the owner needs one)."""
     fiscal_year = year or date.today().year
     seed_currencies(db, company)
-    seed_branch(db, company)
+    branch = seed_branch(db, company)
     accounts = seed_chart_of_accounts(db, company)
     seed_tax_codes(db, company, valid_from=date(fiscal_year, 1, 1), accounts=accounts)
     seed_subledger_transaction_types(db, company, accounts)
+    seed_inventory_transaction_types(db, company, accounts)
+    seed_uom_categories(db, company)
+    warehouses = seed_warehouses(db, company, branch)
+    set_default_warehouse(db, company, warehouses[MAIN_WAREHOUSE_CODE])
     seed_payment_terms(db, company)
     seed_ageing_buckets(db, company)
     seed_fiscal_year(db, company, year=fiscal_year)

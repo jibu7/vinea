@@ -153,6 +153,14 @@ class JournalLine(AuditedMixin, CompanyScopedMixin, Base):
             name="fk_journal_lines_tax_code",
             ondelete="RESTRICT",
         ),
+        # P5: `item_id` has been on the line since P2; `items` exists from 0012, so the
+        # dimension gets the same composite FK the other dimensions carry.
+        ForeignKeyConstraint(
+            ["company_id", "item_id"],
+            ["items.company_id", "items.id"],
+            name="fk_journal_lines_item",
+            ondelete="RESTRICT",
+        ),
         UniqueConstraint("entry_id", "line_no", name="uq_journal_lines_entry_line_no"),
         CheckConstraint("exchange_rate > 0", name="positive_exchange_rate"),
         CheckConstraint(
@@ -163,6 +171,7 @@ class JournalLine(AuditedMixin, CompanyScopedMixin, Base):
         Index("ix_journal_lines_company_project", "company_id", "project_id"),
         Index("ix_journal_lines_company_partner", "company_id", "partner_type", "partner_id"),
         Index("ix_journal_lines_company_tax_code", "company_id", "tax_code_id"),
+        Index("ix_journal_lines_company_item", "company_id", "item_id"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)

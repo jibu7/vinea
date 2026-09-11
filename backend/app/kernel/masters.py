@@ -18,6 +18,7 @@ from app.kernel.errors import LedgerStateError
 from app.models.company import Branch
 from app.models.currency import Currency
 from app.models.gl import GLTransactionType, Project
+from app.models.inventory import INVENTORY_MODULE, InventoryTransactionKind
 from app.models.journal import JournalLine
 from app.models.tax import TaxCode, TaxNature
 from app.models.user import User
@@ -185,6 +186,7 @@ def create_transaction_type(
     module: str,
     code: str,
     name: str,
+    kind: InventoryTransactionKind | None = None,
     default_gl_account_id: int | None = None,
     actor: User,
     request: Request | None = None,
@@ -207,12 +209,28 @@ def create_transaction_type(
             code="transaction_type_code_taken",
             field_errors={"code": ["already in use"]},
         )
+    # `kind` is what the inventory posting map keys off, so an inventory type without one
+    # would be a document nothing could action — the same shape as the P4 defect where a
+    # document type reached the UI with nothing able to process it.
+    if module == INVENTORY_MODULE and kind is None:
+        raise LedgerStateError(
+            "An inventory transaction type needs a kind",
+            code="transaction_type_kind_required",
+            field_errors={"kind": ["required"]},
+        )
+    if module != INVENTORY_MODULE and kind is not None:
+        raise LedgerStateError(
+            f"Transaction types for the {module} module do not carry a kind",
+            code="transaction_type_kind_not_allowed",
+            field_errors={"kind": ["not allowed"]},
+        )
     _assert_usable_default(db, company_id, default_gl_account_id)
     transaction_type = GLTransactionType(
         company_id=company_id,
         module=module,
         code=code,
         name=name,
+        kind=kind,
         default_gl_account_id=default_gl_account_id,
         is_active=True,
     )
@@ -225,7 +243,12 @@ def create_transaction_type(
         "gl_transaction_types",
         transaction_type.id,
         actor=actor,
-        after={"module": module, "code": code, "default_gl_account_id": default_gl_account_id},
+        after={
+            "module": module,
+            "code": code,
+            "kind": kind.value if kind else None,
+            "default_gl_account_id": default_gl_account_id,
+        },
         request=request,
     )
     return transaction_type

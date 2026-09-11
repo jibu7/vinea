@@ -8,6 +8,15 @@ from app.db import set_tenant
 from app.models.company import Branch, CompanyStatus
 from app.models.currency import Currency
 from app.models.fiscal import AccountingPeriod, FiscalYear
+from app.models.gl import GLSettings, GLTransactionType
+from app.models.inventory import (
+    INVENTORY_MODULE,
+    InventoryTransactionKind,
+    NegativeStockPolicy,
+    Uom,
+    UomCategory,
+    Warehouse,
+)
 from app.models.membership import CompanyMembership, MembershipStatus, Role
 from app.models.tax import TaxCode, TaxNature
 from app.services.seed_rwanda import COA_TEMPLATE
@@ -83,3 +92,45 @@ def test_each_tenant_gets_its_own_seed_pack(db: Session, two_tenants) -> None:
         set_tenant(db, tenant.company.id)
         assert db.scalars(select(TaxCode)).all().__len__() == 4
         assert db.scalars(select(Currency)).all().__len__() == 2
+
+
+def test_seed_pack_inventory_masters(db: Session, two_tenants) -> None:
+    """P5 step 1: a tenant is able to post stock the moment it signs up — four UoM categories
+    each with a base unit, a default warehouse, the single in-transit warehouse, and the six
+    inventory transaction types, each carrying the kind its posting map keys off."""
+    for tenant in two_tenants:
+        set_tenant(db, tenant.company.id)
+
+        categories = {row.code: row for row in db.scalars(select(UomCategory))}
+        assert set(categories) == {"COUNT", "WEIGHT", "VOLUME", "LENGTH"}
+        bases = db.scalars(select(Uom).where(Uom.is_base)).all()
+        assert len(bases) == 4
+        assert {row.category_id for row in bases} == {row.id for row in categories.values()}
+
+        warehouses = {row.code: row for row in db.scalars(select(Warehouse))}
+        assert set(warehouses) == {"MAIN", "TRANSIT"}
+        assert warehouses["MAIN"].is_default is True
+        assert warehouses["TRANSIT"].is_in_transit is True
+        assert warehouses["MAIN"].branch_id == db.scalars(select(Branch.id)).one()
+
+        types = {
+            row.code: row
+            for row in db.scalars(
+                select(GLTransactionType).where(GLTransactionType.module == INVENTORY_MODULE)
+            )
+        }
+        assert set(types) == {"ADJIN", "ADJOUT", "REVAL", "TRF", "CNTV", "OPEN"}
+        assert all(row.kind is not None for row in types.values())
+        assert types["OPEN"].kind == InventoryTransactionKind.OPENING_BALANCE
+
+        settings = db.scalars(select(GLSettings)).one()
+        assert settings.default_warehouse_id == warehouses["MAIN"].id
+        assert settings.negative_stock_policy == NegativeStockPolicy.BLOCK
+        for field in (
+            "inventory_account_id",
+            "inventory_in_transit_account_id",
+            "inventory_adjustment_account_id",
+            "stock_count_variance_account_id",
+            "cogs_account_id",
+        ):
+            assert getattr(settings, field) is not None, field

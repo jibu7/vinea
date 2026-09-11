@@ -41,6 +41,13 @@ class DocType(enum.StrEnum):
     # that moves a matured post-dated instrument into the bank.
     ALLOCATION_JOURNAL = "ALJ"
     INSTRUMENT_MATURITY = "MAT"
+    # P5 — inventory documents. One sequence per document type, as in P4: an adjustment is
+    # not a transfer and an auditor following ADJ- numbering must not find a hole where a
+    # count happened to be posted.
+    INV_ADJUSTMENT = "INAJ"
+    INV_JOURNAL = "INJN"
+    INV_TRANSFER = "INTR"
+    INV_COUNT = "INCT"
 
 
 DEFAULT_PREFIXES: dict[str, str] = {
@@ -58,6 +65,10 @@ DEFAULT_PREFIXES: dict[str, str] = {
     DocType.ALLOCATION: "ALC-",
     DocType.ALLOCATION_JOURNAL: "ALJ-",
     DocType.INSTRUMENT_MATURITY: "MAT-",
+    DocType.INV_ADJUSTMENT: "ADJ-",
+    DocType.INV_JOURNAL: "IJN-",
+    DocType.INV_TRANSFER: "TRF-",
+    DocType.INV_COUNT: "CNT-",
 }
 
 

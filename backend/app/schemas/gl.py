@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from app.models.fiscal import PeriodStatus
 from app.models.gl import AccountClass, ControlType
+from app.models.inventory import InventoryTransactionKind
 from app.models.journal import JournalStatus
 from app.models.tax import TaxNature
 from app.schemas.common import ApiModel
@@ -331,6 +332,8 @@ class TransactionTypeCreate(BaseModel):
     module: str = Field(default="gl", min_length=2, max_length=10)
     code: str = Field(min_length=1, max_length=30)
     name: str = Field(min_length=1, max_length=200)
+    # Required for `module="inv"` and meaningless elsewhere — the service enforces both.
+    kind: InventoryTransactionKind | None = None
     default_gl_account_id: int | None = None
 
 
@@ -346,6 +349,7 @@ class TransactionTypeRead(ApiModel):
     module: str
     code: str
     name: str
+    kind: InventoryTransactionKind | None
     default_gl_account_id: int | None
     is_active: bool
 

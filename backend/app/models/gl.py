@@ -18,6 +18,12 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
+from app.models.inventory import (
+    InventoryTransactionKind,
+    NegativeStockPolicy,
+    inventory_txn_kind_enum,
+    negative_stock_policy_enum,
+)
 from app.models.mixins import AuditedMixin, CompanyScopedMixin, pg_enum
 
 
@@ -112,6 +118,12 @@ SETTINGS_ACCOUNT_FIELDS = (
     "post_dated_payable_account_id",
     "ar_control_account_id",
     "ap_control_account_id",
+    # P5 inventory defaults.
+    "inventory_account_id",
+    "inventory_adjustment_account_id",
+    "inventory_in_transit_account_id",
+    "stock_count_variance_account_id",
+    "cogs_account_id",
 )
 
 
@@ -131,6 +143,12 @@ class GLSettings(AuditedMixin, CompanyScopedMixin, Base):
     __table_args__ = (
         UniqueConstraint("company_id", name="uq_gl_settings_company_id"),
         *(_settings_account_fk(field) for field in SETTINGS_ACCOUNT_FIELDS),
+        ForeignKeyConstraint(
+            ["company_id", "default_warehouse_id"],
+            ["warehouses.company_id", "warehouses.id"],
+            name="fk_gl_settings_default_warehouse",
+            ondelete="RESTRICT",
+        ),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
@@ -148,6 +166,25 @@ class GLSettings(AuditedMixin, CompanyScopedMixin, Base):
     post_dated_payable_account_id: Mapped[int | None] = mapped_column(BigInteger)
     ar_control_account_id: Mapped[int | None] = mapped_column(BigInteger)
     ap_control_account_id: Mapped[int | None] = mapped_column(BigInteger)
+    # --- P5 inventory defaults -----------------------------------------------------------
+    # Both INV control accounts (decision 2): only `module='inv'` may post to them, and every
+    # such line carries an item. A manual journal against either fails on the DB trigger.
+    inventory_account_id: Mapped[int | None] = mapped_column(BigInteger)
+    inventory_in_transit_account_id: Mapped[int | None] = mapped_column(BigInteger)
+    # Contra accounts. The count-variance default is allowed to equal the adjustment account
+    # (decision 10) — a shrinkage and a written-off breakage are the same expense to most SMEs.
+    inventory_adjustment_account_id: Mapped[int | None] = mapped_column(BigInteger)
+    stock_count_variance_account_id: Mapped[int | None] = mapped_column(BigInteger)
+    # Seeded now, first read by P6's `StockSold`; P5 posts nothing to it.
+    cogs_account_id: Mapped[int | None] = mapped_column(BigInteger)
+    # Policy, not an account: the same settings row rather than a second settings store.
+    negative_stock_policy: Mapped[NegativeStockPolicy] = mapped_column(
+        negative_stock_policy_enum,
+        nullable=False,
+        default=NegativeStockPolicy.BLOCK,
+        server_default=NegativeStockPolicy.BLOCK.value,
+    )
+    default_warehouse_id: Mapped[int | None] = mapped_column(BigInteger)
 
 
 class Project(AuditedMixin, CompanyScopedMixin, Base):
@@ -183,11 +220,20 @@ class GLTransactionType(AuditedMixin, CompanyScopedMixin, Base):
         ),
         # `__`-prefixed keys are reserved for kernel sentinels (e.g. the year-end close).
         CheckConstraint("code NOT LIKE '\\_\\_%'", name="code_not_reserved"),
+        # Inventory is the first module whose types need to say what they *do* as well as
+        # what they are called: the posting map keys off `kind`, so a user-defined "Damaged"
+        # type is an `adjustment_out` with its own contra rather than a new code the engine
+        # would have to recognise.
+        CheckConstraint(
+            "module <> 'inv' OR kind IS NOT NULL", name="inventory_type_has_a_kind"
+        ),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     module: Mapped[str] = mapped_column(String(10), nullable=False, default="gl")
     code: Mapped[str] = mapped_column(String(30), nullable=False)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
+    # NULL for `gl`/`ar`/`ap`, whose behaviour is fixed by the document they sit on.
+    kind: Mapped[InventoryTransactionKind | None] = mapped_column(inventory_txn_kind_enum)
     default_gl_account_id: Mapped[int | None] = mapped_column(BigInteger)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)

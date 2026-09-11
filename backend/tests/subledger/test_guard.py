@@ -12,6 +12,7 @@ from sqlalchemy import select, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
+from app.inventory import masters as inventory_masters
 from app.kernel import posting
 from app.kernel.errors import (
     SQLSTATE_CONTROL_ACCOUNT,
@@ -22,6 +23,7 @@ from app.kernel.errors import (
 from app.kernel.events import LineSpec, ManualJournal, PartnerDocumentPosted
 from app.kernel.sequences import DocType
 from app.models.gl import ControlType, GLAccount
+from app.models.inventory import Uom, UomCategory
 from app.models.journal import JournalEntry
 from tests.kernel.conftest import Ledger, post_simple
 from tests.subledger.conftest import MARCH, Subledger
@@ -231,16 +233,18 @@ def test_manual_journal_still_names_bank_accounts_distinctly(
     db.rollback()
 
 
-def test_the_inventory_item_check_cannot_fire_before_the_inv_module_exists(
+def test_the_inventory_item_check_guards_the_stock_account(
     db: Session, subledger: Subledger
 ) -> None:
-    """`1300 Inventory` is seeded as an `inventory` control account in every tenant, and it is
-    postable — so the item-dimension rule added in 0009 has a live account to fire on. It
-    still cannot fire on any posting path that exists today, because the registry pairs
-    `inventory` with module `inv` alone and no `inv` module ships before P5: the module check
-    refuses the line first, at both layers. The rule reads `journal_lines.item_id`, a nullable
-    bigint with no foreign key — there is no `items` table yet — and this test is what will
-    tell us the day it becomes reachable."""
+    """`1300 Inventory` is an `inventory` control account in every tenant, and it is postable —
+    so the item-dimension rule added in 0009 has a live account to fire on. No manual journal
+    can reach it: the registry pairs `inventory` with module `inv` alone, so the module check
+    refuses the line first, at both layers.
+
+    Until P5 the rule read `journal_lines.item_id` as a nullable bigint pointing at nothing,
+    and this test recorded that any id satisfied it. P5 step 1 gives `items` its table, so the
+    dimension is now a real foreign key: an INV line still needs an item, and the item it
+    names has to exist."""
     ledger = subledger.ledger
     stock = db.scalar(
         select(GLAccount).where(
@@ -249,6 +253,14 @@ def test_the_inventory_item_check_cannot_fire_before_the_inv_module_exists(
     )
     assert stock is not None
     assert stock.control_type == ControlType.INVENTORY and stock.is_postable
+    category = db.scalars(
+        select(UomCategory).where(
+            UomCategory.company_id == ledger.company_id, UomCategory.code == "COUNT"
+        )
+    ).one()
+    base_uom = db.scalars(
+        select(Uom).where(Uom.company_id == ledger.company_id, Uom.category_id == category.id)
+    ).one()
 
     # Posting Engine: refused for the module, never for the missing item.
     with pytest.raises(PostingError) as excinfo:
@@ -286,15 +298,43 @@ def test_the_inventory_item_check_cannot_fire_before_the_inv_module_exists(
     assert "requires an item" in str(excinfo.value)
     db.rollback()
 
-    # And it is satisfied by any item id, because nothing references an item table yet.
+    # An item id that names nothing is refused by the foreign key 0012 adds — the dimension
+    # is a reference now, not a number.
+    with pytest.raises(DBAPIError) as excinfo:
+        _raw_line(
+            db,
+            subledger,
+            module="inv",
+            partner_type=None,
+            partner_id=None,
+            number="RAW-INV-3",
+            account_code="1300",
+            item_id=2_000_000_000,
+        )
+    assert "fk_journal_lines_item" in str(excinfo.value)
+    db.rollback()
+
+    # And it is satisfied by a real item.
+    item = inventory_masters.create_item(
+        db,
+        ledger.company_id,
+        inventory_masters.ItemInput(
+            code="GUARD-001",
+            name="Guard item",
+            uom_category_id=category.id,
+            base_uom_id=base_uom.id,
+        ),
+        actor=ledger.owner,
+    )
+    db.flush()
     _raw_line(
         db,
         subledger,
         module="inv",
         partner_type=None,
         partner_id=None,
-        number="RAW-INV-3",
+        number="RAW-INV-4",
         account_code="1300",
-        item_id=1,
+        item_id=item.id,
     )
     db.rollback()
