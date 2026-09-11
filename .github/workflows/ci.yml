@@ -93,15 +93,11 @@ jobs:
           for i in $(seq 1 60); do curl -sf -o /dev/null http://localhost:3000/login && break; sleep 2; done
           curl -sf -o /dev/null http://localhost:3000/login
           # `next dev` compiles each route on its first hit — front-load that cost here,
-          # outside any single Playwright test's timeout budget.
-          for route in / /gl/journal-batches/new /gl/enquiries/account /gl/enquiries/trial-balance \
-                       /maintenance/chart-of-accounts /maintenance/customers /maintenance/suppliers \
-                       /ar/invoices/new /ar/receipts/new /ar/allocations/new /ar/enquiry \
-                       /ar/batches/new /ar/post-dated \
-                       /ar/reports/age-analysis /ar/reports/statements /ar/reports/allocations \
-                       /ap/supplier-invoices/new /ap/payments/new /ap/allocations/new /ap/enquiry \
-                       /ap/post-dated /ar/reports/allocations \
-                       /ap/reports/age-analysis /ap/reports/statements /ap/reports/allocations; do
+          # outside any single Playwright test's timeout budget. The list is generated from
+          # `nav-tree.ts` rather than typed out here: the hand-kept version had drifted to
+          # about half the tree, which is the same drift issue #9 found in the axe coverage,
+          # and the nav sweep visits all of it.
+          (cd frontend && npx tsx scripts/nav-routes.ts) | while read -r route; do
             curl -sf -o /dev/null "http://localhost:3000${route}" || true
           done
         working-directory: .
