@@ -130,12 +130,36 @@ def _existing_tenant(db, *, email: str) -> tuple[User, Company] | None:
         return user, company
 
 
+def _ensure_fixture_password(db, *, user: User, password: str) -> None:
+    """Put `password` on an existing fixture user whose stored hash no longer matches.
+
+    Idempotency for a credential has to mean the end state matches the input, not that a row
+    that already exists is left alone. CI mints a fresh `E2E_PASSWORD` per run and a
+    developer's database already holds these fixtures from the last one, so returning the old
+    hash untouched made this script report success while every later login 401'd with
+    `invalid_credentials` — the exact silent disagreement between seed and suite that
+    `fixture_password()` refuses to allow, arriving one layer further in.
+
+    Called inside an open `platform_scope`; the caller commits.
+    """
+    from app.core.security import hash_password, verify_password
+
+    if verify_password(user.hashed_password, password):
+        return
+    user.hashed_password = hash_password(password)
+    db.add(user)
+
+
 def _get_or_create_tenant(
     db, *, company_name: str, email: str, full_name: str, password: str
 ) -> tuple[User, Company]:
     existing = _existing_tenant(db, email=email)
     if existing is not None:
-        return existing
+        user, company = existing
+        with platform_scope(db):
+            _ensure_fixture_password(db, user=user, password=password)
+            db.commit()
+        return user, company
     tenant: ProvisionedTenant = provision_tenant(
         db,
         company_name=company_name,
@@ -199,6 +223,8 @@ def _ensure_member_with_role(
             )
             db.add(user)
             db.flush()
+        else:
+            _ensure_fixture_password(db, user=user, password=password)
 
         existing = db.scalar(
             select(CompanyMembership).where(
