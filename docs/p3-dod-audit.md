@@ -18,7 +18,7 @@ Source: `.github/prompts/phase-3-frontend-foundation.prompt.md`.
 | 4 | RWF renders with no decimals everywhere money is shown | **true** | `formatMoney` honours `decimal_places`, covered in `format.test.ts`. The only other numeric formatter in the app is LineGrid's editing display (`line-grid.tsx:60`), which formats raw entry digits, not a currency amount. |
 | 5 | A **journal** entry can be drafted, autosaved, posted, seen in enquiries and reversed from the UI | **partial** | Draft → post → enquiry → trial balance is covered by `journal-flow.spec.ts`. **Reversal is built** (`gl/entries/[id]/page.tsx`, date + reason + one-reversal rule) but has no test at any level. |
 | 6 | A **cashbook** entry can be drafted, autosaved, posted, seen in enquiries and reversed from the UI | **partial** | The screen exists (`gl/cashbook-batches/new`) and the backend path is tested, but no frontend test or e2e touches it. `grep -rl "cashbook" e2e/` returns nothing. |
-| 7 | Light and dark both pass `axe` | **partial** | True for the three screens the spec named (dashboard, workspace, chart of accounts) in both themes. Not a statement about the app: eight P3 screens have no axe coverage. P4 added four more covered screens. |
+| 7 | Light and dark both pass `axe` | **true** | Was **partial**: true for the three screens the spec named, which is not a statement about the app. `accessibility.spec.ts` now drives the sweep from `nav-tree.ts` — every entry with an `href` and no phase tag, both themes, 50 screens in 3.1 minutes — so a screen is covered when it joins the tree, not when someone remembers it. Closing the gap found eight unnamed `<select>`s (axe `select-name`, *critical*) across six screens that had never been scanned; `select-name.test.ts` keeps them named, including inside dialogs the sweep cannot open. [#9](https://github.com/jibu7/vinea/issues/9). |
 | 8 | Frontend CI jobs green (`lint · typecheck · test · build · e2e`) | **true** | All five jobs exist in `ci.yml` and pass. |
 | 9 | Backend suite unchanged and green | **true** | Green throughout; P4 has only added to it. |
 | 10 | Final report with screenshots of the six main screens | **unverifiable** → see below | No screenshots were committed by P3. P4 step 6 committed its own under `docs/screenshots/`, which is the practice going forward. |
@@ -80,7 +80,7 @@ already regressions in the making.
 |---|---|
 | #3 i18n backfill | [#6](https://github.com/jibu7/vinea/issues/6), already open |
 | #5 reversal untested, #6 cashbook untested, #14 error-mapping gaps | one issue: "P3 frontend test gaps" |
-| #7 axe coverage is three screens, not the app | one issue: "extend axe coverage to every shipped screen" |
+| #7 axe coverage is three screens, not the app | [#9](https://github.com/jibu7/vinea/issues/9) — **closed**: the sweep is nav-driven, and it found eight critical `select-name` violations on its first run. |
 
 ## Why this audit exists
 
