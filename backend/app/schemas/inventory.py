@@ -91,15 +91,17 @@ class ItemCreate(BaseModel):
 
 
 class ItemUpdate(BaseModel):
-    """`item_type`, `uom_category_id` and `base_uom_id` are absent for now, not forever.
-
-    They are unsafe once the item has moves behind it, and safe before that. P5 step 2 adds
-    them back behind a "locked once posted against" check — the rule `update_tax_code` already
-    applies to a tax rate — once `stock_moves` exists to ask. See `masters.update_item`."""
+    """`item_type`, the unit of measure and the inventory account are changeable only while
+    the item still has no moves behind it; from the first posted move the service refuses
+    them with `item_has_moves`. The rule is the one a tax rate already follows — free until
+    something is posted against it, fixed from then on. See `masters.update_item`."""
 
     code: str | None = Field(default=None, min_length=1, max_length=30)
     name: str | None = Field(default=None, min_length=1, max_length=200)
     description: str | None = None
+    item_type: ItemType | None = None
+    uom_category_id: int | None = None
+    base_uom_id: int | None = None
     inventory_account_id: int | None = None
     clear_inventory_account: bool = False
     cogs_account_id: int | None = None

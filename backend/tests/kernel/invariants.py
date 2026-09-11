@@ -3,6 +3,7 @@ every scenario that moves money; every failure here is product-fatal by definiti
 
 import re
 from dataclasses import dataclass
+from datetime import date
 from decimal import Decimal
 
 from sqlalchemy import func, select, text
@@ -51,9 +52,27 @@ def snapshot_ledger(db: Session, company_id: int) -> LedgerSnapshot:
 
 
 def assert_ledger_invariants(
-    db: Session, company_id: int, *, previous: LedgerSnapshot | None = None
+    db: Session,
+    company_id: int,
+    *,
+    previous: LedgerSnapshot | None = None,
+    trial_balance_dates: set[date] | None = None,
 ) -> LedgerSnapshot:
-    """§6 invariants 1, 5 (+ the P2 structural rules). Returns a snapshot for the next call."""
+    """§6 invariants 1, 5 (+ the P2 structural rules). Returns a snapshot for the next call.
+
+    `trial_balance_dates` is for callers that run this suite **after every step** of a long
+    scenario — the property tests. Pass a set the caller owns and each posting date has its
+    trial balance built once per run instead of once per step; without it, every call rebuilds
+    a report for every date in the company's history, which is quadratic in the length of the
+    scenario and was measured at 91% of the P5 property test's runtime.
+
+    Sound because of two invariants this same function asserts: posted rows never change (5a),
+    and every posted entry sums to zero (1). A trial balance as of any date is therefore a sum
+    over whole balanced entries, so a date that footed cannot stop footing — only *new* data
+    can be wrong, and the newest date is re-checked on every call because data keeps arriving
+    at it. The caller owning the set is what keeps it from leaking between tests, which a
+    module-level cache could not: `RESTART IDENTITY` hands the next test the same company id.
+    """
     entries = db.scalars(select(JournalEntry).where(JournalEntry.company_id == company_id)).all()
     posted = [entry for entry in entries if entry.status == JournalStatus.POSTED]
     assert all(entry.status == JournalStatus.POSTED for entry in entries), (
@@ -92,9 +111,15 @@ def assert_ledger_invariants(
         assert line.amount != ZERO, f"zero-amount line {line.id}"
         assert (line.amount > 0) == (line.base_amount > 0), f"sign flip on line {line.id}"
 
-    # 1b. The trial balance foots at every date on which anything was posted (and today).
+    # 1b. The trial balance foots at every date on which anything was posted.
     dates = sorted({entry.entry_date for entry in posted})
-    for as_of in dates:
+    if trial_balance_dates is None:
+        to_check: list[date] = dates
+    else:
+        to_check = [as_of for as_of in dates if as_of not in trial_balance_dates]
+        to_check.extend(dates[-1:])
+        trial_balance_dates.update(dates)
+    for as_of in dict.fromkeys(to_check):
         report = trial_balance(db, company_id, as_of=as_of)
         assert report.foots, f"trial balance does not foot as of {as_of}"
 

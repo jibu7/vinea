@@ -80,7 +80,22 @@ class Ledger:
 
 @pytest.fixture
 def ledger(db: Session) -> Ledger:
-    tenant = make_tenant(db, company_name="Kigali Traders Ltd", email="owner@kigali.example")
+    return build_ledger(db)
+
+
+def build_ledger(
+    db: Session,
+    *,
+    company_name: str = "Kigali Traders Ltd",
+    email: str = "owner@kigali.example",
+) -> Ledger:
+    """The `ledger` fixture's body, callable directly.
+
+    A property test that wants a *fresh* tenant per example needs this: Hypothesis reuses a
+    function-scoped fixture across every example it draws, so a suite asserted after every
+    step would otherwise re-examine an ever-growing history and cost O(examples²).
+    """
+    tenant = make_tenant(db, company_name=company_name, email=email)
     company_id = tenant.company.id
     set_tenant(db, company_id)
 

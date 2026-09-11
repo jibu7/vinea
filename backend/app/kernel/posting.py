@@ -115,7 +115,15 @@ def _partner_default(
 
 
 def _item_default(db: Session, company_id: int, spec: LineSpec, event: PostingEvent) -> int | None:
-    """P5: items carry sales / COGS / inventory accounts."""
+    """P6: an item's sales / COGS accounts, for the document lines that arrive with order
+    entry.
+
+    Inventory deliberately does not use this link. Which inventory account a line belongs to
+    depends on the **warehouse** as well as the item — stock in the in-transit warehouse posts
+    to the in-transit account (P5 decision 6) — and a resolver that sees only the line's item
+    cannot know that. The stock service resolves the account itself and passes it explicitly,
+    which is the first link of this same chain.
+    """
     return None
 
 

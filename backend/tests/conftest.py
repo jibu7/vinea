@@ -43,6 +43,9 @@ from app.services.provisioning import ProvisionedTenant, provision_tenant  # noq
 
 TABLES_IN_TRUNCATION_ORDER = (
     "jobs",
+    "stock_moves",
+    "stock_balances",
+    "item_cost_state",
     "item_barcodes",
     "items",
     "warehouses",

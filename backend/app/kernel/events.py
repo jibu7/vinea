@@ -14,6 +14,7 @@ from decimal import Decimal
 from typing import ClassVar
 
 from app.kernel.sequences import DocType
+from app.models.inventory import INVENTORY_MODULE
 
 ZERO = Decimal(0)
 
@@ -164,6 +165,68 @@ class InstrumentMatured(SubledgerJournal):
     doc_type: str = DocType.INSTRUMENT_MATURITY
 
 
+# --- Inventory events (P5 stock ledger) ------------------------------------------------
+
+
+@dataclass(frozen=True, kw_only=True)
+class StockJournal(SubledgerJournal):
+    """A posting whose accounts and dimensions the **stock service** has already resolved.
+
+    Inventory is a subledger like AR/AP, so it reuses their shape rather than a family of its
+    own: `module` and `doc_type` are instance fields because one code path serves adjustments,
+    journal batches, transfers and counts, and the kind/direction matrix lives in
+    `app.inventory.stock`, not in the event classes.
+
+    The account on each line is always explicit. Inventory cannot use the determination
+    chain's item link, because which inventory account a line belongs to depends on the
+    **warehouse** as well as the item: the same item in the in-transit warehouse posts to the
+    in-transit account (decision 6), and only the stock service knows where the stock is.
+    """
+
+    module: str = INVENTORY_MODULE
+    doc_type: str = DocType.INV_ADJUSTMENT
+
+
+@dataclass(frozen=True, kw_only=True)
+class StockReceived(StockJournal):
+    """Quantity into a location, valued at the cost supplied (decision 13)."""
+
+    event_type: ClassVar[str] = "stock_received"
+
+
+@dataclass(frozen=True, kw_only=True)
+class StockIssued(StockJournal):
+    """Quantity out of a location, valued at the item's weighted average — or at whatever
+    the location had left, when the issue empties it (decision 4)."""
+
+    event_type: ClassVar[str] = "stock_issued"
+
+
+@dataclass(frozen=True, kw_only=True)
+class StockRevalued(StockJournal):
+    """Value without quantity: the move shape a write-down or write-up takes."""
+
+    event_type: ClassVar[str] = "stock_revalued"
+
+
+@dataclass(frozen=True, kw_only=True)
+class StockTransferred(StockJournal):
+    """One leg of a transfer — source → in-transit, or in-transit → destination. Both moves
+    are inventory-account lines of the same entry, so the leg needs no contra: what one
+    location gives up, the other takes, at the frozen value (decision 6)."""
+
+    event_type: ClassVar[str] = "stock_transferred"
+    doc_type: str = DocType.INV_TRANSFER
+
+
+@dataclass(frozen=True, kw_only=True)
+class StockAdjusted(StockJournal):
+    """A posting that mixes directions — the journal batch, and a count's variance document,
+    where one line puts stock in and the next takes it out under one header."""
+
+    event_type: ClassVar[str] = "stock_adjusted"
+
+
 # --- Stubs for later phases (documented vocabulary, not yet postable) ------------------
 
 
@@ -187,20 +250,6 @@ class SupplierInvoiceMatched(_StubEvent):
     event_type: ClassVar[str] = "supplier_invoice_matched"
     doc_type: ClassVar[str] = "SINV"
     module: ClassVar[str] = "ap"
-
-
-@dataclass(frozen=True, kw_only=True)
-class StockAdjusted(_StubEvent):
-    event_type: ClassVar[str] = "stock_adjusted"
-    doc_type: ClassVar[str] = "ADJ"
-    module: ClassVar[str] = "inv"
-
-
-@dataclass(frozen=True, kw_only=True)
-class StockTransferred(_StubEvent):
-    event_type: ClassVar[str] = "stock_transferred"
-    doc_type: ClassVar[str] = "TRF"
-    module: ClassVar[str] = "inv"
 
 
 @dataclass(frozen=True, kw_only=True)

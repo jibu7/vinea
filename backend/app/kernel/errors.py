@@ -19,6 +19,9 @@ SQLSTATE_TOO_FEW_LINES = "VN005"
 SQLSTATE_SINGLE_WRITER = "VN006"
 SQLSTATE_CONTROL_ACCOUNT = "VN007"
 SQLSTATE_CONTROL_PARTNER = "VN008"
+# P5: the stock ledger has the journal's two rules of its own — one writer, and no edits.
+SQLSTATE_STOCK_WRITER = "VN009"
+SQLSTATE_STOCK_IMMUTABLE = "VN010"
 
 _SQLSTATE_CODES = {
     SQLSTATE_IMMUTABLE: "posted_entry_immutable",
@@ -29,6 +32,8 @@ _SQLSTATE_CODES = {
     SQLSTATE_SINGLE_WRITER: "journal_write_forbidden",
     SQLSTATE_CONTROL_ACCOUNT: "control_account_direct_posting",
     SQLSTATE_CONTROL_PARTNER: "dimension_required",
+    SQLSTATE_STOCK_WRITER: "stock_write_forbidden",
+    SQLSTATE_STOCK_IMMUTABLE: "stock_move_immutable",
 }
 
 

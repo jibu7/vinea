@@ -12,11 +12,12 @@ P5 step 1 is what makes the second half of the rule *reachable*: `items` now exi
 2. an `inv` entry on 1300 without an item is refused for the dimension (VN008);
 3. the same entry with a real item is accepted.
 
-Layers 2 and 3 go through raw SQL claiming `module='inv'`, because no inventory event is
-postable through the engine until step 2 — `StockAdjusted` is still a stub and `post()`
-rejects it with `unsupported_event`. The database is the authority the engine is checked
-against, so testing it directly is the honest test to have at this step; step 2 adds the
-engine-level pair once `receive_stock()` / `issue_stock()` can emit.
+Layers 2 and 3 were written against raw SQL claiming `module='inv'`, because when step 1
+landed no inventory event was postable through the engine. Step 2 makes them postable, and
+the engine-level twins are at the bottom of this file. Both stay: the database is the
+authority the engine is checked against, so the raw tests keep their meaning — the twins
+prove the engine agrees with it, and one of them still needs a hand-built event because the
+stock service cannot produce a line without an item.
 """
 
 from decimal import Decimal
@@ -33,9 +34,10 @@ from app.kernel.errors import (
     PostingError,
     kernel_sqlstate,
 )
+from app.kernel.sequences import DocType
 from app.models.gl import ControlAccountModule, ControlType, GLAccount
 from app.models.inventory import INVENTORY_MODULE
-from tests.inventory.conftest import Inventory
+from tests.inventory.conftest import Inventory, Stock, receive
 from tests.kernel.conftest import post_simple
 from tests.subledger.conftest import MARCH
 
@@ -288,4 +290,82 @@ def test_the_in_transit_account_takes_an_inv_line_with_an_item_too(
         text("SELECT count(*) FROM journal_entries WHERE number = 'RAW-TRN-OK'")
     ).scalar_one()
     assert count == 1
+    db.rollback()
+
+
+# --- Step 2: the same three rules, now through the Posting Engine ---------------------------
+#
+# The three tests above reach the database directly, because when they were written nothing
+# inventory could post — `StockAdjusted` was a stub and `post()` refused it. Step 2 makes
+# `receive_stock()` / `issue_stock()` real, so the guard can be exercised where the product
+# actually meets it. Both layers stay: the database is the authority, and these are the proof
+# that the engine agrees with it.
+
+
+def test_the_engine_posts_an_inventory_line_with_its_item(db: Session, stock: Stock) -> None:
+    """Layer 3's twin. The item dimension is not something the stock service remembers to
+    add — it is on every inventory line by construction, because the line *is* a move."""
+    posting = receive(db, stock, quantity=Decimal(4), unit_cost=Decimal(250), on=MARCH)
+
+    inventory_lines = [
+        line
+        for line in posting.entry.lines
+        if line.gl_account_id == stock.inventory.settings.inventory_account_id
+    ]
+    assert len(inventory_lines) == 1
+    assert inventory_lines[0].item_id == stock.item.id
+    assert posting.entry.module == INVENTORY_MODULE
+
+
+def test_the_engine_refuses_an_inventory_line_without_an_item(
+    db: Session, stock: Stock
+) -> None:
+    """Layer 2's twin, at the level the rule is written at: a `module='inv'` event that names
+    an INV account and no item is refused by the engine's own dimension check, before the
+    trigger ever sees it (`VN008` is what catches it if the engine is wrong).
+
+    Reaching this needs a hand-built event, because the stock service cannot produce a line
+    without an item — which is the point, and is why the raw-SQL test above stays.
+    """
+    from app.kernel import posting as posting_engine
+    from app.kernel.events import LineSpec, StockAdjusted
+
+    with pytest.raises(PostingError) as excinfo:
+        posting_engine.post(
+            db,
+            StockAdjusted(
+                entry_date=MARCH,
+                description="an inventory line with no item",
+                doc_type=DocType.INV_ADJUSTMENT,
+                lines=(
+                    LineSpec(
+                        amount=Decimal(100),
+                        gl_account_id=stock.inventory.settings.inventory_account_id,
+                    ),
+                    LineSpec(amount=Decimal(-100), gl_account_id=stock.ledger_account("5200")),
+                ),
+            ),
+            company_id=stock.company_id,
+            actor=stock.owner,
+        )
+
+    assert excinfo.value.code == "dimension_required"
+    assert excinfo.value.field_errors == {"lines.0.item_id": ["item required"]}
+    db.rollback()
+
+
+def test_a_gl_journal_still_cannot_reach_the_inventory_account_now_that_inventory_can(
+    db: Session, stock: Stock
+) -> None:
+    """Layer 1's twin. Making the module postable is exactly the moment this could have been
+    loosened by accident — the registry is deny-by-default for everything but `inv`, and
+    posting real stock does not change that."""
+    receive(db, stock, quantity=Decimal(4), unit_cost=Decimal(250), on=MARCH)
+
+    with pytest.raises(PostingError) as excinfo:
+        post_simple(
+            db, stock.inventory.ledger, debit="1300", credit="2300", amount=Decimal(50), on=MARCH
+        )
+
+    assert excinfo.value.code == "control_account_direct_posting"
     db.rollback()
