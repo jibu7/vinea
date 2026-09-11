@@ -60,6 +60,12 @@ AP_CREDIT_LIMIT_OVERRIDE = "ap:credit_limit_override"
 INV_SETUP_MANAGE = "inv:setup_manage"
 INV_TRANSACTIONS_ADJUST = "inv:transactions_adjust"
 INV_REPORTS_VIEW = "inv:reports_view"
+# Processing a count session posts a variance document against every counted line at once, so
+# it is separated from ordinary adjustment posting the way the AR write-off approval is.
+INV_COUNT_PROCESS = "inv:count_process"
+# Renaming an item code moves every enquiry and report that reads by code, so — like the
+# customer/supplier rename — it is its own permission rather than part of setup.
+INV_ITEM_RENAME = "inv:item_rename"
 
 # Order Entry
 OE_SETUP_MANAGE = "oe:setup_manage"
@@ -135,6 +141,8 @@ ALL_PERMISSIONS: tuple[str, ...] = (
     INV_SETUP_MANAGE,
     INV_TRANSACTIONS_ADJUST,
     INV_REPORTS_VIEW,
+    INV_COUNT_PROCESS,
+    INV_ITEM_RENAME,
     OE_SETUP_MANAGE,
     OE_SALES_ORDERS_MANAGE,
     OE_PURCHASE_ORDERS_MANAGE,
