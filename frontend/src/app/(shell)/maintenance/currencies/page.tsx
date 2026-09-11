@@ -223,6 +223,7 @@ export default function CurrenciesPage() {
                 <select
                   value={selectedCurrencyFilter}
                   onChange={(e) => setSelectedCurrencyFilter(e.target.value)}
+                  aria-label={t("filterRatesAria")}
                   className="h-9 rounded-[var(--radius-control)] border border-[var(--vinea-border-strong)] bg-[var(--vinea-surface-raised)] px-2.5 text-xs text-[var(--vinea-ink)]"
                 >
                   <option value="">{t("allForeignCurrencies")}</option>

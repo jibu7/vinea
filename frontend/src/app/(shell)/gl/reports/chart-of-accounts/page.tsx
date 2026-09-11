@@ -126,6 +126,7 @@ export default function ChartOfAccountsReportPage() {
               <select
                 value={classFilter}
                 onChange={(e) => setClassFilter(e.target.value)}
+                aria-label={t("filterByClassAria")}
                 className="h-10 rounded-[var(--radius-control)] border border-[var(--vinea-border-strong)] bg-[var(--vinea-surface-raised)] px-3 text-sm text-[var(--vinea-ink)]"
               >
                 <option value="all">{t("allClasses")}</option>
