@@ -148,12 +148,17 @@ returns `matured`, `waiting` and `skipped` (with a reason), and the screen repor
 
 - The document workspace renders a second "Search Ctrl K" chip inside its own header, next to the
   app shell's. Cosmetic, visible in `11-document-workspace-*.png`, and not P4's.
-- **No e2e posts a document that picks its rate up from the `exchange_rates` table.** Every
-  foreign-currency document in the tape types its booking rate on the screen, which is the
-  stronger UI assertion but leaves the dated-rate lookup to `tests/kernel` and to
-  `gl-inline-errors.spec.ts`, which only covers the *missing*-rate refusal. The abandoned
-  `claude/p4-step-9-e2e` branch took the other route; this is the one thing it exercised that
-  this branch does not.
+- ~~**No e2e posts a document that picks its rate up from the `exchange_rates` table.**~~
+  **Closed** by `e2e/dated-rate.spec.ts`: an invoice posted with the Exchange rate field left
+  empty, twice, either side of a second seeded rate — the booked base follows the document's
+  date, which is what makes `valid_from <= date` the thing under test rather than "a rate was
+  reachable".
+
+  One correction to the original note, found when the abandoned branch was finally read: it
+  seeds rates through `POST /gl/exchange-rates` as a *precondition* and then still types the
+  rate on the screen (`ar-ap-cycle.spec.ts:176`). It did not take the other route, so this gap
+  was never covered anywhere. The rest of the note stood: the tape types its rate, and
+  `gl-inline-errors.spec.ts` covers only the *missing*-rate refusal.
 - `frontend/scripts/e2e-{journal,cashbook,step4-maintenance,step6-verify,step7-reports}.ts` are
   ad-hoc verification scripts against a hand-made dev tenant, not part of `npm run e2e`. They now
   take their credentials from the environment, but nothing runs them.
