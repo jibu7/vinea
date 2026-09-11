@@ -17,6 +17,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 
 from alembic import command
+from app.core.permissions import ALL_PERMISSIONS
 from tests.conftest import ADMIN_URL
 
 BACKFILL_DB = f"{ADMIN_URL.database}_p5_backfill"
@@ -293,8 +294,15 @@ def test_p5_backfills_a_pre_p5_tenant(pre_p5_engine: Engine) -> None:
             "INCT": "CNT-",
         }
 
-        # 7. The Administrator role stores its permissions as data, so the two new inventory
-        # constants reach an existing tenant only because the migration puts them there.
+        # 7. The Administrator role stores its permissions as *data*, so the constants in
+        # `app.core.permissions` reach an existing tenant only because the migration puts
+        # them there — and the whole list goes in, not just P5's two. The fixture's role was
+        # seeded with two permissions, as a role provisioned several phases ago would have
+        # been; after the upgrade it holds exactly what the code knows about.
+        #
+        # This compares against the *live* constant while the migration carries a frozen
+        # copy. That is the point: the day P6 adds a permission without its own back-fill,
+        # this line fails and says so.
         permissions = conn.execute(
             text(
                 "SELECT permissions FROM roles WHERE company_id = :cid AND name "
@@ -302,10 +310,8 @@ def test_p5_backfills_a_pre_p5_tenant(pre_p5_engine: Engine) -> None:
             ),
             {"cid": company_id},
         ).scalar_one()
-        assert "inv:count_process" in permissions
-        assert "inv:item_rename" in permissions
-        # And nothing it already held was lost.
-        assert "gl:setup_manage" in permissions
+        assert set(permissions) == set(ALL_PERMISSIONS)
+        assert len(permissions) == len(set(permissions)), "the union duplicated a permission"
 
 
 def test_the_backfill_gives_every_tenant_its_own_rows(pre_p5_engine: Engine) -> None:
@@ -358,3 +364,190 @@ def test_the_backfill_gives_every_tenant_its_own_rows(pre_p5_engine: Engine) -> 
                 {"cid": company_id},
             ).scalar_one()
             assert default_warehouse == own, company_id
+
+
+# --- A tenant that has already journalled against its inventory account ----------------------
+
+
+def _post_manual_journal_on(
+    engine: Engine, company_id: int, *, debit_code: str, credit_code: str
+) -> int:
+    """A posted, balanced manual journal as a pre-P5 tenant could legitimately have written
+    it — 1300 was an ordinary postable account then, so a bookkeeper adjusting stock by hand
+    was doing nothing wrong.
+
+    Written directly, with the single-writer guard opened by hand, for the same reason
+    `tests/test_p4_backfill.py` does it: this is a *historical* row. The posting engine only
+    ever writes the current schema, so it cannot produce the shape the past had.
+    """
+    # A transactional connection, not the fixture's AUTOCOMMIT one: "a posted entry has at
+    # least two lines" is a deferred constraint trigger, so under autocommit it fires on the
+    # entry insert, before its lines can exist.
+    txn_engine = create_engine(ADMIN_URL.set(database=BACKFILL_DB))
+    with txn_engine.begin() as conn:
+        conn.execute(text("SELECT set_config('app.posting_engine', 'on', false)"))
+        conn.execute(text("SET CONSTRAINTS ALL DEFERRED"))
+        ids = {
+            row.code: row.id
+            for row in conn.execute(
+                text("SELECT id, code FROM gl_accounts WHERE company_id = :cid"),
+                {"cid": company_id},
+            )
+        }
+        branch_id = conn.execute(
+            text("SELECT id FROM branches WHERE company_id = :cid"), {"cid": company_id}
+        ).scalar_one()
+        currency_id = conn.execute(
+            text("SELECT id FROM currencies WHERE company_id = :cid"), {"cid": company_id}
+        ).scalar_one()
+        year_id = conn.execute(
+            text(
+                "INSERT INTO fiscal_years (company_id, name, start_date, end_date, status) "
+                "VALUES (:cid, '2026', '2026-01-01', '2026-12-31', 'open') RETURNING id"
+            ),
+            {"cid": company_id},
+        ).scalar_one()
+        period_id = conn.execute(
+            text(
+                "INSERT INTO accounting_periods (company_id, fiscal_year_id, period_no, name, "
+                "start_date, end_date, status) VALUES (:cid, :year, 3, 'Mar 2026', "
+                "'2026-03-01', '2026-03-31', 'open') RETURNING id"
+            ),
+            {"cid": company_id, "year": year_id},
+        ).scalar_one()
+        entry_id = conn.execute(
+            text(
+                "INSERT INTO journal_entries (company_id, number, doc_type, event_type, "
+                "module, entry_date, period_id, description, status) VALUES (:cid, "
+                "'JE-000001', 'JE', 'manual_journal', 'gl', '2026-03-10', :period, "
+                "'Stock written up by hand, before P5', 'draft') RETURNING id"
+            ),
+            {"cid": company_id, "period": period_id},
+        ).scalar_one()
+        for line_no, (code, amount) in enumerate(
+            ((debit_code, 5000), (credit_code, -5000)), start=1
+        ):
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO journal_lines
+                        (company_id, entry_id, line_no, gl_account_id, branch_id, currency_id,
+                         exchange_rate, amount, base_amount, tax_amount, is_rounding_line)
+                    VALUES (:cid, :entry, :line_no, :account, :branch, :currency, 1, :amount,
+                            :amount, 0, false)
+                    """
+                ),
+                {
+                    "cid": company_id,
+                    "entry": entry_id,
+                    "line_no": line_no,
+                    "account": ids[code],
+                    "branch": branch_id,
+                    "currency": currency_id,
+                    "amount": amount,
+                },
+            )
+        # Posted last: the lines of a posted entry are immutable the moment it is posted, so
+        # they have to exist first — the same order the posting engine works in.
+        conn.execute(
+            text("UPDATE journal_entries SET status = 'posted' WHERE id = :id"),
+            {"id": entry_id},
+        )
+    txn_engine.dispose()
+    return entry_id
+
+
+def test_an_inventory_account_with_history_is_not_marked_as_a_control_account(
+    pre_p5_engine: Engine, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The condition the whole control back-fill turns on.
+
+    Marking 1300 `inventory` narrows it permanently: only `module='inv'` may post to it and
+    every line on it must carry an item. This tenant's existing line satisfies neither, and
+    posted lines are append-only, so it can never be made to. The upgrade must therefore
+    succeed *and* leave the account alone — and say which company it left alone, because a
+    silent skip is how an operator finds out months later that inventory never started.
+    """
+    untouched = _provision_pre_p5_tenant(pre_p5_engine, company_name="Journalled Ltd")
+    clean = _provision_pre_p5_tenant(pre_p5_engine, company_name="Clean Ltd")
+    _post_manual_journal_on(pre_p5_engine, untouched, debit_code="1300", credit_code="3200")
+    url = ADMIN_URL.set(database=BACKFILL_DB).render_as_string(hide_password=False)
+
+    _alembic(url, "head")
+
+    with pre_p5_engine.connect() as conn:
+        for company_id, expected_control in ((untouched, None), (clean, "inventory")):
+            account = conn.execute(
+                text(
+                    "SELECT control_type, is_control FROM gl_accounts "
+                    "WHERE company_id = :cid AND code = '1300'"
+                ),
+                {"cid": company_id},
+            ).one()
+            assert account.control_type == expected_control, company_id
+            assert account.is_control is (expected_control is not None), company_id
+
+            setting = conn.execute(
+                text(
+                    "SELECT inventory_account_id, inventory_adjustment_account_id "
+                    "FROM gl_settings WHERE company_id = :cid"
+                ),
+                {"cid": company_id},
+            ).one()
+            # The control key follows the account: NULL where the account could not be
+            # marked, so inventory refuses to start rather than posting into an unguarded
+            # account. The contra key is an ordinary account and is filled either way.
+            if expected_control is None:
+                assert setting.inventory_account_id is None
+            else:
+                assert setting.inventory_account_id is not None
+            assert setting.inventory_adjustment_account_id is not None, company_id
+
+        # 1350 is created by this revision, so it has no history and is marked in both.
+        transit_control = {
+            row.company_id: row.control_type
+            for row in conn.execute(
+                text("SELECT company_id, control_type FROM gl_accounts WHERE code = '1350'")
+            )
+        }
+        assert transit_control[untouched] == "inventory"
+        assert transit_control[clean] == "inventory"
+
+    # And the skip is announced, by company id, in the upgrade's output.
+    output = capsys.readouterr().out
+    assert f"company {untouched}: account 1300" in output
+    assert "NOT being marked" in output
+    assert f"company {clean}:" not in output
+
+
+def test_the_rest_of_the_backfill_still_lands_for_a_tenant_with_history(
+    pre_p5_engine: Engine,
+) -> None:
+    """Skipping the control mark is not skipping the phase: the tenant still gets its units,
+    warehouses, transaction types and sequences, so the only thing standing between it and a
+    working inventory module is the one decision a person has to make."""
+    company_id = _provision_pre_p5_tenant(pre_p5_engine, company_name="Journalled Ltd")
+    _post_manual_journal_on(pre_p5_engine, company_id, debit_code="1300", credit_code="3200")
+    url = ADMIN_URL.set(database=BACKFILL_DB).render_as_string(hide_password=False)
+
+    _alembic(url, "head")
+
+    with pre_p5_engine.connect() as conn:
+        counts = conn.execute(
+            text(
+                """
+                SELECT (SELECT count(*) FROM uoms WHERE company_id = :cid) AS uoms,
+                       (SELECT count(*) FROM warehouses WHERE company_id = :cid) AS warehouses,
+                       (SELECT count(*) FROM gl_transaction_types
+                         WHERE company_id = :cid AND module = 'inv') AS types,
+                       (SELECT count(*) FROM document_sequences
+                         WHERE company_id = :cid
+                           AND doc_type IN ('INAJ','INJN','INTR','INCT')) AS sequences
+                """
+            ),
+            {"cid": company_id},
+        ).one()
+    assert counts.uoms == len(EXPECTED_UOMS)
+    assert counts.warehouses == 2
+    assert counts.types == len(EXPECTED_TRANSACTION_TYPES)
+    assert counts.sequences == 4

@@ -91,8 +91,11 @@ class ItemCreate(BaseModel):
 
 
 class ItemUpdate(BaseModel):
-    """`item_type`, `uom_category_id` and `base_uom_id` are absent on purpose: changing them
-    would change what every quantity already posted against the item means."""
+    """`item_type`, `uom_category_id` and `base_uom_id` are absent for now, not forever.
+
+    They are unsafe once the item has moves behind it, and safe before that. P5 step 2 adds
+    them back behind a "locked once posted against" check — the rule `update_tax_code` already
+    applies to a tax rate — once `stock_moves` exists to ask. See `masters.update_item`."""
 
     code: str | None = Field(default=None, min_length=1, max_length=30)
     name: str | None = Field(default=None, min_length=1, max_length=200)

@@ -580,9 +580,15 @@ def update_item(
     """Codes are renameable — history hangs off `item_id`, never off the code, so the
     "Rename Item Code" screen is a code change plus an audit row and nothing else.
 
-    `item_type` and the unit of measure are *not* editable. A stock item that became a
-    service would strand its moves, and moving an item to another UoM category would change
-    what every quantity already posted against it means.
+    `item_type` and the unit of measure are absent from this signature *for now*. Both are
+    unsafe once the item has stock behind it — a stock item that became a service would
+    strand its moves, and moving an item to another UoM category would change what every
+    quantity already posted against it means. The right rule is the one the tax codes and
+    currencies already use (`_tax_code_has_postings`): free to change until something has
+    been posted against it, locked from then on. That test needs `stock_moves`, which lands
+    in P5 step 2 — so these fields open up there, behind that check, rather than being
+    frozen at creation as they are today. Recorded in the step-1 report and in the step-2
+    scope so it is a scheduled change, not a forgotten one.
     """
     before = {
         "code": item.code,

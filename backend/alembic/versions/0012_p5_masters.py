@@ -18,9 +18,29 @@ index every other dimension on the line carries.
 Existing tenants are back-filled: the Stock in Transit and Opening Balance Suspense accounts,
 the five `gl_settings` account keys plus the negative-stock policy and default warehouse, the
 four UoM categories with their base units, the Main and in-transit warehouses, the six
-inventory transaction types, the four document sequences, and the two new inventory
-permissions on the Administrator role. `tests/test_p5_backfill.py` asserts every one of them.
+inventory transaction types, the four document sequences, and the full permission list on
+every system Administrator role. `tests/test_p5_backfill.py` asserts every one of them.
+
+Two things the back-fill deliberately does not do:
+
+**It will not mark an inventory account that already has journal lines.** Marking 1300 as an
+INV control account is a permanent narrowing — only `module='inv'` may post to it, and every
+line on it must carry an item. A tenant that has already journalled against 1300 has lines
+that break both rules, and posted lines are append-only, so they cannot be fixed. Those
+accounts stay uncontrolled, their `gl_settings` key stays NULL so inventory refuses to start
+rather than posting into an unguarded account, and the company id is printed in the upgrade
+output. See `_mark_inventory_control_accounts`.
+
+**It assumes `rw_sme_v1` is the only chart-of-accounts template.** Every account this
+back-fill resolves — 1300, 1350, 5100, 5200, 3400, and the contra accounts on the transaction
+types — is found by *code*, and those codes are `rw_sme_v1`'s. `companies.coa_template` is
+`rw_sme_v1` for every tenant today (§8 Q2 is still open on the template itself), so the
+assumption holds; the day a second template ships, this revision is already applied and a new
+one has to map the same keys for it. Recorded here so that is a known task rather than a
+discovery.
 """
+
+import json
 
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
@@ -65,14 +85,19 @@ NEW_ACCOUNTS = (
     ("3400", "Opening Balance Suspense", "equity", "3000", None),
 )
 
-# (settings column, account code)
-SETTINGS_ACCOUNTS = (
+# (settings column, account code). Split in two because the two control keys may only be
+# filled with an account this migration was actually able to mark as an INV control account
+# — see `_mark_inventory_control_accounts`.
+SETTINGS_CONTROL_ACCOUNTS = (
     ("inventory_account_id", "1300"),
     ("inventory_in_transit_account_id", "1350"),
+)
+SETTINGS_CONTRA_ACCOUNTS = (
     ("inventory_adjustment_account_id", "5200"),
     ("stock_count_variance_account_id", "5200"),
     ("cogs_account_id", "5100"),
 )
+SETTINGS_ACCOUNTS = (*SETTINGS_CONTROL_ACCOUNTS, *SETTINGS_CONTRA_ACCOUNTS)
 
 # (category code, name, base unit code, base unit name, base unit decimals)
 UOM_CATEGORIES = (
@@ -100,7 +125,88 @@ DOCUMENT_SEQUENCES = (
     ("INCT", "CNT-"),
 )
 
+# The two constants P5 adds. Only these are removed on downgrade: the rest of the list below
+# predates this revision, so taking them away would not be an inverse, it would be damage.
 NEW_PERMISSIONS = ("inv:count_process", "inv:item_rename")
+
+# `app.core.permissions.ALL_PERMISSIONS` frozen as of this revision (architecture rule 10: a
+# migration is a historical record and may not change when the application changes). The
+# Administrator role stores its permission list as *data*, so a system role provisioned before
+# this revision holds whatever the constant said on the day it was seeded — P2's list for a P2
+# tenant, P4's for a P4 one. Back-filling only P5's two constants would leave those tenants
+# permanently short of everything they had already missed. The whole list is unioned in.
+#
+# `tests/test_p5_backfill.py` compares the result against the *live* constant, so the day P6
+# adds a permission without its own back-fill, that test says so.
+ALL_PERMISSIONS_AT_0012 = (
+    "users:create",
+    "users:read",
+    "users:update",
+    "users:delete",
+    "users:manage_roles",
+    "roles:create",
+    "roles:read",
+    "roles:update",
+    "roles:delete",
+    "roles:manage_permissions",
+    "company:read",
+    "company:update",
+    "accounting_periods:manage",
+    "accounting_periods:reopen",
+    "common:setup_currencies",
+    "common:setup_taxes",
+    "common:setup_branches",
+    "gl:setup_manage",
+    "gl:journal_post",
+    "gl:reports_view",
+    "projects:read",
+    "projects:manage",
+    "ar:setup_manage",
+    "ar:transactions_post",
+    "ar:reports_view",
+    "ar:writeoff_approve",
+    "ar:credit_limit_override",
+    "ap:setup_manage",
+    "ap:transactions_post",
+    "ap:reports_view",
+    "ap:credit_limit_override",
+    "inv:setup_manage",
+    "inv:transactions_adjust",
+    "inv:reports_view",
+    "inv:count_process",
+    "inv:item_rename",
+    "oe:setup_manage",
+    "oe:sales_orders_manage",
+    "oe:purchase_orders_manage",
+    "oe:grv_process",
+    "oe:reports_view",
+    "reporting:financial_statements_view",
+    "reporting:financial_statements_generate",
+    "reporting:templates_manage",
+    "reporting:schedules_manage",
+    "reporting:bank_reconciliation_manage",
+    "reporting:ar_aging_view",
+    "reporting:ap_aging_view",
+    "reporting:gl_advanced_view",
+    "reporting:comparative_analysis",
+    "reporting:cash_flow_view",
+    "reporting:trial_balance_view",
+    "reporting:inventory_valuation_view",
+    "reporting:dashboard_view",
+    "reporting:export",
+    "bom:setup_manage",
+    "bom:manufacturing_create",
+    "bom:manufacturing_process",
+    "bom:reports_view",
+    "bom:mrp_run",
+    "pos:setup_manage",
+    "pos:till_operate",
+    "pos:till_manage",
+    "pos:sales_create",
+    "pos:returns_process",
+    "pos:reports_view",
+    "pos:reconcile",
+)
 
 
 def _audit_columns() -> list[sa.Column]:
@@ -384,17 +490,11 @@ def _backfill_existing_tenants() -> None:
             )
         )
 
-    # A pre-P5 tenant may carry an inventory account that was never marked as a control
-    # account; decision 2 makes it one, or nothing stops a manual journal from posting to it.
-    op.execute(
-        """
-        UPDATE gl_accounts
-           SET is_control = true, control_type = 'inventory'
-         WHERE code IN ('1300', '1350') AND control_type IS NULL
-        """
-    )
+    _mark_inventory_control_accounts()
 
-    for column, account_code in SETTINGS_ACCOUNTS:
+    # Contra keys map by code alone: an adjustment or COGS account is an ordinary postable
+    # account, so there is nothing about it that the upgrade could fail to establish.
+    for column, account_code in SETTINGS_CONTRA_ACCOUNTS:
         op.execute(
             sa.text(
                 f"""
@@ -403,6 +503,27 @@ def _backfill_existing_tenants() -> None:
                   FROM gl_accounts a
                  WHERE a.company_id = s.company_id
                    AND a.code = :account_code
+                   AND s.{column} IS NULL
+                """
+            ).bindparams(account_code=account_code)
+        )
+
+    # The two control keys additionally require the account to *be* an INV control account.
+    # Where `_mark_inventory_control_accounts` had to leave one unmarked, the key stays NULL
+    # and the first inventory posting fails loudly with `gl_setting_missing` — which is the
+    # right failure. Pointing the setting at an unmarked account would be the wrong one: the
+    # guard only fires on accounts carrying a control type, so inventory would post into an
+    # account nothing was protecting, and the item-required rule would never run.
+    for column, account_code in SETTINGS_CONTROL_ACCOUNTS:
+        op.execute(
+            sa.text(
+                f"""
+                UPDATE gl_settings s
+                   SET {column} = a.id
+                  FROM gl_accounts a
+                 WHERE a.company_id = s.company_id
+                   AND a.code = :account_code
+                   AND a.control_type = 'inventory'
                    AND s.{column} IS NULL
                 """
             ).bindparams(account_code=account_code)
@@ -520,20 +641,87 @@ def _backfill_existing_tenants() -> None:
             ).bindparams(doc_type=doc_type, prefix=prefix)
         )
 
-    # The Administrator role stores its permission list as data, so a new constant in
-    # `app.core.permissions` reaches an existing tenant only if a migration puts it there.
-    for permission in NEW_PERMISSIONS:
-        op.execute(
-            sa.text(
-                """
-                UPDATE roles
-                   SET permissions = permissions || to_jsonb(CAST(:permission AS text))
-                 WHERE is_system
-                   AND name = 'Administrator'
-                   AND NOT (permissions @> to_jsonb(CAST(:permission AS text)))
-                """
-            ).bindparams(permission=permission)
+    _backfill_administrator_permissions()
+
+
+def _mark_inventory_control_accounts() -> None:
+    """Make 1300/1350 INV control accounts — but only where that is still a true statement.
+
+    Marking an account `inventory` means two things become permanent: nothing outside
+    `module='inv'` may ever post to it again, and every line on it must carry an `item_id`.
+    A pre-P5 tenant that has already journalled against its inventory account has lines that
+    satisfy neither. They were legal the day they were written, and posted lines are
+    append-only (architecture rule 3), so they cannot be corrected into compliance. Marking
+    the account anyway would hand that tenant a control account its own history contradicts,
+    and P5 step 2's `assert_stock_invariants` — stock valuation == the inventory GL balance —
+    could never come true for it: the balance would carry journal amounts with no moves
+    behind them.
+
+    So the rule is: mark only where the account has no journal lines at all, and name the
+    companies that were skipped in the upgrade's output. Those tenants keep a working ledger
+    and an inventory module that refuses to start until someone migrates their stock history
+    deliberately, which is a decision for a person, not for a migration.
+    """
+    bind = op.get_bind()
+    skipped = bind.execute(
+        sa.text(
+            """
+            SELECT a.company_id, a.code, count(l.id) AS line_count
+              FROM gl_accounts a
+              JOIN journal_lines l ON l.gl_account_id = a.id
+             WHERE a.code IN ('1300', '1350')
+               AND a.control_type IS NULL
+             GROUP BY a.company_id, a.code
+             ORDER BY a.company_id, a.code
+            """
         )
+    ).all()
+    for row in skipped:
+        print(
+            f"{revision}: company {row.company_id}: account {row.code} already carries "
+            f"{row.line_count} journal line(s) and is NOT being marked as an inventory "
+            "control account. Its gl_settings key stays NULL and inventory posting will "
+            "refuse to start for this company until the account is migrated by hand."
+        )
+
+    op.execute(
+        """
+        UPDATE gl_accounts a
+           SET is_control = true, control_type = 'inventory'
+         WHERE a.code IN ('1300', '1350')
+           AND a.control_type IS NULL
+           AND NOT EXISTS (
+               SELECT 1 FROM journal_lines l WHERE l.gl_account_id = a.id
+           )
+        """
+    )
+
+
+def _backfill_administrator_permissions() -> None:
+    """Union the whole permission list into every system Administrator role.
+
+    The list is stored data, so a role seeded at P2 still holds P2's list — back-filling only
+    P5's two constants would leave it permanently short of everything it had already missed
+    (P4's credit-limit overrides, P3's project permissions, and so on). The union is
+    idempotent: a role that already holds the list is not rewritten, and one that holds extras
+    keeps them.
+    """
+    op.execute(
+        sa.text(
+            """
+            UPDATE roles r
+               SET permissions = r.permissions || (
+                     SELECT coalesce(jsonb_agg(missing.value), '[]'::jsonb)
+                       FROM jsonb_array_elements(CAST(:all_permissions AS jsonb))
+                            AS missing(value)
+                      WHERE NOT (r.permissions @> jsonb_build_array(missing.value))
+                   )
+             WHERE r.is_system
+               AND r.name = 'Administrator'
+               AND NOT (r.permissions @> CAST(:all_permissions AS jsonb))
+            """
+        ).bindparams(all_permissions=json.dumps(list(ALL_PERMISSIONS_AT_0012)))
+    )
 
 
 def downgrade() -> None:
