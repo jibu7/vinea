@@ -13,18 +13,19 @@ export interface GLAccount {
 }
 
 /** Wire values match backend `app.models.gl.ControlType` (a two-letter StrEnum for AR/AP —
- * CSS `capitalize` mangles those to "Ar"/"Ap", so render through this label map instead. */
-const CONTROL_TYPE_LABELS: Record<string, string> = {
-  bank: "Bank",
-  cash: "Cash",
-  ar: "AR",
-  ap: "AP",
-  inventory: "Inventory",
-};
+ * CSS `capitalize` mangles those to "Ar"/"Ap", so render through the catalogue instead). */
+const CONTROL_TYPE_KEYS = ["bank", "cash", "ar", "ap", "inventory"];
 
-export function controlTypeLabel(controlType: string | null | undefined): string {
-  if (!controlType) return "None";
-  return CONTROL_TYPE_LABELS[controlType] ?? controlType;
+/** The short control-type label, as a chip and as a CSV cell. Not a component, so it takes
+ * the `gl` translator rather than calling a hook. A wire value this build does not know is
+ * returned verbatim, exactly as the old label map did — a new backend ControlType shows up
+ * as itself rather than as a missing-message crash. */
+export function controlTypeLabel(
+  controlType: string | null | undefined,
+  t: (key: string) => string,
+): string {
+  if (!controlType) return t("controlTypeShort.none");
+  return CONTROL_TYPE_KEYS.includes(controlType) ? t(`controlTypeShort.${controlType}`) : controlType;
 }
 
 export interface Project {

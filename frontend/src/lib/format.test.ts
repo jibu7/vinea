@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { RWF, USD, formatDate, formatMoney, roundHalfUp, trimDecimalString } from "./format";
+import { RWF, USD, dotted, formatDate, formatMoney, roundHalfUp, trimDecimalString } from "./format";
 
 describe("formatMoney", () => {
   it("shows RWF with no decimal places", () => {
@@ -61,5 +61,21 @@ describe("trimDecimalString", () => {
     expect(trimDecimalString("0")).toBe("0");
     expect(trimDecimalString("1200")).toBe("1200");
     expect(trimDecimalString("1200.75")).toBe("1200.75");
+  });
+});
+
+describe("dotted", () => {
+  it("joins parts with the separator every picker label uses", () => {
+    expect(dotted("1000", "Bank")).toBe("1000 · Bank");
+  });
+
+  it("skips absent parts rather than leaving a dangling separator", () => {
+    expect(dotted("JE-0001", null)).toBe("JE-0001");
+    expect(dotted(undefined, "Only")).toBe("Only");
+    expect(dotted("", "Only")).toBe("Only");
+  });
+
+  it("takes numbers, which document numbers sometimes are", () => {
+    expect(dotted(42, "Kigali")).toBe("42 · Kigali");
   });
 });

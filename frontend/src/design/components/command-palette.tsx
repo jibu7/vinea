@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
+import { useTranslations } from "next-intl";
 import { Command as CommandPrimitive } from "cmdk";
 import { Search } from "lucide-react";
 import { cn } from "@/lib/cn";
@@ -16,6 +17,7 @@ export interface CommandPaletteItem {
 
 /** Ctrl+K shell: navigate, "new journal", "new cashbook entry", switch company, toggle theme. */
 export function CommandPalette({ items }: { items: CommandPaletteItem[] }) {
+  const t = useTranslations("common");
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
@@ -39,22 +41,22 @@ export function CommandPalette({ items }: { items: CommandPaletteItem[] }) {
           className="fixed left-1/2 top-24 z-50 w-full max-w-lg -translate-x-1/2 overflow-hidden rounded-[var(--radius-card)] border border-[var(--vinea-border)] bg-[var(--vinea-surface-raised)] shadow-[var(--elevation-3)]"
           aria-describedby={undefined}
         >
-          <DialogPrimitive.Title className="sr-only">Command palette</DialogPrimitive.Title>
+          <DialogPrimitive.Title className="sr-only">{t("commandPalette")}</DialogPrimitive.Title>
           <CommandPrimitive shouldFilter>
             <div className="flex items-center gap-2 border-b border-[var(--vinea-border)] px-4 py-3">
               <Search className="size-4 text-[var(--vinea-ink-subtle)]" />
               <CommandPrimitive.Input
                 autoFocus
-                placeholder="Type a command or search…"
+                placeholder={t("commandPalettePlaceholder")}
                 className="w-full bg-transparent text-sm outline-none placeholder:text-[var(--vinea-ink-subtle)]"
               />
               <kbd className="rounded border border-[var(--vinea-border)] px-1.5 py-0.5 text-[10px] text-[var(--vinea-ink-subtle)]">
-                Esc
+                {t("esc")}
               </kbd>
             </div>
             <CommandPrimitive.List className="max-h-80 overflow-auto p-2">
               <CommandPrimitive.Empty className="px-3 py-6 text-center text-sm text-[var(--vinea-ink-subtle)]">
-                No matches
+                {t("noMatches")}
               </CommandPrimitive.Empty>
               {groups.map((group) => (
                 <CommandPrimitive.Group

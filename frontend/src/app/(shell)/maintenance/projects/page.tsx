@@ -17,6 +17,7 @@ import { useApiErrorToast } from "@/lib/use-api-error-toast";
 
 export default function ProjectsPage() {
   const t = useTranslations("maintenance");
+  const tc = useTranslations("common");
   const toast = useToast();
   const showApiError = useApiErrorToast();
 
@@ -50,14 +51,14 @@ export default function ProjectsPage() {
           projectId: editingProject.id,
           payload: { code, name },
         });
-        toast.show({ title: "Project updated", tone: "success" });
+        toast.show({ title: t("projectUpdated"), tone: "success" });
       } else {
         await createProject.mutateAsync({ code, name });
-        toast.show({ title: "Project created", tone: "success" });
+        toast.show({ title: t("projectCreated"), tone: "success" });
       }
       setOpen(false);
     } catch (err) {
-      showApiError(err, "Couldn't save project");
+      showApiError(err, t("projectSaveFailed"));
     }
   }
 
@@ -73,7 +74,7 @@ export default function ProjectsPage() {
         tone: "success",
       });
     } catch (err) {
-      showApiError(err, "Couldn't update project");
+      showApiError(err, t("projectUpdateFailed"));
     }
   }
 
@@ -81,14 +82,12 @@ export default function ProjectsPage() {
     <div className="flex min-h-screen flex-col" data-density="dense">
       <header className="flex items-center justify-between border-b border-[var(--vinea-border)] bg-[var(--vinea-surface-raised)] px-6 py-3">
         <div className="flex items-center gap-3">
-          <Link href="/" className="text-[var(--vinea-ink-subtle)] hover:text-[var(--vinea-ink)]" aria-label="Back">
+          <Link href="/" className="text-[var(--vinea-ink-subtle)] hover:text-[var(--vinea-ink)]" aria-label={tc("back")}>
             <ArrowLeft className="size-4" />
           </Link>
           <div>
             <h1 className="font-display text-lg font-semibold">{t("projects")}</h1>
-            <p className="text-xs text-[var(--vinea-ink-muted)]">
-              Cross-module job costing and analytics dimension (ADR-04 / D8)
-            </p>
+            <p className="text-xs text-[var(--vinea-ink-muted)]">{t("projectsSubtitle")}</p>
           </div>
         </div>
 
@@ -105,15 +104,15 @@ export default function ProjectsPage() {
           <div className="rounded-[var(--radius-card)] border border-[var(--vinea-border)] bg-[var(--vinea-surface-raised)] p-6 space-y-4">
             <div className="flex items-center gap-2">
               <Briefcase className="size-4 text-[var(--vinea-brand)]" />
-              <h2 className="font-display text-base font-semibold">Costing Projects</h2>
+              <h2 className="font-display text-base font-semibold">{t("costingProjects")}</h2>
             </div>
 
             <Table>
               <THead>
                 <TR>
-                  <TH className="w-32">Project Code</TH>
-                  <TH>Project Name</TH>
-                  <TH className="w-32 text-right">Status</TH>
+                  <TH className="w-32">{t("projectCode")}</TH>
+                  <TH>{t("projectName")}</TH>
+                  <TH className="w-32 text-right">{t("status")}</TH>
                 </TR>
               </THead>
               <TBody>
@@ -126,7 +125,7 @@ export default function ProjectsPage() {
                         <button
                           type="button"
                           onClick={() => startEdit(p)}
-                          aria-label={`Edit ${p.name}`}
+                          aria-label={t("editLabel", { name: p.name })}
                           className="p-1 text-[var(--vinea-ink-subtle)] hover:text-[var(--vinea-ink)] rounded"
                         >
                           <Edit2 className="size-3.5" />
@@ -147,17 +146,17 @@ export default function ProjectsPage() {
       </main>
 
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent title={editingProject ? "Edit Project" : t("newProject")}>
+        <DialogContent title={editingProject ? t("editProjectTitle") : t("newProject")}>
           <div className="space-y-3 pt-2">
             <Field label={t("code")}>
-              <Input value={code} onChange={(e) => setCode(e.target.value)} placeholder="PRJ-01" />
+              <Input value={code} onChange={(e) => setCode(e.target.value)} placeholder={t("projectCodePlaceholder")} />
             </Field>
             <Field label={t("name")}>
-              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Vineyard Expansion" />
+              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder={t("projectNamePlaceholder")} />
             </Field>
 
             <div className="flex justify-end gap-2 pt-3">
-              <Button variant="ghost" onClick={() => setOpen(false)}>Cancel</Button>
+              <Button variant="ghost" onClick={() => setOpen(false)}>{t("cancel")}</Button>
               <Button variant="primary" disabled={!code || !name} onClick={handleSave}>
                 {t("save")}
               </Button>

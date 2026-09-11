@@ -22,11 +22,12 @@ import {
 } from "@/features/gl/hooks";
 import { byId, toOptions } from "@/features/gl/lookups";
 import type { Currency } from "@/features/gl/types";
-import { formatDate } from "@/lib/format";
+import { dotted, formatDate } from "@/lib/format";
 import { useApiErrorToast } from "@/lib/use-api-error-toast";
 
 export default function CurrenciesPage() {
   const t = useTranslations("maintenance");
+  const tc = useTranslations("common");
   const toast = useToast();
   const showApiError = useApiErrorToast();
 
@@ -69,9 +70,9 @@ export default function CurrenciesPage() {
       setCurrCode("");
       setCurrName("");
       setCurrSymbol("");
-      toast.show({ title: "Currency created", tone: "success" });
+      toast.show({ title: t("currencyCreated"), tone: "success" });
     } catch (err) {
-      showApiError(err, "Couldn't create currency");
+      showApiError(err, t("currencyCreateFailed"));
     }
   }
 
@@ -84,9 +85,9 @@ export default function CurrenciesPage() {
       });
       setRateOpen(false);
       setRateValue("");
-      toast.show({ title: "Exchange rate recorded", tone: "success" });
+      toast.show({ title: t("exchangeRateRecorded"), tone: "success" });
     } catch (err) {
-      showApiError(err, "Couldn't save exchange rate");
+      showApiError(err, t("exchangeRateSaveFailed"));
     }
   }
 
@@ -102,7 +103,7 @@ export default function CurrenciesPage() {
         tone: "success",
       });
     } catch (err) {
-      showApiError(err, "Couldn't update currency");
+      showApiError(err, t("currencyUpdateFailed"));
     }
   }
 
@@ -110,14 +111,12 @@ export default function CurrenciesPage() {
     <div className="flex min-h-screen flex-col" data-density="dense">
       <header className="flex items-center justify-between border-b border-[var(--vinea-border)] bg-[var(--vinea-surface-raised)] px-6 py-3">
         <div className="flex items-center gap-3">
-          <Link href="/" className="text-[var(--vinea-ink-subtle)] hover:text-[var(--vinea-ink)]" aria-label="Back">
+          <Link href="/" className="text-[var(--vinea-ink-subtle)] hover:text-[var(--vinea-ink)]" aria-label={tc("back")}>
             <ArrowLeft className="size-4" />
           </Link>
           <div>
             <h1 className="font-display text-lg font-semibold">{t("foreignCurrency")}</h1>
-            <p className="text-xs text-[var(--vinea-ink-muted)]">
-              Currencies and dated exchange rate schedules (ADR-06)
-            </p>
+            <p className="text-xs text-[var(--vinea-ink-muted)]">{t("currenciesSubtitle")}</p>
           </div>
         </div>
         <ThemeToggle />
@@ -143,21 +142,21 @@ export default function CurrenciesPage() {
                   <div className="space-y-3 pt-2">
                     <div className="grid grid-cols-2 gap-3">
                       <Field label={t("code")}>
-                        <Input value={currCode} onChange={(e) => setCurrCode(e.target.value)} maxLength={3} placeholder="EUR" />
+                        <Input value={currCode} onChange={(e) => setCurrCode(e.target.value)} maxLength={3} placeholder={t("currencyCodePlaceholder")} />
                       </Field>
                       <Field label={t("symbol")}>
-                        <Input value={currSymbol} onChange={(e) => setCurrSymbol(e.target.value)} placeholder="€" />
+                        <Input value={currSymbol} onChange={(e) => setCurrSymbol(e.target.value)} placeholder={t("currencySymbolPlaceholder")} />
                       </Field>
                     </div>
                     <Field label={t("name")}>
-                      <Input value={currName} onChange={(e) => setCurrName(e.target.value)} placeholder="Euro" />
+                      <Input value={currName} onChange={(e) => setCurrName(e.target.value)} placeholder={t("currencyNamePlaceholder")} />
                     </Field>
                     <Field label={t("decimals")}>
                       <Input value={currDecimals} onChange={(e) => setCurrDecimals(e.target.value)} type="number" min={0} max={6} />
                     </Field>
 
                     <div className="flex justify-end gap-2 pt-2">
-                      <Button variant="ghost" onClick={() => setCurrOpen(false)}>Cancel</Button>
+                      <Button variant="ghost" onClick={() => setCurrOpen(false)}>{t("cancel")}</Button>
                       <Button variant="primary" disabled={!currCode || !currName || createCurrency.isPending} onClick={handleCreateCurrency}>
                         {createCurrency.isPending ? t("saving") : t("save")}
                       </Button>
@@ -170,12 +169,12 @@ export default function CurrenciesPage() {
             <Table>
               <THead>
                 <TR>
-                  <TH className="w-24">Code</TH>
-                  <TH>Currency Name</TH>
-                  <TH className="w-24">Symbol</TH>
-                  <TH className="w-28 text-center">Decimals</TH>
-                  <TH className="w-28">Type</TH>
-                  <TH className="w-28 text-right">Status</TH>
+                  <TH className="w-24">{t("code")}</TH>
+                  <TH>{t("currencyName")}</TH>
+                  <TH className="w-24">{t("symbol")}</TH>
+                  <TH className="w-28 text-center">{t("decimals")}</TH>
+                  <TH className="w-28">{t("currencyType")}</TH>
+                  <TH className="w-28 text-right">{t("status")}</TH>
                 </TR>
               </THead>
               <TBody>
@@ -183,24 +182,24 @@ export default function CurrenciesPage() {
                   <TR key={c.id}>
                     <TD className="font-mono text-xs font-semibold text-[var(--vinea-brand)]">{c.code}</TD>
                     <TD className="font-medium text-xs text-[var(--vinea-ink)]">{c.name}</TD>
-                    <TD className="font-mono text-xs">{c.symbol ?? "—"}</TD>
+                    <TD className="font-mono text-xs">{c.symbol ?? t("emptyValue")}</TD>
                     <TD className="text-center font-mono text-xs">{c.decimal_places}</TD>
                     <TD>
                       {c.is_base ? (
                         <StatusChip tone="success">{t("isBase")}</StatusChip>
                       ) : (
-                        <StatusChip tone="neutral">Foreign</StatusChip>
+                        <StatusChip tone="neutral">{t("foreign")}</StatusChip>
                       )}
                     </TD>
                     <TD className="text-right">
                       {!c.is_base ? (
                         <button type="button" onClick={() => handleToggleCurrencyActive(c)}>
                           <StatusChip tone={c.is_active ? "success" : "neutral"}>
-                            {c.is_active ? "Active" : "Inactive"}
+                            {c.is_active ? t("active") : t("inactive")}
                           </StatusChip>
                         </button>
                       ) : (
-                        <StatusChip tone="success">Active</StatusChip>
+                        <StatusChip tone="success">{t("active")}</StatusChip>
                       )}
                     </TD>
                   </TR>
@@ -216,7 +215,7 @@ export default function CurrenciesPage() {
                 <TrendingUp className="size-4 text-[var(--vinea-brand)]" />
                 <div>
                   <h2 className="font-display text-base font-semibold">{t("exchangeRates")}</h2>
-                  <p className="text-xs text-[var(--vinea-ink-muted)]">Base currency per 1 foreign unit</p>
+                  <p className="text-xs text-[var(--vinea-ink-muted)]">{t("exchangeRatesSubtitle")}</p>
                 </div>
               </div>
 
@@ -226,9 +225,9 @@ export default function CurrenciesPage() {
                   onChange={(e) => setSelectedCurrencyFilter(e.target.value)}
                   className="h-9 rounded-[var(--radius-control)] border border-[var(--vinea-border-strong)] bg-[var(--vinea-surface-raised)] px-2.5 text-xs text-[var(--vinea-ink)]"
                 >
-                  <option value="">All foreign currencies</option>
+                  <option value="">{t("allForeignCurrencies")}</option>
                   {nonBaseCurrencies.map((c) => (
-                    <option key={c.id} value={c.id}>{c.code} · {c.name}</option>
+                    <option key={c.id} value={c.id}>{dotted(c.code, c.name)}</option>
                   ))}
                 </select>
 
@@ -245,7 +244,7 @@ export default function CurrenciesPage() {
                           options={toOptions(nonBaseCurrencies, (c) => `${c.code} · ${c.name}`)}
                           value={rateCurrencyId}
                           onValueChange={setRateCurrencyId}
-                          placeholder="Select foreign currency…"
+                          placeholder={t("selectForeignCurrency")}
                         />
                       </Field>
                       <Field label={t("validFrom")}>
@@ -255,14 +254,14 @@ export default function CurrenciesPage() {
                         <Input
                           value={rateValue}
                           onChange={(e) => setRateValue(e.target.value)}
-                          placeholder="e.g. 1350.50"
+                          placeholder={t("ratePlaceholder")}
                           type="number"
                           step="any"
                         />
                       </Field>
 
                       <div className="flex justify-end gap-2 pt-2">
-                        <Button variant="ghost" onClick={() => setRateOpen(false)}>Cancel</Button>
+                        <Button variant="ghost" onClick={() => setRateOpen(false)}>{t("cancel")}</Button>
                         <Button variant="primary" disabled={!rateCurrencyId || !rateValue || createRate.isPending} onClick={handleCreateRate}>
                           {createRate.isPending ? t("saving") : t("save")}
                         </Button>
@@ -276,9 +275,9 @@ export default function CurrenciesPage() {
             <Table>
               <THead>
                 <TR>
-                  <TH className="w-32">Currency</TH>
-                  <TH className="w-48">Valid From</TH>
-                  <TH className="text-right">Effective Rate</TH>
+                  <TH className="w-32">{t("currency")}</TH>
+                  <TH className="w-48">{t("validFrom")}</TH>
+                  <TH className="text-right">{t("effectiveRate")}</TH>
                 </TR>
               </THead>
               <TBody>

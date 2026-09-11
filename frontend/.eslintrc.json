@@ -1,32 +1,31 @@
 {
   "extends": "next/core-web-vitals",
+  "rules": {
+    "react/jsx-no-literals": [
+      "error",
+      {
+        "noStrings": true,
+        "ignoreProps": true
+      }
+    ],
+    "no-restricted-syntax": [
+      "error",
+      {
+        "selector": "JSXAttribute[name.name=/^(placeholder|title|description|label|aria-label)$/] > Literal[value=/\\S/]",
+        "message": "User-visible attribute copy must come from next-intl: use placeholder={t(\"…\")}, not placeholder=\"…\"."
+      },
+      {
+        "selector": "JSXAttribute[name.name=/^(placeholder|title|description|label|aria-label)$/] > JSXExpressionContainer > Literal[value=/\\S/]",
+        "message": "User-visible attribute copy must come from next-intl: use placeholder={t(\"…\")}, not placeholder={\"…\"}."
+      }
+    ]
+  },
   "overrides": [
     {
-      "files": [
-        "src/app/(shell)/maintenance/customers/**/*.tsx",
-        "src/app/(shell)/maintenance/suppliers/**/*.tsx",
-        "src/app/(shell)/maintenance/sales-reps/**/*.tsx",
-        "src/app/(shell)/maintenance/payment-terms/**/*.tsx",
-        "src/app/(shell)/maintenance/ageing-bucket-sets/**/*.tsx",
-        "src/app/(shell)/maintenance/ar-ap-defaults/**/*.tsx",
-        "src/app/(shell)/maintenance/ar-transaction-types/**/*.tsx",
-        "src/app/(shell)/maintenance/ap-transaction-types/**/*.tsx",
-        "src/app/(shell)/maintenance/rename-partner-code/**/*.tsx",
-        "src/features/subledger/**/*.tsx",
-        "src/features/gl/transaction-types-screen.tsx",
-        "src/app/(shell)/ar/**/*.tsx",
-        "src/app/(shell)/ap/**/*.tsx",
-        "src/features/subledger/reports/**/*.tsx",
-        "src/design/components/report-page.tsx"
-      ],
+      "files": ["src/app/design/**/*.tsx"],
       "rules": {
-        "react/jsx-no-literals": [
-          "error",
-          {
-            "noStrings": true,
-            "ignoreProps": true
-          }
-        ]
+        "react/jsx-no-literals": "off",
+        "no-restricted-syntax": "off"
       }
     }
   ]

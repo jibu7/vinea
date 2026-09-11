@@ -14,10 +14,12 @@ import { ThemeToggle } from "@/design/components/theme-toggle";
 import { useMe } from "@/features/auth/hooks";
 import { useBranches, useCurrencies, useProjects, useTrialBalance } from "@/features/gl/hooks";
 import { exportToCsv } from "@/lib/csv";
-import { formatDate } from "@/lib/format";
+import { dotted, formatDate } from "@/lib/format";
 
 export default function TrialBalanceReportPage() {
   const t = useTranslations("gl");
+  const tc = useTranslations("common");
+  const tApp = useTranslations("app");
   const { data: me } = useMe();
 
   const [asOfDate, setAsOfDate] = useState<Date>(() => new Date());
@@ -77,7 +79,7 @@ export default function TrialBalanceReportPage() {
       {/* Screen Header */}
       <header className="flex items-center justify-between border-b border-[var(--vinea-border)] bg-[var(--vinea-surface-raised)] px-6 py-3 print:hidden">
         <div className="flex items-center gap-3">
-          <Link href="/" className="text-[var(--vinea-ink-subtle)] hover:text-[var(--vinea-ink)]" aria-label="Back">
+          <Link href="/" className="text-[var(--vinea-ink-subtle)] hover:text-[var(--vinea-ink)]" aria-label={tc("back")}>
             <ArrowLeft className="size-4" />
           </Link>
           <div>
@@ -119,31 +121,33 @@ export default function TrialBalanceReportPage() {
           <div className="hidden border-b-2 border-black pb-4 print:block">
             <div className="flex items-baseline justify-between">
               <div>
-                <h1 className="text-2xl font-bold tracking-tight">{me?.company?.name ?? "Vinea ERP"}</h1>
+                <h1 className="text-2xl font-bold tracking-tight">{me?.company?.name ?? tApp("name")}</h1>
                 <p className="text-base font-semibold">{t("trialBalanceReport")}</p>
               </div>
               <div className="text-right text-xs">
                 <p>
-                  <strong>{t("asOf")}:</strong> {formatDate(asOfDate)}
+                  <strong>{tc("labelColon", { label: t("asOf") })}</strong> {formatDate(asOfDate)}
                 </p>
                 <p>
-                  <strong>Printed:</strong> {formatDate(new Date())}
+                  <strong>{tc("labelColon", { label: t("printed") })}</strong> {formatDate(new Date())}
                 </p>
               </div>
             </div>
             <div className="mt-2 flex gap-4 text-xs text-gray-600">
               {selectedBranch && (
                 <span>
-                  <strong>Branch:</strong> {selectedBranch.code} - {selectedBranch.name}
+                  <strong>{tc("labelColon", { label: t("branch") })}</strong>{" "}
+                  {t("codeName", { code: selectedBranch.code, name: selectedBranch.name })}
                 </span>
               )}
               {selectedProject && (
                 <span>
-                  <strong>Project:</strong> {selectedProject.code} - {selectedProject.name}
+                  <strong>{tc("labelColon", { label: t("project") })}</strong>{" "}
+                  {t("codeName", { code: selectedProject.code, name: selectedProject.name })}
                 </span>
               )}
               {isProjectFiltered && (
-                <span className="italic font-medium">({t("projectSubsetNote")})</span>
+                <span className="italic font-medium">{tc("parenthesised", { text: t("projectSubsetNote") })}</span>
               )}
             </div>
           </div>
@@ -162,7 +166,7 @@ export default function TrialBalanceReportPage() {
                 <option value="">{t("allBranches")}</option>
                 {(branches.data ?? []).map((b) => (
                   <option key={b.id} value={b.id}>
-                    {b.code} · {b.name}
+                    {dotted(b.code, b.name)}
                   </option>
                 ))}
               </select>
@@ -176,7 +180,7 @@ export default function TrialBalanceReportPage() {
                 <option value="">{t("allProjects")}</option>
                 {(projects.data ?? []).map((p) => (
                   <option key={p.id} value={p.id}>
-                    {p.code} · {p.name}
+                    {dotted(p.code, p.name)}
                   </option>
                 ))}
               </select>
@@ -186,23 +190,23 @@ export default function TrialBalanceReportPage() {
           {/* Table */}
           {isLoading ? (
             <div className="flex h-48 items-center justify-center text-sm text-[var(--vinea-ink-subtle)]">
-              Loading report data…
+              {t("loadingReportData")}
             </div>
           ) : !tb || tb.rows.length === 0 ? (
             <div className="rounded-[var(--radius-card)] border border-dashed border-[var(--vinea-border)] p-12 text-center text-sm text-[var(--vinea-ink-subtle)]">
-              No balances found as of {formatDate(asOfDate)}.
+              {t("noBalancesAsOf", { date: formatDate(asOfDate) })}
             </div>
           ) : (
             <div className="overflow-auto rounded-[var(--radius-card)] border border-[var(--vinea-border)] bg-[var(--vinea-surface-raised)] print:border print:border-gray-300">
               <Table>
                 <THead className="print:bg-gray-100">
                   <TR>
-                    <TH className="w-24">Code</TH>
-                    <TH>Account Name</TH>
-                    <TH className="w-28">Class</TH>
-                    <TH className="w-36 text-right">Debit</TH>
-                    <TH className="w-36 text-right">Credit</TH>
-                    <TH className="w-36 text-right">Net</TH>
+                    <TH className="w-24">{t("code")}</TH>
+                    <TH>{t("accountName")}</TH>
+                    <TH className="w-28">{t("accountClass")}</TH>
+                    <TH className="w-36 text-right">{t("debit")}</TH>
+                    <TH className="w-36 text-right">{t("credit")}</TH>
+                    <TH className="w-36 text-right">{t("net")}</TH>
                   </TR>
                 </THead>
                 <TBody className="divide-y divide-[var(--vinea-border)] print:divide-gray-300">
@@ -242,7 +246,7 @@ export default function TrialBalanceReportPage() {
               <div className="flex items-center justify-between border-t-2 border-[var(--vinea-border)] bg-[var(--vinea-surface-sunken)]/60 px-6 py-4 font-mono text-sm print:border-t-2 print:border-black print:bg-gray-50">
                 <div>
                   <span className="font-sans text-xs font-semibold uppercase tracking-wider text-[var(--vinea-ink-muted)] print:text-black">
-                    {isProjectFiltered ? t("subsetDifference") : t("difference")}:
+                    {tc("labelColon", { label: isProjectFiltered ? t("subsetDifference") : t("difference") })}
                   </span>{" "}
                   <span
                     className={`font-semibold ${
@@ -259,7 +263,7 @@ export default function TrialBalanceReportPage() {
                 <div className="flex gap-8">
                   <div>
                     <span className="font-sans text-xs text-[var(--vinea-ink-subtle)] print:text-black">
-                      {isProjectFiltered ? t("subsetDebit") : t("totalDebit")}:
+                      {tc("labelColon", { label: isProjectFiltered ? t("subsetDebit") : t("totalDebit") })}
                     </span>{" "}
                     <span className="font-semibold">
                       {currencyLike && <Money amount={totalDebit} currency={currencyLike} />}
@@ -267,7 +271,7 @@ export default function TrialBalanceReportPage() {
                   </div>
                   <div>
                     <span className="font-sans text-xs text-[var(--vinea-ink-subtle)] print:text-black">
-                      {isProjectFiltered ? t("subsetCredit") : t("totalCredit")}:
+                      {tc("labelColon", { label: isProjectFiltered ? t("subsetCredit") : t("totalCredit") })}
                     </span>{" "}
                     <span className="font-semibold">
                       {currencyLike && <Money amount={totalCredit} currency={currencyLike} />}

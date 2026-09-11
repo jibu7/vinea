@@ -24,10 +24,11 @@ import {
 import { byId, toOptions } from "@/features/gl/lookups";
 import type { AccountTransaction, AccountTransactionsResponse } from "@/features/gl/types";
 import { api } from "@/lib/api";
-import { formatDate } from "@/lib/format";
+import { dotted, formatDate } from "@/lib/format";
 
 function AccountEnquiryView() {
   const t = useTranslations("gl");
+  const tc = useTranslations("common");
   const tEntryTitle = useTranslations("gl.entryTitle");
   const searchParams = useSearchParams();
   const initialAccountId = searchParams.get("accountId") ?? "";
@@ -140,7 +141,7 @@ function AccountEnquiryView() {
     <div className="flex min-h-screen flex-col" data-density="dense">
       <header className="flex items-center justify-between border-b border-[var(--vinea-border)] bg-[var(--vinea-surface-raised)] px-6 py-3">
         <div className="flex items-center gap-3">
-          <Link href="/" className="text-[var(--vinea-ink-subtle)] hover:text-[var(--vinea-ink)]" aria-label="Back">
+          <Link href="/" className="text-[var(--vinea-ink-subtle)] hover:text-[var(--vinea-ink)]" aria-label={tc("back")}>
             <ArrowLeft className="size-4" />
           </Link>
           <div>
@@ -170,7 +171,7 @@ function AccountEnquiryView() {
                 options={toOptions(accounts.data ?? [], (a) => `${a.code} · ${a.name}`)}
                 value={accountId}
                 onValueChange={setAccountId}
-                placeholder="Choose an account…"
+                placeholder={t("chooseAccount")}
               />
             </Field>
             <Field label={t("dateFrom")}>
@@ -188,7 +189,7 @@ function AccountEnquiryView() {
                 <option value="">{t("allBranches")}</option>
                 {(branches.data ?? []).map((b) => (
                   <option key={b.id} value={b.id}>
-                    {b.code} · {b.name}
+                    {dotted(b.code, b.name)}
                   </option>
                 ))}
               </select>
@@ -199,19 +200,19 @@ function AccountEnquiryView() {
             <div className="rounded-[var(--radius-card)] border border-dashed border-[var(--vinea-border)] p-16 text-center">
               <p className="text-sm font-medium text-[var(--vinea-ink)]">{t("selectAccountToBegin")}</p>
               <p className="mt-1 text-xs text-[var(--vinea-ink-subtle)]">
-                Select an account above to inspect all posted ledger movements and running balance.
+                {t("selectAccountHint")}
               </p>
             </div>
           ) : loading ? (
             <div className="flex h-48 items-center justify-center text-sm text-[var(--vinea-ink-subtle)]">
-              Loading account transactions…
+              {t("loadingAccountTransactions")}
             </div>
           ) : (
             <div className="space-y-4">
               {/* Opening balance bar */}
               <div className="flex items-center justify-between rounded-[var(--radius-control)] border border-[var(--vinea-border)] bg-[var(--vinea-surface-sunken)]/60 px-4 py-3">
                 <span className="text-xs font-semibold uppercase tracking-wider text-[var(--vinea-ink-muted)]">
-                  {t("openingBalance")} (as of {formatDate(dateFrom)})
+                  {t("openingBalanceAsOf", { date: formatDate(dateFrom) })}
                 </span>
                 <span className="font-mono text-sm font-semibold">
                   {currencyLike && <Money amount={Number(openingBase)} currency={currencyLike} />}
@@ -228,13 +229,13 @@ function AccountEnquiryView() {
                   <THead>
                     <TR>
                       <TH className="w-24">{t("date")}</TH>
-                      <TH className="w-28">Doc #</TH>
+                      <TH className="w-28">{t("docNumber")}</TH>
                       <TH className="w-32">{t("reference")}</TH>
-                      <TH>Description</TH>
-                      <TH className="w-20">Branch</TH>
-                      <TH className="w-20">Project</TH>
-                      <TH className="w-32 text-right">Debit</TH>
-                      <TH className="w-32 text-right">Credit</TH>
+                      <TH>{t("description")}</TH>
+                      <TH className="w-20">{t("branch")}</TH>
+                      <TH className="w-20">{t("project")}</TH>
+                      <TH className="w-32 text-right">{t("debit")}</TH>
+                      <TH className="w-32 text-right">{t("credit")}</TH>
                       <TH className="w-36 text-right">{t("runningBalance")}</TH>
                     </TR>
                   </THead>
@@ -320,7 +321,7 @@ function AccountEnquiryView() {
         >
           {drawerLoading || !drawerEntry ? (
             <div className="flex h-48 items-center justify-center text-sm text-[var(--vinea-ink-subtle)]">
-              Loading entry details…
+              {t("loadingEntryDetails")}
             </div>
           ) : (
             <div className="space-y-6 pt-2">
@@ -350,26 +351,26 @@ function AccountEnquiryView() {
               )}
 
               <div className="rounded-[var(--radius-card)] border border-[var(--vinea-border)] bg-[var(--vinea-surface-sunken)]/40 p-4 space-y-2">
-                <p className="text-xs font-medium text-[var(--vinea-ink-muted)]">Description</p>
+                <p className="text-xs font-medium text-[var(--vinea-ink-muted)]">{t("description")}</p>
                 <p className="text-sm text-[var(--vinea-ink)]">{drawerEntry.description}</p>
                 {drawerEntry.reference && (
                   <p className="text-xs text-[var(--vinea-ink-muted)]">
-                    <span className="font-medium">Ref:</span> {drawerEntry.reference}
+                    <span className="font-medium">{t("ref")}</span> {drawerEntry.reference}
                   </p>
                 )}
               </div>
 
               <div>
                 <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-[var(--vinea-ink-subtle)]">
-                  Journal Lines ({drawerEntry.lines.length})
+                  {t("journalLinesCount", { count: drawerEntry.lines.length })}
                 </p>
                 <div className="overflow-hidden rounded-[var(--radius-control)] border border-[var(--vinea-border)]">
                   <table className="w-full text-xs">
                     <thead className="bg-[var(--vinea-surface-sunken)] text-[var(--vinea-ink-subtle)]">
                       <tr>
-                        <th className="px-3 py-2 text-left">Account</th>
-                        <th className="px-3 py-2 text-right">Debit</th>
-                        <th className="px-3 py-2 text-right">Credit</th>
+                        <th className="px-3 py-2 text-left">{t("account")}</th>
+                        <th className="px-3 py-2 text-right">{t("debit")}</th>
+                        <th className="px-3 py-2 text-right">{t("credit")}</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-[var(--vinea-border)]">
@@ -404,8 +405,9 @@ function AccountEnquiryView() {
 }
 
 export default function AccountEnquiryPage() {
+  const tc = useTranslations("common");
   return (
-    <Suspense fallback={<div className="flex min-h-screen items-center justify-center text-sm">Loading…</div>}>
+    <Suspense fallback={<div className="flex min-h-screen items-center justify-center text-sm">{tc("loading")}</div>}>
       <AccountEnquiryView />
     </Suspense>
   );

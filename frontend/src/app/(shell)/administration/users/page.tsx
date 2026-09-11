@@ -25,6 +25,7 @@ import { useApiErrorToast } from "@/lib/use-api-error-toast";
 
 export default function UsersAndMembershipsPage() {
   const t = useTranslations("maintenance");
+  const tc = useTranslations("common");
   const toast = useToast();
   const showApiError = useApiErrorToast();
 
@@ -66,9 +67,9 @@ export default function UsersAndMembershipsPage() {
       });
       setInviteOpen(false);
       setInviteEmail("");
-      toast.show({ title: "Invitation sent", description: inviteEmail, tone: "success" });
+      toast.show({ title: t("invitationSent"), description: inviteEmail, tone: "success" });
     } catch (err) {
-      showApiError(err, "Couldn't send invitation");
+      showApiError(err, t("invitationSendFailed"));
     }
   }
 
@@ -80,27 +81,27 @@ export default function UsersAndMembershipsPage() {
         roleIds: memberRoleIds,
       });
       setRoleModalMember(null);
-      toast.show({ title: "Roles updated", tone: "success" });
+      toast.show({ title: t("rolesUpdated"), tone: "success" });
     } catch (err) {
-      showApiError(err, "Couldn't update roles");
+      showApiError(err, t("rolesUpdateFailed"));
     }
   }
 
   async function handleToggleStatus(m: CompanyMember) {
     if (m.is_owner) {
-      toast.show({ title: "Cannot deactivate owner", tone: "danger" });
+      toast.show({ title: t("cannotDeactivateOwner"), tone: "danger" });
       return;
     }
     try {
       if (m.status === "active") {
         await deactivateMember.mutateAsync(m.id);
-        toast.show({ title: "Member deactivated", tone: "neutral" });
+        toast.show({ title: t("memberDeactivated"), tone: "neutral" });
       } else {
         await activateMember.mutateAsync(m.id);
-        toast.show({ title: "Member activated", tone: "success" });
+        toast.show({ title: t("memberActivated"), tone: "success" });
       }
     } catch (err) {
-      showApiError(err, "Couldn't change status");
+      showApiError(err, t("statusChangeFailed"));
     }
   }
 
@@ -108,14 +109,12 @@ export default function UsersAndMembershipsPage() {
     <div className="flex min-h-screen flex-col" data-density="dense">
       <header className="flex items-center justify-between border-b border-[var(--vinea-border)] bg-[var(--vinea-surface-raised)] px-6 py-3">
         <div className="flex items-center gap-3">
-          <Link href="/" className="text-[var(--vinea-ink-subtle)] hover:text-[var(--vinea-ink)]" aria-label="Back">
+          <Link href="/" className="text-[var(--vinea-ink-subtle)] hover:text-[var(--vinea-ink)]" aria-label={tc("back")}>
             <ArrowLeft className="size-4" />
           </Link>
           <div>
             <h1 className="font-display text-lg font-semibold">{t("usersAndMemberships")}</h1>
-            <p className="text-xs text-[var(--vinea-ink-muted)]">
-              Manage organization memberships, invitations, and role assignments (ADR-02)
-            </p>
+            <p className="text-xs text-[var(--vinea-ink-muted)]">{t("usersSubtitle")}</p>
           </div>
         </div>
 
@@ -132,17 +131,17 @@ export default function UsersAndMembershipsPage() {
           <div className="rounded-[var(--radius-card)] border border-[var(--vinea-border)] bg-[var(--vinea-surface-raised)] p-6 space-y-4">
             <div className="flex items-center gap-2">
               <Shield className="size-4 text-[var(--vinea-brand)]" />
-              <h2 className="font-display text-base font-semibold">Team Members & Invitations</h2>
+              <h2 className="font-display text-base font-semibold">{t("teamMembersAndInvitations")}</h2>
             </div>
 
             <Table>
               <THead>
                 <TR>
-                  <TH>Member / Email</TH>
-                  <TH className="w-48">Roles</TH>
-                  <TH className="w-32">Status</TH>
-                  <TH className="w-36">Joined / Invited</TH>
-                  <TH className="w-36 text-right">Actions</TH>
+                  <TH>{t("memberEmail")}</TH>
+                  <TH className="w-48">{t("roles")}</TH>
+                  <TH className="w-32">{t("status")}</TH>
+                  <TH className="w-36">{t("joinedInvited")}</TH>
+                  <TH className="w-36 text-right">{t("actions")}</TH>
                 </TR>
               </THead>
               <TBody>
@@ -169,7 +168,7 @@ export default function UsersAndMembershipsPage() {
                             {r.name}
                           </span>
                         ))}
-                        {m.roles.length === 0 && <span className="text-xs text-[var(--vinea-ink-subtle)]">—</span>}
+                        {m.roles.length === 0 && <span className="text-xs text-[var(--vinea-ink-subtle)]">{t("emptyValue")}</span>}
                       </div>
                     </TD>
                     <TD>
@@ -186,7 +185,11 @@ export default function UsersAndMembershipsPage() {
                       </StatusChip>
                     </TD>
                     <TD className="text-xs text-[var(--vinea-ink-muted)]">
-                      {m.accepted_at ? formatDate(m.accepted_at) : m.invited_at ? `Invited ${formatDate(m.invited_at)}` : "—"}
+                      {m.accepted_at
+                        ? formatDate(m.accepted_at)
+                        : m.invited_at
+                          ? t("invitedOn", { date: formatDate(m.invited_at) })
+                          : t("emptyValue")}
                     </TD>
                     <TD className="text-right">
                       {!m.is_owner && (
@@ -196,7 +199,7 @@ export default function UsersAndMembershipsPage() {
                             onClick={() => startEditRoles(m)}
                             className="h-7 px-2 text-xs"
                           >
-                            Roles
+                            {t("roles")}
                           </Button>
                           <Button
                             variant={m.status === "active" ? "ghost" : "secondary"}
@@ -225,7 +228,7 @@ export default function UsersAndMembershipsPage() {
                 type="email"
                 value={inviteEmail}
                 onChange={(e) => setInviteEmail(e.target.value)}
-                placeholder="colleague@rugariwines.rw"
+                placeholder={t("emailPlaceholder")}
               />
             </Field>
 
@@ -256,9 +259,9 @@ export default function UsersAndMembershipsPage() {
             </div>
 
             <div className="flex justify-end gap-2 pt-2">
-              <Button variant="ghost" onClick={() => setInviteOpen(false)}>Cancel</Button>
+              <Button variant="ghost" onClick={() => setInviteOpen(false)}>{t("cancel")}</Button>
               <Button variant="primary" disabled={!inviteEmail.trim() || inviteMember.isPending} onClick={handleSendInvite}>
-                {inviteMember.isPending ? t("saving") : "Send Invitation"}
+                {inviteMember.isPending ? t("saving") : t("sendInvitation")}
               </Button>
             </div>
           </div>
@@ -267,7 +270,7 @@ export default function UsersAndMembershipsPage() {
 
       {/* Edit Roles Modal */}
       <Dialog open={roleModalMember !== null} onOpenChange={(open) => !open && setRoleModalMember(null)}>
-        <DialogContent title="Assign Roles" description={roleModalMember?.email}>
+        <DialogContent title={t("assignRoles")} description={roleModalMember?.email}>
           <div className="space-y-4 pt-2">
             <div className="space-y-2 rounded-[var(--radius-control)] border border-[var(--vinea-border)] p-3">
               {(rolesQuery.data ?? []).map((r) => {
@@ -293,7 +296,7 @@ export default function UsersAndMembershipsPage() {
             </div>
 
             <div className="flex justify-end gap-2 pt-2">
-              <Button variant="ghost" onClick={() => setRoleModalMember(null)}>Cancel</Button>
+              <Button variant="ghost" onClick={() => setRoleModalMember(null)}>{t("cancel")}</Button>
               <Button variant="primary" disabled={updateMemberRoles.isPending} onClick={handleSaveRoles}>
                 {updateMemberRoles.isPending ? t("saving") : t("save")}
               </Button>

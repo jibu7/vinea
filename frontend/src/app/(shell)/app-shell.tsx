@@ -22,6 +22,8 @@ import type { MeResponse } from "@/features/auth/types";
 
 export function AppShell({ me, children }: { me: MeResponse; children: React.ReactNode }) {
   const t = useTranslations("shell");
+  const tApp = useTranslations("app");
+  const tc = useTranslations("common");
   const router = useRouter();
   const toast = useToast();
   const showApiError = useApiErrorToast();
@@ -103,7 +105,7 @@ export function AppShell({ me, children }: { me: MeResponse; children: React.Rea
           <div className="flex size-8 items-center justify-center rounded-[var(--radius-control)] bg-[var(--vinea-brand)] text-[var(--vinea-on-brand)]">
             <LayoutGrid className="size-4" />
           </div>
-          <span className="font-display text-lg font-semibold">Vinea</span>
+          <span className="font-display text-lg font-semibold">{tApp("shortName")}</span>
         </div>
 
         {permissions.has("users:read") && (
@@ -141,7 +143,7 @@ export function AppShell({ me, children }: { me: MeResponse; children: React.Rea
               className="flex items-center gap-2 rounded-[var(--radius-control)] border border-[var(--vinea-border-strong)] px-3 py-1.5 text-sm text-[var(--vinea-ink-muted)]"
             >
               <Building2 className="size-4" />
-              {me.company?.name ?? "Select company"}
+              {me.company?.name ?? t("selectCompany")}
             </button>
             {companyMenuOpen && (
               <div className="absolute left-0 top-full z-40 mt-1 w-64 rounded-[var(--radius-control)] border border-[var(--vinea-border)] bg-[var(--vinea-surface-raised)] p-1 shadow-[var(--elevation-2)]">
@@ -152,7 +154,7 @@ export function AppShell({ me, children }: { me: MeResponse; children: React.Rea
                     className="flex w-full items-center justify-between rounded-[calc(var(--radius-control)-2px)] px-2 py-1.5 text-left text-sm hover:bg-[var(--vinea-surface-sunken)]"
                   >
                     {m.company_name}
-                    {m.company_id === me.company?.id && <span className="text-[var(--vinea-brand)]">✓</span>}
+                    {m.company_id === me.company?.id && <span className="text-[var(--vinea-brand)]">{t("activeCompanyMark")}</span>}
                   </button>
                 ))}
               </div>
@@ -161,10 +163,10 @@ export function AppShell({ me, children }: { me: MeResponse; children: React.Rea
           <div className="flex items-center gap-2">
             <button className="flex items-center gap-2 rounded-[var(--radius-control)] border border-[var(--vinea-border-strong)] px-3 py-1.5 text-sm text-[var(--vinea-ink-subtle)]">
               <CommandIcon className="size-3.5" /> {t("search")}
-              <kbd className="rounded border border-[var(--vinea-border)] px-1 text-[10px]">Ctrl K</kbd>
+              <kbd className="rounded border border-[var(--vinea-border)] px-1 text-[10px]">{tc("ctrlK")}</kbd>
             </button>
             <ThemeToggle />
-            <Button variant="ghost" size="sm" onClick={handleLogout} aria-label="Sign out">
+            <Button variant="ghost" size="sm" onClick={handleLogout} aria-label={t("signOut")}>
               <LogOut className="size-4" />
             </Button>
           </div>

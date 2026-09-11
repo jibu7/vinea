@@ -15,6 +15,7 @@ import { useApiErrorToast } from "@/lib/use-api-error-toast";
 
 export default function DefaultsPage() {
   const t = useTranslations("maintenance");
+  const tc = useTranslations("common");
   const toast = useToast();
   const showApiError = useApiErrorToast();
 
@@ -53,7 +54,7 @@ export default function DefaultsPage() {
       });
       toast.show({ title: t("saved"), tone: "success" });
     } catch (err) {
-      showApiError(err, "Couldn't save GL defaults");
+      showApiError(err, t("glDefaultsSaveFailed"));
     }
   }
 
@@ -61,14 +62,12 @@ export default function DefaultsPage() {
     <div className="flex min-h-screen flex-col" data-density="dense">
       <header className="flex items-center justify-between border-b border-[var(--vinea-border)] bg-[var(--vinea-surface-raised)] px-6 py-3">
         <div className="flex items-center gap-3">
-          <Link href="/" className="text-[var(--vinea-ink-subtle)] hover:text-[var(--vinea-ink)]" aria-label="Back">
+          <Link href="/" className="text-[var(--vinea-ink-subtle)] hover:text-[var(--vinea-ink)]" aria-label={tc("back")}>
             <ArrowLeft className="size-4" />
           </Link>
           <div>
             <h1 className="font-display text-lg font-semibold">{t("defaults")}</h1>
-            <p className="text-xs text-[var(--vinea-ink-muted)]">
-              General Ledger default accounts for automated system entries
-            </p>
+            <p className="text-xs text-[var(--vinea-ink-muted)]">{t("defaultsSubtitle")}</p>
           </div>
         </div>
         <ThemeToggle />
@@ -87,7 +86,7 @@ export default function DefaultsPage() {
                 options={toOptions(postableAccounts, (a) => `${a.code} · ${a.name}`)}
                 value={retainedEarningsId}
                 onValueChange={setRetainedEarningsId}
-                placeholder="Choose retained earnings account…"
+                placeholder={t("chooseRetainedEarnings")}
               />
             </Field>
 
@@ -96,7 +95,7 @@ export default function DefaultsPage() {
                 options={toOptions(postableAccounts, (a) => `${a.code} · ${a.name}`)}
                 value={roundingDiffId}
                 onValueChange={setRoundingDiffId}
-                placeholder="Choose rounding difference account…"
+                placeholder={t("chooseRoundingDifference")}
               />
             </Field>
 

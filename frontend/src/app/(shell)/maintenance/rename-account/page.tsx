@@ -14,11 +14,12 @@ import { ThemeToggle } from "@/design/components/theme-toggle";
 import { useToast } from "@/design/components/toast";
 import { useAccountHistory, useAccounts, useUpdateAccount } from "@/features/gl/hooks";
 import { toOptions } from "@/features/gl/lookups";
-import { formatDate } from "@/lib/format";
+import { DOT, formatDate } from "@/lib/format";
 import { useApiErrorToast } from "@/lib/use-api-error-toast";
 
 function RenameAccountView() {
   const t = useTranslations("maintenance");
+  const tc = useTranslations("common");
   const searchParams = useSearchParams();
   const toast = useToast();
   const showApiError = useApiErrorToast();
@@ -50,13 +51,13 @@ function RenameAccountView() {
         payload: { code: newCode },
       });
       toast.show({
-        title: "Account renamed",
+        title: t("accountRenamed"),
         description: `Code changed from ${currentAccount.code} to ${updated.code}`,
         tone: "success",
       });
       history.refetch();
     } catch (err) {
-      showApiError(err, "Couldn't rename account");
+      showApiError(err, t("accountRenameFailed"));
     }
   }
 
@@ -66,14 +67,12 @@ function RenameAccountView() {
     <div className="flex min-h-screen flex-col" data-density="dense">
       <header className="flex items-center justify-between border-b border-[var(--vinea-border)] bg-[var(--vinea-surface-raised)] px-6 py-3">
         <div className="flex items-center gap-3">
-          <Link href="/maintenance/chart-of-accounts" className="text-[var(--vinea-ink-subtle)] hover:text-[var(--vinea-ink)]" aria-label="Back">
+          <Link href="/maintenance/chart-of-accounts" className="text-[var(--vinea-ink-subtle)] hover:text-[var(--vinea-ink)]" aria-label={tc("back")}>
             <ArrowLeft className="size-4" />
           </Link>
           <div>
             <h1 className="font-display text-lg font-semibold">{t("renameAccount")}</h1>
-            <p className="text-xs text-[var(--vinea-ink-muted)]">
-              Update an account code while keeping its full ledger history and linkages intact
-            </p>
+            <p className="text-xs text-[var(--vinea-ink-muted)]">{t("renameAccountSubtitle")}</p>
           </div>
         </div>
         <ThemeToggle />
@@ -83,12 +82,12 @@ function RenameAccountView() {
         <div className="mx-auto max-w-4xl space-y-6">
           {/* Account Selection and Rename Card */}
           <div className="rounded-[var(--radius-card)] border border-[var(--vinea-border)] bg-[var(--vinea-surface-raised)] p-6 space-y-6">
-            <Field label="Select account to rename">
+            <Field label={t("selectAccountToRename")}>
               <Combobox
                 options={toOptions(accounts.data ?? [], (a) => `${a.code} · ${a.name}`)}
                 value={selectedAccountId}
                 onValueChange={setSelectedAccountId}
-                placeholder="Choose account…"
+                placeholder={t("chooseAccount")}
               />
             </Field>
 
@@ -96,7 +95,7 @@ function RenameAccountView() {
               <div className="rounded-[var(--radius-control)] border border-[var(--vinea-border)] bg-[var(--vinea-surface-sunken)]/50 p-4 space-y-4">
                 <div className="flex items-center justify-between">
                   <div>
-                    <p className="text-xs uppercase tracking-wider text-[var(--vinea-ink-subtle)]">Account</p>
+                    <p className="text-xs uppercase tracking-wider text-[var(--vinea-ink-subtle)]">{t("account")}</p>
                     <p className="text-base font-semibold text-[var(--vinea-ink)]">{currentAccount.name}</p>
                   </div>
                   <div className="flex gap-2">
@@ -116,7 +115,7 @@ function RenameAccountView() {
                     <Input
                       value={newCode}
                       onChange={(e) => setNewCode(e.target.value)}
-                      placeholder="e.g. 6150"
+                      placeholder={t("newCodePlaceholder")}
                       className="font-mono"
                     />
                   </Field>
@@ -125,7 +124,7 @@ function RenameAccountView() {
                 <div className="flex items-center justify-between pt-2">
                   <div className="flex items-center gap-2 text-xs text-[var(--vinea-ink-muted)]">
                     <ShieldAlert className="size-4 text-[var(--vinea-warning)]" />
-                    <span>Existing journal lines stay tied to this account; only the visible code is updated.</span>
+                    <span>{t("renameKeepsHistoryNote")}</span>
                   </div>
 
                   <Button
@@ -150,17 +149,17 @@ function RenameAccountView() {
               </div>
 
               {history.isLoading ? (
-                <div className="p-4 text-center text-xs text-[var(--vinea-ink-subtle)]">Loading history…</div>
+                <div className="p-4 text-center text-xs text-[var(--vinea-ink-subtle)]">{t("loadingHistory")}</div>
               ) : !history.data || history.data.length === 0 ? (
-                <p className="text-xs text-[var(--vinea-ink-subtle)]">No change events recorded for this account.</p>
+                <p className="text-xs text-[var(--vinea-ink-subtle)]">{t("noChangeEvents")}</p>
               ) : (
                 <Table>
                   <THead>
                     <TR>
-                      <TH className="w-36">Timestamp</TH>
-                      <TH className="w-40">Event</TH>
-                      <TH>Details</TH>
-                      <TH className="w-48 text-right">Changed By</TH>
+                      <TH className="w-36">{t("timestamp")}</TH>
+                      <TH className="w-40">{t("event")}</TH>
+                      <TH>{t("details")}</TH>
+                      <TH className="w-48 text-right">{t("changedBy")}</TH>
                     </TR>
                   </THead>
                   <TBody>
@@ -190,8 +189,8 @@ function RenameAccountView() {
                               </span>
                             ) : isRecon && afterCode ? (
                               <span className="text-[var(--vinea-ink)]">
-                                Reconciled to <strong className="font-mono">{afterCode}</strong>
-                                {note ? ` · ${note}` : ""}
+                                {t("reconciledTo")} <strong className="font-mono">{afterCode}</strong>
+                                {note ? DOT + note : ""}
                               </span>
                             ) : (
                               <span className="text-[var(--vinea-ink-muted)]">
@@ -217,8 +216,9 @@ function RenameAccountView() {
 }
 
 export default function RenameAccountPage() {
+  const tc = useTranslations("common");
   return (
-    <Suspense fallback={<div className="flex min-h-screen items-center justify-center text-sm">Loading…</div>}>
+    <Suspense fallback={<div className="flex min-h-screen items-center justify-center text-sm">{tc("loading")}</div>}>
       <RenameAccountView />
     </Suspense>
   );

@@ -21,11 +21,12 @@ import {
 } from "@/features/gl/hooks";
 import { byId, toOptions } from "@/features/gl/lookups";
 import type { TaxCode } from "@/features/gl/types";
-import { formatDate } from "@/lib/format";
+import { dotted, formatDate } from "@/lib/format";
 import { useApiErrorToast } from "@/lib/use-api-error-toast";
 
 export default function TaxTypesPage() {
   const t = useTranslations("maintenance");
+  const tCommon = useTranslations("common");
   const toast = useToast();
   const showApiError = useApiErrorToast();
 
@@ -88,7 +89,7 @@ export default function TaxTypesPage() {
             valid_to: validTo ? validTo.toISOString().slice(0, 10) : null,
           },
         });
-        toast.show({ title: "Tax code updated", tone: "success" });
+        toast.show({ title: t("taxCodeUpdated"), tone: "success" });
       } else {
         await createTaxCode.mutateAsync({
           code,
@@ -99,11 +100,11 @@ export default function TaxTypesPage() {
           valid_from: validFrom.toISOString().slice(0, 10),
           valid_to: validTo ? validTo.toISOString().slice(0, 10) : null,
         });
-        toast.show({ title: "Tax code created", tone: "success" });
+        toast.show({ title: t("taxCodeCreated"), tone: "success" });
       }
       setOpen(false);
     } catch (err) {
-      showApiError(err, "Couldn't save tax code");
+      showApiError(err, t("taxCodeSaveFailed"));
     }
   }
 
@@ -119,7 +120,7 @@ export default function TaxTypesPage() {
         tone: "success",
       });
     } catch (err) {
-      showApiError(err, "Couldn't update tax code");
+      showApiError(err, t("taxCodeUpdateFailed"));
     }
   }
 
@@ -142,14 +143,12 @@ export default function TaxTypesPage() {
     <div className="flex min-h-screen flex-col" data-density="dense">
       <header className="flex items-center justify-between border-b border-[var(--vinea-border)] bg-[var(--vinea-surface-raised)] px-6 py-3">
         <div className="flex items-center gap-3">
-          <Link href="/" className="text-[var(--vinea-ink-subtle)] hover:text-[var(--vinea-ink)]" aria-label="Back">
+          <Link href="/" className="text-[var(--vinea-ink-subtle)] hover:text-[var(--vinea-ink)]" aria-label={tCommon("back")}>
             <ArrowLeft className="size-4" />
           </Link>
           <div>
             <h1 className="font-display text-lg font-semibold">{t("taxTypes")}</h1>
-            <p className="text-xs text-[var(--vinea-ink-muted)]">
-              Tax codes, statutory VAT rates, and linked ledger accounts (Appendix C.1)
-            </p>
+            <p className="text-xs text-[var(--vinea-ink-muted)]">{t("taxesSubtitle")}</p>
           </div>
         </div>
 
@@ -172,12 +171,12 @@ export default function TaxTypesPage() {
             <Table>
               <THead>
                 <TR>
-                  <TH className="w-32">Code</TH>
-                  <TH>Tax Name & Nature</TH>
-                  <TH className="w-24 text-right">Rate</TH>
-                  <TH>GL Account</TH>
-                  <TH className="w-48">Validity Window</TH>
-                  <TH className="w-36 text-right">Status</TH>
+                  <TH className="w-32">{t("code")}</TH>
+                  <TH>{t("taxNameAndNature")}</TH>
+                  <TH className="w-24 text-right">{t("rate")}</TH>
+                  <TH>{t("glAccount")}</TH>
+                  <TH className="w-48">{t("validityWindow")}</TH>
+                  <TH className="w-36 text-right">{t("status")}</TH>
                 </TR>
               </THead>
               <TBody>
@@ -191,9 +190,9 @@ export default function TaxTypesPage() {
                         <p className="font-medium text-xs text-[var(--vinea-ink)]">{tc.name}</p>
                         <p className="text-[11px] text-[var(--vinea-ink-subtle)]">{formatNatureLabel(tc.nature)}</p>
                       </TD>
-                      <TD className="text-right font-mono text-xs font-semibold">{rateNum}%</TD>
+                      <TD className="text-right font-mono text-xs font-semibold">{t("percentValue", { value: rateNum })}</TD>
                       <TD className="text-xs text-[var(--vinea-ink)]">
-                        {acc ? `${acc.code} · ${acc.name}` : "—"}
+                        {acc ? dotted(acc.code, acc.name) : t("emptyValue")}
                       </TD>
                       <TD className="text-xs text-[var(--vinea-ink-muted)]">
                         {formatDate(tc.valid_from)} {tc.valid_to ? `– ${formatDate(tc.valid_to)}` : "– Indefinite"}
@@ -203,7 +202,7 @@ export default function TaxTypesPage() {
                           <button
                             type="button"
                             onClick={() => startEdit(tc)}
-                            aria-label={`Edit ${tc.code}`}
+                            aria-label={t("editLabel", { name: tc.code })}
                             className="p-1 text-[var(--vinea-ink-subtle)] hover:text-[var(--vinea-ink)] rounded"
                           >
                             <Edit2 className="size-3.5" />
@@ -230,14 +229,14 @@ export default function TaxTypesPage() {
           <div className="space-y-3 pt-2">
             <div className="grid grid-cols-2 gap-3">
               <Field label={t("code")}>
-                <Input value={code} onChange={(e) => setCode(e.target.value)} disabled={!!editingId} placeholder="VAT-OUT-18" />
+                <Input value={code} onChange={(e) => setCode(e.target.value)} disabled={!!editingId} placeholder={t("taxCodePlaceholder")} />
               </Field>
               <Field label={t("ratePercent")}>
-                <Input value={ratePct} onChange={(e) => setRatePct(e.target.value)} type="number" step="any" placeholder="18" />
+                <Input value={ratePct} onChange={(e) => setRatePct(e.target.value)} type="number" step="any" placeholder={t("taxRatePlaceholder")} />
               </Field>
             </div>
             <Field label={t("name")}>
-              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Standard Rate Output VAT" />
+              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder={t("taxNamePlaceholder")} />
             </Field>
             {!editingId && (
               <Field label={t("nature")}>
@@ -258,7 +257,7 @@ export default function TaxTypesPage() {
                 options={toOptions(postableAccounts, (a) => `${a.code} · ${a.name}`)}
                 value={glAccountId}
                 onValueChange={setGlAccountId}
-                placeholder="Choose GL posting account…"
+                placeholder={t("chooseGlPostingAccount")}
               />
             </Field>
             {!editingId && (
@@ -268,7 +267,7 @@ export default function TaxTypesPage() {
             )}
 
             <div className="flex justify-end gap-2 pt-2">
-              <Button variant="ghost" onClick={() => setOpen(false)}>Cancel</Button>
+              <Button variant="ghost" onClick={() => setOpen(false)}>{t("cancel")}</Button>
               <Button variant="primary" disabled={!name || !ratePct} onClick={handleSave}>
                 {t("save")}
               </Button>

@@ -18,10 +18,12 @@ import { byId, toOptions } from "@/features/gl/lookups";
 import type { AccountTransaction, AccountTransactionsResponse } from "@/features/gl/types";
 import { api } from "@/lib/api";
 import { exportToCsv } from "@/lib/csv";
-import { formatDate } from "@/lib/format";
+import { dotted, formatDate } from "@/lib/format";
 
 function AccountTransactionsReportView() {
   const t = useTranslations("gl");
+  const tc = useTranslations("common");
+  const tApp = useTranslations("app");
   const searchParams = useSearchParams();
   const { data: me } = useMe();
   const initialAccountId = searchParams.get("accountId") ?? "";
@@ -172,7 +174,7 @@ function AccountTransactionsReportView() {
       {/* Screen Header */}
       <header className="flex items-center justify-between border-b border-[var(--vinea-border)] bg-[var(--vinea-surface-raised)] px-6 py-3 print:hidden">
         <div className="flex items-center gap-3">
-          <Link href="/" className="text-[var(--vinea-ink-subtle)] hover:text-[var(--vinea-ink)]" aria-label="Back">
+          <Link href="/" className="text-[var(--vinea-ink-subtle)] hover:text-[var(--vinea-ink)]" aria-label={tc("back")}>
             <ArrowLeft className="size-4" />
           </Link>
           <div>
@@ -209,32 +211,39 @@ function AccountTransactionsReportView() {
           <div className="hidden border-b-2 border-black pb-4 print:block">
             <div className="flex items-baseline justify-between">
               <div>
-                <h1 className="text-2xl font-bold tracking-tight">{me?.company?.name ?? "Vinea ERP"}</h1>
+                <h1 className="text-2xl font-bold tracking-tight">{me?.company?.name ?? tApp("name")}</h1>
                 <p className="text-base font-semibold">{t("accountTransactionsReport")}</p>
                 {selectedAccount && (
                   <p className="text-sm font-medium">
-                    Account: {selectedAccount.code} — {selectedAccount.name} ({selectedAccount.class})
+                    {t("accountHeading", {
+                      code: selectedAccount.code,
+                      name: selectedAccount.name,
+                      accountClass: selectedAccount.class,
+                    })}
                   </p>
                 )}
               </div>
               <div className="text-right text-xs">
                 <p>
-                  <strong>Period:</strong> {formatDate(dateFrom)} – {formatDate(dateTo)}
+                  <strong>{tc("labelColon", { label: t("period") })}</strong>{" "}
+                  {t("dateRange", { from: formatDate(dateFrom), to: formatDate(dateTo) })}
                 </p>
                 <p>
-                  <strong>Printed:</strong> {formatDate(new Date())}
+                  <strong>{tc("labelColon", { label: t("printed") })}</strong> {formatDate(new Date())}
                 </p>
               </div>
             </div>
             <div className="mt-2 flex gap-4 text-xs text-gray-600">
               {selectedBranch && (
                 <span>
-                  <strong>Branch:</strong> {selectedBranch.code} - {selectedBranch.name}
+                  <strong>{tc("labelColon", { label: t("branch") })}</strong>{" "}
+                  {t("codeName", { code: selectedBranch.code, name: selectedBranch.name })}
                 </span>
               )}
               {selectedProject && (
                 <span>
-                  <strong>Project:</strong> {selectedProject.code} - {selectedProject.name}
+                  <strong>{tc("labelColon", { label: t("project") })}</strong>{" "}
+                  {t("codeName", { code: selectedProject.code, name: selectedProject.name })}
                 </span>
               )}
             </div>
@@ -247,7 +256,7 @@ function AccountTransactionsReportView() {
                 options={toOptions(accounts.data ?? [], (a) => `${a.code} · ${a.name}`)}
                 value={accountId}
                 onValueChange={setAccountId}
-                placeholder="Choose an account…"
+                placeholder={t("chooseAccount")}
               />
             </Field>
             <Field label={t("dateFrom")}>
@@ -265,7 +274,7 @@ function AccountTransactionsReportView() {
                 <option value="">{t("allBranches")}</option>
                 {(branches.data ?? []).map((b) => (
                   <option key={b.id} value={b.id}>
-                    {b.code} · {b.name}
+                    {dotted(b.code, b.name)}
                   </option>
                 ))}
               </select>
@@ -278,14 +287,14 @@ function AccountTransactionsReportView() {
             </div>
           ) : loading ? (
             <div className="flex h-48 items-center justify-center text-sm text-[var(--vinea-ink-subtle)]">
-              Loading account transactions…
+              {t("loadingAccountTransactions")}
             </div>
           ) : (
             <div className="overflow-auto rounded-[var(--radius-card)] border border-[var(--vinea-border)] bg-[var(--vinea-surface-raised)] print:border print:border-gray-300">
               {/* Opening Balance Bar */}
               <div className="flex items-center justify-between border-b border-[var(--vinea-border)] bg-[var(--vinea-surface-sunken)]/60 px-4 py-3 print:bg-gray-100">
                 <span className="text-xs font-semibold uppercase tracking-wider text-[var(--vinea-ink-muted)] print:text-black">
-                  {t("openingBalance")} (as of {formatDate(dateFrom)})
+                  {t("openingBalanceAsOf", { date: formatDate(dateFrom) })}
                 </span>
                 <span className="font-mono text-sm font-semibold print:text-black">
                   {currencyLike && <Money amount={Number(openingBase)} currency={currencyLike} />}
@@ -301,13 +310,13 @@ function AccountTransactionsReportView() {
                   <THead className="print:bg-gray-100">
                     <TR>
                       <TH className="w-24">{t("date")}</TH>
-                      <TH className="w-28">Doc #</TH>
+                      <TH className="w-28">{t("docNumber")}</TH>
                       <TH className="w-32">{t("reference")}</TH>
-                      <TH>Description</TH>
-                      <TH className="w-20">Branch</TH>
-                      <TH className="w-20">Project</TH>
-                      <TH className="w-32 text-right">Debit</TH>
-                      <TH className="w-32 text-right">Credit</TH>
+                      <TH>{t("description")}</TH>
+                      <TH className="w-20">{t("branch")}</TH>
+                      <TH className="w-20">{t("project")}</TH>
+                      <TH className="w-32 text-right">{t("debit")}</TH>
+                      <TH className="w-32 text-right">{t("credit")}</TH>
                       <TH className="w-36 text-right">{t("runningBalance")}</TH>
                     </TR>
                   </THead>
@@ -357,7 +366,7 @@ function AccountTransactionsReportView() {
               <div className="flex items-center justify-between border-t-2 border-[var(--vinea-border)] bg-[var(--vinea-surface-sunken)]/60 px-6 py-4 font-mono text-sm print:border-t-2 print:border-black print:bg-gray-50">
                 <div>
                   <span className="font-sans text-xs font-semibold uppercase tracking-wider text-[var(--vinea-ink-muted)] print:text-black">
-                    {t("closingBalance")} (as of {formatDate(dateTo)}):
+                    {tc("labelColon", { label: t("closingBalanceAsOf", { date: formatDate(dateTo) }) })}
                   </span>{" "}
                   <span className="font-semibold print:text-black">
                     {currencyLike && <Money amount={closingBalance} currency={currencyLike} />}
@@ -366,7 +375,7 @@ function AccountTransactionsReportView() {
                 <div className="flex gap-8">
                   <div>
                     <span className="font-sans text-xs text-[var(--vinea-ink-subtle)] print:text-black">
-                      {t("totalDebit")}:
+                      {tc("labelColon", { label: t("totalDebit") })}
                     </span>{" "}
                     <span className="font-semibold">
                       {currencyLike && <Money amount={totalDebit} currency={currencyLike} />}
@@ -374,7 +383,7 @@ function AccountTransactionsReportView() {
                   </div>
                   <div>
                     <span className="font-sans text-xs text-[var(--vinea-ink-subtle)] print:text-black">
-                      {t("totalCredit")}:
+                      {tc("labelColon", { label: t("totalCredit") })}
                     </span>{" "}
                     <span className="font-semibold">
                       {currencyLike && <Money amount={totalCredit} currency={currencyLike} />}
@@ -391,8 +400,9 @@ function AccountTransactionsReportView() {
 }
 
 export default function AccountTransactionsReportPage() {
+  const tc = useTranslations("common");
   return (
-    <Suspense fallback={<div className="flex min-h-screen items-center justify-center text-sm">Loading…</div>}>
+    <Suspense fallback={<div className="flex min-h-screen items-center justify-center text-sm">{tc("loading")}</div>}>
       <AccountTransactionsReportView />
     </Suspense>
   );

@@ -2,10 +2,12 @@
 
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { useMe } from "@/features/auth/hooks";
 import { AppShell } from "./app-shell";
 
 export default function ShellLayout({ children }: { children: React.ReactNode }) {
+  const t = useTranslations("common");
   const router = useRouter();
   const { data: me, isPending, isError } = useMe();
 
@@ -16,7 +18,7 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
   if (isPending) {
     return (
       <div className="flex min-h-screen items-center justify-center text-sm text-[var(--vinea-ink-subtle)]">
-        Loading…
+        {t("loading")}
       </div>
     );
   }

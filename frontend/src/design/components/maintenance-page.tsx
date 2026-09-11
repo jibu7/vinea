@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useTranslations } from "next-intl";
 import { ArrowLeft } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { ThemeToggle } from "./theme-toggle";
@@ -26,6 +27,7 @@ export function MaintenancePage({
   width?: "wide" | "narrow";
   children: React.ReactNode;
 }) {
+  const t = useTranslations("common");
   return (
     <div className="flex min-h-screen flex-col" data-density="dense">
       <header className="flex items-center justify-between border-b border-[var(--vinea-border)] bg-[var(--vinea-surface-raised)] px-6 py-3">
@@ -33,7 +35,7 @@ export function MaintenancePage({
           <Link
             href={backHref}
             className="text-[var(--vinea-ink-subtle)] hover:text-[var(--vinea-ink)]"
-            aria-label="Back"
+            aria-label={t("back")}
           >
             <ArrowLeft className="size-4" />
           </Link>

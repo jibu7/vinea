@@ -17,7 +17,7 @@ import { useGLLookups, toOptions, byId } from "@/features/gl/lookups";
 import type { JournalEntryCreatePayload, JournalLineInput } from "@/features/gl/types";
 import { useApiErrorToast } from "@/lib/use-api-error-toast";
 import { loadDraft, saveDraft, clearDraft, newDraftId, type Draft } from "@/lib/drafts";
-import { formatDate, roundHalfUp } from "@/lib/format";
+import { dotted, formatDate, roundHalfUp } from "@/lib/format";
 
 interface JournalDraftData {
   entryDate: string;
@@ -215,17 +215,17 @@ export default function NewJournalBatchPage() {
             aria-label={t("branch")}
             className="h-10 w-full rounded-[var(--radius-control)] border border-[var(--vinea-border-strong)] bg-[var(--vinea-surface-raised)] px-3 text-sm"
           >
-            <option value="">—</option>
+            <option value="">{t("emptyValue")}</option>
             {(branches.data ?? []).map((b) => (
-              <option key={b.id} value={b.id}>{b.code} · {b.name}</option>
+              <option key={b.id} value={b.id}>{dotted(b.code, b.name)}</option>
             ))}
           </select>
         </Field>
         <Field label={t("reference")}>
-          <Input value={reference} onChange={(e) => setReference(e.target.value)} placeholder="e.g. CHQ-1002" />
+          <Input value={reference} onChange={(e) => setReference(e.target.value)} placeholder={t("referencePlaceholder")} />
         </Field>
         <Field label={t("description")}>
-          <Input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="September payroll accrual" />
+          <Input value={description} onChange={(e) => setDescription(e.target.value)} placeholder={t("journalDescriptionPlaceholder")} />
         </Field>
       </div>
 

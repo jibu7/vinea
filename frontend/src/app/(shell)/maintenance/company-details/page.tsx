@@ -41,11 +41,13 @@ import {
   useUpdateGLSettings,
 } from "@/features/gl/hooks";
 import { toOptions } from "@/features/gl/lookups";
-import { formatDate } from "@/lib/format";
+import { dotted, formatDate } from "@/lib/format";
 import { useApiErrorToast } from "@/lib/use-api-error-toast";
 
 export default function CompanyDetailsPage() {
   const t = useTranslations("maintenance");
+  const tc = useTranslations("common");
+  const tGl = useTranslations("gl");
   const toast = useToast();
   const showApiError = useApiErrorToast();
 
@@ -122,7 +124,7 @@ export default function CompanyDetailsPage() {
       });
       toast.show({ title: t("saved"), tone: "success" });
     } catch (err) {
-      showApiError(err, "Couldn't update company details");
+      showApiError(err, t("companyUpdateFailed"));
     }
   }
 
@@ -134,7 +136,7 @@ export default function CompanyDetailsPage() {
       });
       toast.show({ title: t("saved"), tone: "success" });
     } catch (err) {
-      showApiError(err, "Couldn't save GL defaults");
+      showApiError(err, t("glDefaultsSaveFailed"));
     }
   }
 
@@ -148,9 +150,9 @@ export default function CompanyDetailsPage() {
       });
       setNewYearOpen(false);
       setYearCode("");
-      toast.show({ title: "Fiscal year created", tone: "success" });
+      toast.show({ title: t("fiscalYearCreated"), tone: "success" });
     } catch (err) {
-      showApiError(err, "Couldn't create fiscal year");
+      showApiError(err, t("fiscalYearCreateFailed"));
     }
   }
 
@@ -159,16 +161,16 @@ export default function CompanyDetailsPage() {
     try {
       if (reopenTarget.type === "year") {
         await reopenFiscalYear.mutateAsync({ yearId: reopenTarget.id, reason: reopenReason });
-        toast.show({ title: "Fiscal year reopened", tone: "success" });
+        toast.show({ title: t("fiscalYearReopened"), tone: "success" });
       } else {
         await reopenPeriod.mutateAsync({ periodId: reopenTarget.id, reason: reopenReason });
-        toast.show({ title: "Period reopened", tone: "success" });
+        toast.show({ title: t("periodReopened"), tone: "success" });
       }
       setReopenOpen(false);
       setReopenReason("");
       setReopenTarget(null);
     } catch (err) {
-      showApiError(err, "Couldn't reopen");
+      showApiError(err, t("reopenFailed"));
     }
   }
 
@@ -178,13 +180,13 @@ export default function CompanyDetailsPage() {
     <div className="flex min-h-screen flex-col" data-density="dense">
       <header className="flex items-center justify-between border-b border-[var(--vinea-border)] bg-[var(--vinea-surface-raised)] px-6 py-3">
         <div className="flex items-center gap-3">
-          <Link href="/" className="text-[var(--vinea-ink-subtle)] hover:text-[var(--vinea-ink)]" aria-label="Back">
+          <Link href="/" className="text-[var(--vinea-ink-subtle)] hover:text-[var(--vinea-ink)]" aria-label={tc("back")}>
             <ArrowLeft className="size-4" />
           </Link>
           <div>
             <h1 className="font-display text-lg font-semibold">{t("companyDetails")}</h1>
             <p className="text-xs text-[var(--vinea-ink-muted)]">
-              {companyQuery.data?.name ?? "Company setup"} · Configuration & fiscal periods
+              {dotted(companyQuery.data?.name ?? t("companySetup"), t("companyDetailsSubtitle"))}
             </p>
           </div>
         </div>
@@ -214,7 +216,7 @@ export default function CompanyDetailsPage() {
                 </Field>
                 <div className="grid grid-cols-2 gap-4">
                   <Field label={t("tin")}>
-                    <Input value={tin} onChange={(e) => setTin(e.target.value)} placeholder="e.g. 100234567" />
+                    <Input value={tin} onChange={(e) => setTin(e.target.value)} placeholder={t("tinPlaceholder")} />
                   </Field>
                   <Field label={t("fiscalCountry")}>
                     <Input value={fiscalCountry} onChange={(e) => setFiscalCountry(e.target.value)} maxLength={2} />
@@ -247,7 +249,7 @@ export default function CompanyDetailsPage() {
                 <div className="flex items-center justify-between">
                   <div>
                     <h2 className="font-display text-base font-semibold">{t("fiscalYears")}</h2>
-                    <p className="text-xs text-[var(--vinea-ink-muted)]">Annual boundaries for ledger closing</p>
+                    <p className="text-xs text-[var(--vinea-ink-muted)]">{t("fiscalYearsSubtitle")}</p>
                   </div>
                   <Dialog open={newYearOpen} onOpenChange={setNewYearOpen}>
                     <DialogTrigger asChild>
@@ -257,22 +259,22 @@ export default function CompanyDetailsPage() {
                     </DialogTrigger>
                     <DialogContent title={t("newFiscalYear")}>
                       <div className="space-y-3 pt-2">
-                        <Field label="Year code">
-                          <Input value={yearCode} onChange={(e) => setYearCode(e.target.value)} placeholder="FY2026" />
+                        <Field label={t("yearCode")}>
+                          <Input value={yearCode} onChange={(e) => setYearCode(e.target.value)} placeholder={t("yearCodePlaceholder")} />
                         </Field>
                         <div className="grid grid-cols-2 gap-3">
-                          <Field label="Start date">
+                          <Field label={t("startDate")}>
                             <DatePicker value={startDate} onValueChange={setStartDate} />
                           </Field>
-                          <Field label="End date">
+                          <Field label={t("endDate")}>
                             <DatePicker value={endDate} onValueChange={setEndDate} />
                           </Field>
                         </div>
-                        <Field label="Number of periods">
+                        <Field label={t("numberOfPeriods")}>
                           <Input value={periodCount} onChange={(e) => setPeriodCount(e.target.value)} type="number" />
                         </Field>
                         <div className="flex justify-end gap-2 pt-2">
-                          <Button variant="ghost" onClick={() => setNewYearOpen(false)}>Cancel</Button>
+                          <Button variant="ghost" onClick={() => setNewYearOpen(false)}>{t("cancel")}</Button>
                           <Button variant="primary" disabled={!yearCode || createFiscalYear.isPending} onClick={handleCreateYear}>
                             {createFiscalYear.isPending ? t("saving") : t("save")}
                           </Button>
@@ -300,7 +302,7 @@ export default function CompanyDetailsPage() {
                         </StatusChip>
                       </div>
                       <p className="mt-1 text-xs text-[var(--vinea-ink-muted)]">
-                        {formatDate(fy.start_date)} – {formatDate(fy.end_date)}
+                        {tGl("dateRange", { from: formatDate(fy.start_date), to: formatDate(fy.end_date) })}
                       </p>
                       <div className="mt-3 flex gap-2">
                         {fy.status === "open" ? (
@@ -338,22 +340,20 @@ export default function CompanyDetailsPage() {
                 <div className="flex items-center justify-between">
                   <div>
                     <h2 className="font-display text-base font-semibold">{t("accountingPeriods")}</h2>
-                    <p className="text-xs text-[var(--vinea-ink-muted)]">
-                      Monthly posting control & audit checkpoints
-                    </p>
+                    <p className="text-xs text-[var(--vinea-ink-muted)]">{t("accountingPeriodsSubtitle")}</p>
                   </div>
                 </div>
 
                 {periodsQuery.isLoading ? (
-                  <div className="p-8 text-center text-xs text-[var(--vinea-ink-subtle)]">Loading periods…</div>
+                  <div className="p-8 text-center text-xs text-[var(--vinea-ink-subtle)]">{t("loadingPeriods")}</div>
                 ) : (
                   <Table>
                     <THead>
                       <TR>
-                        <TH className="w-16">#</TH>
-                        <TH>Period Name</TH>
-                        <TH className="w-48">Date Window</TH>
-                        <TH className="w-28">Status</TH>
+                        <TH className="w-16">{t("periodNumber")}</TH>
+                        <TH>{t("periodName")}</TH>
+                        <TH className="w-48">{t("dateWindow")}</TH>
+                        <TH className="w-28">{t("status")}</TH>
                         <TH className="w-40 text-right">{t("actions")}</TH>
                       </TR>
                     </THead>
@@ -363,7 +363,7 @@ export default function CompanyDetailsPage() {
                           <TD className="font-mono text-xs">{p.period_number}</TD>
                           <TD className="font-medium text-xs text-[var(--vinea-ink)]">{p.name}</TD>
                           <TD className="text-xs text-[var(--vinea-ink-muted)]">
-                            {formatDate(p.start_date)} – {formatDate(p.end_date)}
+                            {tGl("dateRange", { from: formatDate(p.start_date), to: formatDate(p.end_date) })}
                           </TD>
                           <TD>
                             <StatusChip
@@ -446,9 +446,7 @@ export default function CompanyDetailsPage() {
               <div className="rounded-[var(--radius-card)] border border-[var(--vinea-border)] bg-[var(--vinea-surface-raised)] p-6 space-y-4 max-w-2xl">
                 <div>
                   <h2 className="font-display text-base font-semibold">{t("generalSettings")}</h2>
-                  <p className="text-xs text-[var(--vinea-ink-muted)]">
-                    Default accounts for year-end retained earnings and FX rounding
-                  </p>
+                  <p className="text-xs text-[var(--vinea-ink-muted)]">{t("generalSettingsSubtitle")}</p>
                 </div>
 
                 <Field label={t("retainedEarningsAccount")}>
@@ -456,7 +454,7 @@ export default function CompanyDetailsPage() {
                     options={toOptions(postableAccounts, (a) => `${a.code} · ${a.name}`)}
                     value={retainedEarningsId}
                     onValueChange={setRetainedEarningsId}
-                    placeholder="Choose retained earnings account…"
+                    placeholder={t("chooseRetainedEarnings")}
                   />
                 </Field>
 
@@ -465,7 +463,7 @@ export default function CompanyDetailsPage() {
                     options={toOptions(postableAccounts, (a) => `${a.code} · ${a.name}`)}
                     value={roundingDiffId}
                     onValueChange={setRoundingDiffId}
-                    placeholder="Choose rounding difference account…"
+                    placeholder={t("chooseRoundingDifference")}
                   />
                 </Field>
 
@@ -480,19 +478,19 @@ export default function CompanyDetailsPage() {
 
           {/* Reopen Reason Dialog */}
           <Dialog open={reopenOpen} onOpenChange={setReopenOpen}>
-            <DialogContent title="Reopen Audit Confirmation" description="Reopening a closed fiscal boundary is audited.">
+            <DialogContent title={t("reopenAuditTitle")} description={t("reopenAuditDescription")}>
               <div className="space-y-3 pt-2">
                 <Field label={t("reason")}>
                   <Input
                     value={reopenReason}
                     onChange={(e) => setReopenReason(e.target.value)}
-                    placeholder="e.g. Late supplier invoice adjustments"
+                    placeholder={t("reopenReasonPlaceholder")}
                   />
                 </Field>
                 <div className="flex justify-end gap-2 pt-2">
-                  <Button variant="ghost" onClick={() => setReopenOpen(false)}>Cancel</Button>
+                  <Button variant="ghost" onClick={() => setReopenOpen(false)}>{t("cancel")}</Button>
                   <Button variant="primary" disabled={!reopenReason.trim()} onClick={handleConfirmReconfirm}>
-                    Confirm Reopen
+                    {t("confirmReopen")}
                   </Button>
                 </div>
               </div>

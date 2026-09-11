@@ -15,6 +15,8 @@ import { formatDate } from "@/lib/format";
 
 export default function ChartOfAccountsReportPage() {
   const t = useTranslations("gl");
+  const tc = useTranslations("common");
+  const tApp = useTranslations("app");
   const { data: me } = useMe();
   const { data: accounts, isLoading } = useAccounts();
 
@@ -52,7 +54,7 @@ export default function ChartOfAccountsReportPage() {
       a.name,
       a.class,
       a.is_postable ? "Postable" : "Header",
-      controlTypeLabel(a.control_type),
+      controlTypeLabel(a.control_type, t),
       a.is_active ? "Active" : "Inactive",
     ]);
     exportToCsv(`chart-of-accounts-${new Date().toISOString().slice(0, 10)}`, headers, rows);
@@ -63,13 +65,17 @@ export default function ChartOfAccountsReportPage() {
       {/* Screen Header */}
       <header className="flex items-center justify-between border-b border-[var(--vinea-border)] bg-[var(--vinea-surface-raised)] px-6 py-3 print:hidden">
         <div className="flex items-center gap-3">
-          <Link href="/" className="text-[var(--vinea-ink-subtle)] hover:text-[var(--vinea-ink)]" aria-label="Back">
+          <Link href="/" className="text-[var(--vinea-ink-subtle)] hover:text-[var(--vinea-ink)]" aria-label={tc("back")}>
             <ArrowLeft className="size-4" />
           </Link>
           <div>
             <h1 className="font-display text-lg font-semibold">{t("chartOfAccountsReport")}</h1>
             <p className="text-xs text-[var(--vinea-ink-muted)]">
-              {filtered.length} accounts ({summary.postable} postable, {summary.control} control)
+              {t("accountCountSummary", {
+                count: filtered.length,
+                postable: summary.postable,
+                control: summary.control,
+              })}
             </p>
           </div>
         </div>
@@ -90,15 +96,15 @@ export default function ChartOfAccountsReportPage() {
           <div className="hidden border-b-2 border-black pb-4 print:block">
             <div className="flex items-baseline justify-between">
               <div>
-                <h1 className="text-2xl font-bold tracking-tight">{me?.company?.name ?? "Vinea ERP"}</h1>
+                <h1 className="text-2xl font-bold tracking-tight">{me?.company?.name ?? tApp("name")}</h1>
                 <p className="text-base font-semibold">{t("chartOfAccountsReport")}</p>
               </div>
               <div className="text-right text-xs">
                 <p>
-                  <strong>Total Accounts:</strong> {filtered.length}
+                  <strong>{tc("labelColon", { label: t("totalAccounts") })}</strong> {filtered.length}
                 </p>
                 <p>
-                  <strong>Printed:</strong> {formatDate(new Date())}
+                  <strong>{tc("labelColon", { label: t("printed") })}</strong> {formatDate(new Date())}
                 </p>
               </div>
             </div>
@@ -113,7 +119,7 @@ export default function ChartOfAccountsReportPage() {
                   type="text"
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
-                  placeholder="Search by code or name…"
+                  placeholder={t("searchAccountsPlaceholder")}
                   className="h-10 w-full rounded-[var(--radius-control)] border border-[var(--vinea-border-strong)] bg-[var(--vinea-surface-raised)] pl-9 pr-3 text-sm text-[var(--vinea-ink)]"
                 />
               </div>
@@ -123,11 +129,11 @@ export default function ChartOfAccountsReportPage() {
                 className="h-10 rounded-[var(--radius-control)] border border-[var(--vinea-border-strong)] bg-[var(--vinea-surface-raised)] px-3 text-sm text-[var(--vinea-ink)]"
               >
                 <option value="all">{t("allClasses")}</option>
-                <option value="asset">Asset</option>
-                <option value="liability">Liability</option>
-                <option value="equity">Equity</option>
-                <option value="income">Income</option>
-                <option value="expense">Expense</option>
+                <option value="asset">{t("accountClasses.asset")}</option>
+                <option value="liability">{t("accountClasses.liability")}</option>
+                <option value="equity">{t("accountClasses.equity")}</option>
+                <option value="income">{t("accountClasses.income")}</option>
+                <option value="expense">{t("accountClasses.expense")}</option>
               </select>
             </div>
             <div className="flex items-center gap-4 text-xs">
@@ -155,23 +161,23 @@ export default function ChartOfAccountsReportPage() {
           {/* Listing Table */}
           {isLoading ? (
             <div className="flex h-48 items-center justify-center text-sm text-[var(--vinea-ink-subtle)]">
-              Loading chart of accounts…
+              {t("loadingChartOfAccounts")}
             </div>
           ) : filtered.length === 0 ? (
             <div className="rounded-[var(--radius-card)] border border-dashed border-[var(--vinea-border)] p-12 text-center text-sm text-[var(--vinea-ink-subtle)]">
-              No accounts match the current filter.
+              {t("noAccountsMatch")}
             </div>
           ) : (
             <div className="overflow-auto rounded-[var(--radius-card)] border border-[var(--vinea-border)] bg-[var(--vinea-surface-raised)] print:border print:border-gray-300">
               <Table>
                 <THead className="print:bg-gray-100">
                   <TR>
-                    <TH className="w-24">Code</TH>
-                    <TH>Account Name</TH>
-                    <TH className="w-28">Class</TH>
-                    <TH className="w-28">Type</TH>
-                    <TH className="w-32">Control Type</TH>
-                    <TH className="w-24 text-right">Status</TH>
+                    <TH className="w-24">{t("code")}</TH>
+                    <TH>{t("accountName")}</TH>
+                    <TH className="w-28">{t("accountClass")}</TH>
+                    <TH className="w-28">{t("accountType")}</TH>
+                    <TH className="w-32">{t("controlType")}</TH>
+                    <TH className="w-24 text-right">{t("status")}</TH>
                   </TR>
                 </THead>
                 <TBody className="divide-y divide-[var(--vinea-border)] print:divide-gray-300">
@@ -194,7 +200,7 @@ export default function ChartOfAccountsReportPage() {
                       <TD className="text-xs text-[var(--vinea-ink-subtle)] print:text-black">
                         {acc.control_type ? (
                           <span className="rounded bg-[var(--vinea-surface-sunken)] px-1.5 py-0.5 font-mono text-[11px] text-[var(--vinea-ink)]">
-                            {controlTypeLabel(acc.control_type)}
+                            {controlTypeLabel(acc.control_type, t)}
                           </span>
                         ) : (
                           "—"

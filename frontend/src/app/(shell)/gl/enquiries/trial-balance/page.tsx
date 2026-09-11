@@ -12,10 +12,11 @@ import { StatusChip } from "@/design/components/status-chip";
 import { Table, THead, TBody, TR, TH, TD } from "@/design/components/table";
 import { ThemeToggle } from "@/design/components/theme-toggle";
 import { useBranches, useCurrencies, useProjects, useTrialBalance } from "@/features/gl/hooks";
-import { formatDate } from "@/lib/format";
+import { dotted, formatDate } from "@/lib/format";
 
 export default function TrialBalanceEnquiryPage() {
   const t = useTranslations("gl");
+  const tc = useTranslations("common");
   const router = useRouter();
 
   const [asOfDate, setAsOfDate] = useState<Date>(() => new Date());
@@ -49,7 +50,7 @@ export default function TrialBalanceEnquiryPage() {
     <div className="flex min-h-screen flex-col" data-density="dense">
       <header className="flex items-center justify-between border-b border-[var(--vinea-border)] bg-[var(--vinea-surface-raised)] px-6 py-3">
         <div className="flex items-center gap-3">
-          <Link href="/" className="text-[var(--vinea-ink-subtle)] hover:text-[var(--vinea-ink)]" aria-label="Back">
+          <Link href="/" className="text-[var(--vinea-ink-subtle)] hover:text-[var(--vinea-ink)]" aria-label={tc("back")}>
             <ArrowLeft className="size-4" />
           </Link>
           <div>
@@ -103,7 +104,7 @@ export default function TrialBalanceEnquiryPage() {
                 <option value="">{t("allBranches")}</option>
                 {(branches.data ?? []).map((b) => (
                   <option key={b.id} value={b.id}>
-                    {b.code} · {b.name}
+                    {dotted(b.code, b.name)}
                   </option>
                 ))}
               </select>
@@ -117,7 +118,7 @@ export default function TrialBalanceEnquiryPage() {
                 <option value="">{t("allProjects")}</option>
                 {(projects.data ?? []).map((p) => (
                   <option key={p.id} value={p.id}>
-                    {p.code} · {p.name}
+                    {dotted(p.code, p.name)}
                   </option>
                 ))}
               </select>
@@ -166,22 +167,22 @@ export default function TrialBalanceEnquiryPage() {
           {/* Trial Balance Table */}
           {isLoading ? (
             <div className="flex h-48 items-center justify-center text-sm text-[var(--vinea-ink-subtle)]">
-              Loading trial balance…
+              {t("loadingTrialBalance")}
             </div>
           ) : !tb || tb.rows.length === 0 ? (
             <div className="rounded-[var(--radius-card)] border border-dashed border-[var(--vinea-border)] p-12 text-center text-sm text-[var(--vinea-ink-subtle)]">
-              No balances found as of {formatDate(asOfDate)}.
+              {t("noBalancesAsOf", { date: formatDate(asOfDate) })}
             </div>
           ) : (
             <Table>
               <THead>
                 <TR>
-                  <TH className="w-24">Code</TH>
-                  <TH>Account Name</TH>
-                  <TH className="w-28">Class</TH>
-                  <TH className="w-36 text-right">Debit</TH>
-                  <TH className="w-36 text-right">Credit</TH>
-                  <TH className="w-36 text-right">Net</TH>
+                  <TH className="w-24">{t("code")}</TH>
+                  <TH>{t("accountName")}</TH>
+                  <TH className="w-28">{t("accountClass")}</TH>
+                  <TH className="w-36 text-right">{t("debit")}</TH>
+                  <TH className="w-36 text-right">{t("credit")}</TH>
+                  <TH className="w-36 text-right">{t("net")}</TH>
                 </TR>
               </THead>
               <TBody>
