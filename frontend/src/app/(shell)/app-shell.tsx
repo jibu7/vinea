@@ -11,7 +11,8 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { useTranslations } from "next-intl";
-import { SidebarNav, navIntents } from "@/design/components/module-nav";
+import { SidebarNav } from "@/design/components/module-nav";
+import { navIntents } from "@/design/nav-tree";
 import { ThemeToggle } from "@/design/components/theme-toggle";
 import { Button } from "@/design/components/button";
 import { CommandPalette, type CommandPaletteItem } from "@/design/components/command-palette";

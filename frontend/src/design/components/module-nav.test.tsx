@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { SidebarNav, navIntents } from "./module-nav";
+import { SidebarNav } from "./module-nav";
+import { navIntents } from "@/design/nav-tree";
 
 const allPermissions = new Set(
   navIntents.flatMap((intent) => intent.items.map((item) => item.permission).filter(Boolean)) as string[],

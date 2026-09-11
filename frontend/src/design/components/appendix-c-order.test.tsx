@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { navIntents, type IntentLabel } from "./module-nav";
+import { navIntents, type IntentLabel } from "@/design/nav-tree";
 
 /**
  * Appendix C of the Master Plan adopts the owner's menu ordering as the navigation contract.

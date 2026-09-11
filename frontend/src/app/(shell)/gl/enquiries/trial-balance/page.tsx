@@ -99,6 +99,7 @@ export default function TrialBalanceEnquiryPage() {
               <select
                 value={branchId}
                 onChange={(e) => setBranchId(e.target.value)}
+                aria-label={t("branch")}
                 className="h-10 w-full rounded-[var(--radius-control)] border border-[var(--vinea-border-strong)] bg-[var(--vinea-surface-raised)] px-3 text-sm text-[var(--vinea-ink)]"
               >
                 <option value="">{t("allBranches")}</option>
@@ -113,6 +114,7 @@ export default function TrialBalanceEnquiryPage() {
               <select
                 value={projectId}
                 onChange={(e) => setProjectId(e.target.value)}
+                aria-label={t("project")}
                 className="h-10 w-full rounded-[var(--radius-control)] border border-[var(--vinea-border-strong)] bg-[var(--vinea-surface-raised)] px-3 text-sm text-[var(--vinea-ink)]"
               >
                 <option value="">{t("allProjects")}</option>

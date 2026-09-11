@@ -215,11 +215,36 @@ export async function setTheme(page: Page, theme: "light" | "dark"): Promise<voi
   await page.waitForTimeout(200);
 }
 
-/** Fails on any serious/critical axe violation, with the full violation JSON in the message. */
-export async function assertNoSeriousViolations(page: Page): Promise<void> {
+export interface SeriousViolation {
+  id: string;
+  impact: string;
+  help: string;
+  /** One CSS selector per offending node, so a report can name the element without the JSON. */
+  targets: string[];
+}
+
+/** Runs axe over the page and returns the serious/critical violations, worst first.
+ *
+ * Split from the assertion below because the nav-wide sweep visits every screen in the tree
+ * and has to *collect* across all of them: throwing on the first screen would report one
+ * failure and hide the rest, and an accessibility pass you have to run fifty times to see
+ * fifty problems is one nobody finishes. */
+export async function seriousViolations(page: Page): Promise<SeriousViolation[]> {
   const { default: AxeBuilder } = await import("@axe-core/playwright");
-  const { expect } = await import("@playwright/test");
   const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]).analyze();
-  const serious = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
+  return results.violations
+    .filter((v) => v.impact === "serious" || v.impact === "critical")
+    .map((v) => ({
+      id: v.id,
+      impact: v.impact ?? "serious",
+      help: v.help,
+      targets: v.nodes.map((n) => n.target.join(" ")),
+    }));
+}
+
+/** Fails on any serious/critical axe violation, with the offending rules and nodes in the message. */
+export async function assertNoSeriousViolations(page: Page): Promise<void> {
+  const { expect } = await import("@playwright/test");
+  const serious = await seriousViolations(page);
   expect(serious, JSON.stringify(serious, null, 2)).toEqual([]);
 }
