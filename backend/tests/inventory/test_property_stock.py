@@ -17,6 +17,10 @@ decimals.
 Illegal moves are skipped rather than failed: an issue with nothing to issue under `block`,
 a reversal of something already reversed. The property under test is the invariant suite, not
 the plumbing.
+
+Both machines carry `@pytest.mark.slow`, which is how the nightly deep workflow selects them
+(`pytest -m slow`). Without the marker they would run at two examples in CI and *never* at
+three hundred anywhere — a guard that exists and is never fired.
 """
 
 import itertools
@@ -269,6 +273,7 @@ def _drive(
     assert not stock_service.verify_stock_balances(db, fixture.company_id)
 
 
+@pytest.mark.slow
 @given(plan=PLAN, allow_negative=st.booleans())
 def test_the_invariants_hold_after_every_step_at_zero_decimals(
     db: Session, plan: list[tuple], allow_negative: bool
@@ -283,6 +288,7 @@ def test_the_invariants_hold_after_every_step_at_zero_decimals(
     )
 
 
+@pytest.mark.slow
 @given(plan=PLAN, allow_negative=st.booleans())
 def test_the_invariants_hold_after_every_step_at_two_decimals(
     db: Session, plan: list[tuple], allow_negative: bool

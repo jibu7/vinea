@@ -29,6 +29,17 @@ There is no back-fill. A tenant upgrading to this revision has no stock history 
 not have had one, since nothing before this revision could write a move — so the three tables
 start empty for everybody and the first posting is what fills them.
 
+**The downgrade is destructive in a way that does not undo itself.** It drops the move ledger,
+but the journal entries those moves posted are in `journal_entries` / `journal_lines`, and
+those are append-only: the downgrade cannot and must not remove them. A tenant that has posted
+stock and is then downgraded keeps an inventory account carrying value with no move behind it,
+and re-upgrading does not bring the moves back — the tables come back empty.
+`assert_stock_invariants` fails for that company from then on, correctly, and the way out is
+the one in `docs/ops/inventory-control-account.md`. Measured, not assumed: three receipts
+totalling 3 510 left `1300` at 3 510 with zero rows in `stock_moves` after a
+`downgrade -1` / `upgrade head` cycle. Downgrade this revision on a database that has posted
+stock only if you mean to reconstruct the moves by hand afterwards.
+
 `journal_lines` and `gl_transaction_types` each gain a `(company_id, id)` unique constraint,
 the composite targets `stock_moves.journal_line_id` and `stock_moves.transaction_type_id`
 point at: a move names the line that posted its value and the type that produced it, and the
@@ -269,6 +280,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # Destructive and not self-undoing: the moves go, the journal entries they posted stay
+    # (append-only, ADR-04), so the inventory account is left carrying value nothing explains.
+    # See the module docstring.
     for table in TENANT_TABLES:
         op.execute(f"DROP POLICY IF EXISTS tenant_isolation ON {table}")
     for name, table, _spec in INVENTORY_TRIGGERS:
