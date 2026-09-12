@@ -60,8 +60,17 @@ export const navIntents: NavIntent[] = [
       { label: "Transaction types", module: "Accounts Payable", permission: "ap:reports_view", href: "/maintenance/ap-transaction-types" },
       { label: "Defaults", module: "Accounts Payable", permission: "ap:reports_view", href: "/maintenance/ar-ap-defaults" },
       { label: "Rename supplier code", module: "Accounts Payable", permission: "ap:setup_manage", href: "/maintenance/rename-partner-code?role=ap" },
-      { label: "Items", module: "Inventory", phase: "P5" },
-      { label: "Warehouses", module: "Inventory", phase: "P5" },
+      // Appendix C's Inventory block, in the owner's order: Items, Warehouses, Trans types,
+      // Variable barcodes, UoM categories, Defaults, Rename Item Code. The last five had no
+      // rows at all before P5 step 6 — the tree carried only the two the tag named — so the
+      // screens land and the rows arrive in the same edit.
+      { label: "Items", module: "Inventory", permission: "inv:reports_view", href: "/maintenance/inventory-items" },
+      { label: "Warehouses", module: "Inventory", permission: "inv:reports_view", href: "/maintenance/warehouses" },
+      { label: "Transaction types", module: "Inventory", permission: "inv:reports_view", href: "/maintenance/inv-transaction-types" },
+      { label: "Variable barcodes", module: "Inventory", permission: "inv:reports_view", href: "/maintenance/variable-barcodes" },
+      { label: "Units of measure", module: "Inventory", permission: "inv:reports_view", href: "/maintenance/uom-categories" },
+      { label: "Defaults", module: "Inventory", permission: "inv:reports_view", href: "/maintenance/inventory-defaults" },
+      { label: "Rename item code", module: "Inventory", permission: "inv:item_rename", href: "/maintenance/rename-item-code" },
       { label: "Order defaults", module: "Order Entry", phase: "P6" },
       { label: "BOM items & defaults", module: "Bill of Materials", phase: "P12" },
       { label: "Tills & types", module: "Point of Sale", phase: "P11" },

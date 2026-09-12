@@ -397,3 +397,116 @@ def test_pointing_the_inventory_default_at_an_ordinary_account_is_refused(
     assert response.json()["field_errors"] == {
         "inventory_account_id": ["not an inventory control account"]
     }
+
+
+# --- Variable barcodes (P5 step 6) -----------------------------------------------------------
+
+
+def _barcode(client: TestClient, item: dict, barcode: str, uom_id: int, **extra) -> dict:
+    return client.post(
+        f"/api/v1/inventory/items/{item['id']}/barcodes",
+        json={"barcode": barcode, "uom_id": uom_id, **extra},
+    ).json()
+
+
+def test_the_barcode_listing_spans_every_item_and_resolves_what_each_code_means(
+    client: TestClient,
+) -> None:
+    """The Variable barcodes screen's question — "what does this code stand for" — which the
+    per-item endpoint cannot answer because you have to know the item to ask it."""
+    _signup(client)
+    category = _count_category(client)
+    each = category["uoms"][0]["id"]
+    case = client.post(
+        "/api/v1/inventory/uoms",
+        json={
+            "category_id": category["id"],
+            "code": "CASE6",
+            "name": "Case of 6",
+            "factor_to_base": "6",
+        },
+    ).json()
+    wine = _create_item(client)
+    beer = _create_item(client, code="BEER-001", name="Virunga Lager 500ml")
+    _barcode(client, wine, "5901234123457", each)
+    _barcode(client, wine, "5901234999999", case["id"], pack_quantity="1")
+    _barcode(client, beer, "4006381333931", each)
+
+    body = client.get("/api/v1/inventory/barcodes").json()
+
+    assert [row["barcode"] for row in body["items"]] == [
+        "4006381333931",
+        "5901234123457",
+        "5901234999999",
+    ], "barcode order, so a scanner's code is where a person would look for it"
+    by_code = {row["barcode"]: row for row in body["items"]}
+    assert by_code["4006381333931"]["item_code"] == "BEER-001"
+    assert by_code["4006381333931"]["item_name"] == "Virunga Lager 500ml"
+    assert by_code["5901234999999"]["item_code"] == "WINE-001"
+    assert by_code["5901234999999"]["uom_code"] == "CASE6"
+    assert by_code["5901234999999"]["uom_name"] == "Case of 6"
+    assert by_code["5901234123457"]["uom_code"] == "EA"
+    assert body["next_cursor"] is None
+
+
+def test_the_barcode_listing_searches_code_item_code_and_item_name(
+    client: TestClient,
+) -> None:
+    _signup(client)
+    category = _count_category(client)
+    each = category["uoms"][0]["id"]
+    wine = _create_item(client)
+    beer = _create_item(client, code="BEER-001", name="Virunga Lager 500ml")
+    _barcode(client, wine, "5901234123457", each)
+    _barcode(client, beer, "4006381333931", each)
+
+    for term, expected in (
+        ("590123", ["5901234123457"]),
+        ("BEER", ["4006381333931"]),
+        ("Virunga", ["4006381333931"]),
+        ("nothing-here", []),
+    ):
+        rows = client.get(f"/api/v1/inventory/barcodes?q={term}").json()["items"]
+        assert [row["barcode"] for row in rows] == expected, term
+
+
+def test_the_barcode_listing_pages_without_repeating_a_row(client: TestClient) -> None:
+    _signup(client)
+    category = _count_category(client)
+    each = category["uoms"][0]["id"]
+    item = _create_item(client)
+    for suffix in range(5):
+        _barcode(client, item, f"590123412345{suffix}", each)
+
+    seen: list[str] = []
+    cursor = None
+    for _ in range(3):
+        params = "?limit=2" + (f"&cursor={cursor}" if cursor else "")
+        page = client.get(f"/api/v1/inventory/barcodes{params}").json()
+        seen.extend(row["barcode"] for row in page["items"])
+        cursor = page["next_cursor"]
+    assert cursor is None
+    assert len(seen) == len(set(seen)) == 5
+
+
+def test_an_inactive_barcode_is_hidden_unless_asked_for(client: TestClient) -> None:
+    _signup(client)
+    category = _count_category(client)
+    each = category["uoms"][0]["id"]
+    item = _create_item(client)
+    barcode = _barcode(client, item, "5901234123457", each)
+    client.patch(f"/api/v1/inventory/barcodes/{barcode['id']}", json={"is_active": False})
+
+    assert client.get("/api/v1/inventory/barcodes").json()["items"] == []
+    shown = client.get("/api/v1/inventory/barcodes?include_inactive=true").json()["items"]
+    assert [row["barcode"] for row in shown] == ["5901234123457"]
+    assert shown[0]["is_active"] is False
+
+
+def test_the_barcode_listing_needs_an_inventory_permission(
+    client: TestClient, db: Session
+) -> None:
+    company_id = _signup(client)
+    clerk = _clerk(client, db, company_id)
+
+    assert clerk.get("/api/v1/inventory/barcodes").status_code == 403

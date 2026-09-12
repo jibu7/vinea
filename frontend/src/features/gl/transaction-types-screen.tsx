@@ -14,13 +14,20 @@ import { useToast } from "@/design/components/toast";
 import { useHasPermission } from "@/features/auth/hooks";
 import { useAccounts, useCreateTransactionType, useTransactionTypes, useUpdateTransactionType } from "./hooks";
 import { byId, toOptions } from "./lookups";
-import type { TransactionType } from "./types";
+import type { InventoryTransactionKind, TransactionType } from "./types";
 import { useApiErrorToast } from "@/lib/use-api-error-toast";
 
 /**
- * `gl_transaction_types` is one table with a `module` discriminator, so GL, AR and AP get
- * this one screen filtered by module rather than three near-identical pages. Editing rights
- * follow the module: the owning module's setup permission, or the GL one.
+ * `gl_transaction_types` is one table with a `module` discriminator, so GL, AR, AP and
+ * Inventory get this one screen filtered by module rather than four near-identical pages.
+ * Editing rights follow the module: the owning module's setup permission, or the GL one.
+ *
+ * Inventory is the one module whose types carry a **kind** (P5 decision 9): what the type
+ * does to stock. A user adding "Damaged" or "Samples" is adding another `adjustment_out`
+ * with its own contra account, and the kind is what tells the posting engine which of those
+ * it is — so for `module="inv"` the screen shows the column and requires the field on create.
+ * Passing `kinds` is what turns that on; every other module leaves it undefined and the
+ * screen is exactly what it was.
  */
 export function TransactionTypesScreen({
   module,
@@ -28,12 +35,15 @@ export function TransactionTypesScreen({
   description,
   codePlaceholder,
   namePlaceholder,
+  kinds,
 }: {
-  module: "gl" | "ar" | "ap";
+  module: "gl" | "ar" | "ap" | "inv";
   title: string;
   description: string;
   codePlaceholder: string;
   namePlaceholder: string;
+  /** Ordered `[value, label]` pairs. Present only for modules whose types have a kind. */
+  kinds?: ReadonlyArray<readonly [InventoryTransactionKind, string]>;
 }) {
   const t = useTranslations("maintenance");
   const toast = useToast();
@@ -59,12 +69,15 @@ export function TransactionTypesScreen({
   const [code, setCode] = useState("");
   const [name, setName] = useState("");
   const [defaultAccountId, setDefaultAccountId] = useState("");
+  const [kind, setKind] = useState("");
+  const kindLabels = useMemo(() => new Map(kinds ?? []), [kinds]);
 
   function startCreate() {
     setEditingType(null);
     setCode("");
     setName("");
     setDefaultAccountId("");
+    setKind("");
     setOpen(true);
   }
 
@@ -73,6 +86,7 @@ export function TransactionTypesScreen({
     setCode(item.code);
     setName(item.name);
     setDefaultAccountId(item.default_gl_account_id ? String(item.default_gl_account_id) : "");
+    setKind(item.kind ?? "");
     setOpen(true);
   }
 
@@ -92,6 +106,9 @@ export function TransactionTypesScreen({
           module,
           code,
           name,
+          // The kind is fixed at creation and never editable: changing what an existing type
+          // does to stock would silently re-interpret every document already posted with it.
+          ...(kinds ? { kind: kind as InventoryTransactionKind } : {}),
           default_gl_account_id: defaultAccountId ? Number(defaultAccountId) : null,
         });
         toast.show({ title: t("transactionTypeCreated"), tone: "success" });
@@ -140,6 +157,7 @@ export function TransactionTypesScreen({
                 <TH className="w-20">{t("transactionTypeModule")}</TH>
                 <TH className="w-28">{t("code")}</TH>
                 <TH>{t("name")}</TH>
+                {kinds ? <TH className="w-36">{t("transactionTypeKind")}</TH> : null}
                 <TH>{t("defaultAccount")}</TH>
                 <TH className="w-32 text-right">{t("transactionTypeStatus")}</TH>
               </TR>
@@ -156,6 +174,11 @@ export function TransactionTypesScreen({
                     </TD>
                     <TD className="font-mono text-xs font-semibold text-[var(--vinea-brand)]">{item.code}</TD>
                     <TD className="text-xs font-medium text-[var(--vinea-ink)]">{item.name}</TD>
+                    {kinds ? (
+                      <TD className="text-xs text-[var(--vinea-ink-muted)]">
+                        {item.kind ? (kindLabels.get(item.kind) ?? item.kind) : t("emptyValue")}
+                      </TD>
+                    ) : null}
                     <TD className="text-xs text-[var(--vinea-ink-muted)]">
                       {defaultAcc ? `${defaultAcc.code} · ${defaultAcc.name}` : t("emptyValue")}
                     </TD>
@@ -212,6 +235,27 @@ export function TransactionTypesScreen({
                 placeholder={namePlaceholder}
               />
             </Field>
+            {kinds ? (
+              <Field label={t("transactionTypeKind")}>
+                {editingType ? (
+                  // Read-only rather than a disabled control, because it is not a field that
+                  // happens to be locked — after creation the kind is simply not editable,
+                  // and a greyed-out picker invites the question of how to ungrey it.
+                  <p className="px-1 py-1.5 text-xs text-[var(--vinea-ink-muted)]">
+                    {editingType.kind
+                      ? (kindLabels.get(editingType.kind) ?? editingType.kind)
+                      : t("emptyValue")}
+                  </p>
+                ) : (
+                  <Combobox
+                    options={kinds.map(([value, label]) => ({ value, label }))}
+                    value={kind}
+                    onValueChange={setKind}
+                    placeholder={t("chooseTransactionTypeKind")}
+                  />
+                )}
+              </Field>
+            ) : null}
             <Field label={t("defaultAccount")}>
               <Combobox
                 options={toOptions(postableAccounts, (a) => `${a.code} · ${a.name}`)}
@@ -225,7 +269,11 @@ export function TransactionTypesScreen({
               <Button variant="ghost" onClick={() => setOpen(false)}>
                 {t("cancel")}
               </Button>
-              <Button variant="primary" disabled={!code || !name || !canEdit} onClick={handleSave}>
+              <Button
+                variant="primary"
+                disabled={!code || !name || !canEdit || (!!kinds && !editingType && !kind)}
+                onClick={handleSave}
+              >
                 {t("save")}
               </Button>
             </div>

@@ -21,6 +21,20 @@ import { navIntents, type IntentLabel } from "@/design/nav-tree";
  * Recorded in the plan as **Appendix C.1.6**, on the same footing as C.1.5's additions: the
  * tree is a contract, and a change to it belongs in the document the contract lives in rather
  * than only in the code that happens to satisfy it.
+ *
+ * Amended at P5 step 6 with the Maintenance → Inventory block. Two things happened at once,
+ * and only the first is the ordinary kind of edit this file expects:
+ *
+ * 1. "Items" and "Warehouses" lost their `P5` tag, because their screens landed.
+ * 2. Five rows were **added**: Transaction types, Variable barcodes, Units of measure,
+ *    Defaults, Rename item code. These are not new scope. Appendix C has always read
+ *    "Items, Warehouses, Trans types, Variable barcodes, UoM categories, Defaults, Rename
+ *    Item Code" for this block; the tree only ever carried the first two, so the phase tag
+ *    was covering five screens that had no row to be tagged. The order above is the
+ *    appendix's own, and "Units of measure" / "Rename item code" are its "UoM categories" /
+ *    "Rename Item Code" in the tree's sentence case.
+ *
+ * Nothing outside the Inventory block moved.
  */
 const APPENDIX_C: Record<IntentLabel, Array<[string, string, string | null]>> = {
   "Maintenance": [
@@ -46,8 +60,13 @@ const APPENDIX_C: Record<IntentLabel, Array<[string, string, string | null]>> = 
     ["Accounts Payable", "Transaction types", null],
     ["Accounts Payable", "Defaults", null],
     ["Accounts Payable", "Rename supplier code", null],
-    ["Inventory", "Items", "P5"],
-    ["Inventory", "Warehouses", "P5"],
+    ["Inventory", "Items", null],
+    ["Inventory", "Warehouses", null],
+    ["Inventory", "Transaction types", null],
+    ["Inventory", "Variable barcodes", null],
+    ["Inventory", "Units of measure", null],
+    ["Inventory", "Defaults", null],
+    ["Inventory", "Rename item code", null],
     ["Order Entry", "Order defaults", "P6"],
     ["Bill of Materials", "BOM items & defaults", "P12"],
     ["Point of Sale", "Tills & types", "P11"],

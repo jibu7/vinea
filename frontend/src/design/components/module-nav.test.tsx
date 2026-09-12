@@ -29,10 +29,13 @@ describe("SidebarNav permission filtering", () => {
   it("always renders phase-tagged items, disabled, regardless of permissions", () => {
     render(<SidebarNav permissions={new Set()} />);
 
-    const items = screen.getByText("Items"); // Inventory, still P5
-    expect(items).toBeInTheDocument();
-    expect(items.tagName).toBe("SPAN"); // disabled items render as inert text, not a link
-    expect(screen.getAllByText("P5").length).toBeGreaterThan(0);
+    // Order Entry, still P6. This used to read "Items", which stopped being an example of a
+    // phase-tagged row at P5 step 6 when its screen landed — the assertion has to point at
+    // something actually still tagged or it stops testing the tagging at all.
+    const tagged = screen.getByText("Order defaults");
+    expect(tagged).toBeInTheDocument();
+    expect(tagged.tagName).toBe("SPAN"); // disabled items render as inert text, not a link
+    expect(screen.getAllByText("P6").length).toBeGreaterThan(0);
   });
 
   it("renders a live item's label as a link, not disabled text", () => {
@@ -50,7 +53,8 @@ describe("SidebarNav permission filtering", () => {
     expect(screen.queryByText("Company details")).not.toBeInTheDocument();
     expect(screen.queryByText("Foreign currency")).not.toBeInTheDocument();
     expect(screen.queryByText("Customers")).not.toBeInTheDocument(); // live since P4, AR-gated
-    expect(screen.getByText("Items")).toBeInTheDocument(); // phase-tagged, always visible
+    expect(screen.queryByText("Items")).not.toBeInTheDocument(); // live since P5, INV-gated
+    expect(screen.getByText("Order defaults")).toBeInTheDocument(); // phase-tagged, always visible
   });
 
   it("keeps navIntents' declared order and grouping stable for the palette to reuse", () => {
@@ -86,5 +90,42 @@ describe("P4 maintenance screens", () => {
       maintenance.items.find((item) => item.module === module && item.label === "Transaction types");
     expect(byModule("Accounts Receivable")?.href).toBe("/maintenance/ar-transaction-types");
     expect(byModule("Accounts Payable")?.href).toBe("/maintenance/ap-transaction-types");
+  });
+});
+
+describe("P5 maintenance screens", () => {
+  const invPermissions = new Set(["inv:reports_view", "inv:setup_manage", "inv:item_rename"]);
+
+  it.each([
+    ["Items", "/maintenance/inventory-items"],
+    ["Warehouses", "/maintenance/warehouses"],
+    ["Variable barcodes", "/maintenance/variable-barcodes"],
+    ["Units of measure", "/maintenance/uom-categories"],
+    ["Rename item code", "/maintenance/rename-item-code"],
+  ])("links %s to %s with no phase tag left", (label, href) => {
+    render(<SidebarNav permissions={invPermissions} />);
+
+    const link = screen.getAllByText(label)[0].closest("a");
+    expect(link).not.toBeNull();
+    expect(link).toHaveAttribute("href", href);
+  });
+
+  it("gives Inventory its own transaction types and defaults screens", () => {
+    // "Transaction types" and "Defaults" are labels four modules share, so these are matched
+    // on the module rather than the label — the same shape as the AR/AP assertion above.
+    const maintenance = navIntents.find((i) => i.label === "Maintenance")!;
+    const inventory = (label: string) =>
+      maintenance.items.find((item) => item.module === "Inventory" && item.label === label);
+    expect(inventory("Transaction types")?.href).toBe("/maintenance/inv-transaction-types");
+    expect(inventory("Defaults")?.href).toBe("/maintenance/inventory-defaults");
+  });
+
+  it("leaves no P5 tag anywhere in the tree once every P5 screen has landed", () => {
+    // Transactions, Enquiries and Reports still carry P5 rows — steps 7 and 8 clear those.
+    // What this pins is the Maintenance block: a tag left behind on a screen that exists is
+    // a nav item nobody can reach, which is how the row would go unnoticed.
+    const maintenance = navIntents.find((i) => i.label === "Maintenance")!;
+    const tagged = maintenance.items.filter((item) => item.phase === "P5");
+    expect(tagged).toEqual([]);
   });
 });

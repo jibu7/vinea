@@ -27,6 +27,7 @@ from app.models.inventory import ItemType, StockCountStatus, StockTransferStatus
 from app.schemas.common import Page
 from app.schemas.inventory import (
     BarcodeCreate,
+    BarcodeListingRead,
     BarcodeRead,
     BarcodeUpdate,
     CountCancel,
@@ -415,6 +416,52 @@ def create_barcode(
     )
     db.commit()
     return BarcodeRead.model_validate(row)
+
+
+@router.get("/barcodes")
+def search_barcodes(
+    q: str | None = None,
+    item_id: int | None = None,
+    include_inactive: bool = False,
+    cursor: int | None = None,
+    limit: int = Query(default=100, ge=1, le=500),
+    auth: AuthContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+) -> Page[BarcodeListingRead]:
+    """Every barcode in the company, with the item and pack each one stands for.
+
+    The per-item list (`/items/{id}/barcodes`) answers the Items screen's question; this one
+    answers the scanner's, and is the only view a code duplicated across two items shows up
+    in at all.
+    """
+    _require_view(auth)
+    rows, next_cursor = masters.search_barcodes(
+        db,
+        auth.company_id,
+        term=q,
+        item_id=item_id,
+        include_inactive=include_inactive,
+        cursor=cursor,
+        limit=limit,
+    )
+    return Page(
+        items=[
+            BarcodeListingRead(
+                id=row.barcode.id,
+                barcode=row.barcode.barcode,
+                item_id=row.barcode.item_id,
+                item_code=row.item_code,
+                item_name=row.item_name,
+                uom_id=row.barcode.uom_id,
+                uom_code=row.uom_code,
+                uom_name=row.uom_name,
+                pack_quantity=row.barcode.pack_quantity,
+                is_active=row.barcode.is_active,
+            )
+            for row in rows
+        ],
+        next_cursor=next_cursor,
+    )
 
 
 @router.patch("/barcodes/{barcode_id}")

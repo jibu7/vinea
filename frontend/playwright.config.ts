@@ -19,6 +19,13 @@ export default defineConfig({
   expect: { timeout: 10_000 },
   use: {
     baseURL: process.env.PLAYWRIGHT_BASE_URL ?? "http://localhost:3000",
+    // Escape hatch for sandboxes that ship a pinned Chromium at a build number this
+    // Playwright did not download (`Executable doesn't exist at .../chromium_headless_shell-NNNN`).
+    // Unset everywhere else, CI included, where Playwright installs its own matching build —
+    // so this changes nothing about what CI runs.
+    ...(process.env.PLAYWRIGHT_CHROMIUM_PATH
+      ? { launchOptions: { executablePath: process.env.PLAYWRIGHT_CHROMIUM_PATH } }
+      : {}),
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
     viewport: { width: 1440, height: 900 },
