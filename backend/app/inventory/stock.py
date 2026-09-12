@@ -35,6 +35,7 @@ same items in different orders cannot deadlock.
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from dataclasses import field as dc_field
 from datetime import date
 from decimal import Decimal
 
@@ -160,6 +161,12 @@ class StockPosting:
     #: documents do, on their own unique key).
     entry: JournalEntry | None
     moves: list[StockMove]
+    #: The moves that correspond one-for-one, in order, with the lines the caller passed in.
+    #: This is *not* `moves`: the service raises moves of its own — the variance that settles
+    #: a negative-stock crossing — and interleaves them with the keyed ones. A caller that
+    #: needs to say "this line became that move" (a document writing its lines) must use this
+    #: list, because counting positions in `moves` silently shifts the moment a residue lands.
+    keyed_moves: list[StockMove] = dc_field(default_factory=list)
     #: True when an `Idempotency-Key` resolved to a posting that already existed. The moves
     #: are the ones written the first time; nothing was posted again.
     replayed: bool = False
@@ -684,7 +691,10 @@ def post_stock_moves(
             db, company_id, document.idempotency_key, document.idempotency_hash
         )
         if existing is not None:
-            return StockPosting(entry=existing, moves=moves_of(db, existing), replayed=True)
+            found = moves_of(db, existing)
+            return StockPosting(
+                entry=existing, moves=found, keyed_moves=found, replayed=True
+            )
 
     period = lock_period_for_posting(db, company_id, document.move_date)
     ctx = _Context(db, company_id)
@@ -725,7 +735,13 @@ def post_stock_moves(
     )
     written = _write_moves(db, ctx, document, planned, entry=entry, period_id=period.id)
     _apply_caches(db, ctx)
-    return StockPosting(entry=entry, moves=written)
+    return StockPosting(
+        entry=entry,
+        moves=written,
+        keyed_moves=[
+            move for move, plan in zip(written, planned, strict=True) if not plan.is_residue
+        ],
+    )
 
 
 def _write_moves(
@@ -1008,7 +1024,10 @@ def reverse_stock_posting(
         # against that same entry — the caches would move, the ledger would not.
         existing = posting.replay(db, company_id, idempotency_key, idempotency_hash)
         if existing is not None:
-            return StockPosting(entry=existing, moves=moves_of(db, existing), replayed=True)
+            found = moves_of(db, existing)
+            return StockPosting(
+                entry=existing, moves=found, keyed_moves=found, replayed=True
+            )
 
     original = db.get(JournalEntry, entry_id)
     if original is None or original.company_id != company_id:
@@ -1086,6 +1105,7 @@ def reverse_stock_posting(
         _stock_service(db, on=False)
     _apply_caches(db, ctx)
 
+    mirrored_moves = list(written)
     residues = {
         location: value
         for location, state in ctx.location_states.items()
@@ -1095,7 +1115,103 @@ def reverse_stock_posting(
         written.extend(
             _expel_reversal_residues(db, ctx, residues, on_date=on_date, reversal=reversal)
         )
-    return StockPosting(entry=reversal, moves=written)
+    return StockPosting(entry=reversal, moves=written, keyed_moves=mirrored_moves)
+
+
+def reverse_unvalued_moves(
+    db: Session,
+    company_id: int,
+    *,
+    originals: Sequence[StockMove],
+    on_date: date,
+    actor: User,
+) -> StockPosting:
+    """Mirror moves that carry no value — the reversal of a posting the ledger never saw.
+
+    A receipt at zero cost, or an issue while the average is zero, moves quantity and nothing
+    else: the Posting Engine writes no line for it, so there is no journal entry and
+    `posting.reverse` has nothing to reverse. The quantity is still on the shelf, though, and
+    it still has to be able to come back off it. So the mirror is valueless too — reversing
+    moves with the opposite quantity, `value = 0`, and no entry, which is exactly the shape
+    the `value_matches_journal_link` check constraint permits.
+
+    The negative-stock policy applies here as it does to any other reversal: under `block`, a
+    zero-cost receipt whose quantity has since gone out cannot be taken back.
+
+    Numbering and idempotency are the caller's, not this function's — there is no entry to
+    carry either, which is the same reason the documents in step 3 carry their own key.
+    """
+    if not originals:
+        raise PostingError(
+            "There is nothing to reverse",
+            code="too_few_lines",
+            field_errors={"lines": ["at least one move required"]},
+        )
+    if any(move.value != ZERO for move in originals):
+        # Guarded rather than assumed: a valued move reversed this way would take value out
+        # of `stock_balances` with no journal line to take it out of the GL, and the identity
+        # that the whole design rests on would break silently.
+        raise PostingError(
+            "These moves carry value; reverse them through their journal entry",
+            code="moves_carry_value",
+        )
+
+    period = lock_period_for_posting(db, company_id, on_date)
+    ctx = _Context(db, company_id, actor)
+    locations = [(move.item_id, move.warehouse_id) for move in originals]
+    for item_id, warehouse_id in locations:
+        ctx.item(item_id)
+        ctx.warehouse(warehouse_id)
+    ctx.lock(locations)
+
+    policy = ctx.settings.negative_stock_policy
+    for move in originals:
+        location = (move.item_id, move.warehouse_id)
+        state = ctx.location_states[location]
+        if state.quantity - move.quantity < ZERO and policy == NegativeStockPolicy.BLOCK:
+            raise _insufficient_stock(
+                ctx.item(move.item_id),
+                ctx.warehouse(move.warehouse_id),
+                state.quantity,
+                move.quantity,
+            )
+        ctx.location_states[location] = state.after(-move.quantity, ZERO)
+        ctx.item_states[move.item_id] = ctx.item_states[move.item_id].after(
+            -move.quantity, ZERO
+        )
+
+    written: list[StockMove] = []
+    _stock_service(db, on=True)
+    try:
+        for move in originals:
+            written.append(
+                StockMove(
+                    company_id=company_id,
+                    item_id=move.item_id,
+                    warehouse_id=move.warehouse_id,
+                    move_date=on_date,
+                    period_id=period.id,
+                    sequence_no=_next_sequence(db),
+                    quantity=-move.quantity,
+                    unit_cost=move.unit_cost,
+                    value=ZERO,
+                    journal_entry_id=None,
+                    journal_line_id=None,
+                    transaction_type_id=move.transaction_type_id,
+                    source_doc_type=move.source_doc_type,
+                    source_doc_id=move.source_doc_id,
+                    source_line_id=move.source_line_id,
+                    project_id=move.project_id,
+                    cost_provisional=move.cost_provisional,
+                    reverses_move_id=move.id,
+                )
+            )
+        db.add_all(written)
+        db.flush()
+    finally:
+        _stock_service(db, on=False)
+    _apply_caches(db, ctx)
+    return StockPosting(entry=None, moves=written, keyed_moves=written)
 
 
 def _expel_reversal_residues(

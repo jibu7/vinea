@@ -531,3 +531,205 @@ class ItemCostState(AuditedMixin, CompanyScopedMixin, Base):
     last_positive_average_cost: Mapped[Decimal] = mapped_column(
         AVERAGE, nullable=False, default=Decimal(0)
     )
+
+
+# --- Stock documents (P5 step 3) -----------------------------------------------------------
+
+
+class InventoryDocumentStatus(enum.StrEnum):
+    """A stock document is posted the moment it exists — there is no draft row here, because
+    a draft lives in the browser's IndexedDB until it is posted (the P3 convention). The only
+    later transition is a reversal, which leaves the original standing and links to it."""
+
+    POSTED = "posted"
+    REVERSED = "reversed"
+
+
+inventory_document_status_enum = pg_enum(InventoryDocumentStatus, "inventory_document_status")
+
+
+class InventoryDocument(AuditedMixin, CompanyScopedMixin, Base):
+    """The header of one stock document — an adjustment or a journal batch (decision 3).
+
+    **Why this table exists at all**, when `stock_moves` already records every fact of the
+    posting: three things the moves cannot carry.
+
+    * A **number**. Decision 12 gives adjustments and batches their own `document_sequences`
+      doc types, and an auditor follows those numbers. A move has a `sequence_no`, which is a
+      posting *order*, deliberately gappy, and not a number anyone quotes.
+    * A **unit**. A batch is one document with many lines, refused whole; the moves it wrote
+      are individually indistinguishable from any other moves once they are in the ledger.
+    * **Idempotency for a posting that valued nothing.** `Idempotency-Key` lives on
+      `journal_entries`, and a posting in which nothing carried value produces no entry (a
+      receipt at zero cost is still a real change to what is on the shelf). Such a document is
+      replay-protected here, on its own unique key, or not at all.
+
+    **Numbering.** The document takes its journal entry's number, exactly as `partner_documents`
+    does in P4 — one number for the document and the entry it produced, so a trial balance and
+    a stock enquiry name the same thing the same way. When the posting produced no entry there
+    is no number to inherit, so the document claims one from the same gapless sequence. Every
+    number in an `INAJ-` run is therefore accounted for by either an entry or a valueless
+    document, and the sequence has no holes in it.
+
+    **How it links to its moves.** Through `InventoryDocumentLine.stock_move_id`, set after
+    the posting returns. It cannot be the other way round: `stock_moves` refuses UPDATE, so a
+    move's `source_doc_id` would have to be known before the move is written, and the document
+    cannot be numbered before the posting it is numbered from. P4 has the same ordering and
+    resolves it the same way.
+    """
+
+    __tablename__ = "inventory_documents"
+    __table_args__ = (
+        UniqueConstraint("company_id", "id", name="uq_inventory_documents_company_id_id"),
+        UniqueConstraint("company_id", "number", name="uq_inventory_documents_company_number"),
+        ForeignKeyConstraint(
+            ["company_id", "journal_entry_id"],
+            ["journal_entries.company_id", "journal_entries.id"],
+            name="fk_inventory_documents_journal_entry",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "reversal_entry_id"],
+            ["journal_entries.company_id", "journal_entries.id"],
+            name="fk_inventory_documents_reversal_entry",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "reverses_document_id"],
+            ["inventory_documents.company_id", "inventory_documents.id"],
+            name="fk_inventory_documents_reverses_document",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "transaction_type_id"],
+            ["gl_transaction_types.company_id", "gl_transaction_types.id"],
+            name="fk_inventory_documents_transaction_type",
+            ondelete="RESTRICT",
+        ),
+        # The replay key, unique per company while it is set — the P4 shape exactly.
+        Index(
+            "uq_inventory_documents_company_idempotency_key",
+            "company_id",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=text("idempotency_key IS NOT NULL"),
+        ),
+        Index("ix_inventory_documents_company_date", "company_id", "document_date"),
+        Index("ix_inventory_documents_company_doc_type", "company_id", "doc_type"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    #: `INAJ` for an adjustment, `INJN` for a journal batch — the `DocType` the posting used.
+    doc_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    number: Mapped[str] = mapped_column(String(50), nullable=False)
+    document_date: Mapped[date] = mapped_column(Date, nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    reference: Mapped[str | None] = mapped_column(String(100))
+    #: The header's type. A batch may leave this null and carry a type per line instead.
+    transaction_type_id: Mapped[int | None] = mapped_column(BigInteger)
+    status: Mapped[InventoryDocumentStatus] = mapped_column(
+        inventory_document_status_enum,
+        nullable=False,
+        default=InventoryDocumentStatus.POSTED,
+        server_default=InventoryDocumentStatus.POSTED.value,
+    )
+    #: Null exactly when nothing in the posting carried value.
+    journal_entry_id: Mapped[int | None] = mapped_column(BigInteger)
+    reversal_entry_id: Mapped[int | None] = mapped_column(BigInteger)
+    reverses_document_id: Mapped[int | None] = mapped_column(BigInteger)
+    idempotency_key: Mapped[str | None] = mapped_column(String(255))
+    idempotency_hash: Mapped[str | None] = mapped_column(String(64))
+
+
+class InventoryDocumentLine(AuditedMixin, CompanyScopedMixin, Base):
+    """One line as it was typed, and the move it became.
+
+    The move is the truth; this row is the *intent*. It exists because the two are not the
+    same statement: a move is always in the item's base unit, and "24" in the base unit does
+    not record that someone entered "2 cases". When a count is disputed, what was keyed is the
+    question, and `stock_moves` cannot answer it.
+
+    `stock_move_id` is the link forward. It is nullable only for the window inside the posting
+    transaction before the moves come back; every committed line has one.
+    """
+
+    __tablename__ = "inventory_document_lines"
+    __table_args__ = (
+        UniqueConstraint("company_id", "id", name="uq_inventory_document_lines_company_id_id"),
+        UniqueConstraint(
+            "company_id", "document_id", "line_no", name="uq_inventory_document_lines_line_no"
+        ),
+        # One line per move: a move cannot be claimed by two lines, and a line cannot invent
+        # a move that another document wrote.
+        UniqueConstraint("stock_move_id", name="uq_inventory_document_lines_stock_move_id"),
+        ForeignKeyConstraint(
+            ["company_id", "document_id"],
+            ["inventory_documents.company_id", "inventory_documents.id"],
+            name="fk_inventory_document_lines_document",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "stock_move_id"],
+            ["stock_moves.company_id", "stock_moves.id"],
+            name="fk_inventory_document_lines_stock_move",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "item_id"],
+            ["items.company_id", "items.id"],
+            name="fk_inventory_document_lines_item",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "warehouse_id"],
+            ["warehouses.company_id", "warehouses.id"],
+            name="fk_inventory_document_lines_warehouse",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "uom_id"],
+            ["uoms.company_id", "uoms.id"],
+            name="fk_inventory_document_lines_uom",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "transaction_type_id"],
+            ["gl_transaction_types.company_id", "gl_transaction_types.id"],
+            name="fk_inventory_document_lines_transaction_type",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "contra_account_id"],
+            ["gl_accounts.company_id", "gl_accounts.id"],
+            name="fk_inventory_document_lines_contra_account",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "project_id"],
+            ["projects.company_id", "projects.id"],
+            name="fk_inventory_document_lines_project",
+            ondelete="RESTRICT",
+        ),
+        Index("ix_inventory_document_lines_document", "company_id", "document_id"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    document_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    line_no: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    item_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    warehouse_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    #: What was keyed, in `uom_id`. A magnitude: the direction is the transaction type's kind.
+    quantity: Mapped[Decimal] = mapped_column(QUANTITY, nullable=False)
+    uom_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    #: The same quantity in the item's base unit — what became `stock_moves.quantity`.
+    quantity_base: Mapped[Decimal] = mapped_column(QUANTITY, nullable=False)
+    #: Only on an increase; an issue is costed at the average, never at a typed rate.
+    unit_cost: Mapped[Decimal | None] = mapped_column(COST)
+    #: Only on a revaluation, which states its own amount and moves no quantity.
+    value: Mapped[Decimal | None] = mapped_column(MONEY)
+    transaction_type_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    #: Overrides the transaction type's own contra for this line only.
+    contra_account_id: Mapped[int | None] = mapped_column(BigInteger)
+    project_id: Mapped[int | None] = mapped_column(BigInteger)
+    description: Mapped[str | None] = mapped_column(Text)
+    stock_move_id: Mapped[int | None] = mapped_column(BigInteger)

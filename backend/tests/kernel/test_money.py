@@ -31,6 +31,7 @@ amounts = st.decimals(
 places = st.integers(min_value=0, max_value=6)
 
 
+@pytest.mark.slow
 @given(amount=amounts, decimal_places=places)
 @settings(max_examples=500)
 def test_rounding_is_half_up_to_currency_places(amount: Decimal, decimal_places: int) -> None:
@@ -64,6 +65,7 @@ def test_float_money_is_rejected_not_coerced() -> None:
         round_amount(1.5, 2)  # type: ignore[arg-type]
 
 
+@pytest.mark.slow
 @given(parts=st.lists(amounts, min_size=1, max_size=20), decimal_places=places)
 @settings(max_examples=200)
 def test_document_total_is_the_sum_of_rounded_lines(
@@ -79,6 +81,7 @@ def test_round_for_uses_the_currency_places(ledger: Ledger) -> None:
     assert round_for(ledger.currencies["USD"])(Decimal("99.555")) == Decimal("99.56")
 
 
+@pytest.mark.slow
 @given(
     amount=st.decimals(min_value=Decimal("0.01"), max_value=Decimal("1e9"), places=2),
     rate=st.sampled_from([Decimal("18"), Decimal("16"), Decimal("7.5"), Decimal("0")]),

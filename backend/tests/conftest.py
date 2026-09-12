@@ -19,7 +19,21 @@ from sqlalchemy.orm import Session, sessionmaker
 # means "superuser", so the file is correct wherever in the import graph it lands.
 DEFAULT_ADMIN_URL = "postgresql+psycopg://vinea:vinea@localhost:5432/vinea"
 ADMIN_URL = make_url(os.environ.get("MIGRATION_DATABASE_URL") or DEFAULT_ADMIN_URL)
-TEST_DB_NAME = f"{ADMIN_URL.database}_test"
+# Per-process, so two pytest runs on one machine cannot share a database.
+#
+# The session-scoped `database` fixture below DROPs and CREATEs this database at session
+# start. When two runs shared one name — a full suite in one terminal, a subset in another,
+# or a `timeout`-killed run whose pytest process survived inside the container — the second
+# recreated the database under the first and both dissolved into
+# `duplicate key value violates unique constraint "uq_users_email"` setup errors that look
+# exactly like a broken branch. That cost a whole debugging session on a branch CI had
+# already passed, so the name now carries the pid and the collision is not available to make.
+#
+# The pid is reused by the OS eventually, hence the `drop_database` teardown: a database left
+# behind by a killed run would otherwise be adopted, not recreated, by whichever later run
+# happened to draw the same pid. `xdist` workers each get their own pid and so their own
+# database, which is the same property for the same reason.
+TEST_DB_NAME = f"{ADMIN_URL.database}_test_{os.getpid()}"
 APP_ROLE = "vinea_app_test"
 APP_PASSWORD = "vinea_app_test"
 
@@ -143,6 +157,22 @@ def _grant_app_role() -> None:
     admin.dispose()
 
 
+def _drop_test_database() -> None:
+    """Leave nothing behind. Without this the per-pid databases accumulate, and a database
+    outliving its run could be adopted by a later run that drew the same pid."""
+    maintenance = create_engine(_maintenance_url(), isolation_level="AUTOCOMMIT")
+    with maintenance.connect() as conn:
+        conn.execute(
+            text(
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                "WHERE datname = :name AND pid <> pg_backend_pid()"
+            ),
+            {"name": TEST_DB_NAME},
+        )
+        conn.execute(text(f'DROP DATABASE IF EXISTS "{TEST_DB_NAME}"'))
+    maintenance.dispose()
+
+
 @pytest.fixture(scope="session", autouse=True)
 def database() -> Iterator[None]:
     _recreate_test_database()
@@ -150,6 +180,7 @@ def database() -> Iterator[None]:
     _grant_app_role()
     yield
     engine.dispose()
+    _drop_test_database()
 
 
 @pytest.fixture(autouse=True)

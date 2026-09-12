@@ -1,6 +1,6 @@
 """Inventory API schemas (P5 step 1 — masters)."""
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Annotated, Any
 
@@ -226,3 +226,83 @@ class InventoryDefaultsUpdate(BaseModel):
     negative_stock_policy: NegativeStockPolicy | None = None
     default_warehouse_id: int | None = None
     clear_default_warehouse: bool = False
+
+
+# --- Stock documents (P5 step 3) -----------------------------------------------------------
+
+Cost = Annotated[Decimal, Field(max_digits=20, decimal_places=10)]
+
+
+class StockDocumentLineCreate(BaseModel):
+    """One keyed line.
+
+    `quantity` is a **magnitude**, never signed: the direction comes from the transaction
+    type's kind (decision 9), so the same payload cannot mean "in" on one type and "out" on
+    another. A revaluation is the exception that proves it — it moves no quantity at all and
+    states a signed `value` instead.
+    """
+
+    item_id: int
+    warehouse_id: int
+    quantity: Quantity = Decimal(0)
+    #: Defaults to the item's own base unit. Any unit of the same category converts at 6 dp.
+    uom_id: int | None = None
+    #: Required on an increase, refused on a decrease — an issue is costed at the average.
+    unit_cost: Cost | None = None
+    #: A revaluation's signed amount: positive writes the stock up, negative down.
+    value: Money | None = None
+    #: Omit to inherit the header's type. A batch's lines normally carry their own.
+    transaction_type_id: int | None = None
+    contra_account_id: int | None = None
+    project_id: int | None = None
+    description: str | None = Field(default=None, max_length=500)
+
+
+class StockDocumentCreate(BaseModel):
+    document_date: date
+    description: str = Field(min_length=1, max_length=500)
+    reference: str | None = Field(default=None, max_length=100)
+    transaction_type_id: int | None = None
+    lines: list[StockDocumentLineCreate] = Field(min_length=1)
+
+
+class StockDocumentReverse(BaseModel):
+    reversal_date: date
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class StockDocumentLineRead(ApiModel):
+    id: int
+    line_no: int
+    item_id: int
+    warehouse_id: int
+    quantity: Decimal
+    uom_id: int
+    quantity_base: Decimal
+    unit_cost: Decimal | None
+    value: Decimal | None
+    transaction_type_id: int
+    contra_account_id: int | None
+    project_id: int | None
+    description: str | None
+    #: The move this line became. Null only inside the posting transaction.
+    stock_move_id: int | None
+
+
+class StockDocumentSummary(ApiModel):
+    id: int
+    doc_type: str
+    number: str
+    document_date: date
+    description: str
+    reference: str | None
+    status: str
+    #: Null when nothing in the posting carried value, which is a real and legal outcome.
+    journal_entry_id: int | None
+    reversal_entry_id: int | None
+    reverses_document_id: int | None
+
+
+class StockDocumentRead(StockDocumentSummary):
+    transaction_type_id: int | None
+    lines: list[StockDocumentLineRead]
