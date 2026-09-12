@@ -516,3 +516,222 @@ class CountProcessResult(BaseModel):
     session: CountSessionSummary
     #: Null when every variance was zero: a count that agrees with the books posts nothing.
     document: StockDocumentRead | None
+
+
+# --- Item enquiry (P5 step 5) --------------------------------------------------------------
+
+
+class EnquiryLocationRead(BaseModel):
+    warehouse_id: int
+    warehouse_code: str
+    warehouse_name: str
+    branch_id: int
+    is_in_transit: bool
+    quantity: Decimal
+    value: Decimal
+
+
+class EnquiryMoveRead(BaseModel):
+    """One move, with every key the screen needs to drill onwards from it."""
+
+    move_id: int
+    move_date: date
+    #: Posting order. Shown beside the date because the two differ for a backdated document,
+    #: and when they differ it is the only thing that explains the value on the row.
+    sequence_no: int
+    warehouse_id: int
+    warehouse_code: str
+    quantity: Decimal
+    unit_cost: Decimal | None
+    value: Decimal
+    running_quantity: Decimal
+    running_value: Decimal
+    #: Costed at the last positive average because there was no stock to cost it against
+    #: (decision 5). The review trail, never corrected retroactively.
+    cost_provisional: bool
+    project_id: int | None
+    journal_entry_id: int | None
+    entry_number: str | None
+    transaction_type_id: int | None
+    transaction_type_code: str | None
+    transaction_type_name: str | None
+    source_doc_type: str | None
+    source_doc_id: int | None
+    source_line_id: int | None
+    reverses_move_id: int | None
+
+
+class ItemEnquiryRead(BaseModel):
+    item_id: int
+    item_code: str
+    item_name: str
+    base_uom_id: int
+    as_of: date
+    date_from: date | None
+    warehouse_id: int | None
+    provisional_only: bool
+    locations: list[EnquiryLocationRead]
+    #: Item-wide as at `as_of`, across every location — a warehouse filter narrows the rows,
+    #: never the average.
+    total_quantity: Decimal
+    total_value: Decimal
+    average_cost: Decimal
+    opening_quantity: Decimal
+    opening_value: Decimal
+    moves: list[EnquiryMoveRead]
+    next_cursor: int | None
+
+
+# --- Reports (P5 step 5) ---------------------------------------------------------------------
+
+
+class MovementRowRead(BaseModel):
+    item_id: int
+    item_code: str
+    item_name: str
+    warehouse_id: int
+    warehouse_code: str
+    warehouse_name: str
+    branch_id: int
+    is_in_transit: bool
+    opening_quantity: Decimal
+    opening_value: Decimal
+    quantity_in: Decimal
+    value_in: Decimal
+    quantity_out: Decimal
+    value_out: Decimal
+    closing_quantity: Decimal
+    closing_value: Decimal
+
+
+class MovementReportRead(BaseModel):
+    date_from: date
+    date_to: date
+    rows: list[MovementRowRead]
+    next_cursor: int | None
+    #: Over the whole filtered set, not over this page.
+    opening_value: Decimal
+    value_in: Decimal
+    value_out: Decimal
+    closing_value: Decimal
+
+
+class TransactionRowRead(BaseModel):
+    move_id: int
+    move_date: date
+    sequence_no: int
+    item_id: int
+    item_code: str
+    item_name: str
+    warehouse_id: int
+    warehouse_code: str
+    branch_id: int
+    quantity: Decimal
+    unit_cost: Decimal | None
+    value: Decimal
+    cost_provisional: bool
+    project_id: int | None
+    transaction_type_id: int | None
+    journal_entry_id: int | None
+    entry_number: str | None
+    source_doc_type: str | None
+    source_doc_id: int | None
+    source_line_id: int | None
+
+
+class TransactionReportRead(BaseModel):
+    date_from: date
+    date_to: date
+    rows: list[TransactionRowRead]
+    next_cursor: int | None
+    total_quantity: Decimal
+    total_value: Decimal
+    move_count: int
+
+
+class ValuationRowRead(BaseModel):
+    item_id: int
+    item_code: str
+    item_name: str
+    warehouse_id: int
+    warehouse_code: str
+    warehouse_name: str
+    branch_id: int
+    is_in_transit: bool
+    quantity: Decimal
+    value: Decimal
+    #: value / quantity for display; null at zero quantity, where it has no answer.
+    unit_cost: Decimal | None
+    gl_account_id: int | None
+
+
+class ValuationItemTotalRead(BaseModel):
+    item_id: int
+    item_code: str
+    item_name: str
+    quantity: Decimal
+    value: Decimal
+
+
+class ValuationWarehouseTotalRead(BaseModel):
+    warehouse_id: int
+    value: Decimal
+
+
+class ValuationAccountTotalRead(BaseModel):
+    """What the inventory account should read on `as_of`. The report states its own tie to
+    the GL, so a screen can show the two side by side instead of taking it on trust."""
+
+    gl_account_id: int | None
+    code: str | None
+    name: str | None
+    value: Decimal
+
+
+class ValuationReportRead(BaseModel):
+    as_of: date
+    include_zero: bool
+    rows: list[ValuationRowRead]
+    item_totals: list[ValuationItemTotalRead]
+    warehouse_totals: list[ValuationWarehouseTotalRead]
+    account_totals: list[ValuationAccountTotalRead]
+    next_cursor: int | None
+    total_value: Decimal
+
+
+class CountVarianceRowRead(BaseModel):
+    line_id: int
+    line_no: int
+    item_id: int
+    item_code: str
+    item_name: str
+    system_quantity: Decimal
+    counted_quantity: Decimal | None
+    variance: Decimal | None
+    stale: bool
+    stock_move_id: int | None
+
+
+class CountReportRowRead(BaseModel):
+    session_id: int
+    number: str
+    warehouse_id: int
+    warehouse_code: str
+    warehouse_name: str
+    branch_id: int
+    count_date: date
+    description: str
+    status: str
+    snapshot_at: datetime
+    document_id: int | None
+    document_number: str | None
+    journal_entry_id: int | None
+    line_count: int
+    counted_count: int
+    variance_count: int
+    lines: list[CountVarianceRowRead]
+
+
+class CountReportRead(BaseModel):
+    rows: list[CountReportRowRead]
+    next_cursor: int | None

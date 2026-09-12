@@ -18,7 +18,9 @@ from app.core.errors import PermissionDeniedError
 from app.db import get_db
 from app.inventory import counts as inventory_counts
 from app.inventory import documents as inventory_documents
+from app.inventory import enquiries as inventory_enquiries
 from app.inventory import masters
+from app.inventory import reports as inventory_reports
 from app.inventory import transfers as inventory_transfers
 from app.models.audit import AuditLog
 from app.models.inventory import ItemType, StockCountStatus, StockTransferStatus
@@ -35,21 +37,31 @@ from app.schemas.inventory import (
     CountPreviewRead,
     CountProcessRequest,
     CountProcessResult,
+    CountReportRead,
+    CountReportRowRead,
     CountSessionCreate,
     CountSessionRead,
     CountSessionSummary,
+    CountVarianceRowRead,
+    EnquiryLocationRead,
+    EnquiryMoveRead,
     InventoryDefaultsRead,
     InventoryDefaultsUpdate,
     ItemAuditRead,
     ItemCreate,
+    ItemEnquiryRead,
     ItemLookupRead,
     ItemRead,
     ItemUpdate,
+    MovementReportRead,
+    MovementRowRead,
     StockDocumentCreate,
     StockDocumentLineRead,
     StockDocumentRead,
     StockDocumentReverse,
     StockDocumentSummary,
+    TransactionReportRead,
+    TransactionRowRead,
     TransferCancel,
     TransferCreate,
     TransferLineRead,
@@ -64,6 +76,11 @@ from app.schemas.inventory import (
     UomCreate,
     UomRead,
     UomUpdate,
+    ValuationAccountTotalRead,
+    ValuationItemTotalRead,
+    ValuationReportRead,
+    ValuationRowRead,
+    ValuationWarehouseTotalRead,
     WarehouseCreate,
     WarehouseRead,
     WarehouseUpdate,
@@ -1196,3 +1213,377 @@ def cancel_count(
     )
     db.commit()
     return _session_read(db, auth.company_id, session)
+
+
+# --- Item enquiry (P5 step 5) ---------------------------------------------------------------
+
+
+def _require_reports(auth: AuthContext) -> None:
+    if permissions.INV_REPORTS_VIEW not in auth.permissions:
+        raise PermissionDeniedError(
+            f"Missing required permission(s): {permissions.INV_REPORTS_VIEW}"
+        )
+
+
+def _require_valuation(auth: AuthContext) -> None:
+    """The valuation report answers a finance question, not an inventory one.
+
+    `reporting:inventory_valuation_view` has existed since P1 for exactly this report; this is
+    where it starts meaning something. Either permission opens it, so a stock controller does
+    not lose a report they already had and an accountant who has never been given inventory
+    rights can still tie the account to the stock behind it.
+    """
+    allowed = (permissions.INV_REPORTS_VIEW, permissions.REPORTING_INVENTORY_VALUATION_VIEW)
+    if not any(permission in auth.permissions for permission in allowed):
+        raise PermissionDeniedError(f"Missing required permission(s): {' or '.join(allowed)}")
+
+
+@router.get("/items/{item_id}/enquiry")
+def item_enquiry(
+    item_id: int,
+    as_of: date | None = None,
+    date_from: date | None = None,
+    warehouse_id: int | None = None,
+    # Decision 5's review trail. Narrows the rows shown; never the running balance, which goes
+    # on counting every move in the window so the column still totals to something real.
+    provisional_only: bool = False,
+    include_zero_locations: bool = False,
+    cursor: int | None = None,
+    limit: int = Query(default=100, ge=1, le=500),
+    auth: AuthContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+) -> ItemEnquiryRead:
+    _require_view(auth)
+    enquiry = inventory_enquiries.item_enquiry(
+        db,
+        auth.company_id,
+        item_id,
+        as_of=as_of or date.today(),
+        date_from=date_from,
+        warehouse_id=warehouse_id,
+        provisional_only=provisional_only,
+        include_zero_locations=include_zero_locations,
+        cursor=cursor,
+        limit=limit,
+    )
+    return ItemEnquiryRead(
+        item_id=enquiry.item.id,
+        item_code=enquiry.item.code,
+        item_name=enquiry.item.name,
+        base_uom_id=enquiry.item.base_uom_id,
+        as_of=enquiry.as_of,
+        date_from=enquiry.date_from,
+        warehouse_id=enquiry.warehouse_id,
+        provisional_only=enquiry.provisional_only,
+        locations=[
+            EnquiryLocationRead(
+                warehouse_id=location.warehouse_id,
+                warehouse_code=location.warehouse_code,
+                warehouse_name=location.warehouse_name,
+                branch_id=location.branch_id,
+                is_in_transit=location.is_in_transit,
+                quantity=location.quantity,
+                value=location.value,
+            )
+            for location in enquiry.locations
+        ],
+        total_quantity=enquiry.total_quantity,
+        total_value=enquiry.total_value,
+        average_cost=enquiry.average_cost,
+        opening_quantity=enquiry.opening_quantity,
+        opening_value=enquiry.opening_value,
+        moves=[
+            EnquiryMoveRead(
+                move_id=move.move_id,
+                move_date=move.move_date,
+                sequence_no=move.sequence_no,
+                warehouse_id=move.warehouse_id,
+                warehouse_code=move.warehouse_code,
+                quantity=move.quantity,
+                unit_cost=move.unit_cost,
+                value=move.value,
+                running_quantity=move.running_quantity,
+                running_value=move.running_value,
+                cost_provisional=move.cost_provisional,
+                project_id=move.project_id,
+                journal_entry_id=move.journal_entry_id,
+                entry_number=move.entry_number,
+                transaction_type_id=move.transaction_type_id,
+                transaction_type_code=move.transaction_type_code,
+                transaction_type_name=move.transaction_type_name,
+                source_doc_type=move.source_doc_type,
+                source_doc_id=move.source_doc_id,
+                source_line_id=move.source_line_id,
+                reverses_move_id=move.reverses_move_id,
+            )
+            for move in enquiry.moves
+        ],
+        next_cursor=enquiry.next_cursor,
+    )
+
+
+# --- Reports (P5 step 5) --------------------------------------------------------------------
+
+
+@router.get("/reports/movement")
+def movement_report(
+    date_from: date,
+    date_to: date,
+    warehouse_id: int | None = None,
+    branch_id: int | None = None,
+    item_id: int | None = None,
+    include_zero: bool = False,
+    cursor: int | None = None,
+    limit: int = Query(default=100, ge=1, le=500),
+    auth: AuthContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+) -> MovementReportRead:
+    _require_reports(auth)
+    report = inventory_reports.movement_report(
+        db,
+        auth.company_id,
+        date_from=date_from,
+        date_to=date_to,
+        warehouse_id=warehouse_id,
+        branch_id=branch_id,
+        item_id=item_id,
+        include_zero=include_zero,
+        cursor=cursor,
+        limit=limit,
+    )
+    return MovementReportRead(
+        date_from=report.date_from,
+        date_to=report.date_to,
+        rows=[
+            MovementRowRead(
+                item_id=row.item_id,
+                item_code=row.item_code,
+                item_name=row.item_name,
+                warehouse_id=row.warehouse_id,
+                warehouse_code=row.warehouse_code,
+                warehouse_name=row.warehouse_name,
+                branch_id=row.branch_id,
+                is_in_transit=row.is_in_transit,
+                opening_quantity=row.opening_quantity,
+                opening_value=row.opening_value,
+                quantity_in=row.quantity_in,
+                value_in=row.value_in,
+                quantity_out=row.quantity_out,
+                value_out=row.value_out,
+                closing_quantity=row.closing_quantity,
+                closing_value=row.closing_value,
+            )
+            for row in report.rows
+        ],
+        next_cursor=report.next_cursor,
+        opening_value=report.opening_value,
+        value_in=report.value_in,
+        value_out=report.value_out,
+        closing_value=report.closing_value,
+    )
+
+
+@router.get("/reports/transactions")
+def transaction_report(
+    date_from: date,
+    date_to: date,
+    item_id: int | None = None,
+    warehouse_id: int | None = None,
+    branch_id: int | None = None,
+    transaction_type_id: int | None = None,
+    project_id: int | None = None,
+    provisional_only: bool = False,
+    cursor: int | None = None,
+    limit: int = Query(default=100, ge=1, le=500),
+    auth: AuthContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+) -> TransactionReportRead:
+    _require_reports(auth)
+    report = inventory_reports.transaction_report(
+        db,
+        auth.company_id,
+        date_from=date_from,
+        date_to=date_to,
+        item_id=item_id,
+        warehouse_id=warehouse_id,
+        branch_id=branch_id,
+        transaction_type_id=transaction_type_id,
+        project_id=project_id,
+        provisional_only=provisional_only,
+        cursor=cursor,
+        limit=limit,
+    )
+    return TransactionReportRead(
+        date_from=report.date_from,
+        date_to=report.date_to,
+        rows=[
+            TransactionRowRead(
+                move_id=row.move_id,
+                move_date=row.move_date,
+                sequence_no=row.sequence_no,
+                item_id=row.item_id,
+                item_code=row.item_code,
+                item_name=row.item_name,
+                warehouse_id=row.warehouse_id,
+                warehouse_code=row.warehouse_code,
+                branch_id=row.branch_id,
+                quantity=row.quantity,
+                unit_cost=row.unit_cost,
+                value=row.value,
+                cost_provisional=row.cost_provisional,
+                project_id=row.project_id,
+                transaction_type_id=row.transaction_type_id,
+                journal_entry_id=row.journal_entry_id,
+                entry_number=row.entry_number,
+                source_doc_type=row.source_doc_type,
+                source_doc_id=row.source_doc_id,
+                source_line_id=row.source_line_id,
+            )
+            for row in report.rows
+        ],
+        next_cursor=report.next_cursor,
+        total_quantity=report.total_quantity,
+        total_value=report.total_value,
+        move_count=report.move_count,
+    )
+
+
+@router.get("/reports/valuation")
+def valuation_report(
+    as_of: date | None = None,
+    warehouse_id: int | None = None,
+    branch_id: int | None = None,
+    item_id: int | None = None,
+    # The P3 "Include zero balances" convention: a location holding nothing is worth nothing,
+    # so it is off by default and the totals are the same either way.
+    include_zero: bool = False,
+    cursor: int | None = None,
+    limit: int = Query(default=100, ge=1, le=500),
+    auth: AuthContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+) -> ValuationReportRead:
+    _require_valuation(auth)
+    report = inventory_reports.valuation_report(
+        db,
+        auth.company_id,
+        as_of=as_of or date.today(),
+        warehouse_id=warehouse_id,
+        branch_id=branch_id,
+        item_id=item_id,
+        include_zero=include_zero,
+        cursor=cursor,
+        limit=limit,
+    )
+    return ValuationReportRead(
+        as_of=report.as_of,
+        include_zero=report.include_zero,
+        rows=[
+            ValuationRowRead(
+                item_id=row.item_id,
+                item_code=row.item_code,
+                item_name=row.item_name,
+                warehouse_id=row.warehouse_id,
+                warehouse_code=row.warehouse_code,
+                warehouse_name=row.warehouse_name,
+                branch_id=row.branch_id,
+                is_in_transit=row.is_in_transit,
+                quantity=row.quantity,
+                value=row.value,
+                unit_cost=row.unit_cost,
+                gl_account_id=row.gl_account_id,
+            )
+            for row in report.rows
+        ],
+        item_totals=[
+            ValuationItemTotalRead(
+                item_id=total.item_id,
+                item_code=total.item_code,
+                item_name=total.item_name,
+                quantity=total.quantity,
+                value=total.value,
+            )
+            for total in report.item_totals
+        ],
+        warehouse_totals=[
+            ValuationWarehouseTotalRead(warehouse_id=warehouse, value=value)
+            for warehouse, value in sorted(report.warehouse_totals.items())
+        ],
+        account_totals=[
+            ValuationAccountTotalRead(
+                gl_account_id=total.gl_account_id,
+                code=total.code,
+                name=total.name,
+                value=total.value,
+            )
+            for total in report.account_totals
+        ],
+        next_cursor=report.next_cursor,
+        total_value=report.total_value,
+    )
+
+
+@router.get("/reports/counts")
+def count_report(
+    status_filter: StockCountStatus | None = Query(default=None, alias="status"),
+    warehouse_id: int | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    with_lines: bool = True,
+    variances_only: bool = False,
+    cursor: int | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
+    auth: AuthContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+) -> CountReportRead:
+    _require_reports(auth)
+    report = inventory_reports.count_report(
+        db,
+        auth.company_id,
+        status=status_filter,
+        warehouse_id=warehouse_id,
+        date_from=date_from,
+        date_to=date_to,
+        with_lines=with_lines,
+        variances_only=variances_only,
+        cursor=cursor,
+        limit=limit,
+    )
+    return CountReportRead(
+        rows=[
+            CountReportRowRead(
+                session_id=row.session_id,
+                number=row.number,
+                warehouse_id=row.warehouse_id,
+                warehouse_code=row.warehouse_code,
+                warehouse_name=row.warehouse_name,
+                branch_id=row.branch_id,
+                count_date=row.count_date,
+                description=row.description,
+                status=str(row.status),
+                snapshot_at=row.snapshot_at,
+                document_id=row.document_id,
+                document_number=row.document_number,
+                journal_entry_id=row.journal_entry_id,
+                line_count=row.line_count,
+                counted_count=row.counted_count,
+                variance_count=row.variance_count,
+                lines=[
+                    CountVarianceRowRead(
+                        line_id=line.line_id,
+                        line_no=line.line_no,
+                        item_id=line.item_id,
+                        item_code=line.item_code,
+                        item_name=line.item_name,
+                        system_quantity=line.system_quantity,
+                        counted_quantity=line.counted_quantity,
+                        variance=line.variance,
+                        stale=line.stale,
+                        stock_move_id=line.stock_move_id,
+                    )
+                    for line in row.lines
+                ],
+            )
+            for row in report.rows
+        ],
+        next_cursor=report.next_cursor,
+    )
