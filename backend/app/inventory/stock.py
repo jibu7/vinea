@@ -35,6 +35,7 @@ same items in different orders cannot deadlock.
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from dataclasses import field as dc_field
 from datetime import date
 from decimal import Decimal
 
@@ -160,6 +161,12 @@ class StockPosting:
     #: documents do, on their own unique key).
     entry: JournalEntry | None
     moves: list[StockMove]
+    #: The moves that correspond one-for-one, in order, with the lines the caller passed in.
+    #: This is *not* `moves`: the service raises moves of its own — the variance that settles
+    #: a negative-stock crossing — and interleaves them with the keyed ones. A caller that
+    #: needs to say "this line became that move" (a document writing its lines) must use this
+    #: list, because counting positions in `moves` silently shifts the moment a residue lands.
+    keyed_moves: list[StockMove] = dc_field(default_factory=list)
     #: True when an `Idempotency-Key` resolved to a posting that already existed. The moves
     #: are the ones written the first time; nothing was posted again.
     replayed: bool = False
@@ -684,7 +691,10 @@ def post_stock_moves(
             db, company_id, document.idempotency_key, document.idempotency_hash
         )
         if existing is not None:
-            return StockPosting(entry=existing, moves=moves_of(db, existing), replayed=True)
+            found = moves_of(db, existing)
+            return StockPosting(
+                entry=existing, moves=found, keyed_moves=found, replayed=True
+            )
 
     period = lock_period_for_posting(db, company_id, document.move_date)
     ctx = _Context(db, company_id)
@@ -725,7 +735,13 @@ def post_stock_moves(
     )
     written = _write_moves(db, ctx, document, planned, entry=entry, period_id=period.id)
     _apply_caches(db, ctx)
-    return StockPosting(entry=entry, moves=written)
+    return StockPosting(
+        entry=entry,
+        moves=written,
+        keyed_moves=[
+            move for move, plan in zip(written, planned, strict=True) if not plan.is_residue
+        ],
+    )
 
 
 def _write_moves(
@@ -1008,7 +1024,10 @@ def reverse_stock_posting(
         # against that same entry — the caches would move, the ledger would not.
         existing = posting.replay(db, company_id, idempotency_key, idempotency_hash)
         if existing is not None:
-            return StockPosting(entry=existing, moves=moves_of(db, existing), replayed=True)
+            found = moves_of(db, existing)
+            return StockPosting(
+                entry=existing, moves=found, keyed_moves=found, replayed=True
+            )
 
     original = db.get(JournalEntry, entry_id)
     if original is None or original.company_id != company_id:
@@ -1086,6 +1105,7 @@ def reverse_stock_posting(
         _stock_service(db, on=False)
     _apply_caches(db, ctx)
 
+    mirrored_moves = list(written)
     residues = {
         location: value
         for location, state in ctx.location_states.items()
@@ -1095,7 +1115,7 @@ def reverse_stock_posting(
         written.extend(
             _expel_reversal_residues(db, ctx, residues, on_date=on_date, reversal=reversal)
         )
-    return StockPosting(entry=reversal, moves=written)
+    return StockPosting(entry=reversal, moves=written, keyed_moves=mirrored_moves)
 
 
 def _expel_reversal_residues(

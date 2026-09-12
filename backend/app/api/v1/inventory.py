@@ -5,17 +5,22 @@ Transaction types live on the GL router (`/gl/transaction-types?module=inv`) —
 serves every module, so inventory gets a `module` filter rather than a second endpoint.
 """
 
-from fastapi import APIRouter, Depends, Request, status
+from datetime import date
+
+from fastapi import APIRouter, Depends, Query, Request, Response, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.api import idempotency
 from app.api.deps import AuthContext, get_tenant_context
 from app.core import permissions
 from app.core.errors import PermissionDeniedError
 from app.db import get_db
+from app.inventory import documents as inventory_documents
 from app.inventory import masters
 from app.models.audit import AuditLog
 from app.models.inventory import ItemType
+from app.schemas.common import Page
 from app.schemas.inventory import (
     BarcodeCreate,
     BarcodeRead,
@@ -27,6 +32,11 @@ from app.schemas.inventory import (
     ItemLookupRead,
     ItemRead,
     ItemUpdate,
+    StockDocumentCreate,
+    StockDocumentLineRead,
+    StockDocumentRead,
+    StockDocumentReverse,
+    StockDocumentSummary,
     UomCategoryCreate,
     UomCategoryRead,
     UomCategoryUpdate,
@@ -486,3 +496,183 @@ def update_defaults(
     )
     db.commit()
     return InventoryDefaultsRead.model_validate(settings)
+
+
+# --- Stock documents (P5 step 3) -----------------------------------------------------------
+
+
+def _require_post(auth: AuthContext) -> None:
+    if permissions.INV_TRANSACTIONS_ADJUST not in auth.permissions:
+        raise PermissionDeniedError(
+            f"Missing required permission(s): {permissions.INV_TRANSACTIONS_ADJUST}"
+        )
+
+
+def _line_inputs(payload: StockDocumentCreate) -> tuple[inventory_documents.DocumentLineInput, ...]:
+    return tuple(
+        inventory_documents.DocumentLineInput(
+            item_id=line.item_id,
+            warehouse_id=line.warehouse_id,
+            quantity=line.quantity,
+            uom_id=line.uom_id,
+            unit_cost=line.unit_cost,
+            value=line.value,
+            transaction_type_id=line.transaction_type_id,
+            contra_account_id=line.contra_account_id,
+            project_id=line.project_id,
+            description=line.description,
+        )
+        for line in payload.lines
+    )
+
+
+def _document_read(db: Session, company_id: int, document) -> StockDocumentRead:
+    lines = inventory_documents.lines_of(db, company_id, document.id)
+    return StockDocumentRead(
+        **StockDocumentSummary.model_validate(document).model_dump(),
+        transaction_type_id=document.transaction_type_id,
+        lines=[StockDocumentLineRead.model_validate(line) for line in lines],
+    )
+
+
+@router.post("/adjustments", status_code=status.HTTP_201_CREATED)
+def post_adjustment(
+    payload: StockDocumentCreate,
+    request: Request,
+    response: Response,
+    idempotency_key: str = idempotency.IdempotencyKey,
+    auth: AuthContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+) -> StockDocumentRead:
+    """A single-item adjustment — an increase, a decrease or a revaluation by transaction type.
+
+    Replaying the key returns the original document with `200` rather than posting a second
+    one; that is the whole contract of `Idempotency-Key` here, and it holds even when the
+    posting valued nothing and so produced no journal entry to hang the key on.
+    """
+    _require_post(auth)
+    document, replayed = inventory_documents.post_adjustment(
+        db,
+        auth.company_id,
+        inventory_documents.DocumentInput(
+            document_date=payload.document_date,
+            description=payload.description,
+            reference=payload.reference,
+            transaction_type_id=payload.transaction_type_id,
+            lines=_line_inputs(payload),
+        ),
+        actor=auth.user,
+        idempotency_key=idempotency_key,
+        idempotency_hash=idempotency.fingerprint("inventory_adjustment", payload),
+        request=request,
+    )
+    db.commit()
+    if replayed:
+        response.status_code = status.HTTP_200_OK
+    return _document_read(db, auth.company_id, document)
+
+
+@router.post("/journal-batches", status_code=status.HTTP_201_CREATED)
+def post_journal_batch(
+    payload: StockDocumentCreate,
+    request: Request,
+    response: Response,
+    idempotency_key: str = idempotency.IdempotencyKey,
+    auth: AuthContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+) -> StockDocumentRead:
+    """Many items, many warehouses, mixed directions — one document, one journal entry, one
+    unit of work (decisions 3 and 9). A line that fails takes the whole batch with it.
+
+    This is also the go-live path for opening stock: inventory accounts are control accounts
+    (decision 2), so opening balances cannot arrive as a GL journal — they come through here
+    under an `opening_balance` transaction type.
+    """
+    _require_post(auth)
+    document, replayed = inventory_documents.post_batch(
+        db,
+        auth.company_id,
+        inventory_documents.DocumentInput(
+            document_date=payload.document_date,
+            description=payload.description,
+            reference=payload.reference,
+            transaction_type_id=payload.transaction_type_id,
+            lines=_line_inputs(payload),
+        ),
+        actor=auth.user,
+        idempotency_key=idempotency_key,
+        idempotency_hash=idempotency.fingerprint("inventory_batch", payload),
+        request=request,
+    )
+    db.commit()
+    if replayed:
+        response.status_code = status.HTTP_200_OK
+    return _document_read(db, auth.company_id, document)
+
+
+@router.post("/documents/{document_id}/reverse", status_code=status.HTTP_201_CREATED)
+def reverse_stock_document(
+    document_id: int,
+    payload: StockDocumentReverse,
+    request: Request,
+    idempotency_key: str = idempotency.IdempotencyKey,
+    auth: AuthContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+) -> StockDocumentRead:
+    """Decision 11: the kernel reversal plus reversing moves at the original values.
+
+    Under the `block` policy a receipt whose quantity has since been issued cannot be
+    reversed — the reversing move would take a location below zero, and it fails with
+    `insufficient_stock` before anything is written.
+    """
+    _require_post(auth)
+    reversal = inventory_documents.reverse_document(
+        db,
+        auth.company_id,
+        document_id,
+        on_date=payload.reversal_date,
+        reason=payload.reason,
+        actor=auth.user,
+        idempotency_key=idempotency_key,
+        idempotency_hash=idempotency.fingerprint("inventory_reversal", payload),
+        request=request,
+    )
+    db.commit()
+    return _document_read(db, auth.company_id, reversal)
+
+
+@router.get("/documents")
+def list_stock_documents(
+    doc_type: str | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    cursor: int | None = None,
+    limit: int = Query(default=100, ge=1, le=500),
+    auth: AuthContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+) -> Page[StockDocumentSummary]:
+    _require_view(auth)
+    rows, next_cursor = inventory_documents.list_documents(
+        db,
+        auth.company_id,
+        doc_type=doc_type,
+        date_from=date_from,
+        date_to=date_to,
+        cursor=cursor,
+        limit=limit,
+    )
+    return Page(
+        items=[StockDocumentSummary.model_validate(row) for row in rows],
+        next_cursor=next_cursor,
+    )
+
+
+@router.get("/documents/{document_id}")
+def get_stock_document(
+    document_id: int,
+    auth: AuthContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+) -> StockDocumentRead:
+    _require_view(auth)
+    document = inventory_documents.get_document(db, auth.company_id, document_id)
+    return _document_read(db, auth.company_id, document)
