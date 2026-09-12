@@ -48,6 +48,7 @@ from app.models.inventory import (
     InventoryDocumentStatus,
     InventoryTransactionKind,
     Item,
+    StockMove,
     Uom,
 )
 from app.models.journal import JournalEntry
@@ -655,31 +656,64 @@ def reverse_document(
             f"{original.number} is itself a reversal; post a new document instead",
             code="cannot_reverse_a_reversal",
         )
-    if original.journal_entry_id is None:
-        # Nothing valued, so the kernel has no entry to reverse. The moves are real and the
-        # quantity has to come back, but there is no ledger side to mirror — rather than
-        # inventing a posting shape for it, this is refused and named. It is reachable only
-        # by reversing a document whose every line was a zero-cost receipt.
-        raise LedgerStateError(
-            f"{original.number} posted no journal entry and cannot be reversed; "
-            "post an opposite document instead",
-            code="document_has_no_entry",
+    original_lines = list(
+        db.scalars(
+            select(InventoryDocumentLine)
+            .where(
+                InventoryDocumentLine.company_id == company_id,
+                InventoryDocumentLine.document_id == original.id,
+            )
+            .order_by(InventoryDocumentLine.line_no)
         )
-
-    posting = stock_service.reverse_stock_posting(
-        db,
-        company_id,
-        entry_id=original.journal_entry_id,
-        on_date=on_date,
-        reason=reason,
-        actor=actor,
-        idempotency_key=idempotency_key,
-        idempotency_hash=idempotency_hash,
     )
+
+    if original.journal_entry_id is None:
+        # Decision 4: a valueless document reverses as a valueless mirror.
+        #
+        # Nothing here valued, so the kernel has no entry to reverse — but the quantity is on
+        # the shelf and has to be able to come back off it. Refusing would leave a zero-cost
+        # receipt as the one posting in the system that cannot be undone, which is a worse
+        # answer than mirroring it: the moves reverse, the caches follow, and the ledger says
+        # nothing in both directions because it had nothing to say in the first place.
+        #
+        # The document's moves are found through its own lines rather than through an entry,
+        # which is the reason `stock_move_id` is on the line at all.
+        originals = [
+            move
+            for line in original_lines
+            if line.stock_move_id is not None
+            and (move := db.get(StockMove, line.stock_move_id)) is not None
+        ]
+        posting = stock_service.reverse_unvalued_moves(
+            db,
+            company_id,
+            originals=originals,
+            on_date=on_date,
+            actor=actor,
+        )
+    else:
+        posting = stock_service.reverse_stock_posting(
+            db,
+            company_id,
+            entry_id=original.journal_entry_id,
+            on_date=on_date,
+            reason=reason,
+            actor=actor,
+            idempotency_key=idempotency_key,
+            idempotency_hash=idempotency_hash,
+        )
     reversal = InventoryDocument(
         company_id=company_id,
         doc_type=original.doc_type,
-        number=posting.entry.number if posting.entry is not None else original.number,
+        number=(
+            posting.entry.number
+            if posting.entry is not None
+            # A valueless mirror has no entry to take a number from, so it claims its own —
+            # the same rule the valueless document it reverses followed on the way in. Never
+            # the original's number: two documents sharing one number would break the
+            # per-company uniqueness the sequence exists to guarantee.
+            else claim_number(db, company_id, original.doc_type).number
+        ),
         document_date=on_date,
         description=f"Reversal of {original.number}: {reason}",
         reference=original.reference,
@@ -693,18 +727,8 @@ def reverse_document(
     db.add(reversal)
     db.flush()
 
-    originals = list(
-        db.scalars(
-            select(InventoryDocumentLine)
-            .where(
-                InventoryDocumentLine.company_id == company_id,
-                InventoryDocumentLine.document_id == original.id,
-            )
-            .order_by(InventoryDocumentLine.line_no)
-        )
-    )
     mirrored = {move.reverses_move_id: move for move in posting.moves}
-    for line in originals:
+    for line in original_lines:
         move = mirrored.get(line.stock_move_id)
         db.add(
             InventoryDocumentLine(

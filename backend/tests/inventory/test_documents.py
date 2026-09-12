@@ -28,7 +28,7 @@ from app.models.inventory import (
     NegativeStockPolicy,
     StockMove,
 )
-from app.models.journal import JournalEntry
+from app.models.journal import JournalEntry, JournalLine
 from tests.inventory.conftest import Stock
 from tests.inventory.invariants import assert_stock_invariants, location_position
 from tests.kernel.invariants import assert_ledger_invariants
@@ -570,6 +570,73 @@ def test_a_reversal_is_itself_a_document_with_its_own_lines(
     assert move.value == Decimal(-400)
 
 
+def test_a_valueless_document_reverses_as_a_valueless_mirror(
+    db: Session, stock: Stock
+) -> None:
+    """Decision 4: a posting the ledger never saw still has to be undoable.
+
+    A zero-cost receipt moves quantity and no value, so the Posting Engine writes no entry.
+    Refusing to reverse it would leave it as the one posting in the system that cannot be
+    undone. It mirrors instead: the quantity comes back off the shelf, the location returns
+    to 0 / 0, the two documents link, and *neither* carries a journal entry — because there
+    was nothing for the ledger to say in either direction.
+    """
+    receipt = _post_in(db, stock, Decimal(7), Decimal(0))
+    assert receipt.journal_entry_id is None
+
+    after_receipt = location_position(db, stock.company_id, stock.item.id, stock.main.id)
+    assert (after_receipt.quantity, after_receipt.value) == (Decimal(7), Decimal(0))
+
+    reversal = documents_service.reverse_document(
+        db,
+        stock.company_id,
+        receipt.id,
+        on_date=JANUARY,
+        reason="never arrived",
+        actor=stock.owner,
+    )
+
+    position = location_position(db, stock.company_id, stock.item.id, stock.main.id)
+    assert (position.quantity, position.value) == (Decimal(0), Decimal(0))
+
+    assert reversal.reverses_document_id == receipt.id
+    assert receipt.status == InventoryDocumentStatus.REVERSED
+    assert reversal.journal_entry_id is None, "the mirror posts no entry either"
+    assert receipt.reversal_entry_id is None
+    assert reversal.number and reversal.number != receipt.number
+
+    lines = documents_service.lines_of(db, stock.company_id, reversal.id)
+    assert len(lines) == 1
+    move = db.get(StockMove, lines[0].stock_move_id)
+    assert move is not None
+    assert move.quantity == Decimal(-7)
+    assert move.value == Decimal(0)
+    assert move.journal_entry_id is None
+    assert move.reverses_move_id is not None
+    _both_invariants(db, stock)
+
+
+def test_block_still_refuses_a_valueless_reversal_whose_stock_has_gone(
+    db: Session, stock: Stock
+) -> None:
+    """The mirror is not a way around the negative-stock policy: a zero-cost receipt whose
+    quantity has since gone out cannot be taken back under `block` either."""
+    receipt = _post_in(db, stock, Decimal(7), Decimal(0))
+    documents_service.post_adjustment(
+        db,
+        stock.company_id,
+        _input(stock, _line(stock, type_code="ADJOUT", quantity=Decimal(5))),
+        actor=stock.owner,
+    )
+
+    with pytest.raises(LedgerStateError) as err:
+        documents_service.reverse_document(
+            db, stock.company_id, receipt.id, on_date=JANUARY, reason="too late",
+            actor=stock.owner,
+        )
+    assert err.value.code == "insufficient_stock"
+
+
 def test_a_document_cannot_be_reversed_twice(db: Session, stock: Stock) -> None:
     adjustment = _post_in(db, stock, Decimal(4), Decimal(10))
     documents_service.reverse_document(
@@ -725,4 +792,76 @@ def test_a_line_after_a_residue_still_points_at_its_own_move(
     residues = [move for move in all_moves if move.id not in claimed]
     assert len(residues) == 1, "the crossing raised exactly one variance move"
     assert residues[0].quantity == Decimal(0)
+    _both_invariants(db, stock)
+
+
+# --- Decision 9: what a batch line may carry ---------------------------------------------------
+
+
+def test_a_batch_line_carries_its_own_contra_project_and_description(
+    db: Session, stock: Stock
+) -> None:
+    """Decision 9 lists what a batch line keys: item, warehouse, quantity, unit cost,
+    transaction type, **contra override, project** and description. The override is the point
+    — it is how one batch books two lines of the same type to different accounts without
+    defining a transaction type per account.
+    """
+    override = stock.ledger_account("5100")
+    project = stock.inventory.ledger.projects["P-ALPHA"]
+
+    document, _ = documents_service.post_batch(
+        db,
+        stock.company_id,
+        documents_service.DocumentInput(
+            document_date=JANUARY,
+            description="two lines, two contras",
+            lines=(
+                documents_service.DocumentLineInput(
+                    item_id=stock.item.id,
+                    warehouse_id=stock.main.id,
+                    quantity=Decimal(4),
+                    unit_cost=Decimal(100),
+                    transaction_type_id=stock.type_id("ADJIN"),
+                    contra_account_id=override,
+                    project_id=project.id,
+                    description="booked to the override",
+                ),
+                documents_service.DocumentLineInput(
+                    item_id=stock.item.id,
+                    warehouse_id=stock.depot.id,
+                    quantity=Decimal(2),
+                    unit_cost=Decimal(150),
+                    transaction_type_id=stock.type_id("ADJIN"),
+                    description="booked to the type's own contra",
+                ),
+            ),
+        ),
+        actor=stock.owner,
+    )
+
+    lines = documents_service.lines_of(db, stock.company_id, document.id)
+    assert lines[0].contra_account_id == override
+    assert lines[0].project_id == project.id
+    assert lines[0].description == "booked to the override"
+    assert lines[1].contra_account_id is None
+
+    # The override reached the ledger, and the second line did not follow it there.
+    contras = {
+        line.gl_account_id
+        for line in db.scalars(
+            select(JournalLine).where(
+                JournalLine.company_id == stock.company_id,
+                JournalLine.entry_id == document.journal_entry_id,
+            )
+        )
+        if line.gl_account_id
+        not in {stock.ledger_account("1300"), stock.ledger_account("1350")}
+    }
+    assert override in contras
+    assert stock.ledger_account("5200") in contras, "the type's own contra is still used"
+
+    # The project rides through to the move and to the journal line that posted it.
+    move = db.get(StockMove, lines[0].stock_move_id)
+    assert move is not None
+    assert move.project_id == project.id
     _both_invariants(db, stock)

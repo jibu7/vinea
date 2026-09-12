@@ -1118,6 +1118,102 @@ def reverse_stock_posting(
     return StockPosting(entry=reversal, moves=written, keyed_moves=mirrored_moves)
 
 
+def reverse_unvalued_moves(
+    db: Session,
+    company_id: int,
+    *,
+    originals: Sequence[StockMove],
+    on_date: date,
+    actor: User,
+) -> StockPosting:
+    """Mirror moves that carry no value — the reversal of a posting the ledger never saw.
+
+    A receipt at zero cost, or an issue while the average is zero, moves quantity and nothing
+    else: the Posting Engine writes no line for it, so there is no journal entry and
+    `posting.reverse` has nothing to reverse. The quantity is still on the shelf, though, and
+    it still has to be able to come back off it. So the mirror is valueless too — reversing
+    moves with the opposite quantity, `value = 0`, and no entry, which is exactly the shape
+    the `value_matches_journal_link` check constraint permits.
+
+    The negative-stock policy applies here as it does to any other reversal: under `block`, a
+    zero-cost receipt whose quantity has since gone out cannot be taken back.
+
+    Numbering and idempotency are the caller's, not this function's — there is no entry to
+    carry either, which is the same reason the documents in step 3 carry their own key.
+    """
+    if not originals:
+        raise PostingError(
+            "There is nothing to reverse",
+            code="too_few_lines",
+            field_errors={"lines": ["at least one move required"]},
+        )
+    if any(move.value != ZERO for move in originals):
+        # Guarded rather than assumed: a valued move reversed this way would take value out
+        # of `stock_balances` with no journal line to take it out of the GL, and the identity
+        # that the whole design rests on would break silently.
+        raise PostingError(
+            "These moves carry value; reverse them through their journal entry",
+            code="moves_carry_value",
+        )
+
+    period = lock_period_for_posting(db, company_id, on_date)
+    ctx = _Context(db, company_id, actor)
+    locations = [(move.item_id, move.warehouse_id) for move in originals]
+    for item_id, warehouse_id in locations:
+        ctx.item(item_id)
+        ctx.warehouse(warehouse_id)
+    ctx.lock(locations)
+
+    policy = ctx.settings.negative_stock_policy
+    for move in originals:
+        location = (move.item_id, move.warehouse_id)
+        state = ctx.location_states[location]
+        if state.quantity - move.quantity < ZERO and policy == NegativeStockPolicy.BLOCK:
+            raise _insufficient_stock(
+                ctx.item(move.item_id),
+                ctx.warehouse(move.warehouse_id),
+                state.quantity,
+                move.quantity,
+            )
+        ctx.location_states[location] = state.after(-move.quantity, ZERO)
+        ctx.item_states[move.item_id] = ctx.item_states[move.item_id].after(
+            -move.quantity, ZERO
+        )
+
+    written: list[StockMove] = []
+    _stock_service(db, on=True)
+    try:
+        for move in originals:
+            written.append(
+                StockMove(
+                    company_id=company_id,
+                    item_id=move.item_id,
+                    warehouse_id=move.warehouse_id,
+                    move_date=on_date,
+                    period_id=period.id,
+                    sequence_no=_next_sequence(db),
+                    quantity=-move.quantity,
+                    unit_cost=move.unit_cost,
+                    value=ZERO,
+                    journal_entry_id=None,
+                    journal_line_id=None,
+                    transaction_type_id=move.transaction_type_id,
+                    source_doc_type=move.source_doc_type,
+                    source_doc_id=move.source_doc_id,
+                    source_line_id=move.source_line_id,
+                    project_id=move.project_id,
+                    cost_provisional=move.cost_provisional,
+                    reverses_move_id=move.id,
+                )
+            )
+        db.add_all(written)
+        db.flush()
+    finally:
+        _stock_service(db, on=False)
+    _apply_caches(db, ctx)
+    return StockPosting(entry=None, moves=written, keyed_moves=written)
+
+
 def _expel_reversal_residues(
     db: Session,
     ctx: _Context,

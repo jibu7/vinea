@@ -7,6 +7,7 @@ RLS-enforcing role.
 """
 
 from datetime import date
+from decimal import Decimal
 
 from fastapi.testclient import TestClient
 from sqlalchemy import select
@@ -165,6 +166,52 @@ def test_a_journal_batch_posts_many_lines_as_one_document(client: TestClient) ->
     body = response.json()
     assert body["doc_type"] == "INJN"
     assert len(body["lines"]) == 2
+
+
+def test_an_opening_balance_batch_books_its_contra_to_3400(client: TestClient) -> None:
+    """Decision 2's go-live path, end to end through the endpoint.
+
+    Inventory accounts are control accounts, so opening stock cannot arrive as a GL journal.
+    It comes through here under the seeded `OPEN` type, whose contra is `3400 Opening Balance
+    Suspense` — the account that carries what the opening stock was worth until the rest of
+    the opening trial balance lands against it.
+    """
+    _signup(client)
+    item = _stock_item(client)
+    warehouse = _main_warehouse(client)
+
+    response = client.post(
+        "/api/v1/inventory/journal-batches",
+        json={
+            "document_date": TODAY,
+            "description": "Opening stock at go-live",
+            "lines": [
+                {
+                    "item_id": item["id"],
+                    "warehouse_id": warehouse["id"],
+                    "quantity": "10",
+                    "unit_cost": "100",
+                    "transaction_type_id": _type_id(client, "OPEN"),
+                }
+            ],
+        },
+        headers={"Idempotency-Key": "opening-1"},
+    )
+    assert response.status_code == 201, response.text
+    entry_id = response.json()["journal_entry_id"]
+
+    code_of = {
+        row["id"]: row["code"] for row in client.get("/api/v1/gl/accounts").json()
+    }
+    entry = client.get(f"/api/v1/gl/journal-entries/{entry_id}").json()
+    by_code = {code_of[line["gl_account_id"]]: line for line in entry["lines"]}
+
+    assert "3400" in by_code, f"opening stock must book to 3400, got {sorted(by_code)}"
+    assert Decimal(by_code["3400"]["base_amount"]) == Decimal("-1000")
+
+    inventory_line = next(line for code, line in by_code.items() if code != "3400")
+    assert Decimal(inventory_line["base_amount"]) == Decimal("1000")
+    assert inventory_line["item_id"] == item["id"], "every INV line carries its item"
 
 
 def test_a_batch_line_failure_refuses_the_whole_batch(client: TestClient) -> None:
