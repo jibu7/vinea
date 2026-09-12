@@ -39,6 +39,7 @@ from app.inventory import masters
 from app.inventory import stock as stock_service
 from app.kernel.errors import LedgerStateError, PostingError
 from app.kernel.money import ZERO
+from app.kernel.posting import gl_settings_for
 from app.kernel.sequences import DocType, claim_number
 from app.models.gl import GLTransactionType
 from app.models.inventory import (
@@ -609,6 +610,223 @@ def post_batch(
         idempotency_key=idempotency_key,
         idempotency_hash=idempotency_hash,
         request=request,
+    )
+
+
+# --- Count variances -------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class VarianceLine:
+    """One non-zero variance from a count session, already converted and already costed.
+
+    `quantity_base` is **signed** — positive is stock found, negative is stock missing. This
+    is the one document whose direction is a fact about the line rather than about the
+    transaction type (decision 7 gives a count exactly one kind for both), which is why it
+    does not arrive as a `DocumentLineInput` with its sign in the type's `kind`.
+    """
+
+    item_id: int
+    warehouse_id: int
+    uom_id: int
+    quantity_base: Decimal
+    #: Only on a gain: what the found stock is taken in at, which decision 7 fixes as the
+    #: item's current average. A loss is costed by the stock service like any other issue.
+    unit_cost: Decimal | None = None
+    project_id: int | None = None
+    description: str | None = None
+    source_line_id: int | None = None
+
+
+def count_variance_type(
+    db: Session, company_id: int, type_id: int | None
+) -> GLTransactionType:
+    """The count's transaction type, or the company's own when it has exactly one.
+
+    Defaulting rather than requiring: a count sheet is opened by whoever is going to walk the
+    aisles, and asking them which transaction type a variance should post under is asking the
+    wrong person. Naming one is still allowed, which is how "Shrinkage" and "Breakage" get
+    their own contra accounts (decision 9).
+    """
+    if type_id is None:
+        candidates = list(
+            db.scalars(
+                select(GLTransactionType).where(
+                    GLTransactionType.company_id == company_id,
+                    GLTransactionType.module == INVENTORY_MODULE,
+                    GLTransactionType.kind == InventoryTransactionKind.COUNT_VARIANCE,
+                    GLTransactionType.is_active,
+                )
+            )
+        )
+        if len(candidates) != 1:
+            raise LedgerStateError(
+                "This company has no single default count-variance type; name one on the "
+                "session"
+                if candidates
+                else "This company has no active count-variance transaction type",
+                code="transaction_type_required",
+                field_errors={"transaction_type_id": ["required"]},
+            )
+        return candidates[0]
+
+    row = db.get(GLTransactionType, type_id)
+    if row is None or row.company_id != company_id or row.module != INVENTORY_MODULE:
+        raise NotFoundError("Inventory transaction type not found")
+    if not row.is_active:
+        raise LedgerStateError(
+            f"Transaction type {row.code} is not active",
+            code="transaction_type_inactive",
+            field_errors={"transaction_type_id": ["not active"]},
+        )
+    if row.kind != InventoryTransactionKind.COUNT_VARIANCE:
+        raise LedgerStateError(
+            f"{row.code} is a {row.kind.value} type and cannot carry a count variance",
+            code="transaction_kind_not_allowed",
+            field_errors={"transaction_type_id": ["not valid on a count"]},
+        )
+    return row
+
+
+def variance_contra_account(
+    db: Session, company_id: int, txn_type: GLTransactionType
+) -> int | None:
+    """Where a count variance lands: the transaction type's contra, or — when it names none —
+    the `stock_count_variance_account` setting of decision 10.
+
+    Precedence in that order because decision 9 makes the type the place a user says "count
+    this kind of loss to that account", while decision 10 gives the company one default for
+    when nobody has said anything. Returning `None` when the type has its own contra leaves
+    the stock service to resolve it, rather than resolving it twice in two places.
+    """
+    if txn_type.default_gl_account_id is not None:
+        return None
+    settings = gl_settings_for(db, company_id)
+    account_id = settings.stock_count_variance_account_id
+    if account_id is None:
+        raise PostingError(
+            "The stock count variance account is not set; a count cannot post without it",
+            code="gl_setting_missing",
+            field_errors={"stock_count_variance_account_id": ["required"]},
+        )
+    return int(account_id)
+
+
+def post_count_variance(
+    db: Session,
+    company_id: int,
+    data: DocumentInput,
+    *,
+    lines: Sequence[VarianceLine],
+    transaction_type_id: int,
+    contra_account_id: int | None = None,
+    source_doc_type: str,
+    source_doc_id: int,
+    actor: User,
+    idempotency_key: str | None = None,
+    idempotency_hash: str | None = None,
+    request: Request | None = None,
+) -> tuple[InventoryDocument, bool]:
+    """The document a processed count posts: every non-zero variance, in one entry.
+
+    It is an ordinary `inventory_documents` row of doc type `INCT`, which is the whole point —
+    a count variance is reversed, listed, numbered and drilled into by exactly the machinery
+    step 3 built, and decision 11's "a processed count stays Completed and links to the
+    reversal" needs no count-specific reversal path to be true.
+
+    Gains and losses ride in one posting rather than two, so the entry balances the way the
+    count reads: one document, one number, one set of variances, refused whole.
+    """
+    if not lines:
+        raise LedgerStateError(
+            "A count variance document needs at least one line",
+            code="empty_document",
+            field_errors={"lines": ["at least one line required"]},
+        )
+    if idempotency_key:
+        existing = _replay(db, company_id, idempotency_key, idempotency_hash)
+        if existing is not None:
+            return existing, True
+
+    def _uom(uom_id: int) -> Uom:
+        uom = db.get(Uom, uom_id)
+        if uom is None or uom.company_id != company_id:
+            raise NotFoundError("Unit of measure not found")
+        return uom
+
+    resolved = [
+        _Resolved(
+            source=DocumentLineInput(
+                item_id=line.item_id,
+                warehouse_id=line.warehouse_id,
+                # Signed, deliberately: on this one document the direction belongs to the
+                # line, so the sheet reads the way it was counted — found 3, missing 1.
+                quantity=line.quantity_base,
+                uom_id=line.uom_id,
+                unit_cost=line.unit_cost,
+                transaction_type_id=transaction_type_id,
+                contra_account_id=contra_account_id,
+                project_id=line.project_id,
+                description=line.description,
+            ),
+            kind=InventoryTransactionKind.COUNT_VARIANCE,
+            transaction_type_id=transaction_type_id,
+            uom=_uom(line.uom_id),
+            quantity_base=line.quantity_base,
+            signed_quantity=line.quantity_base,
+            unit_cost=line.unit_cost,
+            value=None,
+        )
+        for line in lines
+    ]
+    document = stock_service.StockDocument(
+        doc_type=str(DocType.INV_COUNT),
+        move_date=data.document_date,
+        description=data.description,
+        reference=data.reference,
+        transaction_type_id=transaction_type_id,
+        source_doc_type=source_doc_type,
+        source_doc_id=source_doc_id,
+        idempotency_key=idempotency_key,
+        idempotency_hash=idempotency_hash,
+    )
+    posting = stock_service.post_stock_moves(
+        db,
+        company_id,
+        document=document,
+        moves=[
+            stock_service.SignedLine(
+                line=stock_service.StockLine(
+                    item_id=line.item_id,
+                    warehouse_id=line.warehouse_id,
+                    quantity=abs(line.quantity_base),
+                    unit_cost=line.unit_cost,
+                    transaction_type_id=transaction_type_id,
+                    contra_account_id=contra_account_id,
+                    project_id=line.project_id,
+                    description=line.description or data.description,
+                    source_line_id=line.source_line_id,
+                ),
+                quantity=line.quantity_base,
+            )
+            for line in lines
+        ],
+        actor=actor,
+    )
+    return (
+        _write_document(
+            db,
+            company_id,
+            doc_type=DocType.INV_COUNT,
+            data=data,
+            resolved=resolved,
+            posting=posting,
+            actor=actor,
+            idempotency_key=idempotency_key,
+            idempotency_hash=idempotency_hash,
+            request=request,
+        ),
+        False,
     )
 
 

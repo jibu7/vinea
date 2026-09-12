@@ -12,8 +12,13 @@ from sqlalchemy.orm import Session
 from app.kernel.balances import verify_period_balances
 from app.kernel.enquiries import trial_balance
 from app.kernel.money import is_rounded
+from app.kernel.sequences import DocType
 from app.models.currency import Currency
 from app.models.fiscal import AccountingPeriod
+
+# The three tables that can hold a document number without a journal entry behind it — see
+# `_numbers_without_entries`.
+from app.models.inventory import InventoryDocument, StockCountSession, StockTransfer
 from app.models.journal import DocumentSequence, JournalEntry, JournalLine, JournalStatus
 
 ZERO = Decimal(0)
@@ -134,6 +139,17 @@ def assert_ledger_invariants(
             assert current.checksums.get(entry_id) == checksum, f"entry {entry_id} was mutated"
 
     # 5b. Sequences are gapless per (company, doc_type): numbers 1..N with N = next - 1.
+    #
+    # "Numbers", not "entry numbers". Until P5 those were the same thing, because a journal
+    # entry was the only thing that could claim one. Since step 3 a posting in which nothing
+    # carried value produces moves and **no entry** (decision 1) — a receipt at zero cost is
+    # still a real change to what is on the shelf — and such a document claims a number of its
+    # own from the same run so that the run has no holes in it. A company with one zero-cost
+    # adjustment and one ordinary one therefore has `ADJ-000001` on a document and
+    # `ADJ-000002` on an entry, which is exactly right and which this check called a gap.
+    #
+    # So the claimants are gathered from every table that can hold a number, and the union is
+    # what must be 1..N. A number belonging to two things, or to nothing, is still a failure.
     sequences = {
         seq.doc_type: seq
         for seq in db.scalars(
@@ -143,13 +159,54 @@ def assert_ledger_invariants(
         )
     }
     by_doc_type: dict[str, list[int]] = {}
+
+    def _claim(doc_type: str, number: str) -> None:
+        match = _TRAILING_DIGITS.search(number)
+        assert match, f"unparseable number {number}"
+        by_doc_type.setdefault(doc_type, []).append(int(match.group(1)))
+
     for entry in entries:
-        match = _TRAILING_DIGITS.search(entry.number)
-        assert match, f"unparseable number {entry.number}"
-        by_doc_type.setdefault(entry.doc_type, []).append(int(match.group(1)))
+        _claim(entry.doc_type, entry.number)
+    for doc_type, number in _numbers_without_entries(db, company_id):
+        _claim(doc_type, number)
     for doc_type, numbers in by_doc_type.items():
         numbers.sort()
         assert numbers == list(range(1, len(numbers) + 1)), f"gap in {doc_type}: {numbers}"
         assert sequences[doc_type].next_number == len(numbers) + 1, doc_type
 
     return current
+
+
+def _numbers_without_entries(db: Session, company_id: int) -> list[tuple[str, str]]:
+    """Numbers held by something other than a journal entry.
+
+    Three claimants, and only these three: a valueless stock document and a valueless transfer
+    (neither posted an entry to take a number from), and a count session, which is a working
+    paper that may never post at all and so has a run of its own. A document that *did* post
+    an entry shares that entry's number, and counting it here would make every ordinary
+    document look like a duplicate claim.
+
+    Named rather than discovered, because the property being checked is about the handful of
+    places allowed to claim a number without posting one: a fourth should have to be added
+    here deliberately, by somebody who has thought about whether it should exist.
+    """
+    documents = db.execute(
+        select(InventoryDocument.doc_type, InventoryDocument.number).where(
+            InventoryDocument.company_id == company_id,
+            InventoryDocument.journal_entry_id.is_(None),
+        )
+    ).all()
+    transfers = db.execute(
+        select(StockTransfer.number).where(
+            StockTransfer.company_id == company_id,
+            StockTransfer.dispatch_entry_id.is_(None),
+        )
+    ).all()
+    sessions = db.execute(
+        select(StockCountSession.number).where(StockCountSession.company_id == company_id)
+    ).all()
+    return (
+        [(doc_type, number) for doc_type, number in documents]
+        + [(str(DocType.INV_TRANSFER), number) for (number,) in transfers]
+        + [(str(DocType.INV_COUNT_SESSION), number) for (number,) in sessions]
+    )

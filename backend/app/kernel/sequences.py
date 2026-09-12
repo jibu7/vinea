@@ -48,6 +48,13 @@ class DocType(enum.StrEnum):
     INV_JOURNAL = "INJN"
     INV_TRANSFER = "INTR"
     INV_COUNT = "INCT"
+    # A count *session* is not a posting: it is the sheet somebody walks the aisles with, and
+    # it has to be nameable from the moment it is opened — days before it posts anything, and
+    # still when it is cancelled having posted nothing at all. Its own run, because every
+    # number in the `CNT-` run belongs to a variance document that reached the ledger, and a
+    # session claiming one would leave a hole where a posting should be (the gapless check in
+    # `tests/kernel/invariants.py` states exactly that).
+    INV_COUNT_SESSION = "INCS"
 
 
 DEFAULT_PREFIXES: dict[str, str] = {
@@ -69,6 +76,7 @@ DEFAULT_PREFIXES: dict[str, str] = {
     DocType.INV_JOURNAL: "IJN-",
     DocType.INV_TRANSFER: "TRF-",
     DocType.INV_COUNT: "CNT-",
+    DocType.INV_COUNT_SESSION: "CNS-",
 }
 
 

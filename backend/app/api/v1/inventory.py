@@ -16,15 +16,28 @@ from app.api.deps import AuthContext, get_tenant_context
 from app.core import permissions
 from app.core.errors import PermissionDeniedError
 from app.db import get_db
+from app.inventory import counts as inventory_counts
 from app.inventory import documents as inventory_documents
 from app.inventory import masters
+from app.inventory import transfers as inventory_transfers
 from app.models.audit import AuditLog
-from app.models.inventory import ItemType
+from app.models.inventory import ItemType, StockCountStatus, StockTransferStatus
 from app.schemas.common import Page
 from app.schemas.inventory import (
     BarcodeCreate,
     BarcodeRead,
     BarcodeUpdate,
+    CountCancel,
+    CountLineCreate,
+    CountLineEntry,
+    CountLineRead,
+    CountPreviewLine,
+    CountPreviewRead,
+    CountProcessRequest,
+    CountProcessResult,
+    CountSessionCreate,
+    CountSessionRead,
+    CountSessionSummary,
     InventoryDefaultsRead,
     InventoryDefaultsUpdate,
     ItemAuditRead,
@@ -37,6 +50,12 @@ from app.schemas.inventory import (
     StockDocumentRead,
     StockDocumentReverse,
     StockDocumentSummary,
+    TransferCancel,
+    TransferCreate,
+    TransferLineRead,
+    TransferRead,
+    TransferReceive,
+    TransferSummary,
     UomCategoryCreate,
     UomCategoryRead,
     UomCategoryUpdate,
@@ -676,3 +695,471 @@ def get_stock_document(
     _require_view(auth)
     document = inventory_documents.get_document(db, auth.company_id, document_id)
     return _document_read(db, auth.company_id, document)
+
+
+# --- Warehouse transfers (P5 step 4) --------------------------------------------------------
+
+
+def _transfer_read(db: Session, company_id: int, transfer) -> TransferRead:
+    lines = inventory_transfers.lines_of(db, company_id, transfer.id)
+    return TransferRead(
+        **TransferSummary.model_validate(transfer).model_dump(),
+        transaction_type_id=transfer.transaction_type_id,
+        project_id=transfer.project_id,
+        lines=[TransferLineRead.model_validate(line) for line in lines],
+    )
+
+
+@router.post("/transfers", status_code=status.HTTP_201_CREATED)
+def post_transfer(
+    payload: TransferCreate,
+    request: Request,
+    response: Response,
+    idempotency_key: str = idempotency.IdempotencyKey,
+    auth: AuthContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+) -> TransferRead:
+    """Dispatch a transfer — and receive it in the same transaction when `receive_now`.
+
+    Two postings, one per leg, each carrying the branch of its own physical warehouse
+    (decision 6). With `receive_now` false the stock stays in the in-transit warehouse, where
+    it is a real position on the valuation report and real value on the in-transit account,
+    until somebody receives it.
+    """
+    _require_post(auth)
+    transfer, replayed = inventory_transfers.post_transfer(
+        db,
+        auth.company_id,
+        inventory_transfers.TransferInput(
+            transfer_date=payload.transfer_date,
+            description=payload.description,
+            reference=payload.reference,
+            from_warehouse_id=payload.from_warehouse_id,
+            to_warehouse_id=payload.to_warehouse_id,
+            transaction_type_id=payload.transaction_type_id,
+            project_id=payload.project_id,
+            lines=tuple(
+                inventory_transfers.TransferLineInput(
+                    item_id=line.item_id,
+                    quantity=line.quantity,
+                    uom_id=line.uom_id,
+                    description=line.description,
+                )
+                for line in payload.lines
+            ),
+        ),
+        receive_now=payload.receive_now,
+        actor=auth.user,
+        idempotency_key=idempotency_key,
+        idempotency_hash=idempotency.fingerprint("inventory_transfer", payload),
+        request=request,
+    )
+    db.commit()
+    if replayed:
+        response.status_code = status.HTTP_200_OK
+    return _transfer_read(db, auth.company_id, transfer)
+
+
+@router.post("/transfers/{transfer_id}/receive")
+def receive_transfer(
+    transfer_id: int,
+    payload: TransferReceive,
+    request: Request,
+    idempotency_key: str = idempotency.IdempotencyKey,
+    auth: AuthContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+) -> TransferRead:
+    """The second leg: in-transit → destination, at the value the dispatch froze.
+
+    Everything dispatched arrives — P5 ships direct transfers, and partial receipt is the
+    requisition workflow the plan leaves in the backlog (§B.2).
+    """
+    _require_post(auth)
+    transfer = inventory_transfers.receive_transfer(
+        db,
+        auth.company_id,
+        transfer_id,
+        on_date=payload.receive_date,
+        actor=auth.user,
+        idempotency_key=idempotency_key,
+        idempotency_hash=idempotency.fingerprint("inventory_transfer_receive", payload),
+        request=request,
+    )
+    db.commit()
+    return _transfer_read(db, auth.company_id, transfer)
+
+
+@router.post("/transfers/{transfer_id}/cancel")
+def cancel_transfer(
+    transfer_id: int,
+    payload: TransferCancel,
+    request: Request,
+    idempotency_key: str = idempotency.IdempotencyKey,
+    auth: AuthContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+) -> TransferRead:
+    """Send stock in transit back to the source by reversing the dispatch leg.
+
+    The only way out of the in-transit warehouse other than arriving: no other document may
+    name it (decision 6), so without this a mis-keyed dispatch would strand both the quantity
+    and its value there.
+    """
+    _require_post(auth)
+    transfer = inventory_transfers.cancel_transfer(
+        db,
+        auth.company_id,
+        transfer_id,
+        on_date=payload.cancellation_date,
+        reason=payload.reason,
+        actor=auth.user,
+        idempotency_key=idempotency_key,
+        idempotency_hash=idempotency.fingerprint("inventory_transfer_cancel", payload),
+        request=request,
+    )
+    db.commit()
+    return _transfer_read(db, auth.company_id, transfer)
+
+
+@router.get("/transfers")
+def list_transfers(
+    status_filter: StockTransferStatus | None = Query(default=None, alias="status"),
+    warehouse_id: int | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    cursor: int | None = None,
+    limit: int = Query(default=100, ge=1, le=500),
+    auth: AuthContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+) -> Page[TransferSummary]:
+    """`warehouse_id` matches either end — "what have I sent and what is coming to me" is one
+    question, and answering it should not take two calls."""
+    _require_view(auth)
+    rows, next_cursor = inventory_transfers.list_transfers(
+        db,
+        auth.company_id,
+        status=status_filter,
+        warehouse_id=warehouse_id,
+        date_from=date_from,
+        date_to=date_to,
+        cursor=cursor,
+        limit=limit,
+    )
+    return Page(
+        items=[TransferSummary.model_validate(row) for row in rows], next_cursor=next_cursor
+    )
+
+
+@router.get("/transfers/{transfer_id}")
+def get_transfer(
+    transfer_id: int,
+    auth: AuthContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+) -> TransferRead:
+    _require_view(auth)
+    transfer = inventory_transfers.get_transfer(db, auth.company_id, transfer_id)
+    return _transfer_read(db, auth.company_id, transfer)
+
+
+# --- Stock counts (P5 step 4) ----------------------------------------------------------------
+
+
+def _require_count(auth: AuthContext) -> None:
+    """Opening and filling in a count sheet. Either permission does: a stock controller who
+    can process counts can obviously open one, and a clerk who posts adjustments is the other
+    person who walks the aisles."""
+    allowed = (permissions.INV_COUNT_PROCESS, permissions.INV_TRANSACTIONS_ADJUST)
+    if not any(permission in auth.permissions for permission in allowed):
+        raise PermissionDeniedError(f"Missing required permission(s): {' or '.join(allowed)}")
+
+
+def _require_count_process(auth: AuthContext) -> None:
+    """Processing posts a variance against every counted line at once, which is why it is its
+    own permission (`inv:count_process`) rather than part of adjustment posting."""
+    if permissions.INV_COUNT_PROCESS not in auth.permissions:
+        raise PermissionDeniedError(
+            f"Missing required permission(s): {permissions.INV_COUNT_PROCESS}"
+        )
+
+
+def _count_line_read(line, *, variance, stale: bool) -> CountLineRead:
+    return CountLineRead(
+        **{
+            field: getattr(line, field)
+            for field in (
+                "id",
+                "line_no",
+                "item_id",
+                "system_quantity",
+                "counted_quantity",
+                "uom_id",
+                "counted_quantity_base",
+                "snapshot_at",
+                "counted_at",
+                "note",
+                "stock_move_id",
+            )
+        },
+        variance=variance,
+        stale=stale,
+    )
+
+
+def _session_read(db: Session, company_id: int, session) -> CountSessionRead:
+    lines = inventory_counts.lines_of(db, company_id, session.id)
+    stale = inventory_counts.stale_lines(db, company_id, session, lines)
+    return CountSessionRead(
+        **CountSessionSummary.model_validate(session).model_dump(),
+        transaction_type_id=session.transaction_type_id,
+        project_id=session.project_id,
+        lines=[
+            _count_line_read(
+                line,
+                variance=inventory_counts.variance_of(line),
+                stale=line.id in stale,
+            )
+            for line in lines
+        ],
+    )
+
+
+@router.post("/counts", status_code=status.HTTP_201_CREATED)
+def open_count_session(
+    payload: CountSessionCreate,
+    request: Request,
+    auth: AuthContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+) -> CountSessionRead:
+    """Freeze a warehouse: one line per item, each with what the books say and the
+    posting-order watermark it was read at (decision 7)."""
+    _require_count(auth)
+    session = inventory_counts.open_session(
+        db,
+        auth.company_id,
+        inventory_counts.CountSessionInput(
+            warehouse_id=payload.warehouse_id,
+            count_date=payload.count_date,
+            description=payload.description,
+            reference=payload.reference,
+            transaction_type_id=payload.transaction_type_id,
+            project_id=payload.project_id,
+            include_items=tuple(payload.include_items),
+            include_zero_balances=payload.include_zero_balances,
+        ),
+        actor=auth.user,
+        request=request,
+    )
+    db.commit()
+    return _session_read(db, auth.company_id, session)
+
+
+@router.get("/counts")
+def list_count_sessions(
+    status_filter: StockCountStatus | None = Query(default=None, alias="status"),
+    warehouse_id: int | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    cursor: int | None = None,
+    limit: int = Query(default=100, ge=1, le=500),
+    auth: AuthContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+) -> Page[CountSessionSummary]:
+    _require_view(auth)
+    rows, next_cursor = inventory_counts.list_sessions(
+        db,
+        auth.company_id,
+        status=status_filter,
+        warehouse_id=warehouse_id,
+        date_from=date_from,
+        date_to=date_to,
+        cursor=cursor,
+        limit=limit,
+    )
+    return Page(
+        items=[CountSessionSummary.model_validate(row) for row in rows],
+        next_cursor=next_cursor,
+    )
+
+
+@router.get("/counts/{session_id}")
+def get_count_session(
+    session_id: int,
+    auth: AuthContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+) -> CountSessionRead:
+    _require_view(auth)
+    session = inventory_counts.get_session(db, auth.company_id, session_id)
+    return _session_read(db, auth.company_id, session)
+
+
+@router.post("/counts/{session_id}/lines", status_code=status.HTTP_201_CREATED)
+def add_count_line(
+    session_id: int,
+    payload: CountLineCreate,
+    request: Request,
+    auth: AuthContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+) -> CountLineRead:
+    """Put an item on the sheet that the warehouse does not hold — stock found where the books
+    say there is none."""
+    _require_count(auth)
+    line = inventory_counts.add_line(
+        db, auth.company_id, session_id, payload.item_id, actor=auth.user, request=request
+    )
+    session = inventory_counts.get_session(db, auth.company_id, session_id)
+    db.commit()
+    return _count_line_read(
+        line,
+        variance=inventory_counts.variance_of(line),
+        stale=inventory_counts.is_stale(db, auth.company_id, session, line),
+    )
+
+
+@router.patch("/counts/{session_id}/lines/{line_id}")
+def enter_count(
+    session_id: int,
+    line_id: int,
+    payload: CountLineEntry,
+    request: Request,
+    auth: AuthContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+) -> CountLineRead:
+    """Key what was on the shelf. `counted_quantity: null` clears the line to uncounted —
+    which is not a count of zero."""
+    _require_count(auth)
+    line = inventory_counts.enter_count(
+        db,
+        auth.company_id,
+        session_id,
+        line_id,
+        quantity=payload.counted_quantity,
+        uom_id=payload.uom_id,
+        note=payload.note,
+        actor=auth.user,
+        request=request,
+    )
+    session = inventory_counts.get_session(db, auth.company_id, session_id)
+    db.commit()
+    return _count_line_read(
+        line,
+        variance=inventory_counts.variance_of(line),
+        stale=inventory_counts.is_stale(db, auth.company_id, session, line),
+    )
+
+
+@router.post("/counts/{session_id}/lines/{line_id}/resnapshot")
+def resnapshot_count_line(
+    session_id: int,
+    line_id: int,
+    request: Request,
+    auth: AuthContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+) -> CountLineRead:
+    """Re-freeze a stale line and clear its count, so it can be counted again against what
+    the books now say (decision 7)."""
+    _require_count(auth)
+    line = inventory_counts.resnapshot_line(
+        db, auth.company_id, session_id, line_id, actor=auth.user, request=request
+    )
+    session = inventory_counts.get_session(db, auth.company_id, session_id)
+    db.commit()
+    return _count_line_read(
+        line,
+        variance=inventory_counts.variance_of(line),
+        stale=inventory_counts.is_stale(db, auth.company_id, session, line),
+    )
+
+
+@router.get("/counts/{session_id}/preview")
+def preview_count(
+    session_id: int,
+    auth: AuthContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+) -> CountPreviewRead:
+    """What Process would post, and what would stop it — the allocation screen's contract."""
+    _require_view(auth)
+    preview = inventory_counts.preview(db, auth.company_id, session_id)
+    return CountPreviewRead(
+        session_id=preview.session.id,
+        number=preview.session.number,
+        warehouse_id=preview.session.warehouse_id,
+        count_date=preview.session.count_date,
+        total_value=preview.total_value,
+        counted_lines=preview.counted_lines,
+        uncounted_lines=preview.uncounted_lines,
+        variance_lines=preview.variance_lines,
+        stale_lines=preview.stale_lines,
+        can_process=preview.can_process,
+        lines=[
+            CountPreviewLine(
+                line_id=row.line.id,
+                item_id=row.item.id,
+                item_code=row.item.code,
+                item_name=row.item.name,
+                system_quantity=row.line.system_quantity,
+                counted_quantity=row.line.counted_quantity,
+                variance=row.variance,
+                unit_cost=row.unit_cost,
+                value=row.value,
+                counted=row.counted,
+                stale=row.stale,
+            )
+            for row in preview.lines
+        ],
+    )
+
+
+@router.post("/counts/{session_id}/process")
+def process_count(
+    session_id: int,
+    request: Request,
+    response: Response,
+    idempotency_key: str = idempotency.IdempotencyKey,
+    auth: AuthContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+) -> CountProcessResult:
+    """Post every non-zero variance as one count-variance document and complete the session.
+
+    Refused whole with `count_line_stale` while any counted line's location has moved since
+    it was frozen (decision 7). A session whose variances are all zero completes with no
+    document: a count that agrees with the books is an answer the ledger has nothing to add
+    to.
+    """
+    _require_count_process(auth)
+    session, document, replayed = inventory_counts.process_session(
+        db,
+        auth.company_id,
+        session_id,
+        actor=auth.user,
+        idempotency_key=idempotency_key,
+        idempotency_hash=idempotency.fingerprint(
+            "inventory_count_process", CountProcessRequest(session_id=session_id)
+        ),
+        request=request,
+    )
+    db.commit()
+    if replayed:
+        response.status_code = status.HTTP_200_OK
+    return CountProcessResult(
+        session=CountSessionSummary.model_validate(session),
+        document=(
+            _document_read(db, auth.company_id, document) if document is not None else None
+        ),
+    )
+
+
+@router.post("/counts/{session_id}/cancel")
+def cancel_count(
+    session_id: int,
+    payload: CountCancel,
+    request: Request,
+    auth: AuthContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+) -> CountSessionRead:
+    """Abandon a count. Nothing was posted, so nothing is reversed — the sheet stays as the
+    record that a count was started and given up on."""
+    _require_count(auth)
+    session = inventory_counts.cancel_session(
+        db, auth.company_id, session_id, reason=payload.reason, actor=auth.user, request=request
+    )
+    db.commit()
+    return _session_read(db, auth.company_id, session)

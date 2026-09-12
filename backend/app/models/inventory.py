@@ -14,7 +14,7 @@ another tenant's item, unit or branch even though FK checks bypass RLS.
 """
 
 import enum
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 
 from sqlalchemy import (
@@ -22,6 +22,7 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     Date,
+    DateTime,
     ForeignKeyConstraint,
     Index,
     Numeric,
@@ -732,4 +733,401 @@ class InventoryDocumentLine(AuditedMixin, CompanyScopedMixin, Base):
     contra_account_id: Mapped[int | None] = mapped_column(BigInteger)
     project_id: Mapped[int | None] = mapped_column(BigInteger)
     description: Mapped[str | None] = mapped_column(Text)
+    stock_move_id: Mapped[int | None] = mapped_column(BigInteger)
+
+
+# --- Transfers (P5 step 4) -----------------------------------------------------------------
+
+
+class StockTransferStatus(enum.StrEnum):
+    """Where a transfer's stock physically is.
+
+    `IN_TRANSIT` is the state decision 6 exists to make visible: the stock has left the
+    source, has not arrived anywhere, and is sitting in the in-transit warehouse against the
+    in-transit account. It is a real position on the valuation report, not a gap between two
+    postings.
+    """
+
+    IN_TRANSIT = "in_transit"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+
+
+stock_transfer_status_enum = pg_enum(StockTransferStatus, "stock_transfer_status")
+
+
+class StockTransfer(AuditedMixin, CompanyScopedMixin, Base):
+    """The header of a warehouse transfer — one document, **two** postings (decision 6).
+
+    This is why a transfer is not an `inventory_documents` row. That table carries one
+    `journal_entry_id`, because an adjustment and a journal batch are one posting each; a
+    transfer is a dispatch *and* a receive, each its own entry, each carrying the branch of
+    its own physical warehouse so the branch balances stay square when the two warehouses sit
+    in different branches. A shape that holds two entries is a different shape.
+
+    **Numbering** follows the step-3 rule: the document takes the number of the entry it
+    posted — here, the dispatch leg's. The receive leg claims the next number from the same
+    `INTR` sequence, so a completed transfer accounts for two numbers in the `TRF-` run and
+    leaves no hole; a dispatch that valued nothing claims its own number, as a valueless
+    adjustment does.
+
+    **Status is a fact about stock, not a workflow.** There is no draft: a transfer exists
+    because it was dispatched. `CANCELLED` is the reversal of a dispatch that never arrived,
+    which is the only way stock in transit can come home — without it a mis-keyed dispatch
+    would leave value in the in-transit account with nothing able to move it.
+    """
+
+    __tablename__ = "stock_transfers"
+    __table_args__ = (
+        UniqueConstraint("company_id", "id", name="uq_stock_transfers_company_id_id"),
+        UniqueConstraint("company_id", "number", name="uq_stock_transfers_company_number"),
+        ForeignKeyConstraint(
+            ["company_id", "from_warehouse_id"],
+            ["warehouses.company_id", "warehouses.id"],
+            name="fk_stock_transfers_from_warehouse",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "to_warehouse_id"],
+            ["warehouses.company_id", "warehouses.id"],
+            name="fk_stock_transfers_to_warehouse",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "transaction_type_id"],
+            ["gl_transaction_types.company_id", "gl_transaction_types.id"],
+            name="fk_stock_transfers_transaction_type",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "dispatch_entry_id"],
+            ["journal_entries.company_id", "journal_entries.id"],
+            name="fk_stock_transfers_dispatch_entry",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "receive_entry_id"],
+            ["journal_entries.company_id", "journal_entries.id"],
+            name="fk_stock_transfers_receive_entry",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "cancellation_entry_id"],
+            ["journal_entries.company_id", "journal_entries.id"],
+            name="fk_stock_transfers_cancellation_entry",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "project_id"],
+            ["projects.company_id", "projects.id"],
+            name="fk_stock_transfers_project",
+            ondelete="RESTRICT",
+        ),
+        # The replay key of the *dispatch*. Receiving carries its own key on its own posting,
+        # which the kernel protects, because by then the transfer exists to be found.
+        Index(
+            "uq_stock_transfers_company_idempotency_key",
+            "company_id",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=text("idempotency_key IS NOT NULL"),
+        ),
+        Index("ix_stock_transfers_company_date", "company_id", "transfer_date"),
+        Index("ix_stock_transfers_company_status", "company_id", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    number: Mapped[str] = mapped_column(String(50), nullable=False)
+    transfer_date: Mapped[date] = mapped_column(Date, nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    reference: Mapped[str | None] = mapped_column(String(100))
+    from_warehouse_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    to_warehouse_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    transaction_type_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    project_id: Mapped[int | None] = mapped_column(BigInteger)
+    status: Mapped[StockTransferStatus] = mapped_column(
+        stock_transfer_status_enum,
+        nullable=False,
+        default=StockTransferStatus.IN_TRANSIT,
+        server_default=StockTransferStatus.IN_TRANSIT.value,
+    )
+    #: Null exactly when the leg valued nothing — a transfer of stock carried at zero.
+    dispatch_entry_id: Mapped[int | None] = mapped_column(BigInteger)
+    receive_entry_id: Mapped[int | None] = mapped_column(BigInteger)
+    cancellation_entry_id: Mapped[int | None] = mapped_column(BigInteger)
+    #: The date each later leg was posted on; the dispatch's is `transfer_date`.
+    received_date: Mapped[date | None] = mapped_column(Date)
+    cancelled_date: Mapped[date | None] = mapped_column(Date)
+    idempotency_key: Mapped[str | None] = mapped_column(String(255))
+    idempotency_hash: Mapped[str | None] = mapped_column(String(64))
+
+
+class StockTransferLine(AuditedMixin, CompanyScopedMixin, Base):
+    """One item on the transfer, and the four moves it becomes.
+
+    Four, because each leg is a pair: dispatch takes the quantity out of the source and puts
+    it into transit; receive takes it out of transit and puts it into the destination. The
+    columns are named for what they are rather than collapsed into a link table, because each
+    of the four answers a different question — "what left Main", "what is in transit", "what
+    left transit", "what arrived at Depot" — and a report that asks one of them should not
+    have to filter a generic list to find out.
+
+    A cancelled transfer's reversing moves are not recorded here: they are mirrors, found
+    through `stock_moves.reverses_move_id` from the dispatch pair, and duplicating the link
+    would create a second place for it to be wrong.
+    """
+
+    __tablename__ = "stock_transfer_lines"
+    __table_args__ = (
+        UniqueConstraint("company_id", "id", name="uq_stock_transfer_lines_company_id_id"),
+        UniqueConstraint(
+            "company_id", "transfer_id", "line_no", name="uq_stock_transfer_lines_line_no"
+        ),
+        # A move belongs to one line of one transfer, in one role.
+        UniqueConstraint("dispatch_out_move_id", name="uq_stock_transfer_lines_dispatch_out"),
+        UniqueConstraint("dispatch_in_move_id", name="uq_stock_transfer_lines_dispatch_in"),
+        UniqueConstraint("receive_out_move_id", name="uq_stock_transfer_lines_receive_out"),
+        UniqueConstraint("receive_in_move_id", name="uq_stock_transfer_lines_receive_in"),
+        ForeignKeyConstraint(
+            ["company_id", "transfer_id"],
+            ["stock_transfers.company_id", "stock_transfers.id"],
+            name="fk_stock_transfer_lines_transfer",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "item_id"],
+            ["items.company_id", "items.id"],
+            name="fk_stock_transfer_lines_item",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "uom_id"],
+            ["uoms.company_id", "uoms.id"],
+            name="fk_stock_transfer_lines_uom",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "dispatch_out_move_id"],
+            ["stock_moves.company_id", "stock_moves.id"],
+            name="fk_stock_transfer_lines_dispatch_out_move",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "dispatch_in_move_id"],
+            ["stock_moves.company_id", "stock_moves.id"],
+            name="fk_stock_transfer_lines_dispatch_in_move",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "receive_out_move_id"],
+            ["stock_moves.company_id", "stock_moves.id"],
+            name="fk_stock_transfer_lines_receive_out_move",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "receive_in_move_id"],
+            ["stock_moves.company_id", "stock_moves.id"],
+            name="fk_stock_transfer_lines_receive_in_move",
+            ondelete="RESTRICT",
+        ),
+        Index("ix_stock_transfer_lines_transfer", "company_id", "transfer_id"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    transfer_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    line_no: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    item_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    #: What was keyed, in `uom_id`; always a magnitude — a transfer has a direction already.
+    quantity: Mapped[Decimal] = mapped_column(QUANTITY, nullable=False)
+    uom_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    quantity_base: Mapped[Decimal] = mapped_column(QUANTITY, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    dispatch_out_move_id: Mapped[int | None] = mapped_column(BigInteger)
+    dispatch_in_move_id: Mapped[int | None] = mapped_column(BigInteger)
+    receive_out_move_id: Mapped[int | None] = mapped_column(BigInteger)
+    receive_in_move_id: Mapped[int | None] = mapped_column(BigInteger)
+
+
+# --- Stock counts (P5 step 4) --------------------------------------------------------------
+
+
+class StockCountStatus(enum.StrEnum):
+    """A count session's life: counting → processed, or counting → abandoned.
+
+    `COMPLETED` is terminal and stays terminal, including when the variance document it
+    posted is later reversed (decision 11) — the count happened, and a reversal is a second
+    event rather than an unwinding of the first.
+    """
+
+    COUNTING = "counting"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+
+
+stock_count_status_enum = pg_enum(StockCountStatus, "stock_count_status")
+
+
+class StockCountSession(AuditedMixin, CompanyScopedMixin, Base):
+    """A stock take of one warehouse, frozen at a moment (decision 7).
+
+    **What a snapshot is.** `snapshot_at` is the wall clock, for people. `snapshot_sequence`
+    is the posting-order watermark, for correctness: every move carries a `sequence_no` from
+    one company-wide counter, so "a move landed after this snapshot" is exactly
+    `sequence_no > snapshot_sequence` — a comparison no clock skew, no long transaction and
+    no backdated document can confuse. The session freezes a `system_quantity` per line at
+    that watermark and never reads a live balance again; that is what makes a variance a
+    statement about a moment rather than about whenever Process happened to run.
+
+    **It is a working paper, not a posting.** Nothing in the ledger changes until Process,
+    which posts one count-variance document (an `inventory_documents` row of doc type `INCT`)
+    holding every non-zero variance. The session then points at that document and is
+    Completed. A session with nothing but zero variances completes with no document at all,
+    because a count that agrees with the books is a true and complete answer that the ledger
+    has nothing to say about.
+
+    **Its number.** The session claims one from its own `INCS` run (`CNS-`) when it is opened,
+    before anything can be posted — a count sheet is handed to somebody and referred to for
+    days, so it has to be nameable while it is still empty. The variance document it
+    eventually posts takes its number from the entry it posts, out of the separate `INCT` run
+    (`CNT-`). Two runs rather than one because a `CNT-` number stands for something that
+    reached the ledger: a cancelled session, or one whose count agreed with the books, posts
+    nothing, and letting it consume a posting number would leave a hole where an auditor
+    would look for a document.
+    """
+
+    __tablename__ = "stock_count_sessions"
+    __table_args__ = (
+        UniqueConstraint("company_id", "id", name="uq_stock_count_sessions_company_id_id"),
+        UniqueConstraint("company_id", "number", name="uq_stock_count_sessions_company_number"),
+        ForeignKeyConstraint(
+            ["company_id", "warehouse_id"],
+            ["warehouses.company_id", "warehouses.id"],
+            name="fk_stock_count_sessions_warehouse",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "transaction_type_id"],
+            ["gl_transaction_types.company_id", "gl_transaction_types.id"],
+            name="fk_stock_count_sessions_transaction_type",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "document_id"],
+            ["inventory_documents.company_id", "inventory_documents.id"],
+            name="fk_stock_count_sessions_document",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "project_id"],
+            ["projects.company_id", "projects.id"],
+            name="fk_stock_count_sessions_project",
+            ondelete="RESTRICT",
+        ),
+        Index("ix_stock_count_sessions_company_status", "company_id", "status"),
+        Index("ix_stock_count_sessions_company_warehouse", "company_id", "warehouse_id"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    number: Mapped[str] = mapped_column(String(50), nullable=False)
+    warehouse_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    #: The date the variance document posts on — the day the stock was counted, which is not
+    #: necessarily the day Process is run.
+    count_date: Mapped[date] = mapped_column(Date, nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    reference: Mapped[str | None] = mapped_column(String(100))
+    transaction_type_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    project_id: Mapped[int | None] = mapped_column(BigInteger)
+    status: Mapped[StockCountStatus] = mapped_column(
+        stock_count_status_enum,
+        nullable=False,
+        default=StockCountStatus.COUNTING,
+        server_default=StockCountStatus.COUNTING.value,
+    )
+    snapshot_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    #: `stock_moves.sequence_no` as at the snapshot. A line is stale when its location has a
+    #: move above its own watermark; see `StockCountLine.snapshot_sequence`.
+    snapshot_sequence: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    #: The variance document Process posted. Null on a session that is still counting, was
+    #: cancelled, or found no variance at all.
+    document_id: Mapped[int | None] = mapped_column(BigInteger)
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class StockCountLine(AuditedMixin, CompanyScopedMixin, Base):
+    """One item on the count sheet: what the books said, and what the counter found.
+
+    The **variance is not a column**. It is `counted_quantity_base - system_quantity`, and
+    storing it would be a second place for the same fact to live and disagree from
+    (architecture rule 1, the same reason no master carries a quantity). A null
+    `counted_quantity_base` is an uncounted line, which is not the same as a line counted at
+    zero — the first contributes nothing to the posting, the second writes off everything the
+    location held.
+
+    Each line carries **its own** watermark, not just the session's, because re-snapshotting
+    is per line: when one item moves mid-count, that line is re-frozen and recounted while
+    the rest of the sheet, which nothing disturbed, stays exactly as it was counted.
+    """
+
+    __tablename__ = "stock_count_lines"
+    __table_args__ = (
+        UniqueConstraint("company_id", "id", name="uq_stock_count_lines_company_id_id"),
+        UniqueConstraint(
+            "company_id", "session_id", "line_no", name="uq_stock_count_lines_line_no"
+        ),
+        # One line per item per session: two lines for one item would make the variance
+        # ambiguous and let a double count post twice.
+        UniqueConstraint(
+            "company_id", "session_id", "item_id", name="uq_stock_count_lines_item"
+        ),
+        # And one line per move, as on a document line: a line cannot claim a move that
+        # another line already accounts for.
+        UniqueConstraint("stock_move_id", name="uq_stock_count_lines_stock_move_id"),
+        CheckConstraint(
+            "(counted_quantity IS NULL) = (counted_quantity_base IS NULL)",
+            name="counted_quantity_is_converted",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "session_id"],
+            ["stock_count_sessions.company_id", "stock_count_sessions.id"],
+            name="fk_stock_count_lines_session",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "item_id"],
+            ["items.company_id", "items.id"],
+            name="fk_stock_count_lines_item",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "uom_id"],
+            ["uoms.company_id", "uoms.id"],
+            name="fk_stock_count_lines_uom",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "stock_move_id"],
+            ["stock_moves.company_id", "stock_moves.id"],
+            name="fk_stock_count_lines_stock_move",
+            ondelete="RESTRICT",
+        ),
+        Index("ix_stock_count_lines_session", "company_id", "session_id"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    session_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    line_no: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    item_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    #: What the books said this location held at `snapshot_at`, in the item's base unit.
+    system_quantity: Mapped[Decimal] = mapped_column(QUANTITY, nullable=False)
+    snapshot_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    snapshot_sequence: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    #: What was keyed, in `uom_id`, and the same figure in the item's base unit. Null until
+    #: somebody counts the line; cleared again when the line is re-snapshotted.
+    counted_quantity: Mapped[Decimal | None] = mapped_column(QUANTITY)
+    uom_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    counted_quantity_base: Mapped[Decimal | None] = mapped_column(QUANTITY)
+    counted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    note: Mapped[str | None] = mapped_column(Text)
+    #: The move this line's variance became, set by Process. Null on a line with no variance.
     stock_move_id: Mapped[int | None] = mapped_column(BigInteger)

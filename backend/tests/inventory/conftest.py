@@ -256,6 +256,7 @@ def transfer_now(
     on: date,
 ) -> tuple[stock_service.StockPosting, stock_service.StockPosting]:
     """Both legs, one transaction — the "Transfer now" action of decision 6."""
+    leg = [stock_service.TransferLine(item_id=fixture.item.id, quantity=quantity)]
     dispatch = stock_service.transfer_stock(
         db,
         fixture.company_id,
@@ -263,8 +264,7 @@ def transfer_now(
             DocType.INV_TRANSFER, on, transaction_type_id=fixture.type_id("TRF"),
             description="transfer dispatch",
         ),
-        item_id=fixture.item.id,
-        quantity=quantity,
+        lines=leg,
         from_warehouse_id=source.id,
         to_warehouse_id=fixture.transit.id,
         actor=fixture.owner,
@@ -276,8 +276,7 @@ def transfer_now(
             DocType.INV_TRANSFER, on, transaction_type_id=fixture.type_id("TRF"),
             description="transfer receive",
         ),
-        item_id=fixture.item.id,
-        quantity=quantity,
+        lines=leg,
         from_warehouse_id=fixture.transit.id,
         to_warehouse_id=destination.id,
         actor=fixture.owner,
