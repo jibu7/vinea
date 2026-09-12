@@ -424,12 +424,20 @@ class _Context:
     # -- account resolution ------------------------------------------------------------------
 
     def inventory_account_for(self, item: Item, warehouse: Warehouse) -> int:
-        """Decision 6's one warehouse-level override, and decision 8's item default."""
-        if warehouse.is_in_transit:
-            return self._required_setting("inventory_in_transit_account_id")
-        if item.inventory_account_id is not None:
-            return item.inventory_account_id
-        return self._required_setting("inventory_account_id")
+        """Decision 6's one warehouse-level override, and decision 8's item default.
+
+        The rule itself is `inventory_account_id` — shared with the read side, so a report
+        cannot answer "which account holds this stock" differently from the posting that put
+        it there. All this adds is the posting side's refusal to guess when it is unmapped.
+        """
+        account_id = inventory_account_id(item, warehouse, self.settings)
+        if account_id is not None:
+            return account_id
+        return self._required_setting(
+            "inventory_in_transit_account_id"
+            if warehouse.is_in_transit
+            else "inventory_account_id"
+        )
 
     def _required_setting(self, field_name: str) -> int:
         """A NULL inventory key means inventory refuses to start rather than posting into an
@@ -1478,6 +1486,65 @@ def verify_stock_balances(db: Session, company_id: int) -> StockDrift:
             )
         )
     return StockDrift(balances=balance_drift, costs=cost_drift)
+
+
+def inventory_account_id(
+    item: Item, warehouse: Warehouse, settings: GLSettings
+) -> int | None:
+    """Which inventory account holds this (item, warehouse) cell.
+
+    Decision 6's one warehouse-level override — stock in transit belongs to the in-transit
+    account wherever it came from — then decision 8's item default, then the company's.
+
+    `None` means the company has not mapped it. The posting side turns that into a refusal
+    (`inventory_account_for`); the reports show the cell without an account rather than
+    declining to render, because a report that will not open is a worse answer to a missing
+    setting than a report with a gap in it that says where the gap is.
+    """
+    if warehouse.is_in_transit:
+        return settings.inventory_in_transit_account_id
+    if item.inventory_account_id is not None:
+        return item.inventory_account_id
+    return settings.inventory_account_id
+
+
+def location_accounts(
+    db: Session, company_id: int, locations: Sequence[Location]
+) -> dict[Location, int | None]:
+    """`inventory_account_id` for a whole report's worth of cells, in two queries.
+
+    Read from the **masters**, exactly as the invariant suite does, and deliberately not off
+    the journal lines the moves point at: reading the line would make "the report ties to the
+    account" true by construction and therefore worth nothing.
+    """
+    if not locations:
+        return {}
+    settings = db.scalars(select(GLSettings).where(GLSettings.company_id == company_id)).one()
+    items = {
+        row.id: row
+        for row in db.scalars(
+            select(Item).where(
+                Item.company_id == company_id,
+                Item.id.in_({item_id for item_id, _ in locations}),
+            )
+        )
+    }
+    warehouses = {
+        row.id: row
+        for row in db.scalars(
+            select(Warehouse).where(
+                Warehouse.company_id == company_id,
+                Warehouse.id.in_({warehouse_id for _, warehouse_id in locations}),
+            )
+        )
+    }
+    return {
+        location: inventory_account_id(
+            items[location[0]], warehouses[location[1]], settings
+        )
+        for location in locations
+        if location[0] in items and location[1] in warehouses
+    }
 
 
 def balances_as_of(
