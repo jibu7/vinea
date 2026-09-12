@@ -2,6 +2,7 @@
 every scenario that moves money; every failure here is product-fatal by definition."""
 
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
@@ -12,6 +13,7 @@ from sqlalchemy.orm import Session
 from app.kernel.balances import verify_period_balances
 from app.kernel.enquiries import trial_balance
 from app.kernel.money import is_rounded
+from app.kernel.sequences import SequenceClaimant, claimants_for
 from app.models.currency import Currency
 from app.models.fiscal import AccountingPeriod
 from app.models.journal import DocumentSequence, JournalEntry, JournalLine, JournalStatus
@@ -134,22 +136,72 @@ def assert_ledger_invariants(
             assert current.checksums.get(entry_id) == checksum, f"entry {entry_id} was mutated"
 
     # 5b. Sequences are gapless per (company, doc_type): numbers 1..N with N = next - 1.
-    sequences = {
-        seq.doc_type: seq
-        for seq in db.scalars(
-            select(DocumentSequence).where(
-                DocumentSequence.company_id == company_id, DocumentSequence.branch_id.is_(None)
-            )
+    #
+    # "Numbers", not "entry numbers". Until P5 those were the same thing, because a journal
+    # entry was the only thing that could claim one — except `ALC-`, which allocations have
+    # always held alone and which this check therefore never looked at. Since P5 step 3 a
+    # posting in which nothing carried value produces moves and **no entry** (decision 1), and
+    # such a document claims a number of its own so the run keeps no holes. A company with one
+    # zero-cost adjustment and one ordinary one has `ADJ-000001` on a document and
+    # `ADJ-000002` on an entry, which is right and which this check called a gap.
+    #
+    # Who may hold a number is **not** decided here. `SEQUENCE_CLAIMANTS` lives beside
+    # `document_sequences`, and a doc type that registers no claimant fails this assertion
+    # rather than being skipped — so a later phase that starts numbering something registers
+    # it where the numbers are defined instead of editing this file.
+    for sequence in db.scalars(
+        select(DocumentSequence).where(DocumentSequence.company_id == company_id)
+    ):
+        if sequence.branch_id is not None:
+            # Branch-scoped runs are their own number space and nothing claims one yet; when
+            # something does, this check needs the claimant query scoped to the branch too.
+            # Skipping loudly beats checking the wrong space quietly.
+            continue
+        try:
+            claimants = claimants_for(sequence.doc_type)
+        except KeyError as unregistered:  # noqa: PERF203 - one sequence, one message
+            raise AssertionError(str(unregistered)) from unregistered
+        numbers = sorted(
+            _claimed_numbers(db, company_id, sequence.doc_type, claimants)
         )
-    }
-    by_doc_type: dict[str, list[int]] = {}
-    for entry in entries:
-        match = _TRAILING_DIGITS.search(entry.number)
-        assert match, f"unparseable number {entry.number}"
-        by_doc_type.setdefault(entry.doc_type, []).append(int(match.group(1)))
-    for doc_type, numbers in by_doc_type.items():
-        numbers.sort()
-        assert numbers == list(range(1, len(numbers) + 1)), f"gap in {doc_type}: {numbers}"
-        assert sequences[doc_type].next_number == len(numbers) + 1, doc_type
+        assert numbers == list(range(1, len(numbers) + 1)), (
+            f"gap in {sequence.doc_type}: {numbers}"
+        )
+        assert sequence.next_number == len(numbers) + 1, (
+            f"{sequence.doc_type} has issued {len(numbers)} numbers but its sequence is at "
+            f"{sequence.next_number}: a number was claimed and nothing kept it"
+        )
 
     return current
+
+
+def _claimed_numbers(
+    db: Session,
+    company_id: int,
+    doc_type: str,
+    claimants: Sequence[SequenceClaimant],
+) -> list[int]:
+    """Every number held in this run, from every table the registry says may hold one.
+
+    A number belonging to two claimants shows up twice and fails the 1..N check, which is the
+    point: "gapless" means every number belongs to exactly one thing.
+    """
+    numbers: list[int] = []
+    for claimant in claimants:
+        conditions = ["company_id = :company_id"]
+        if claimant.doc_type_column is not None:
+            conditions.append(f"{claimant.doc_type_column} = :doc_type")
+        if claimant.where is not None:
+            conditions.append(f"({claimant.where})")
+        rows = db.execute(
+            text(
+                f"SELECT {claimant.number_column} FROM {claimant.table} "  # noqa: S608 - names
+                f"WHERE {' AND '.join(conditions)}"  # come from the registry, never a request
+            ),
+            {"company_id": company_id, "doc_type": str(doc_type)},
+        ).all()
+        for (number,) in rows:
+            match = _TRAILING_DIGITS.search(number)
+            assert match, f"unparseable number {number}"
+            numbers.append(int(match.group(1)))
+    return numbers

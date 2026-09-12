@@ -23,6 +23,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.inventory import documents as documents_service
 from app.inventory import stock as stock_service
 from app.kernel.errors import PostingError
 from app.kernel.sequences import DocType
@@ -221,4 +222,62 @@ def test_a_revaluation_of_a_location_that_holds_stock_is_accepted(
     assert posting.entry is not None
     position = location_position(db, stock.company_id, stock.item.id, stock.depot.id)
     assert (position.quantity, position.value) == (Decimal(5), Decimal(750))
+    _assert_everything(db, stock)
+
+
+def test_a_valueless_document_and_a_valued_one_share_one_gapless_run(
+    db: Session, stock: Stock
+) -> None:
+    """The numbering half of decision 1, which step 3 stated and nothing tested.
+
+    A valueless posting has no entry to take a number from, so the document claims one itself
+    — and the next valued document's entry takes the one after it. Both numbers are in the
+    `ADJ-` run, neither is skipped, and neither belongs to two things.
+
+    This is a regression test for a real failure: `assert_ledger_invariants` counted only the
+    numbers on *journal entries*, so a company with one zero-cost adjustment and one ordinary
+    one failed the standing acceptance contract with "gap in INAJ: [2]" — the ledger was
+    correct and the checker's model of it was a version behind. Found while building step 4,
+    whose transfers claim numbers the same way.
+    """
+    free, _ = documents_service.post_adjustment(
+        db,
+        stock.company_id,
+        documents_service.DocumentInput(
+            document_date=MARCH,
+            description="promotional cases, no charge",
+            lines=(
+                documents_service.DocumentLineInput(
+                    item_id=stock.item.id,
+                    warehouse_id=stock.main.id,
+                    quantity=Decimal(12),
+                    unit_cost=ZERO,
+                    transaction_type_id=stock.type_id("ADJIN"),
+                ),
+            ),
+        ),
+        actor=stock.owner,
+    )
+    paid, _ = documents_service.post_adjustment(
+        db,
+        stock.company_id,
+        documents_service.DocumentInput(
+            document_date=MARCH,
+            description="stock bought and paid for",
+            lines=(
+                documents_service.DocumentLineInput(
+                    item_id=stock.item.id,
+                    warehouse_id=stock.main.id,
+                    quantity=Decimal(5),
+                    unit_cost=Decimal(100),
+                    transaction_type_id=stock.type_id("ADJIN"),
+                ),
+            ),
+        ),
+        actor=stock.owner,
+    )
+
+    assert free.journal_entry_id is None
+    assert paid.journal_entry_id is not None
+    assert (free.number, paid.number) == ("ADJ-000001", "ADJ-000002")
     _assert_everything(db, stock)

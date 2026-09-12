@@ -397,8 +397,7 @@ def test_a_dispatch_leaves_the_value_in_transit_and_the_receive_takes_it_out(
         document=document(
             DocType.INV_TRANSFER, MARCH, transaction_type_id=stock.type_id("TRF")
         ),
-        item_id=stock.item.id,
-        quantity=Decimal(4),
+        lines=[stock_service.TransferLine(item_id=stock.item.id, quantity=Decimal(4))],
         from_warehouse_id=stock.main.id,
         to_warehouse_id=stock.transit.id,
         actor=stock.owner,
@@ -428,8 +427,7 @@ def test_a_dispatch_leaves_the_value_in_transit_and_the_receive_takes_it_out(
         document=document(
             DocType.INV_TRANSFER, MARCH, transaction_type_id=stock.type_id("TRF")
         ),
-        item_id=stock.item.id,
-        quantity=Decimal(4),
+        lines=[stock_service.TransferLine(item_id=stock.item.id, quantity=Decimal(4))],
         from_warehouse_id=stock.transit.id,
         to_warehouse_id=stock.depot.id,
         actor=stock.owner,

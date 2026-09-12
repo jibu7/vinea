@@ -177,12 +177,16 @@ class _Machine:
                     if second_warehouse
                     else (self.fixture.main, self.fixture.depot)
                 )
+                leg = [
+                    stock_service.TransferLine(
+                        item_id=self.fixture.item.id, quantity=quantity
+                    )
+                ]
                 dispatch = stock_service.transfer_stock(
                     db,
                     self.fixture.company_id,
                     document=self._document(DocType.INV_TRANSFER, on, "TRF"),
-                    item_id=self.fixture.item.id,
-                    quantity=quantity,
+                    lines=leg,
                     from_warehouse_id=source.id,
                     to_warehouse_id=self.fixture.transit.id,
                     actor=self.fixture.owner,
@@ -194,8 +198,7 @@ class _Machine:
                     db,
                     self.fixture.company_id,
                     document=self._document(DocType.INV_TRANSFER, on, "TRF"),
-                    item_id=self.fixture.item.id,
-                    quantity=quantity,
+                    lines=leg,
                     from_warehouse_id=self.fixture.transit.id,
                     to_warehouse_id=destination.id,
                     actor=self.fixture.owner,

@@ -12,6 +12,7 @@ from app.schemas.common import ApiModel
 Money = Annotated[Decimal, Field(max_digits=20, decimal_places=6)]
 NonNegativeMoney = Annotated[Decimal, Field(ge=0, max_digits=20, decimal_places=6)]
 Quantity = Annotated[Decimal, Field(max_digits=20, decimal_places=6)]
+NonNegativeQuantity = Annotated[Decimal, Field(ge=0, max_digits=20, decimal_places=6)]
 PositiveQuantity = Annotated[Decimal, Field(gt=0, max_digits=20, decimal_places=6)]
 Factor = Annotated[Decimal, Field(gt=0, max_digits=20, decimal_places=10)]
 
@@ -306,3 +307,212 @@ class StockDocumentSummary(ApiModel):
 class StockDocumentRead(StockDocumentSummary):
     transaction_type_id: int | None
     lines: list[StockDocumentLineRead]
+
+
+# --- Warehouse transfers (P5 step 4) --------------------------------------------------------
+
+
+class TransferLineCreate(BaseModel):
+    """One item to move. A magnitude: a transfer has a direction already."""
+
+    item_id: int
+    quantity: PositiveQuantity
+    #: Defaults to the item's own base unit; any unit of the same category converts at 6 dp.
+    uom_id: int | None = None
+    description: str | None = Field(default=None, max_length=500)
+
+
+class TransferCreate(BaseModel):
+    transfer_date: date
+    description: str = Field(min_length=1, max_length=500)
+    reference: str | None = Field(default=None, max_length=100)
+    from_warehouse_id: int
+    to_warehouse_id: int
+    #: Defaults to the company's transfer transaction type when it has exactly one.
+    transaction_type_id: int | None = None
+    project_id: int | None = None
+    #: "Transfer now" — both legs in one transaction (decision 6). False dispatches only, and
+    #: the stock waits in the in-transit warehouse until somebody receives it.
+    receive_now: bool = True
+    lines: list[TransferLineCreate] = Field(min_length=1)
+
+
+class TransferReceive(BaseModel):
+    #: Defaults to the dispatch date; never earlier than it.
+    receive_date: date | None = None
+
+
+class TransferCancel(BaseModel):
+    cancellation_date: date | None = None
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class TransferReverse(BaseModel):
+    reversal_date: date | None = None
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class TransferLineRead(ApiModel):
+    id: int
+    line_no: int
+    item_id: int
+    quantity: Decimal
+    uom_id: int
+    quantity_base: Decimal
+    description: str | None
+    dispatch_out_move_id: int | None
+    dispatch_in_move_id: int | None
+    receive_out_move_id: int | None
+    receive_in_move_id: int | None
+
+
+class TransferSummary(ApiModel):
+    id: int
+    number: str
+    transfer_date: date
+    description: str
+    reference: str | None
+    from_warehouse_id: int
+    to_warehouse_id: int
+    status: str
+    #: Null when the leg valued nothing — stock carried at zero still moves (decision 1).
+    dispatch_entry_id: int | None
+    receive_entry_id: int | None
+    #: The mirrors. A cancellation sets the dispatch one; reversing an arrived transfer sets
+    #: both, the receive leg first (decision 11).
+    dispatch_reversal_entry_id: int | None
+    receive_reversal_entry_id: int | None
+    received_date: date | None
+    #: When it was cancelled or reversed — `status` says which.
+    undone_date: date | None
+
+
+class TransferRead(TransferSummary):
+    transaction_type_id: int
+    project_id: int | None
+    lines: list[TransferLineRead]
+
+
+# --- Stock counts (P5 step 4) ----------------------------------------------------------------
+
+
+class CountSessionCreate(BaseModel):
+    warehouse_id: int
+    count_date: date
+    description: str = Field(min_length=1, max_length=500)
+    reference: str | None = Field(default=None, max_length=100)
+    #: Defaults to the company's count-variance transaction type when it has exactly one.
+    transaction_type_id: int | None = None
+    project_id: int | None = None
+    #: Items to put on the sheet that the warehouse does not currently hold.
+    include_items: list[int] = Field(default_factory=list)
+    include_zero_balances: bool = False
+
+
+class CountLineCreate(BaseModel):
+    item_id: int
+
+
+class CountLineEntry(BaseModel):
+    """What was on the shelf. `null` clears the line back to uncounted, which is not the same
+    as counting it at zero — the first posts nothing, the second writes off the location."""
+
+    counted_quantity: NonNegativeQuantity | None = None
+    uom_id: int | None = None
+    note: str | None = Field(default=None, max_length=500)
+
+
+class CountCancel(BaseModel):
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class CountLineRead(ApiModel):
+    id: int
+    line_no: int
+    item_id: int
+    system_quantity: Decimal
+    counted_quantity: Decimal | None
+    uom_id: int
+    counted_quantity_base: Decimal | None
+    #: `counted - system`, in the item's base unit; null while the line is uncounted. Derived
+    #: on the way out, never stored.
+    variance: Decimal | None
+    #: The location has been posted to since this line was frozen (decision 7). Process
+    #: refuses while any counted line says this.
+    stale: bool
+    snapshot_at: datetime
+    counted_at: datetime | None
+    note: str | None
+    stock_move_id: int | None
+
+
+class CountSessionSummary(ApiModel):
+    id: int
+    number: str
+    warehouse_id: int
+    count_date: date
+    description: str
+    reference: str | None
+    status: str
+    snapshot_at: datetime
+    #: The variance document Process posted; null while counting, when cancelled, and when
+    #: the count agreed with the books.
+    document_id: int | None
+    processed_at: datetime | None
+    cancelled_at: datetime | None
+
+
+class CountSessionRead(CountSessionSummary):
+    transaction_type_id: int
+    project_id: int | None
+    lines: list[CountLineRead]
+
+
+class CountPreviewLine(BaseModel):
+    line_id: int
+    item_id: int
+    item_code: str
+    item_name: str
+    system_quantity: Decimal
+    counted_quantity: Decimal | None
+    variance: Decimal | None
+    #: The item's current average — what decision 7 costs both gains and losses at.
+    unit_cost: Decimal
+    value: Decimal
+    counted: bool
+    stale: bool
+
+
+class CountPreviewRead(BaseModel):
+    """The posting before Process, as the allocation screen does it (decision 7)."""
+
+    session_id: int
+    number: str
+    warehouse_id: int
+    count_date: date
+    total_value: Decimal
+    counted_lines: int
+    uncounted_lines: int
+    variance_lines: int
+    #: Empty when Process would go through. Any entry here is a line that has to be
+    #: re-snapshotted and recounted first.
+    stale_lines: list[int]
+    can_process: bool
+    lines: list[CountPreviewLine]
+
+
+class CountProcessRequest(BaseModel):
+    """Process takes no body — what identifies the request is the session it is processing.
+
+    It exists so the `Idempotency-Key` fingerprint has something to be a fingerprint *of*:
+    the same key sent against a different session is a different request and must be caught,
+    which is the whole point of hashing the body on every other posting endpoint.
+    """
+
+    session_id: int
+
+
+class CountProcessResult(BaseModel):
+    session: CountSessionSummary
+    #: Null when every variance was zero: a count that agrees with the books posts nothing.
+    document: StockDocumentRead | None

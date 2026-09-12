@@ -132,6 +132,19 @@ class StockLine:
 
 
 @dataclass(frozen=True)
+class TransferLine:
+    """One item on a transfer leg. Not a `StockLine`, because a transfer names *two*
+    locations and a stock line names one: the leg's warehouses are the posting's, and what
+    varies per line is only the item and how much of it moves."""
+
+    item_id: int
+    quantity: Decimal
+    project_id: int | None = None
+    description: str | None = None
+    source_line_id: int | None = None
+
+
+@dataclass(frozen=True)
 class SignedLine:
     """A line whose direction is already decided — what the core works in. `quantity` is
     signed; zero means a revaluation, which must then carry a `value`."""
@@ -233,6 +246,69 @@ def item_state(db: Session, company_id: int, item_id: int) -> ItemState:
         value=totals[1],
         last_positive_average=ZERO if row is None else row.last_positive_average_cost,
     )
+
+
+def posting_watermark(db: Session, company_id: int) -> int:
+    """The company's highest posting-order number — "everything up to here has happened".
+
+    A stock count freezes this beside every quantity it observes, so "a move landed after the
+    snapshot" is `sequence_no > watermark`: a comparison in posting order, which is the order
+    the costing engine actually works in, rather than one in wall-clock time that a long
+    transaction or a backdated document could confuse.
+
+    Taken over committed moves, which is why the caller must hold the costing locks of the
+    items it is about to observe (`lock_cost_states`) — otherwise a posting could be in flight
+    with a sequence number below this one and land unseen underneath the snapshot.
+    """
+    return int(
+        db.scalar(
+            select(func.coalesce(func.max(StockMove.sequence_no), 0)).where(
+                StockMove.company_id == company_id
+            )
+        )
+        or 0
+    )
+
+
+def lock_cost_states(db: Session, company_id: int, item_ids: Sequence[int]) -> None:
+    """Take the costing lock for these items, in item order, and hold it to commit.
+
+    The same lock `post_stock_moves` takes, from the reading side: while it is held no posting
+    for these items can be in flight, so what a reader sees is a state no half-finished
+    posting is hiding underneath. Items with no cost-state row yet have never moved and so
+    have no lock to take — and nothing to be stale against either, since the first move
+    against them will take a sequence number above any watermark taken now.
+    """
+    ordered = sorted(set(item_ids))
+    if not ordered:
+        return
+    db.scalars(
+        select(ItemCostState)
+        .where(ItemCostState.company_id == company_id, ItemCostState.item_id.in_(ordered))
+        .order_by(ItemCostState.item_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).all()
+
+
+def last_sequence_by_item(db: Session, company_id: int, warehouse_id: int) -> dict[int, int]:
+    """The highest posting-order number each item has reached **at this warehouse**.
+
+    One query for a whole count sheet, rather than one per line: staleness is then a
+    dictionary lookup against each line's own watermark, and a sheet of four hundred items
+    costs the same as a sheet of one.
+    """
+    return {
+        item_id: int(sequence_no)
+        for item_id, sequence_no in db.execute(
+            select(StockMove.item_id, func.max(StockMove.sequence_no))
+            .where(
+                StockMove.company_id == company_id,
+                StockMove.warehouse_id == warehouse_id,
+            )
+            .group_by(StockMove.item_id)
+        ).all()
+    }
 
 
 def has_moves(db: Session, company_id: int, item_id: int) -> bool:
@@ -920,11 +996,9 @@ def transfer_stock(
     company_id: int,
     *,
     document: StockDocument,
-    item_id: int,
-    quantity: Decimal,
+    lines: Sequence[TransferLine],
     from_warehouse_id: int,
     to_warehouse_id: int,
-    project_id: int | None = None,
     actor: User,
 ) -> StockPosting:
     """One leg of a transfer: out of one location and into another, at a frozen value, in one
@@ -939,12 +1013,19 @@ def transfer_stock(
     The value is not re-derived on arrival: what the source gave up is exactly what the
     destination takes, so a transfer can never create or destroy value, whatever the average
     does in between.
+
+    **Many items, one leg.** The moves are interleaved out-then-in, item by item, because the
+    frozen value is taken from the line immediately before — so the pairing is positional and
+    a leg of four items is four pairs, not four out-moves followed by four in-moves. One leg
+    is therefore one journal entry however many items it carries, which is what decision 3
+    asks of a document and what keeps a multi-item transfer from arriving in the GL as a
+    handful of unrelated entries.
     """
-    if quantity <= ZERO:
+    if not lines:
         raise PostingError(
-            "A transfer moves a positive quantity",
-            code="invalid_quantity",
-            field_errors={"quantity": ["must be positive"]},
+            "A transfer needs at least one line",
+            code="too_few_lines",
+            field_errors={"lines": ["at least one line required"]},
         )
     if from_warehouse_id == to_warehouse_id:
         raise PostingError(
@@ -952,33 +1033,44 @@ def transfer_stock(
             code="same_warehouse",
             field_errors={"to_warehouse_id": ["must differ from the source"]},
         )
-    out_line = StockLine(
-        item_id=item_id,
-        warehouse_id=from_warehouse_id,
-        quantity=quantity,
-        project_id=project_id,
-        description=document.description,
-    )
-    in_line = StockLine(
-        item_id=item_id,
-        warehouse_id=to_warehouse_id,
-        quantity=quantity,
-        project_id=project_id,
-        description=document.description,
-    )
+    moves: list[SignedLine] = []
+    for index, transfer in enumerate(lines):
+        if transfer.quantity <= ZERO:
+            raise _on_line(
+                index,
+                PostingError(
+                    "A transfer moves a positive quantity",
+                    code="invalid_quantity",
+                    field_errors={"quantity": ["must be positive"]},
+                ),
+            )
+        shared = {
+            "item_id": transfer.item_id,
+            "quantity": transfer.quantity,
+            "project_id": transfer.project_id,
+            "description": transfer.description or document.description,
+            "source_line_id": transfer.source_line_id,
+        }
+        moves.append(
+            SignedLine(
+                line=StockLine(warehouse_id=from_warehouse_id, **shared),
+                quantity=-transfer.quantity,
+                needs_contra=False,
+            )
+        )
+        moves.append(
+            SignedLine(
+                line=StockLine(warehouse_id=to_warehouse_id, **shared),
+                quantity=transfer.quantity,
+                needs_contra=False,
+                frozen_from_previous=True,
+            )
+        )
     return post_stock_moves(
         db,
         company_id,
         document=document,
-        moves=[
-            SignedLine(line=out_line, quantity=-quantity, needs_contra=False),
-            SignedLine(
-                line=in_line,
-                quantity=quantity,
-                needs_contra=False,
-                frozen_from_previous=True,
-            ),
-        ],
+        moves=moves,
         event_class=StockTransferred,
         actor=actor,
     )
