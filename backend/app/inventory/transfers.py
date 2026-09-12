@@ -521,6 +521,10 @@ def receive_transfer(
             f"{transfer.number} was cancelled and its stock is back at the source",
             code="transfer_cancelled",
         )
+    if transfer.status == StockTransferStatus.REVERSED:
+        raise LedgerStateError(
+            f"{transfer.number} was reversed", code="transfer_already_reversed"
+        )
     if transfer.status == StockTransferStatus.COMPLETED:
         raise LedgerStateError(
             f"{transfer.number} was already received",
@@ -591,6 +595,90 @@ def receive_transfer(
     return transfer
 
 
+def _mirror_leg(
+    db: Session,
+    company_id: int,
+    *,
+    entry_id: int | None,
+    moves: Sequence[StockMove],
+    on_date: date,
+    reason: str,
+    actor: User,
+    idempotency_key: str | None = None,
+    idempotency_hash: str | None = None,
+) -> stock_service.StockPosting:
+    """Undo one leg: the kernel reversal plus reversing moves at the original values.
+
+    "At the original values" is decision 11 and the whole reason this is not a second transfer
+    in the other direction: a mirror moves back exactly what went out, so the two cancel, while
+    a fresh transfer would move whatever the average says today and leave the difference
+    behind.
+
+    A leg that valued nothing has no entry to reverse and mirrors as moves alone — the same
+    shape a valueless document reverses in.
+    """
+    if entry_id is None:
+        return stock_service.reverse_unvalued_moves(
+            db, company_id, originals=list(moves), on_date=on_date, actor=actor
+        )
+    return stock_service.reverse_stock_posting(
+        db,
+        company_id,
+        entry_id=entry_id,
+        on_date=on_date,
+        reason=reason,
+        actor=actor,
+        idempotency_key=idempotency_key,
+        idempotency_hash=idempotency_hash,
+    )
+
+
+def _moves_of(db: Session, lines: Sequence[StockTransferLine], *columns: str) -> list[StockMove]:
+    return [
+        move
+        for line in lines
+        for column in columns
+        if (move_id := getattr(line, column)) is not None
+        and (move := db.get(StockMove, move_id)) is not None
+    ]
+
+
+def _undoable(
+    db: Session, company_id: int, transfer_id: int, *, expected: StockTransferStatus
+) -> StockTransfer:
+    """The state machine, stated once. Each refusal names the action that *would* work, because
+    "already received" is only useful if it also says what to do instead."""
+    transfer = get_transfer(db, company_id, transfer_id)
+    if transfer.status == expected:
+        return transfer
+    if transfer.status == StockTransferStatus.COMPLETED:
+        raise LedgerStateError(
+            f"{transfer.number} has already arrived; reverse it instead of cancelling it",
+            code="transfer_already_received",
+        )
+    if transfer.status == StockTransferStatus.IN_TRANSIT:
+        raise LedgerStateError(
+            f"{transfer.number} has not arrived yet; cancel it instead of reversing it",
+            code="transfer_not_received",
+        )
+    if transfer.status == StockTransferStatus.CANCELLED:
+        raise LedgerStateError(
+            f"{transfer.number} was already cancelled", code="transfer_already_cancelled"
+        )
+    raise LedgerStateError(
+        f"{transfer.number} was already reversed", code="transfer_already_reversed"
+    )
+
+
+def _not_before(transfer: StockTransfer, on: date, since: date, field_name: str) -> None:
+    if on < since:
+        raise LedgerStateError(
+            f"{transfer.number} was posted on {since}; it cannot be undone on {on}",
+            code="undo_before_posting",
+            field_errors={field_name: ["cannot precede the posting it undoes"]},
+        )
+
+
 def cancel_transfer(
     db: Session,
     company_id: int,
@@ -603,7 +691,7 @@ def cancel_transfer(
     idempotency_hash: str | None = None,
     request: Request | None = None,
 ) -> StockTransfer:
-    """Send stock in transit back where it came from, by reversing the dispatch leg.
+    """Send stock in transit back where it came from, by mirroring the dispatch leg.
 
     This is decision 11 applied to the one state a transfer can get stuck in. Without it a
     mis-keyed dispatch would leave quantity in the in-transit warehouse and value on the
@@ -611,57 +699,36 @@ def cancel_transfer(
     receive stock that was never meant to go there, and no other document may name the
     in-transit warehouse (decision 6).
 
-    A **received** transfer is not cancelled — its stock is somewhere real, and unwinding it is
-    a transfer back, which is a document a user posts rather than a state a machine restores.
+    The mirror is the dispatch's own moves, negated at their original values, so the source
+    warehouse gets back exactly what it gave up and the in-transit account returns to zero. The
+    negative-stock policy applies to it like any other issue: under `block`, a cancellation
+    whose in-transit quantity has gone fails with `insufficient_stock` and writes nothing.
+
+    A **received** transfer is not cancelled — `reverse_transfer` is what undoes one of those.
     """
-    transfer = get_transfer(db, company_id, transfer_id)
-    if transfer.status == StockTransferStatus.COMPLETED:
-        raise LedgerStateError(
-            f"{transfer.number} has already arrived; transfer it back instead of cancelling",
-            code="transfer_already_received",
-        )
-    if transfer.status == StockTransferStatus.CANCELLED:
-        raise LedgerStateError(
-            f"{transfer.number} was already cancelled",
-            code="transfer_already_cancelled",
-        )
+    transfer = _undoable(
+        db, company_id, transfer_id, expected=StockTransferStatus.IN_TRANSIT
+    )
     lines = lines_of(db, company_id, transfer.id)
     on = on_date or transfer.transfer_date
-    if on < transfer.transfer_date:
-        raise LedgerStateError(
-            f"{transfer.number} was dispatched on {transfer.transfer_date}; it cannot be "
-            f"cancelled on {on}",
-            code="cancel_before_dispatch",
-            field_errors={"cancellation_date": ["cannot precede the dispatch"]},
-        )
+    _not_before(transfer, on, transfer.transfer_date, "cancellation_date")
 
-    if transfer.dispatch_entry_id is None:
-        # A valueless dispatch mirrors as a valueless cancellation, exactly as a valueless
-        # document reverses in step 3: the quantity is in transit and has to come home, and
-        # the ledger says nothing in both directions because it had nothing to say.
-        originals = [
-            move
-            for line in lines
-            for move_id in (line.dispatch_out_move_id, line.dispatch_in_move_id)
-            if move_id is not None and (move := db.get(StockMove, move_id)) is not None
-        ]
-        posting = stock_service.reverse_unvalued_moves(
-            db, company_id, originals=originals, on_date=on, actor=actor
-        )
-    else:
-        posting = stock_service.reverse_stock_posting(
-            db,
-            company_id,
-            entry_id=transfer.dispatch_entry_id,
-            on_date=on,
-            reason=reason,
-            actor=actor,
-            idempotency_key=idempotency_key,
-            idempotency_hash=idempotency_hash,
-        )
+    posting = _mirror_leg(
+        db,
+        company_id,
+        entry_id=transfer.dispatch_entry_id,
+        moves=_moves_of(db, lines, "dispatch_out_move_id", "dispatch_in_move_id"),
+        on_date=on,
+        reason=reason,
+        actor=actor,
+        idempotency_key=idempotency_key,
+        idempotency_hash=idempotency_hash,
+    )
     transfer.status = StockTransferStatus.CANCELLED
-    transfer.cancellation_entry_id = posting.entry.id if posting.entry is not None else None
-    transfer.cancelled_date = on
+    transfer.dispatch_reversal_entry_id = (
+        posting.entry.id if posting.entry is not None else None
+    )
+    transfer.undone_date = on
     db.flush()
     _audit(
         db,
@@ -672,9 +739,95 @@ def cancel_transfer(
         before={"status": StockTransferStatus.IN_TRANSIT.value},
         after={
             "status": transfer.status.value,
-            "cancelled_date": on.isoformat(),
+            "undone_date": on.isoformat(),
             "reason": reason,
-            "journal_entry_id": transfer.cancellation_entry_id,
+            "journal_entry_id": transfer.dispatch_reversal_entry_id,
+        },
+        request=request,
+    )
+    return transfer
+
+
+def reverse_transfer(
+    db: Session,
+    company_id: int,
+    transfer_id: int,
+    *,
+    on_date: date | None = None,
+    reason: str,
+    actor: User,
+    idempotency_key: str | None = None,
+    idempotency_hash: str | None = None,
+    request: Request | None = None,
+) -> StockTransfer:
+    """Undo a transfer that arrived: both legs mirrored, in reverse posting order (decision 11).
+
+    **Reverse order, and it matters.** The receive leg is mirrored first, which takes the stock
+    off the destination and puts it back in transit; the dispatch mirror then takes it out of
+    transit and returns it to the source. Done the other way round, the in-transit location
+    would go negative in the middle of a posting that ends square — refused outright under
+    `block`, and flagged provisional under `allow`, for a transfer that was never in any doubt.
+
+    **The policy still applies, at the destination.** Under `block`, a transfer whose stock has
+    since been issued or transferred onward cannot be reversed: the first mirror fails with
+    `insufficient_stock` and nothing is written, which is exactly what decision 11 says about a
+    receipt whose quantity has gone. Putting it back would mean inventing the stock.
+
+    Each leg keeps its own branch, so a cross-branch transfer unwinds in both branches rather
+    than in whichever one the reversal happened to be posted from.
+    """
+    transfer = _undoable(db, company_id, transfer_id, expected=StockTransferStatus.COMPLETED)
+    lines = lines_of(db, company_id, transfer.id)
+    since = transfer.received_date or transfer.transfer_date
+    on = on_date or since
+    _not_before(transfer, on, since, "reversal_date")
+
+    arrival = _mirror_leg(
+        db,
+        company_id,
+        entry_id=transfer.receive_entry_id,
+        moves=_moves_of(db, lines, "receive_out_move_id", "receive_in_move_id"),
+        on_date=on,
+        reason=reason,
+        actor=actor,
+        idempotency_key=idempotency_key,
+        idempotency_hash=idempotency_hash,
+    )
+    dispatch = _mirror_leg(
+        db,
+        company_id,
+        entry_id=transfer.dispatch_entry_id,
+        moves=_moves_of(db, lines, "dispatch_out_move_id", "dispatch_in_move_id"),
+        on_date=on,
+        reason=reason,
+        actor=actor,
+        # The key belongs to the request, and the request is one reversal of one transfer; the
+        # kernel would resolve a second posting under the same key to the first entry and hand
+        # back moves that are not this leg's. The transfer's own status is what makes a retry
+        # safe, as it is for Receive.
+    )
+    transfer.status = StockTransferStatus.REVERSED
+    transfer.receive_reversal_entry_id = (
+        arrival.entry.id if arrival.entry is not None else None
+    )
+    transfer.dispatch_reversal_entry_id = (
+        dispatch.entry.id if dispatch.entry is not None else None
+    )
+    transfer.undone_date = on
+    db.flush()
+    _audit(
+        db,
+        company_id,
+        "stock_transfer.reversed",
+        transfer.id,
+        actor=actor,
+        before={"status": StockTransferStatus.COMPLETED.value},
+        after={
+            "status": transfer.status.value,
+            "undone_date": on.isoformat(),
+            "reason": reason,
+            "receive_reversal_entry_id": transfer.receive_reversal_entry_id,
+            "dispatch_reversal_entry_id": transfer.dispatch_reversal_entry_id,
         },
         request=request,
     )

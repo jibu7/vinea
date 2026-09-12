@@ -81,6 +81,91 @@ DEFAULT_PREFIXES: dict[str, str] = {
 
 
 @dataclass(frozen=True)
+class SequenceClaimant:
+    """A table that can hold a number claimed from `document_sequences`.
+
+    The registry below is the answer to "who holds the numbers in this run?", and it is here,
+    beside the sequence itself, rather than in the checker that reads it — because a module
+    that starts claiming numbers has to say so *where the numbers are defined*, not by editing
+    a test three directories away that it has no reason to look at.
+
+    Columns are named as strings, deliberately. The kernel does not import the subledger or
+    the inventory module, and a registry of model classes would invert that; a table and a
+    column name cost one query and no dependency.
+    """
+
+    #: The table holding the number.
+    table: str
+    number_column: str = "number"
+    #: The column naming the doc type, when one table serves several runs (`journal_entries`).
+    #: `None` means the table serves exactly the doc types registered against it.
+    doc_type_column: str | None = None
+    #: A SQL predicate narrowing to the rows that hold a number **of their own**. A document
+    #: that posted a journal entry shares that entry's number, and counting both would make
+    #: every ordinary document look like a duplicate claim.
+    where: str | None = None
+
+
+#: Nearly every run: the entry a posting produced, which is also the number its document
+#: quotes (`partner_documents`, `inventory_documents`).
+_ENTRY = SequenceClaimant(table="journal_entries", doc_type_column="doc_type")
+#: A stock document whose posting valued nothing has no entry to take a number from and
+#: claims one itself (P5 decision 1).
+_VALUELESS_STOCK_DOCUMENT = SequenceClaimant(
+    table="inventory_documents", doc_type_column="doc_type", where="journal_entry_id IS NULL"
+)
+#: The same case for a transfer, whose number is its dispatch leg's.
+_VALUELESS_TRANSFER = SequenceClaimant(
+    table="stock_transfers", where="dispatch_entry_id IS NULL"
+)
+#: A count sheet is nameable from the moment it is opened and may never post at all, so it
+#: has a run of its own rather than consuming a posting number (P5 decision 7).
+_COUNT_SHEET = SequenceClaimant(table="stock_count_sessions")
+#: An allocation is numbered whether or not it posts anything: the realized FX and settlement
+#: discount it may produce are a *different* run (`ALJ-`), so `ALC-` belongs to this table
+#: alone (P4).
+_ALLOCATION = SequenceClaimant(table="allocations")
+
+#: **doc type → who may hold its numbers.** Every `DocType` must appear here, and
+#: `tests/kernel/test_sequence_registry.py` fails the build if one does not;
+#: `assert_ledger_invariants` fails on any sequence a company actually uses whose doc type is
+#: unregistered. A later phase registers its claimant here — it never edits the checker.
+SEQUENCE_CLAIMANTS: dict[str, tuple[SequenceClaimant, ...]] = {
+    DocType.JOURNAL: (_ENTRY,),
+    DocType.CASHBOOK: (_ENTRY,),
+    DocType.YEAR_END: (_ENTRY,),
+    DocType.AR_INVOICE: (_ENTRY,),
+    DocType.AR_CREDIT_NOTE: (_ENTRY,),
+    DocType.AR_RECEIPT: (_ENTRY,),
+    DocType.AP_INVOICE: (_ENTRY,),
+    DocType.AP_DEBIT_NOTE: (_ENTRY,),
+    DocType.AP_PAYMENT: (_ENTRY,),
+    DocType.AR_JOURNAL: (_ENTRY,),
+    DocType.AP_JOURNAL: (_ENTRY,),
+    DocType.ALLOCATION: (_ALLOCATION,),
+    DocType.ALLOCATION_JOURNAL: (_ENTRY,),
+    DocType.INSTRUMENT_MATURITY: (_ENTRY,),
+    DocType.INV_ADJUSTMENT: (_ENTRY, _VALUELESS_STOCK_DOCUMENT),
+    DocType.INV_JOURNAL: (_ENTRY, _VALUELESS_STOCK_DOCUMENT),
+    DocType.INV_TRANSFER: (_ENTRY, _VALUELESS_TRANSFER),
+    DocType.INV_COUNT: (_ENTRY, _VALUELESS_STOCK_DOCUMENT),
+    DocType.INV_COUNT_SESSION: (_COUNT_SHEET,),
+}
+
+
+def claimants_for(doc_type: str) -> tuple[SequenceClaimant, ...]:
+    """Who may hold a number in this run, or a refusal naming what to do about it."""
+    claimants = SEQUENCE_CLAIMANTS.get(str(doc_type))
+    if not claimants:
+        raise KeyError(
+            f"{doc_type} claims numbers from document_sequences but registers no claimant. "
+            "Add one to SEQUENCE_CLAIMANTS in app/kernel/sequences.py — the gapless check "
+            "reads that registry, and a run nobody owns cannot be proven gapless."
+        )
+    return claimants
+
+
+@dataclass(frozen=True)
 class ClaimedNumber:
     number: str
     sequence_no: int

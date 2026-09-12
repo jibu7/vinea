@@ -746,11 +746,17 @@ class StockTransferStatus(enum.StrEnum):
     source, has not arrived anywhere, and is sitting in the in-transit warehouse against the
     in-transit account. It is a real position on the valuation report, not a gap between two
     postings.
+
+    The two terminal ways of undoing one are different events and not one with a flag:
+    `CANCELLED` mirrors the dispatch leg of something still on the road, and `REVERSED`
+    mirrors **both** legs of something that arrived (decision 11). A report that asks "what
+    never left" and one that asks "what came back" are asking different questions.
     """
 
     IN_TRANSIT = "in_transit"
     COMPLETED = "completed"
     CANCELLED = "cancelled"
+    REVERSED = "reversed"
 
 
 stock_transfer_status_enum = pg_enum(StockTransferStatus, "stock_transfer_status")
@@ -812,9 +818,15 @@ class StockTransfer(AuditedMixin, CompanyScopedMixin, Base):
             ondelete="RESTRICT",
         ),
         ForeignKeyConstraint(
-            ["company_id", "cancellation_entry_id"],
+            ["company_id", "dispatch_reversal_entry_id"],
             ["journal_entries.company_id", "journal_entries.id"],
-            name="fk_stock_transfers_cancellation_entry",
+            name="fk_stock_transfers_dispatch_reversal_entry",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "receive_reversal_entry_id"],
+            ["journal_entries.company_id", "journal_entries.id"],
+            name="fk_stock_transfers_receive_reversal_entry",
             ondelete="RESTRICT",
         ),
         ForeignKeyConstraint(
@@ -854,10 +866,16 @@ class StockTransfer(AuditedMixin, CompanyScopedMixin, Base):
     #: Null exactly when the leg valued nothing — a transfer of stock carried at zero.
     dispatch_entry_id: Mapped[int | None] = mapped_column(BigInteger)
     receive_entry_id: Mapped[int | None] = mapped_column(BigInteger)
-    cancellation_entry_id: Mapped[int | None] = mapped_column(BigInteger)
+    #: The mirrors. A cancellation sets the dispatch one; a reversal of an arrived transfer
+    #: sets both, in reverse posting order — the receive leg first, so the quantity is back in
+    #: transit before the dispatch mirror takes it out again and no location passes through a
+    #: negative the policy would have refused.
+    dispatch_reversal_entry_id: Mapped[int | None] = mapped_column(BigInteger)
+    receive_reversal_entry_id: Mapped[int | None] = mapped_column(BigInteger)
     #: The date each later leg was posted on; the dispatch's is `transfer_date`.
     received_date: Mapped[date | None] = mapped_column(Date)
-    cancelled_date: Mapped[date | None] = mapped_column(Date)
+    #: When it was cancelled or reversed — `status` says which of the two happened.
+    undone_date: Mapped[date | None] = mapped_column(Date)
     idempotency_key: Mapped[str | None] = mapped_column(String(255))
     idempotency_hash: Mapped[str | None] = mapped_column(String(64))
 

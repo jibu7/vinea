@@ -222,8 +222,69 @@ def test_cancelling_an_unreceived_transfer_brings_the_stock_home(client: TestCli
     )
 
     assert cancelled.status_code == 200, cancelled.text
-    assert cancelled.json()["status"] == "cancelled"
-    assert cancelled.json()["cancellation_entry_id"] is not None
+    body = cancelled.json()
+    assert body["status"] == "cancelled"
+    assert body["dispatch_reversal_entry_id"] is not None
+    assert body["receive_reversal_entry_id"] is None
+    assert body["undone_date"] == TODAY
+
+
+def test_a_received_transfer_reverses_through_the_endpoint(client: TestClient) -> None:
+    """Decision 11 for the one stock document that posts twice: both legs mirrored, and the
+    stock back where it started."""
+    _signup(client)
+    item = _item(client)
+    main = _warehouse(client, "MAIN")
+    depot = _depot(client)
+    _stock_in(client, item, main)
+    transfer = client.post(
+        "/api/v1/inventory/transfers",
+        json=_transfer_payload(client, item, main, depot),
+        headers={"Idempotency-Key": "trf-rev"},
+    ).json()
+
+    reversed_ = client.post(
+        f"/api/v1/inventory/transfers/{transfer['id']}/reverse",
+        json={"reason": "sent to the wrong depot"},
+        headers={"Idempotency-Key": "trf-rev-1"},
+    )
+
+    assert reversed_.status_code == 200, reversed_.text
+    body = reversed_.json()
+    assert body["status"] == "reversed"
+    assert body["receive_reversal_entry_id"] is not None
+    assert body["dispatch_reversal_entry_id"] is not None
+    assert body["undone_date"] == TODAY
+
+    again = client.post(
+        f"/api/v1/inventory/transfers/{transfer['id']}/reverse",
+        json={"reason": "twice"},
+        headers={"Idempotency-Key": "trf-rev-2"},
+    )
+    assert again.status_code == 409
+    assert again.json()["code"] == "transfer_already_reversed"
+
+
+def test_an_in_transit_transfer_is_cancelled_rather_than_reversed(client: TestClient) -> None:
+    _signup(client)
+    item = _item(client)
+    main = _warehouse(client, "MAIN")
+    depot = _depot(client)
+    _stock_in(client, item, main)
+    transfer = client.post(
+        "/api/v1/inventory/transfers",
+        json=_transfer_payload(client, item, main, depot, receive_now=False),
+        headers={"Idempotency-Key": "trf-rev-3"},
+    ).json()
+
+    response = client.post(
+        f"/api/v1/inventory/transfers/{transfer['id']}/reverse",
+        json={"reason": "not yet"},
+        headers={"Idempotency-Key": "trf-rev-4"},
+    )
+
+    assert response.status_code == 409, response.text
+    assert response.json()["code"] == "transfer_not_received"
 
 
 def test_insufficient_stock_lands_on_the_quantity_cell_of_the_line_that_failed(

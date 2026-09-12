@@ -29,7 +29,7 @@ from app.models.inventory import (
     Uom,
 )
 from app.models.journal import JournalEntry, JournalLine
-from tests.inventory.conftest import Stock, receive, set_policy
+from tests.inventory.conftest import Stock, issue, receive, set_policy
 from tests.inventory.invariants import assert_stock_invariants, location_position
 from tests.kernel.conftest import YEAR
 from tests.kernel.invariants import assert_ledger_invariants
@@ -469,28 +469,93 @@ def test_stock_cannot_arrive_before_it_left(db: Session, stock: Stock) -> None:
 # --- Cancellation -----------------------------------------------------------------------------
 
 
-def test_cancelling_an_unreceived_transfer_brings_the_stock_home(
+def test_cancelling_an_unreceived_transfer_mirrors_the_dispatch_back_to_the_source(
     db: Session, stock: Stock
 ) -> None:
-    """The only way out of the in-transit warehouse other than arriving. Without it a
-    mis-keyed dispatch strands both the quantity and its value there for good."""
+    """The only way out of the in-transit warehouse other than arriving — and a *mirror*, not
+    a second transfer: each reversing move negates the move it points at, at that move's own
+    value, so the source gets back exactly what it gave up whatever the average has done since
+    (decision 11)."""
     receive(db, stock, quantity=Decimal(10), unit_cost=HUNDRED, on=MARCH)
     transfer, _ = _transfer(db, stock, receive_now=False)
+    # The average moves while the stock is on the road, so "back at 400" cannot be luck.
+    receive(db, stock, quantity=Decimal(10), unit_cost=Decimal(500), on=MARCH)
 
     transfer_service.cancel_transfer(
         db, stock.company_id, transfer.id, reason="loaded the wrong pallet", actor=stock.owner
     )
 
     assert transfer.status == StockTransferStatus.CANCELLED
-    assert transfer.cancellation_entry_id is not None
+    assert transfer.dispatch_reversal_entry_id is not None
+    assert transfer.receive_reversal_entry_id is None, "no receive leg happened to mirror"
+    assert transfer.undone_date == MARCH
+
+    # Linked to the dispatch, both in the ledger and in the move ledger.
+    reversal = db.get(JournalEntry, transfer.dispatch_reversal_entry_id)
+    assert reversal.reverses_entry_id == transfer.dispatch_entry_id
+    line = transfer_service.lines_of(db, stock.company_id, transfer.id)[0]
+    mirrors = list(
+        db.scalars(
+            select(StockMove).where(
+                StockMove.company_id == stock.company_id,
+                StockMove.reverses_move_id.in_(
+                    [line.dispatch_out_move_id, line.dispatch_in_move_id]
+                ),
+            )
+        )
+    )
+    assert len(mirrors) == 2
+    originals = {
+        move.id: move
+        for move in db.scalars(
+            select(StockMove).where(
+                StockMove.id.in_([line.dispatch_out_move_id, line.dispatch_in_move_id])
+            )
+        )
+    }
+    for mirror in mirrors:
+        original = originals[mirror.reverses_move_id]
+        assert mirror.quantity == -original.quantity
+        assert mirror.value == -original.value
+        assert mirror.warehouse_id == original.warehouse_id
+
+    # Main gave up 4 worth 400 and gets back 4 worth 400 — never mind that it has since taken
+    # in ten at 500, which is the point of a mirror.
     main = location_position(db, stock.company_id, stock.item.id, stock.main.id)
     transit = location_position(db, stock.company_id, stock.item.id, stock.transit.id)
-    assert (main.quantity, main.value) == (Decimal(10), Decimal(1000))
+    assert (main.quantity, main.value) == (Decimal(20), Decimal(6000))
     assert (transit.quantity, transit.value) == (Decimal(0), Decimal(0))
     _both_invariants(db, stock)
 
 
+def test_cancelling_under_block_is_refused_when_the_stock_in_transit_has_gone(
+    db: Session, stock: Stock
+) -> None:
+    """Decision 11's policy clause, at the in-transit location: a mirror that would take a
+    location below zero is refused like any other issue.
+
+    Nothing in P5 can empty the in-transit warehouse behind a dispatch — no document may name
+    it — so the drain here goes through the stock service directly, which is exactly what P6's
+    documents will be able to do. The guard has to be the engine's, not the document's.
+    """
+    receive(db, stock, quantity=Decimal(10), unit_cost=HUNDRED, on=MARCH)
+    transfer, _ = _transfer(db, stock, receive_now=False)
+    set_policy(db, stock, NegativeStockPolicy.BLOCK)
+    issue(db, stock, quantity=Decimal(4), warehouse=stock.transit, on=MARCH)
+    before = _move_count(db, stock)
+
+    with pytest.raises(LedgerStateError) as error:
+        transfer_service.cancel_transfer(
+            db, stock.company_id, transfer.id, reason="too late", actor=stock.owner
+        )
+
+    assert error.value.code == "insufficient_stock"
+    assert transfer.status == StockTransferStatus.IN_TRANSIT
+    assert _move_count(db, stock) == before, "a refused cancellation wrote moves"
+
+
 def test_a_received_transfer_cannot_be_cancelled(db: Session, stock: Stock) -> None:
+    """It is reversed instead, and the refusal says so."""
     receive(db, stock, quantity=Decimal(10), unit_cost=HUNDRED, on=MARCH)
     transfer, _ = _transfer(db, stock)
 
@@ -500,6 +565,153 @@ def test_a_received_transfer_cannot_be_cancelled(db: Session, stock: Stock) -> N
         )
 
     assert error.value.code == "transfer_already_received"
+    assert "reverse it" in str(error.value)
+
+
+# --- Reversal (decision 11) ---------------------------------------------------------------
+
+
+def test_reversing_a_received_transfer_mirrors_both_legs_and_returns_the_value(
+    db: Session, stock: Stock
+) -> None:
+    receive(db, stock, quantity=Decimal(10), unit_cost=HUNDRED, on=MARCH)
+    transfer, _ = _transfer(db, stock)
+    # Again, an interfering receipt: a mirror moves the original values, not today's average.
+    receive(db, stock, quantity=Decimal(10), unit_cost=Decimal(500), on=MARCH)
+
+    transfer_service.reverse_transfer(
+        db, stock.company_id, transfer.id, reason="sent to the wrong depot", actor=stock.owner
+    )
+
+    assert transfer.status == StockTransferStatus.REVERSED
+    assert transfer.receive_reversal_entry_id is not None
+    assert transfer.dispatch_reversal_entry_id is not None
+    receive_mirror = db.get(JournalEntry, transfer.receive_reversal_entry_id)
+    dispatch_mirror = db.get(JournalEntry, transfer.dispatch_reversal_entry_id)
+    assert receive_mirror.reverses_entry_id == transfer.receive_entry_id
+    assert dispatch_mirror.reverses_entry_id == transfer.dispatch_entry_id
+    # Reverse posting order: the arrival is undone before the dispatch, so in-transit never
+    # goes negative on the way through.
+    assert receive_mirror.id < dispatch_mirror.id
+
+    main = location_position(db, stock.company_id, stock.item.id, stock.main.id)
+    depot = location_position(db, stock.company_id, stock.item.id, stock.depot.id)
+    transit = location_position(db, stock.company_id, stock.item.id, stock.transit.id)
+    assert (depot.quantity, depot.value) == (Decimal(0), Decimal(0))
+    assert (transit.quantity, transit.value) == (Decimal(0), Decimal(0))
+    # 6 left at Main after the transfer, +10 received at 500, +4 mirrored back at the 400 the
+    # dispatch froze: 20 units worth 6 000, and not a franc of the new price on the way back.
+    assert (main.quantity, main.value) == (Decimal(20), Decimal(6000))
+    _both_invariants(db, stock)
+
+
+def test_reversing_under_block_is_refused_when_the_destination_no_longer_holds_it(
+    db: Session, stock: Stock
+) -> None:
+    """Decision 11: a receipt whose quantity has since been issued cannot be reversed under
+    `block`. Here the receipt is the transfer's arrival, and the stock has been sold on."""
+    receive(db, stock, quantity=Decimal(10), unit_cost=HUNDRED, on=MARCH)
+    transfer, _ = _transfer(db, stock)
+    set_policy(db, stock, NegativeStockPolicy.BLOCK)
+    issue(db, stock, quantity=Decimal(4), warehouse=stock.depot, on=MARCH)
+    before = _move_count(db, stock)
+
+    with pytest.raises(LedgerStateError) as error:
+        transfer_service.reverse_transfer(
+            db, stock.company_id, transfer.id, reason="too late", actor=stock.owner
+        )
+
+    assert error.value.code == "insufficient_stock"
+    assert transfer.status == StockTransferStatus.COMPLETED
+    assert _move_count(db, stock) == before, "a refused reversal wrote moves"
+    _both_invariants(db, stock)
+
+
+def test_an_unreceived_transfer_is_cancelled_rather_than_reversed(
+    db: Session, stock: Stock
+) -> None:
+    receive(db, stock, quantity=Decimal(10), unit_cost=HUNDRED, on=MARCH)
+    transfer, _ = _transfer(db, stock, receive_now=False)
+
+    with pytest.raises(LedgerStateError) as error:
+        transfer_service.reverse_transfer(
+            db, stock.company_id, transfer.id, reason="not yet", actor=stock.owner
+        )
+
+    assert error.value.code == "transfer_not_received"
+    assert "cancel it" in str(error.value)
+
+
+def test_a_reversed_transfer_cannot_be_reversed_or_received_again(
+    db: Session, stock: Stock
+) -> None:
+    receive(db, stock, quantity=Decimal(10), unit_cost=HUNDRED, on=MARCH)
+    transfer, _ = _transfer(db, stock)
+    transfer_service.reverse_transfer(
+        db, stock.company_id, transfer.id, reason="wrong depot", actor=stock.owner
+    )
+
+    with pytest.raises(LedgerStateError) as again:
+        transfer_service.reverse_transfer(
+            db, stock.company_id, transfer.id, reason="again", actor=stock.owner
+        )
+    with pytest.raises(LedgerStateError) as arrival:
+        transfer_service.receive_transfer(
+            db, stock.company_id, transfer.id, actor=stock.owner
+        )
+
+    assert again.value.code == "transfer_already_reversed"
+    assert arrival.value.code == "transfer_already_reversed"
+
+
+def test_reversing_a_cross_branch_transfer_unwinds_both_branches(
+    db: Session, stock: Stock
+) -> None:
+    """Each mirror keeps the branch of the leg it undoes, so Musanze's inventory balance comes
+    back to zero rather than the reversal landing wherever it was posted from."""
+    receive(db, stock, quantity=Decimal(10), unit_cost=HUNDRED, on=MARCH)
+    transfer, _ = _transfer(db, stock)
+
+    transfer_service.reverse_transfer(
+        db, stock.company_id, transfer.id, reason="wrong depot", actor=stock.owner
+    )
+
+    inventory_account = stock.inventory.settings.inventory_account_id
+    balances = dict(
+        db.execute(
+            select(JournalLine.branch_id, func.sum(JournalLine.base_amount))
+            .where(
+                JournalLine.company_id == stock.company_id,
+                JournalLine.gl_account_id == inventory_account,
+            )
+            .group_by(JournalLine.branch_id)
+        ).all()
+    )
+    assert balances[stock.depot.branch_id] == Decimal(0)
+    assert balances[stock.main.branch_id] == Decimal(1000), "the stock is back where it began"
+    _both_invariants(db, stock)
+
+
+def test_a_valueless_transfer_reverses_as_a_valueless_mirror(
+    db: Session, stock: Stock
+) -> None:
+    receive(db, stock, quantity=Decimal(10), unit_cost=Decimal(0), on=MARCH)
+    transfer, _ = _transfer(db, stock)
+
+    transfer_service.reverse_transfer(
+        db, stock.company_id, transfer.id, reason="free samples went back", actor=stock.owner
+    )
+
+    assert transfer.status == StockTransferStatus.REVERSED
+    assert transfer.receive_reversal_entry_id is None
+    assert transfer.dispatch_reversal_entry_id is None
+    assert location_position(
+        db, stock.company_id, stock.item.id, stock.main.id
+    ).quantity == Decimal(10)
+    assert location_position(
+        db, stock.company_id, stock.item.id, stock.depot.id
+    ).quantity == Decimal(0)
+    _both_invariants(db, stock)
 
 
 def test_a_cancelled_transfer_cannot_then_be_received(db: Session, stock: Stock) -> None:
@@ -547,7 +759,7 @@ def test_a_valueless_dispatch_can_still_be_cancelled(db: Session, stock: Stock) 
     )
 
     assert transfer.status == StockTransferStatus.CANCELLED
-    assert transfer.cancellation_entry_id is None
+    assert transfer.dispatch_reversal_entry_id is None
     assert location_position(
         db, stock.company_id, stock.item.id, stock.main.id
     ).quantity == Decimal(10)

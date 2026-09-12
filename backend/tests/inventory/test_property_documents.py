@@ -339,3 +339,15 @@ def test_a_fixed_run_of_transfers_and_counts_leaves_a_ledger_that_verifies(
         db, stock.company_id, stock.item.id, stock.depot.id
     ).quantity == Decimal(50)
     _both_invariants(db, stock)
+
+    # And the transfer that arrived while all this was going on is reversed too — both legs,
+    # in reverse posting order, with the count's variance already posted against the stock it
+    # is taking back (decision 11).
+    transfer_service.reverse_transfer(
+        db, stock.company_id, on_the_road.id, reason="wrong depot", actor=stock.owner
+    )
+    assert on_the_road.status == StockTransferStatus.REVERSED
+    assert location_position(
+        db, stock.company_id, stock.item.id, stock.depot.id
+    ).quantity == Decimal(40)
+    _both_invariants(db, stock)

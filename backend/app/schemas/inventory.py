@@ -347,6 +347,11 @@ class TransferCancel(BaseModel):
     reason: str = Field(min_length=1, max_length=500)
 
 
+class TransferReverse(BaseModel):
+    reversal_date: date | None = None
+    reason: str = Field(min_length=1, max_length=500)
+
+
 class TransferLineRead(ApiModel):
     id: int
     line_no: int
@@ -373,9 +378,13 @@ class TransferSummary(ApiModel):
     #: Null when the leg valued nothing — stock carried at zero still moves (decision 1).
     dispatch_entry_id: int | None
     receive_entry_id: int | None
-    cancellation_entry_id: int | None
+    #: The mirrors. A cancellation sets the dispatch one; reversing an arrived transfer sets
+    #: both, the receive leg first (decision 11).
+    dispatch_reversal_entry_id: int | None
+    receive_reversal_entry_id: int | None
     received_date: date | None
-    cancelled_date: date | None
+    #: When it was cancelled or reversed — `status` says which.
+    undone_date: date | None
 
 
 class TransferRead(TransferSummary):

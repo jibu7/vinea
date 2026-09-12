@@ -55,6 +55,7 @@ from app.schemas.inventory import (
     TransferLineRead,
     TransferRead,
     TransferReceive,
+    TransferReverse,
     TransferSummary,
     UomCategoryCreate,
     UomCategoryRead,
@@ -814,6 +815,38 @@ def cancel_transfer(
         actor=auth.user,
         idempotency_key=idempotency_key,
         idempotency_hash=idempotency.fingerprint("inventory_transfer_cancel", payload),
+        request=request,
+    )
+    db.commit()
+    return _transfer_read(db, auth.company_id, transfer)
+
+
+@router.post("/transfers/{transfer_id}/reverse")
+def reverse_transfer(
+    transfer_id: int,
+    payload: TransferReverse,
+    request: Request,
+    idempotency_key: str = idempotency.IdempotencyKey,
+    auth: AuthContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+) -> TransferRead:
+    """Undo a transfer that arrived: both legs mirrored, in reverse posting order (decision 11).
+
+    The receive leg first, so the stock is back in transit before the dispatch mirror takes it
+    out again and no location passes through a negative in the middle of a posting that ends
+    square. Under `block` a transfer whose stock has since gone cannot be reversed —
+    `insufficient_stock`, nothing written.
+    """
+    _require_post(auth)
+    transfer = inventory_transfers.reverse_transfer(
+        db,
+        auth.company_id,
+        transfer_id,
+        on_date=payload.reversal_date,
+        reason=payload.reason,
+        actor=auth.user,
+        idempotency_key=idempotency_key,
+        idempotency_hash=idempotency.fingerprint("inventory_transfer_reverse", payload),
         request=request,
     )
     db.commit()

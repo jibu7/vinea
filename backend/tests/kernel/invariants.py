@@ -2,6 +2,7 @@
 every scenario that moves money; every failure here is product-fatal by definition."""
 
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
@@ -12,13 +13,9 @@ from sqlalchemy.orm import Session
 from app.kernel.balances import verify_period_balances
 from app.kernel.enquiries import trial_balance
 from app.kernel.money import is_rounded
-from app.kernel.sequences import DocType
+from app.kernel.sequences import SequenceClaimant, claimants_for
 from app.models.currency import Currency
 from app.models.fiscal import AccountingPeriod
-
-# The three tables that can hold a document number without a journal entry behind it — see
-# `_numbers_without_entries`.
-from app.models.inventory import InventoryDocument, StockCountSession, StockTransfer
 from app.models.journal import DocumentSequence, JournalEntry, JournalLine, JournalStatus
 
 ZERO = Decimal(0)
@@ -141,72 +138,70 @@ def assert_ledger_invariants(
     # 5b. Sequences are gapless per (company, doc_type): numbers 1..N with N = next - 1.
     #
     # "Numbers", not "entry numbers". Until P5 those were the same thing, because a journal
-    # entry was the only thing that could claim one. Since step 3 a posting in which nothing
-    # carried value produces moves and **no entry** (decision 1) — a receipt at zero cost is
-    # still a real change to what is on the shelf — and such a document claims a number of its
-    # own from the same run so that the run has no holes in it. A company with one zero-cost
-    # adjustment and one ordinary one therefore has `ADJ-000001` on a document and
-    # `ADJ-000002` on an entry, which is exactly right and which this check called a gap.
+    # entry was the only thing that could claim one — except `ALC-`, which allocations have
+    # always held alone and which this check therefore never looked at. Since P5 step 3 a
+    # posting in which nothing carried value produces moves and **no entry** (decision 1), and
+    # such a document claims a number of its own so the run keeps no holes. A company with one
+    # zero-cost adjustment and one ordinary one has `ADJ-000001` on a document and
+    # `ADJ-000002` on an entry, which is right and which this check called a gap.
     #
-    # So the claimants are gathered from every table that can hold a number, and the union is
-    # what must be 1..N. A number belonging to two things, or to nothing, is still a failure.
-    sequences = {
-        seq.doc_type: seq
-        for seq in db.scalars(
-            select(DocumentSequence).where(
-                DocumentSequence.company_id == company_id, DocumentSequence.branch_id.is_(None)
-            )
+    # Who may hold a number is **not** decided here. `SEQUENCE_CLAIMANTS` lives beside
+    # `document_sequences`, and a doc type that registers no claimant fails this assertion
+    # rather than being skipped — so a later phase that starts numbering something registers
+    # it where the numbers are defined instead of editing this file.
+    for sequence in db.scalars(
+        select(DocumentSequence).where(DocumentSequence.company_id == company_id)
+    ):
+        if sequence.branch_id is not None:
+            # Branch-scoped runs are their own number space and nothing claims one yet; when
+            # something does, this check needs the claimant query scoped to the branch too.
+            # Skipping loudly beats checking the wrong space quietly.
+            continue
+        try:
+            claimants = claimants_for(sequence.doc_type)
+        except KeyError as unregistered:  # noqa: PERF203 - one sequence, one message
+            raise AssertionError(str(unregistered)) from unregistered
+        numbers = sorted(
+            _claimed_numbers(db, company_id, sequence.doc_type, claimants)
         )
-    }
-    by_doc_type: dict[str, list[int]] = {}
-
-    def _claim(doc_type: str, number: str) -> None:
-        match = _TRAILING_DIGITS.search(number)
-        assert match, f"unparseable number {number}"
-        by_doc_type.setdefault(doc_type, []).append(int(match.group(1)))
-
-    for entry in entries:
-        _claim(entry.doc_type, entry.number)
-    for doc_type, number in _numbers_without_entries(db, company_id):
-        _claim(doc_type, number)
-    for doc_type, numbers in by_doc_type.items():
-        numbers.sort()
-        assert numbers == list(range(1, len(numbers) + 1)), f"gap in {doc_type}: {numbers}"
-        assert sequences[doc_type].next_number == len(numbers) + 1, doc_type
+        assert numbers == list(range(1, len(numbers) + 1)), (
+            f"gap in {sequence.doc_type}: {numbers}"
+        )
+        assert sequence.next_number == len(numbers) + 1, (
+            f"{sequence.doc_type} has issued {len(numbers)} numbers but its sequence is at "
+            f"{sequence.next_number}: a number was claimed and nothing kept it"
+        )
 
     return current
 
 
-def _numbers_without_entries(db: Session, company_id: int) -> list[tuple[str, str]]:
-    """Numbers held by something other than a journal entry.
+def _claimed_numbers(
+    db: Session,
+    company_id: int,
+    doc_type: str,
+    claimants: Sequence[SequenceClaimant],
+) -> list[int]:
+    """Every number held in this run, from every table the registry says may hold one.
 
-    Three claimants, and only these three: a valueless stock document and a valueless transfer
-    (neither posted an entry to take a number from), and a count session, which is a working
-    paper that may never post at all and so has a run of its own. A document that *did* post
-    an entry shares that entry's number, and counting it here would make every ordinary
-    document look like a duplicate claim.
-
-    Named rather than discovered, because the property being checked is about the handful of
-    places allowed to claim a number without posting one: a fourth should have to be added
-    here deliberately, by somebody who has thought about whether it should exist.
+    A number belonging to two claimants shows up twice and fails the 1..N check, which is the
+    point: "gapless" means every number belongs to exactly one thing.
     """
-    documents = db.execute(
-        select(InventoryDocument.doc_type, InventoryDocument.number).where(
-            InventoryDocument.company_id == company_id,
-            InventoryDocument.journal_entry_id.is_(None),
-        )
-    ).all()
-    transfers = db.execute(
-        select(StockTransfer.number).where(
-            StockTransfer.company_id == company_id,
-            StockTransfer.dispatch_entry_id.is_(None),
-        )
-    ).all()
-    sessions = db.execute(
-        select(StockCountSession.number).where(StockCountSession.company_id == company_id)
-    ).all()
-    return (
-        [(doc_type, number) for doc_type, number in documents]
-        + [(str(DocType.INV_TRANSFER), number) for (number,) in transfers]
-        + [(str(DocType.INV_COUNT_SESSION), number) for (number,) in sessions]
-    )
+    numbers: list[int] = []
+    for claimant in claimants:
+        conditions = ["company_id = :company_id"]
+        if claimant.doc_type_column is not None:
+            conditions.append(f"{claimant.doc_type_column} = :doc_type")
+        if claimant.where is not None:
+            conditions.append(f"({claimant.where})")
+        rows = db.execute(
+            text(
+                f"SELECT {claimant.number_column} FROM {claimant.table} "  # noqa: S608 - names
+                f"WHERE {' AND '.join(conditions)}"  # come from the registry, never a request
+            ),
+            {"company_id": company_id, "doc_type": str(doc_type)},
+        ).all()
+        for (number,) in rows:
+            match = _TRAILING_DIGITS.search(number)
+            assert match, f"unparseable number {number}"
+            numbers.append(int(match.group(1)))
+    return numbers
