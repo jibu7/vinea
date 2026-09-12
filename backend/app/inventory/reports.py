@@ -135,6 +135,14 @@ def _warehouse_scope(
 
 @dataclass(frozen=True)
 class MovementRow:
+    """Opening, in, out and closing for one item × warehouse.
+
+    Carries no average, on the owner's direction at the step-5 gate. Any running average a
+    screen derives from these columns is value ÷ quantity **at that date**, not the cost the
+    issues in the row were posted at — a backdated receipt makes the two differ. Step 8 shows
+    no such column, or labels it as the as-at ratio; never as "cost".
+    """
+
     item_id: int
     item_code: str
     item_name: str
@@ -507,9 +515,18 @@ class ValuationRow:
     gl_account_id: int | None
 
     @property
-    def unit_cost(self) -> Decimal | None:
-        """What this location's stock averages out at — `None` at zero quantity, where the
-        question has no answer. Derived for display only; nothing costs off this."""
+    def average_as_at(self) -> Decimal | None:
+        """Value ÷ quantity **on `as_of`** — `None` at zero quantity, where the question has
+        no answer.
+
+        Named for what it is, and deliberately not `unit_cost`. It is not the cost any issue
+        was posted at: a backdated receipt changes the ratio from its own date while leaving
+        every earlier-posted issue at the value it was given (decision 4), so the two differ
+        in view and a column called "cost" would be telling an operator something untrue. The
+        cost a move was actually posted at is `StockMove.unit_cost`, which the transaction
+        report and the item enquiry carry per row. Derived for display only; nothing costs off
+        this.
+        """
         if self.quantity == ZERO:
             return None
         return self.value / self.quantity

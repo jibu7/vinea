@@ -90,7 +90,11 @@ def test_the_valuation_report_values_each_location_at_its_frozen_values(
     assert by_warehouse["MAIN"].quantity == _d("14")
     assert by_warehouse["MAIN"].value == _d("1547")
     assert report.total_value == _d("2210")
-    assert by_warehouse["MAIN"].unit_cost == _d("1547") / _d("14")
+    # The as-at ratio, named for what it is — never "cost". See `ValuationRow.average_as_at`.
+    assert by_warehouse["MAIN"].average_as_at == _d("1547") / _d("14")
+    assert not hasattr(by_warehouse["MAIN"], "unit_cost"), (
+        "a column named cost on this report would claim something the ledger never said"
+    )
 
 
 def test_the_valuation_report_equals_the_inventory_account_at_every_date(

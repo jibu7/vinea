@@ -660,8 +660,10 @@ class ValuationRowRead(BaseModel):
     is_in_transit: bool
     quantity: Decimal
     value: Decimal
-    #: value / quantity for display; null at zero quantity, where it has no answer.
-    unit_cost: Decimal | None
+    #: Value / quantity **as at `as_of`**; null at zero quantity. Not the cost anything was
+    #: posted at — a backdated receipt makes the two differ — so it is never labelled "cost"
+    #: on a screen. See `ValuationRow.average_as_at`.
+    average_as_at: Decimal | None
     gl_account_id: int | None
 
 

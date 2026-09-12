@@ -1489,7 +1489,7 @@ def valuation_report(
                 is_in_transit=row.is_in_transit,
                 quantity=row.quantity,
                 value=row.value,
-                unit_cost=row.unit_cost,
+                average_as_at=row.average_as_at,
                 gl_account_id=row.gl_account_id,
             )
             for row in report.rows

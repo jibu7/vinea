@@ -55,7 +55,14 @@ class LocationPosition:
 
 @dataclass(frozen=True)
 class MoveRow:
-    """One move, with the drill-down keys the screen needs to get anywhere from here."""
+    """One move, with the drill-down keys the screen needs to get anywhere from here.
+
+    `unit_cost` is the move's own posted cost — the real one, frozen at posting. The enquiry
+    deliberately carries **no** running average: `running_value / running_quantity` is the
+    ratio on that date, not the cost the issues above it were posted at, and a backdated
+    receipt makes the two differ in view. On the owner's direction at the step-5 gate, step 8
+    either omits such a column or labels it as the as-at ratio — never as "cost".
+    """
 
     move_id: int
     move_date: date
