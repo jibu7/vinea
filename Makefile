@@ -30,7 +30,7 @@ db-reset:
 # reads **`MIGRATION_DATABASE_URL`** (the superuser role), *not* `DATABASE_URL`, so
 # `DATABASE_URL=…/somewhere_else alembic downgrade base` silently targets the dev database
 # and wipes it. CI gets the same gate for free because its `vinea` database is untouched by
-# pytest, which works in `vinea_test`.
+# pytest, which works in a per-process `vinea_test_<pid>` database (see backend/tests/conftest.py).
 MIGRATION_SCRATCH_DB ?= vinea_migration_check
 migrate-check:
 	docker compose exec -T db psql -U vinea -d postgres -q \
