@@ -7,8 +7,12 @@
  * anything that is only displayed stays a string all the way to `formatMoney`.
  */
 
-export type ItemType = "stock" | "service" | "non_stock";
-export type NegativeStockPolicy = "block" | "allow";
+// Re-exported from the generated module rather than re-declared: a second hand-written copy
+// of a wire union is the same class of defect as a hand-written literal. Imported as well as
+// re-exported, because the interfaces below use them.
+import type { ItemType, NegativeStockPolicy } from "@/lib/api-enums";
+
+export type { ItemType, NegativeStockPolicy };
 
 export interface Page<T> {
   items: T[];

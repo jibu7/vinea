@@ -2,7 +2,7 @@
 
 import { useTranslations } from "next-intl";
 import { TransactionTypesScreen } from "@/features/gl/transaction-types-screen";
-import type { InventoryTransactionKind } from "@/features/gl/types";
+import { InventoryTransactionKind } from "@/lib/api-enums";
 
 /**
  * The same screen GL, AR and AP use, filtered to `module="inv"` — one table, one
@@ -11,12 +11,12 @@ import type { InventoryTransactionKind } from "@/features/gl/types";
  * another `adjustment_out` with its own contra account.
  */
 const KIND_ORDER: readonly InventoryTransactionKind[] = [
-  "adjustment_in",
-  "adjustment_out",
-  "revaluation",
-  "transfer",
-  "count_variance",
-  "opening_balance",
+  InventoryTransactionKind.ADJUSTMENT_IN,
+  InventoryTransactionKind.ADJUSTMENT_OUT,
+  InventoryTransactionKind.REVALUATION,
+  InventoryTransactionKind.TRANSFER,
+  InventoryTransactionKind.COUNT_VARIANCE,
+  InventoryTransactionKind.OPENING_BALANCE,
 ];
 
 export default function InventoryTransactionTypesPage() {

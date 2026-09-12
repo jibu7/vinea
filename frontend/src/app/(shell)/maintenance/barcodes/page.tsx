@@ -21,8 +21,13 @@ import { dotted, trimDecimalString } from "@/lib/format";
  *
  * Read-only on purpose: a barcode belongs to an item, so it is created and edited where the
  * item is. Nothing here would be true of a barcode with no item behind it.
+ *
+ * **Not "Variable barcodes".** This shipped under that name at P5 step 6 and the owner
+ * corrected it at review: a variable barcode is the POS scale-label pattern — a prefix, then
+ * item-code digits, then weight or price digits, decoded at the till — and that is a P11
+ * screen with its own row in the tree. What this is, is the plain per-item barcode listing.
  */
-export default function VariableBarcodesPage() {
+export default function BarcodesPage() {
   const t = useTranslations("inventory.barcodes");
   const tc = useTranslations("inventory.common");
 

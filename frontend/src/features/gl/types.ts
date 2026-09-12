@@ -40,14 +40,13 @@ export interface Project {
  * users add their own types of an existing kind (Damaged, Samples, ...) with their own contra
  * account, which is what the Maintenance screen is for. `null` on every non-inventory module,
  * where the concept does not apply.
+ *
+ * Re-exported from the generated module rather than re-declared here — imported too, because
+ * `TransactionType` below uses it.
  */
-export type InventoryTransactionKind =
-  | "adjustment_in"
-  | "adjustment_out"
-  | "revaluation"
-  | "transfer"
-  | "count_variance"
-  | "opening_balance";
+import type { InventoryTransactionKind } from "@/lib/api-enums";
+
+export type { InventoryTransactionKind };
 
 export interface TransactionType {
   id: number;

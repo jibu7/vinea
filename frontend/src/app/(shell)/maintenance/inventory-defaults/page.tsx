@@ -16,7 +16,7 @@ import {
   useSaveInventoryDefaults,
   useWarehouses,
 } from "@/features/inventory/hooks";
-import type { NegativeStockPolicy } from "@/features/inventory/types";
+import { ControlType, NegativeStockPolicy } from "@/lib/api-enums";
 import { dotted } from "@/lib/format";
 import { useApiErrorToast } from "@/lib/use-api-error-toast";
 
@@ -35,16 +35,6 @@ const ACCOUNT_KEYS: readonly AccountKey[] = [
   "cogs_account_id",
 ];
 
-/**
- * The wire value of `ControlType.INVENTORY`. Spelled out as a constant because the phase
- * prompt and the ADRs call this control type "INV" while the enum serialises `"inventory"` —
- * comparing against the wrong one leaves the picker empty and the saved account showing as
- * "Not set", which is a screen that renders perfectly and tells the operator something
- * untrue. Caught by `e2e/inventory-maintenance.spec.ts`, which is the point of opening a
- * screen with data in it.
- */
-const INVENTORY_CONTROL_TYPE = "inventory";
-
 const EMPTY: Record<AccountKey, string> = {
   inventory_account_id: "",
   inventory_in_transit_account_id: "",
@@ -57,9 +47,11 @@ const EMPTY: Record<AccountKey, string> = {
  * The inventory keys on `gl_settings` — the same settings mechanism every other module uses
  * (P5 decision 10), not a second store.
  *
- * The two control keys only offer accounts carrying `control_type = "INV"`, because the
- * posting guard rejects anything else and offering an ordinary account here would only buy
- * the operator a 409. The consequence of those being control accounts is the note on the
+ * The two control keys only offer accounts whose control type is `ControlType.INVENTORY`,
+ * because the posting guard rejects anything else and offering an ordinary account here would
+ * only buy the operator a 409. (The phase prompt calls that control type "INV"; the enum
+ * serialises `"inventory"`, and this screen shipped comparing against the prompt's name — the
+ * generated `@/lib/api-enums` is why it cannot happen again.) The consequence of those being control accounts is the note on the
  * card: opening stock cannot arrive as a GL journal, it comes through an inventory journal
  * batch under an opening-balance type.
  */
@@ -76,7 +68,7 @@ export default function InventoryDefaultsPage() {
   const warehouses = useWarehouses();
 
   const [form, setForm] = useState<Record<AccountKey, string>>(EMPTY);
-  const [policy, setPolicy] = useState<NegativeStockPolicy>("block");
+  const [policy, setPolicy] = useState<NegativeStockPolicy>(NegativeStockPolicy.BLOCK);
   const [warehouseId, setWarehouseId] = useState("");
 
   useEffect(() => {
@@ -98,7 +90,7 @@ export default function InventoryDefaultsPage() {
     [accounts.data],
   );
   const inventoryControl = useMemo(
-    () => usable.filter((a) => a.control_type === INVENTORY_CONTROL_TYPE),
+    () => usable.filter((a) => a.control_type === ControlType.INVENTORY),
     [usable],
   );
   const ordinary = useMemo(() => usable.filter((a) => !a.is_control), [usable]);
@@ -174,8 +166,8 @@ export default function InventoryDefaultsPage() {
           <Field label={t("negativeStockPolicy")}>
             <Select
               options={[
-                { value: "block", label: t("policyBlock") },
-                { value: "allow", label: t("policyAllow") },
+                { value: NegativeStockPolicy.BLOCK, label: t("policyBlock") },
+                { value: NegativeStockPolicy.ALLOW, label: t("policyAllow") },
               ]}
               value={policy}
               onValueChange={(value) => setPolicy(value as NegativeStockPolicy)}

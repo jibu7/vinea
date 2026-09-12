@@ -151,7 +151,7 @@ export function useItemBarcodes(itemId: number | null) {
   });
 }
 
-/** The company-wide listing behind the Variable barcodes screen. */
+/** The company-wide listing behind the Barcodes screen. */
 export function useBarcodes(opts: { search?: string; includeInactive?: boolean } = {}) {
   const search = opts.search?.trim() ?? "";
   const includeInactive = opts.includeInactive ?? false;

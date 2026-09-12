@@ -1247,8 +1247,8 @@
       "tabBarcodes": "Barcodes"
     },
     "barcodes": {
-      "title": "Variable barcodes",
-      "subtitle": "Every barcode in the company, and what each one stands for. A code may name a single unit or a whole pack — the unit and pack quantity are how a scan becomes a quantity.",
+      "title": "Barcodes",
+      "subtitle": "Every barcode in the company, and what each one stands for. A code may name a single unit or a whole pack — the unit and pack quantity are how a scan becomes a quantity. Codes are added on the item; this is the listing, and the only place a code attached to two items would show up.",
       "itemTitle": "Barcodes",
       "new": "Add barcode",
       "newTitle": "New barcode",

@@ -19,10 +19,12 @@ export default defineConfig({
   expect: { timeout: 10_000 },
   use: {
     baseURL: process.env.PLAYWRIGHT_BASE_URL ?? "http://localhost:3000",
-    // Escape hatch for sandboxes that ship a pinned Chromium at a build number this
-    // Playwright did not download (`Executable doesn't exist at .../chromium_headless_shell-NNNN`).
-    // Unset everywhere else, CI included, where Playwright installs its own matching build —
-    // so this changes nothing about what CI runs.
+    // DEVELOPMENT ONLY. Escape hatch for a sandbox that ships a pinned Chromium at a build
+    // number this Playwright did not download (`Executable doesn't exist at
+    // .../chromium_headless_shell-NNNN`). Env-gated and unset in CI, where Playwright installs
+    // its own matching build against the real `docker compose` stack — so this changes nothing
+    // about what CI runs, and **CI's compose e2e is the authority**. A green run against a
+    // hand-assembled local stack is a development signal, not evidence the suite passes.
     ...(process.env.PLAYWRIGHT_CHROMIUM_PATH
       ? { launchOptions: { executablePath: process.env.PLAYWRIGHT_CHROMIUM_PATH } }
       : {}),

@@ -25,11 +25,12 @@ import {
   useUpdateBarcode,
   useUpdateItem,
 } from "@/features/inventory/hooks";
-import type { Barcode, Item, ItemType } from "@/features/inventory/types";
+import type { Barcode, Item } from "@/features/inventory/types";
+import { ControlType, ItemType } from "@/lib/api-enums";
 import { dotted, formatMoney, trimDecimalString, type CurrencyLike } from "@/lib/format";
 import { useApiErrorToast } from "@/lib/use-api-error-toast";
 
-const ITEM_TYPES: readonly ItemType[] = ["stock", "service", "non_stock"];
+const ITEM_TYPES: readonly ItemType[] = [ItemType.STOCK, ItemType.SERVICE, ItemType.NON_STOCK];
 
 /**
  * The company's base currency, as `formatMoney` wants it.
@@ -48,16 +49,6 @@ function useBaseCurrency(): CurrencyLike {
     symbol: base?.symbol ?? null,
   };
 }
-
-/**
- * The wire value of `ControlType.INVENTORY`. Spelled out as a constant because the phase
- * prompt and the ADRs call this control type "INV" while the enum serialises `"inventory"` —
- * comparing against the wrong one leaves the picker empty and the saved account showing as
- * "Not set", which is a screen that renders perfectly and tells the operator something
- * untrue. Caught by `e2e/inventory-maintenance.spec.ts`, which is the point of opening a
- * screen with data in it.
- */
-const INVENTORY_CONTROL_TYPE = "inventory";
 
 
 /**
@@ -98,7 +89,7 @@ export default function InventoryItemsPage() {
   const [code, setCode] = useState("");
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
-  const [itemType, setItemType] = useState<ItemType>("stock");
+  const [itemType, setItemType] = useState<ItemType>(ItemType.STOCK);
   const [categoryId, setCategoryId] = useState("");
   const [baseUomId, setBaseUomId] = useState("");
   const [sellingPrice, setSellingPrice] = useState("0");
@@ -114,7 +105,7 @@ export default function InventoryItemsPage() {
     [accounts.data],
   );
   const inventoryControl = useMemo(
-    () => usableAccounts.filter((a) => a.control_type === INVENTORY_CONTROL_TYPE),
+    () => usableAccounts.filter((a) => a.control_type === ControlType.INVENTORY),
     [usableAccounts],
   );
   const ordinaryAccounts = useMemo(
@@ -145,7 +136,7 @@ export default function InventoryItemsPage() {
     setCode("");
     setName("");
     setDescription("");
-    setItemType("stock");
+    setItemType(ItemType.STOCK);
     setCategoryId("");
     setBaseUomId("");
     setSellingPrice("0");
@@ -596,7 +587,7 @@ function ItemDetails({ item, uomName }: { item: Item; uomName: (id: number) => s
   );
 }
 
-/** The barcodes of one item — created here, listed company-wide on Variable barcodes. */
+/** The barcodes of one item — created here, listed company-wide on the Barcodes screen. */
 function BarcodePanel({ item, canEdit }: { item: Item; canEdit: boolean }) {
   const tb = useTranslations("inventory.barcodes");
   const tc = useTranslations("inventory.common");

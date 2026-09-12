@@ -99,7 +99,7 @@ describe("P5 maintenance screens", () => {
   it.each([
     ["Items", "/maintenance/inventory-items"],
     ["Warehouses", "/maintenance/warehouses"],
-    ["Variable barcodes", "/maintenance/variable-barcodes"],
+    ["Barcodes", "/maintenance/barcodes"],
     ["Units of measure", "/maintenance/uom-categories"],
     ["Rename item code", "/maintenance/rename-item-code"],
   ])("links %s to %s with no phase tag left", (label, href) => {

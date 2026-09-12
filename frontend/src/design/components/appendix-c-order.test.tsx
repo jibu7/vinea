@@ -34,6 +34,20 @@ import { navIntents, type IntentLabel } from "@/design/nav-tree";
  *    appendix's own, and "Units of measure" / "Rename item code" are its "UoM categories" /
  *    "Rename Item Code" in the tree's sentence case.
  *
+ * Amended again at the P5 step-6 review, on the owner's correction — a **plan deviation**,
+ * recorded here and carried into `docs/p5-final-report.md`:
+ *
+ * "Variable barcodes" in the appendix is the **POS scale-label pattern** — a prefix, then
+ * item-code digits, then weight or price digits, decoded at the till. It is a P11 screen, not
+ * a P5 one. P5 step 6 read the label as "the barcode listing" and built that instead, which is
+ * a real and needed screen but a different one. So the row keeps the appendix's label and
+ * position and is tagged `P11`, and the screen that was built sits beside it as **"Barcodes"**:
+ * per-item barcodes with their unit and pack quantity, a listing and a duplicate detector.
+ *
+ * The misreading is on the specification side, not the build — the prompt's step-6 list named
+ * "Variable barcodes" among the maintenance screens to ship. Noted so the next reader of the
+ * appendix does not repeat it.
+ *
  * Nothing outside the Inventory block moved.
  */
 const APPENDIX_C: Record<IntentLabel, Array<[string, string, string | null]>> = {
@@ -63,7 +77,8 @@ const APPENDIX_C: Record<IntentLabel, Array<[string, string, string | null]>> = 
     ["Inventory", "Items", null],
     ["Inventory", "Warehouses", null],
     ["Inventory", "Transaction types", null],
-    ["Inventory", "Variable barcodes", null],
+    ["Inventory", "Variable barcodes", "P11"],
+    ["Inventory", "Barcodes", null],
     ["Inventory", "Units of measure", null],
     ["Inventory", "Defaults", null],
     ["Inventory", "Rename item code", null],

@@ -11,6 +11,13 @@ import { PRIMARY_EMAIL, assertNoSeriousViolations, login, setTheme } from "./sup
  * **figure** is asserted — a factor, a pack quantity, a code, a branch — not just a heading.
  * A spec that navigates to a route and checks an `<h1>` proves the route compiles and
  * nothing else, which is exactly how the six P4 defects got through review.
+ *
+ * **The standard set at the step-6 review, binding on steps 7 and 8:** every screen's e2e
+ * asserts at least one *formatted money* value and one *formatted quantity* read off the page
+ * — the rendered string, not the raw field. Both defects this step shipped were of exactly
+ * that shape: a price printed at `NUMERIC(20,6)` scale instead of RWF's zero decimals, and a
+ * unit factor printed as `1.0000000000`. Asserting `8,500` and `6` is what makes the
+ * formatting layer load-bearing instead of decorative.
  */
 
 const SUFFIX = String(Date.now()).slice(-6);
@@ -101,9 +108,9 @@ test.describe("Inventory maintenance", () => {
     await expect(itemRow).toContainText("EA");
     await expect(itemRow).toContainText("Stock");
 
-    // --- variable barcodes: the same code, company-wide, resolved to its item and pack ----
-    await page.goto("/maintenance/variable-barcodes");
-    await page.waitForSelector("h1:has-text('Variable barcodes')");
+    // --- barcodes: the same code, company-wide, resolved to its item and pack -------------
+    await page.goto("/maintenance/barcodes");
+    await page.waitForSelector("h1:has-text('Barcodes')");
     await page.getByLabel("Search").fill(BARCODE);
     const listingRow = page.locator("tbody tr", { hasText: BARCODE }).first();
     await expect(listingRow).toBeVisible();
@@ -223,7 +230,7 @@ test.describe("Inventory maintenance", () => {
       ["items", "/maintenance/inventory-items", "Inventory items"],
       ["warehouses", "/maintenance/warehouses", "Warehouses"],
       ["transaction types", "/maintenance/inv-transaction-types", "Inventory transaction types"],
-      ["variable barcodes", "/maintenance/variable-barcodes", "Variable barcodes"],
+      ["barcodes", "/maintenance/barcodes", "Barcodes"],
       ["units of measure", "/maintenance/uom-categories", "Units of measure"],
       ["inventory defaults", "/maintenance/inventory-defaults", "Inventory defaults"],
       ["rename item code", "/maintenance/rename-item-code", "Rename item code"],

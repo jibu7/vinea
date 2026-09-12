@@ -15,7 +15,7 @@ const OUT = process.env.OUT ?? "screenshots";
 const BASE = process.env.BASE_URL ?? "http://localhost:3000";
 const API = `${process.env.API_URL ?? "http://localhost:8000"}/api/v1`;
 
-/** `ONLY=3-variable-barcodes` re-captures just that one. Re-shooting all seven to change one
+/** `ONLY=3-barcodes` re-captures just that one. Re-shooting all seven to change one
  * is how a review record ends up with fourteen files changed and one of them meaningful. */
 const ONLY = (process.env.ONLY ?? "")
   .split(",")
@@ -231,10 +231,10 @@ async function main() {
     await shoot(page, "2-warehouses", theme);
 
     // 3 — the company-wide barcode listing, resolved to items and packs.
-    await page.goto(`${BASE}/maintenance/variable-barcodes`);
-    await page.waitForSelector("h1:has-text('Variable barcodes')");
+    await page.goto(`${BASE}/maintenance/barcodes`);
+    await page.waitForSelector("h1:has-text('Barcodes')");
     await page.locator("tbody tr").first().waitFor({ state: "visible" });
-    await shoot(page, "3-variable-barcodes", theme);
+    await shoot(page, "3-barcodes", theme);
 
     // 4 — the transaction types with their kinds, seeded six plus the company's own.
     await page.goto(`${BASE}/maintenance/inv-transaction-types`);
