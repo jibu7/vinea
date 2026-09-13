@@ -8,6 +8,12 @@ import { useFieldLabelId } from "./input";
 export interface SelectOption {
   value: string;
   label: string;
+  /**
+   * Extra strings the typeahead matches on without showing them. An item option's label is
+   * `code · name`; its barcodes and description go here, so a scan or a half-remembered
+   * description finds the row while the label stays readable (P5 step 7).
+   */
+  keywords?: string[];
 }
 
 export function Select({

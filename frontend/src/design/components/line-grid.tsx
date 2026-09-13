@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { ChevronsUpDown } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { InventoryTransactionKind } from "@/lib/api-enums";
 import { Combobox } from "./combobox";
 import type { SelectOption } from "./select";
 
@@ -24,6 +25,16 @@ export interface LineGridRow {
   discountPercent: string;
   /** Batch mode (AR/AP journal batches): one partner per line, charged or credited. */
   partnerId: string;
+  /** Inventory mode (P5 step 7): the stock line. `quantity` above is reused as a magnitude —
+   * the transaction type's kind gives the direction. `accountId` above is the contra
+   * override. Transfers use the same mode with the warehouse/type/cost columns switched off. */
+  itemId: string;
+  warehouseId: string;
+  transactionTypeId: string;
+  uomId: string;
+  unitCost: string;
+  /** A revaluation's signed value; nothing else fills it. */
+  value: string;
   /** Shared extra dimensions — collapsible, all default from the header. */
   branchId: string;
   projectId: string;
@@ -47,6 +58,12 @@ export function emptyLineGridRow(defaults: Partial<LineGridRow> = {}): LineGridR
     unitPrice: "",
     discountPercent: "",
     partnerId: "",
+    itemId: "",
+    warehouseId: "",
+    transactionTypeId: "",
+    uomId: "",
+    unitCost: "",
+    value: "",
     branchId: "",
     projectId: "",
     currencyId: "",
@@ -90,6 +107,10 @@ const COL = {
   currency: 4,
   taxCode: 5,
   partner: 6,
+  item: 7,
+  warehouse: 8,
+  transactionType: 9,
+  uom: 10,
   debit: 100,
   credit: 101,
   amount: 102,
@@ -97,6 +118,8 @@ const COL = {
   quantity: 104,
   unitPrice: 105,
   discountPercent: 106,
+  unitCost: 107,
+  value: 108,
 } as const;
 
 /** Amount-style cells swap formatted display for raw digits while they hold the caret. */
@@ -106,10 +129,39 @@ const EDITABLE_AMOUNT_COLS: number[] = [
   COL.amount,
   COL.quantity,
   COL.unitPrice,
+  COL.unitCost,
+  COL.value,
 ];
 
+/** Inventory mode: which of its optional columns a screen wants. Adjustments and batches want
+ * all of them; a transfer wants none — its warehouses are on the header and it carries no
+ * cost, because the arrival takes the dispatched value frozen. */
+export interface InventoryColumns {
+  warehouse?: boolean;
+  transactionType?: boolean;
+  unitCost?: boolean;
+  value?: boolean;
+  contra?: boolean;
+}
+
+const ALL_INVENTORY_COLUMNS: Required<InventoryColumns> = {
+  warehouse: true,
+  transactionType: true,
+  unitCost: true,
+  value: true,
+  contra: true,
+};
+
+/** Which kinds take a unit cost (a receipt is priced by what it cost) and which take a value
+ * (a revaluation moves no quantity and states the write-up or write-down). Everything else is
+ * costed at the average on Post, and the cell says so by not being there. */
+const INCREASE_KINDS: ReadonlySet<string> = new Set([
+  InventoryTransactionKind.ADJUSTMENT_IN,
+  InventoryTransactionKind.OPENING_BALANCE,
+]);
+
 export interface LineGridProps {
-  mode: "journal" | "cashbook" | "document" | "batch";
+  mode: "journal" | "cashbook" | "document" | "batch" | "inventory";
   rows: LineGridRow[];
   onRowsChange: (rows: LineGridRow[]) => void;
   errors?: LineErrors;
@@ -120,6 +172,21 @@ export interface LineGridProps {
   taxCodeOptions?: SelectOption[];
   /** Batch mode only: who each line charges or credits. */
   partnerOptions?: SelectOption[];
+  /** Inventory mode. The item options carry barcodes and descriptions as `keywords`, so a
+   * scan finds the row; the callbacks let the screen answer per-row questions the grid has
+   * no business knowing — what is on hand, what the unit converts to, what the type does. */
+  itemOptions?: SelectOption[];
+  warehouseOptions?: SelectOption[];
+  transactionTypeOptions?: SelectOption[];
+  uomOptionsFor?: (row: LineGridRow) => SelectOption[];
+  /** Formatted quantity on hand of the row's item at the row's warehouse, or undefined. */
+  onHandFor?: (row: LineGridRow) => string | undefined;
+  /** "= 12 EA" — the row's quantity in the item's base unit, or undefined in the base unit. */
+  conversionFor?: (row: LineGridRow) => string | undefined;
+  /** The kind of the row's transaction type, which decides whether a unit cost or a value is
+   * asked for. Null while no type is chosen. */
+  lineKindFor?: (row: LineGridRow) => InventoryTransactionKind | null;
+  inventoryColumns?: InventoryColumns;
   baseCurrencyId?: string;
   /** Looks up the latest dated rate for a currency, to prefill the rate cell. */
   rateForCurrency?: (currencyId: string) => string | undefined;
@@ -144,10 +211,20 @@ export function LineGrid({
   currencyOptions = [],
   taxCodeOptions = [],
   partnerOptions = [],
+  itemOptions = [],
+  warehouseOptions = [],
+  transactionTypeOptions = [],
+  uomOptionsFor,
+  onHandFor,
+  conversionFor,
+  lineKindFor,
+  inventoryColumns,
   baseCurrencyId,
   rateForCurrency,
   rowDefaults,
 }: LineGridProps) {
+  const inv = { ...ALL_INVENTORY_COLUMNS, ...(inventoryColumns ?? {}) };
+  const isInventory = mode === "inventory";
   // Document mode is P4 and fully externalised; the journal/cashbook literals below predate
   // it and are part of the P3 i18n backfill (docs/i18n-backfill-p3.md, issue #6).
   const t = useTranslations("lineGrid");
@@ -234,7 +311,11 @@ export function LineGrid({
           className="flex items-center gap-1.5 text-xs font-medium text-[var(--vinea-ink-muted)] hover:text-[var(--vinea-ink)]"
         >
           <ChevronsUpDown className="size-3.5" />
-          {mode === "document"
+          {mode === "inventory"
+            ? showExtra
+              ? t("inventoryFewerColumns")
+              : t("inventoryMoreColumns")
+            : mode === "document"
             ? showExtra
               ? t("fewerColumns")
               : t("moreColumns")
@@ -259,12 +340,29 @@ export function LineGrid({
           <thead className="bg-[var(--vinea-surface-sunken)] text-xs uppercase tracking-wide text-[var(--vinea-ink-subtle)]">
             <tr>
               {mode === "batch" && <th className="px-3 py-2 text-left">{t("partner")}</th>}
-              <th className="px-3 py-2 text-left">{mode === "batch" ? t("contraAccount") : t("account")}</th>
+              {isInventory && (
+                <>
+                  <th className="px-3 py-2 text-left">{t("item")}</th>
+                  {inv.warehouse && <th className="px-3 py-2 text-left">{t("warehouse")}</th>}
+                  <th className="px-3 py-2 text-right">{t("onHand")}</th>
+                  {inv.transactionType && <th className="px-3 py-2 text-left">{t("transactionType")}</th>}
+                  <th className="px-3 py-2 text-right">{t("quantity")}</th>
+                  <th className="px-3 py-2 text-left">{t("uom")}</th>
+                  {inv.unitCost && <th className="px-3 py-2 text-right">{t("unitCost")}</th>}
+                  {inv.value && <th className="px-3 py-2 text-right">{t("value")}</th>}
+                </>
+              )}
+              {!isInventory && (
+                <th className="px-3 py-2 text-left">{mode === "batch" ? t("contraAccount") : t("account")}</th>
+              )}
+              {isInventory && showExtra && inv.contra && (
+                <th className="px-3 py-2 text-left">{t("contraAccount")}</th>
+              )}
               <th className="px-3 py-2 text-left">{t("description")}</th>
-              {showExtra && <th className="px-3 py-2 text-left">{t("branch")}</th>}
+              {showExtra && !isInventory && <th className="px-3 py-2 text-left">{t("branch")}</th>}
               {showExtra && <th className="px-3 py-2 text-left">{t("project")}</th>}
-              {showExtra && <th className="px-3 py-2 text-left">{t("currencyRate")}</th>}
-              {showExtra && <th className="px-3 py-2 text-left">{t("taxCode")}</th>}
+              {showExtra && !isInventory && <th className="px-3 py-2 text-left">{t("currencyRate")}</th>}
+              {showExtra && !isInventory && <th className="px-3 py-2 text-left">{t("taxCode")}</th>}
               {mode === "journal" && (
                 <>
                   <th className="px-3 py-2 text-right">{t("debit")}</th>
@@ -307,6 +405,16 @@ export function LineGrid({
               const quantityErr = rowErr?.quantity;
               const unitPriceErr = rowErr?.unit_price;
               const discountErr = rowErr?.discount_percent;
+              const itemErr = rowErr?.item_id;
+              const warehouseErr = rowErr?.warehouse_id;
+              const typeErr = rowErr?.transaction_type_id;
+              const uomErr = rowErr?.uom_id;
+              const unitCostErr = rowErr?.unit_cost;
+              const valueErr = rowErr?.value;
+              const contraErr = rowErr?.contra_account_id;
+              const kind = isInventory ? (lineKindFor?.(row) ?? null) : null;
+              const takesUnitCost = kind !== null && INCREASE_KINDS.has(kind);
+              const takesValue = kind === InventoryTransactionKind.REVALUATION;
 
               return (
                 <tr key={row.id} className={cn(activeCell?.row === r && "bg-[var(--vinea-brand-soft)]/30")}>
@@ -329,26 +437,188 @@ export function LineGrid({
                       )}
                     </td>
                   )}
+                  {isInventory && (
+                    <>
+                      <td data-row={r} data-col={COL.item} className="min-w-56 p-1 align-top">
+                        <Combobox
+                          options={itemOptions}
+                          value={row.itemId}
+                          // A new item means a new base unit: the unit picked for the old one
+                          // may not even be in the new item's category.
+                          onValueChange={(v) => updateRow(r, { itemId: v, uomId: "" })}
+                          placeholder={t("itemPlaceholder")}
+                          ariaLabel={t("itemAria", { row: r + 1 })}
+                          className={cn("h-8", itemErr && "border-[var(--vinea-danger)]")}
+                          onFocus={() => startCellEdit(r, COL.item, "itemId", row.itemId)}
+                          onKeyDown={(e) => onCellKeyDown(e, r, COL.item, "itemId")}
+                        />
+                        {itemErr && <p className="mt-0.5 px-1 text-xs text-[var(--vinea-danger)]">{itemErr}</p>}
+                      </td>
+                      {inv.warehouse && (
+                        <td data-row={r} data-col={COL.warehouse} className="min-w-40 p-1 align-top">
+                          <Combobox
+                            options={warehouseOptions}
+                            value={row.warehouseId}
+                            onValueChange={(v) => updateRow(r, { warehouseId: v })}
+                            placeholder={t("warehousePlaceholder")}
+                            ariaLabel={t("warehouseAria", { row: r + 1 })}
+                            className={cn("h-8", warehouseErr && "border-[var(--vinea-danger)]")}
+                            onFocus={() => startCellEdit(r, COL.warehouse, "warehouseId", row.warehouseId)}
+                            onKeyDown={(e) => onCellKeyDown(e, r, COL.warehouse, "warehouseId")}
+                          />
+                          {warehouseErr && <p className="mt-0.5 px-1 text-xs text-[var(--vinea-danger)]">{warehouseErr}</p>}
+                        </td>
+                      )}
+                      {/* Read-only: what the warehouse holds of this item right now, from the
+                          cache the step-2 checker proves. The figure the typeahead exists to
+                          show, and the one a refusal will be about. */}
+                      <td className="w-24 p-1 text-right align-top">
+                        <span
+                          aria-label={t("onHandAria", { row: r + 1 })}
+                          className="block px-2 py-1.5 font-mono text-xs tabular-nums text-[var(--vinea-ink-muted)]"
+                        >
+                          {onHandFor?.(row) ?? t("notApplicable")}
+                        </span>
+                      </td>
+                      {inv.transactionType && (
+                        <td data-row={r} data-col={COL.transactionType} className="min-w-40 p-1 align-top">
+                          <Combobox
+                            options={transactionTypeOptions}
+                            value={row.transactionTypeId}
+                            onValueChange={(v) => updateRow(r, { transactionTypeId: v })}
+                            placeholder={t("transactionTypePlaceholder")}
+                            ariaLabel={t("transactionTypeAria", { row: r + 1 })}
+                            className={cn("h-8", typeErr && "border-[var(--vinea-danger)]")}
+                            onFocus={() => startCellEdit(r, COL.transactionType, "transactionTypeId", row.transactionTypeId)}
+                            onKeyDown={(e) => onCellKeyDown(e, r, COL.transactionType, "transactionTypeId")}
+                          />
+                          {typeErr && <p className="mt-0.5 px-1 text-xs text-[var(--vinea-danger)]">{typeErr}</p>}
+                        </td>
+                      )}
+                      <td data-row={r} data-col={COL.quantity} className="w-28 p-1 align-top">
+                        <input
+                          value={displayAmount(row.quantity, activeCell?.row === r && activeCell.col === COL.quantity)}
+                          onChange={(e) => updateRow(r, { quantity: e.target.value })}
+                          onKeyDown={(e) => onCellKeyDown(e, r, COL.quantity, "quantity")}
+                          onFocus={() => startCellEdit(r, COL.quantity, "quantity", row.quantity)}
+                          onBlur={() => setActiveCell(null)}
+                          inputMode="decimal"
+                          disabled={takesValue}
+                          aria-label={t("quantityAria", { row: r + 1 })}
+                          className={cn(
+                            "h-8 w-full rounded-[var(--radius-control)] border border-transparent bg-transparent px-2 text-right font-mono tabular-nums focus:border-[var(--vinea-brand)] disabled:opacity-40",
+                            quantityErr && "border-[var(--vinea-danger)]",
+                          )}
+                          placeholder={t("zeroPlaceholder")}
+                        />
+                        {quantityErr && <p className="mt-0.5 text-right text-xs text-[var(--vinea-danger)]">{quantityErr}</p>}
+                      </td>
+                      <td data-row={r} data-col={COL.uom} className="min-w-32 p-1 align-top">
+                        <Combobox
+                          options={uomOptionsFor?.(row) ?? []}
+                          value={row.uomId}
+                          onValueChange={(v) => updateRow(r, { uomId: v })}
+                          placeholder={t("uomPlaceholder")}
+                          ariaLabel={t("uomAria", { row: r + 1 })}
+                          className={cn("h-8", uomErr && "border-[var(--vinea-danger)]")}
+                          onFocus={() => startCellEdit(r, COL.uom, "uomId", row.uomId)}
+                          onKeyDown={(e) => onCellKeyDown(e, r, COL.uom, "uomId")}
+                        />
+                        {/* The conversion, shown rather than implied: "6 CS = 36 EA" is the
+                            number the move will actually carry. */}
+                        {conversionFor?.(row) && (
+                          <p
+                            aria-label={t("conversionAria", { row: r + 1 })}
+                            className="mt-0.5 px-1 font-mono text-xs tabular-nums text-[var(--vinea-ink-subtle)]"
+                          >
+                            {conversionFor(row)}
+                          </p>
+                        )}
+                        {uomErr && <p className="mt-0.5 px-1 text-xs text-[var(--vinea-danger)]">{uomErr}</p>}
+                      </td>
+                      {inv.unitCost && (
+                        <td data-row={r} data-col={COL.unitCost} className="w-32 p-1 align-top">
+                          {takesUnitCost ? (
+                            <input
+                              value={displayAmount(row.unitCost, activeCell?.row === r && activeCell.col === COL.unitCost)}
+                              onChange={(e) => updateRow(r, { unitCost: e.target.value })}
+                              onKeyDown={(e) => onCellKeyDown(e, r, COL.unitCost, "unitCost")}
+                              onFocus={() => startCellEdit(r, COL.unitCost, "unitCost", row.unitCost)}
+                              onBlur={() => setActiveCell(null)}
+                              inputMode="decimal"
+                              aria-label={t("unitCostAria", { row: r + 1 })}
+                              className={cn(
+                                "h-8 w-full rounded-[var(--radius-control)] border border-transparent bg-transparent px-2 text-right font-mono tabular-nums focus:border-[var(--vinea-brand)]",
+                                unitCostErr && "border-[var(--vinea-danger)]",
+                              )}
+                              placeholder={t("zeroPlaceholder")}
+                            />
+                          ) : (
+                            // Not disabled — absent. A decrease is costed at the average on
+                            // Post, and a greyed-out cell invites the question of how to
+                            // ungrey it.
+                            <span
+                              aria-label={t("unitCostAria", { row: r + 1 })}
+                              className="block px-2 py-1.5 text-right font-mono text-xs text-[var(--vinea-ink-subtle)]"
+                            >
+                              {t("notApplicable")}
+                            </span>
+                          )}
+                          {unitCostErr && <p className="mt-0.5 text-right text-xs text-[var(--vinea-danger)]">{unitCostErr}</p>}
+                        </td>
+                      )}
+                      {inv.value && (
+                        <td data-row={r} data-col={COL.value} className="w-32 p-1 align-top">
+                          {takesValue ? (
+                            <input
+                              value={displayAmount(row.value, activeCell?.row === r && activeCell.col === COL.value)}
+                              onChange={(e) => updateRow(r, { value: e.target.value })}
+                              onKeyDown={(e) => onCellKeyDown(e, r, COL.value, "value")}
+                              onFocus={() => startCellEdit(r, COL.value, "value", row.value)}
+                              onBlur={() => setActiveCell(null)}
+                              inputMode="decimal"
+                              aria-label={t("valueAria", { row: r + 1 })}
+                              className={cn(
+                                "h-8 w-full rounded-[var(--radius-control)] border border-transparent bg-transparent px-2 text-right font-mono tabular-nums focus:border-[var(--vinea-brand)]",
+                                valueErr && "border-[var(--vinea-danger)]",
+                              )}
+                              placeholder={t("zeroPlaceholder")}
+                            />
+                          ) : (
+                            <span
+                              aria-label={t("valueAria", { row: r + 1 })}
+                              className="block px-2 py-1.5 text-right font-mono text-xs text-[var(--vinea-ink-subtle)]"
+                            >
+                              {t("notApplicable")}
+                            </span>
+                          )}
+                          {valueErr && <p className="mt-0.5 text-right text-xs text-[var(--vinea-danger)]">{valueErr}</p>}
+                        </td>
+                      )}
+                    </>
+                  )}
+                  {(!isInventory || (showExtra && inv.contra)) && (
                   <td data-row={r} data-col={COL.account} className="min-w-48 p-1 align-top">
                     <Combobox
                       options={accountOptions}
                       value={row.accountId}
                       onValueChange={(v) => updateRow(r, { accountId: v })}
-                      placeholder={mode === "batch" ? t("contraAccountPlaceholder") : "Account…"}
+                      placeholder={mode === "batch" || isInventory ? t("contraAccountPlaceholder") : "Account…"}
                       // Batch mode's header calls this column "Contra account"; the accessible
                       // name has to say the same, or a screen-reader user is hunting for a
                       // column that does not exist by that name.
                       ariaLabel={
-                        mode === "batch"
+                        mode === "batch" || isInventory
                           ? t("contraAccountAria", { row: r + 1 })
                           : `Account, row ${r + 1}`
                       }
-                      className={cn("h-8", accountErr && "border-[var(--vinea-danger)]")}
+                      className={cn("h-8", (accountErr || contraErr) && "border-[var(--vinea-danger)]")}
                       onFocus={() => startCellEdit(r, COL.account, "accountId", row.accountId)}
                       onKeyDown={(e) => onCellKeyDown(e, r, COL.account, "accountId")}
                     />
-                    {accountErr && <p className="mt-0.5 px-1 text-xs text-[var(--vinea-danger)]">{accountErr}</p>}
+                    {(accountErr || contraErr) && <p className="mt-0.5 px-1 text-xs text-[var(--vinea-danger)]">{accountErr || contraErr}</p>}
                   </td>
+                  )}
                   <td data-row={r} data-col={COL.description} className="p-1 align-top">
                     <input
                       value={row.description}
@@ -364,7 +634,7 @@ export function LineGrid({
                     />
                     {descErr && <p className="mt-0.5 px-1 text-xs text-[var(--vinea-danger)]">{descErr}</p>}
                   </td>
-                  {showExtra && (
+                  {showExtra && !isInventory && (
                     <td data-row={r} data-col={COL.branch} className="min-w-36 p-1 align-top">
                       <Combobox
                         options={branchOptions}
@@ -394,7 +664,7 @@ export function LineGrid({
                       {projectErr && <p className="mt-0.5 px-1 text-xs text-[var(--vinea-danger)]">{projectErr}</p>}
                     </td>
                   )}
-                  {showExtra && (
+                  {showExtra && !isInventory && (
                     <td data-row={r} data-col={COL.currency} className="min-w-44 p-1 align-top">
                       <div className="flex gap-1">
                         <Combobox
@@ -423,7 +693,7 @@ export function LineGrid({
                       {currencyErr && <p className="mt-0.5 px-1 text-xs text-[var(--vinea-danger)]">{currencyErr}</p>}
                     </td>
                   )}
-                  {showExtra && (
+                  {showExtra && !isInventory && (
                     <td data-row={r} data-col={COL.taxCode} className="min-w-36 p-1 align-top">
                       <Combobox
                         options={taxCodeOptions}
@@ -598,7 +868,7 @@ export function LineGrid({
           onClick={addRow}
           className="w-full border-t border-[var(--vinea-border)] px-3 py-2 text-left text-xs font-medium text-[var(--vinea-brand)] hover:bg-[var(--vinea-surface-sunken)]"
         >
-          {mode === "document" || mode === "batch" ? t("addLine") : "+ Add line"}
+          {mode === "document" || mode === "batch" || isInventory ? t("addLine") : "+ Add line"}
         </button>
       </div>
     </div>

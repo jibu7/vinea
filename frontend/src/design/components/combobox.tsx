@@ -78,6 +78,7 @@ export function Combobox({
                 <CommandPrimitive.Item
                   key={opt.value}
                   value={opt.label}
+                  keywords={opt.keywords}
                   onSelect={() => {
                     onValueChange?.(opt.value);
                     setOpen(false);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { RWF, USD, dotted, formatDate, formatMoney, roundHalfUp, trimDecimalString } from "./format";
+import { RWF, USD, dotted, formatDate, formatMoney, formatQuantity, roundHalfUp, trimDecimalString } from "./format";
 
 describe("formatMoney", () => {
   it("shows RWF with no decimal places", () => {
@@ -77,5 +77,24 @@ describe("dotted", () => {
 
   it("takes numbers, which document numbers sometimes are", () => {
     expect(dotted(42, "Kigali")).toBe("42 · Kigali");
+  });
+});
+
+describe("formatQuantity", () => {
+  it("renders to the unit's decimal places, grouped, with no currency", () => {
+    expect(formatQuantity(6, 0)).toBe("6");
+    expect(formatQuantity(12, 0)).toBe("12");
+    expect(formatQuantity(1234.5, 2)).toBe("1,234.50");
+    expect(formatQuantity(0.0283168, 3)).toBe("0.028");
+  });
+
+  it("rounds half-up, the way the ledger does, not banker's", () => {
+    expect(formatQuantity(2.5, 0)).toBe("3");
+    expect(formatQuantity(0.125, 2)).toBe("0.13");
+  });
+
+  it("never prints NUMERIC scale", () => {
+    // The wire value of a 12-unit line is "12.000000"; a screen must never show it.
+    expect(formatQuantity(Number("12.000000"), 0)).toBe("12");
   });
 });

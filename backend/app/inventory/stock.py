@@ -229,6 +229,27 @@ def location_balance(
     return LocationState() if row is None else LocationState(row.quantity, row.value)
 
 
+def warehouse_balances(db: Session, company_id: int, warehouse_id: int) -> list[StockBalance]:
+    """Every (item, warehouse) cache row at one warehouse — the quantity on hand a picker shows
+    beside each item before the operator commits to a line.
+
+    Read from `stock_balances` rather than reconstructed from moves, on purpose: this is the
+    one reader for which "the position now" is exactly the question, and the cache is proven
+    against the moves by `verify_stock_balances()`. Rows at zero are returned too — an item the
+    warehouse *used* to hold reads "0" rather than vanishing from the list.
+    """
+    return list(
+        db.scalars(
+            select(StockBalance)
+            .where(
+                StockBalance.company_id == company_id,
+                StockBalance.warehouse_id == warehouse_id,
+            )
+            .order_by(StockBalance.item_id)
+        )
+    )
+
+
 def item_state(db: Session, company_id: int, item_id: int) -> ItemState:
     row = db.scalar(
         select(ItemCostState).where(

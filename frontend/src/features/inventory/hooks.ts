@@ -7,13 +7,28 @@ import type {
   BarcodeCreatePayload,
   BarcodeListing,
   BarcodeUpdatePayload,
+  CountLine,
+  CountLineEntryPayload,
+  CountPreview,
+  CountProcessResult,
+  CountSession,
+  CountSessionPayload,
+  CountSessionSummary,
   InventoryDefaults,
   InventoryDefaultsPayload,
   Item,
   ItemAuditRecord,
   ItemCreatePayload,
   ItemUpdatePayload,
+  OnHandRow,
   Page,
+  StockDocument,
+  StockDocumentPayload,
+  StockDocumentReversePayload,
+  StockDocumentSummary,
+  Transfer,
+  TransferPayload,
+  TransferSummary,
   Uom,
   UomCategoryCreatePayload,
   UomCategoryUpdatePayload,
@@ -239,5 +254,245 @@ export function useSaveInventoryDefaults() {
     mutationFn: (payload: InventoryDefaultsPayload) =>
       api.patch<InventoryDefaults>("/inventory/defaults", payload),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: [ROOT] }),
+  });
+}
+
+// --- Stock documents (P5 step 7) ----------------------------------------------------------
+
+/** `Idempotency-Key` is the draft's UUID, so a retried post replays instead of duplicating. */
+export function usePostAdjustment() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ payload, idempotencyKey }: { payload: StockDocumentPayload; idempotencyKey: string }) =>
+      api.post<StockDocument>("/inventory/adjustments", payload, { "Idempotency-Key": idempotencyKey }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: [ROOT] }),
+  });
+}
+
+/** A batch is one unit of work: one key, and a refused line refuses all of them. */
+export function usePostJournalBatch() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ payload, idempotencyKey }: { payload: StockDocumentPayload; idempotencyKey: string }) =>
+      api.post<StockDocument>("/inventory/journal-batches", payload, { "Idempotency-Key": idempotencyKey }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: [ROOT] }),
+  });
+}
+
+export function useReverseStockDocument() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      documentId,
+      payload,
+      idempotencyKey,
+    }: {
+      documentId: number;
+      payload: StockDocumentReversePayload;
+      idempotencyKey: string;
+    }) =>
+      api.post<StockDocument>(`/inventory/documents/${documentId}/reverse`, payload, {
+        "Idempotency-Key": idempotencyKey,
+      }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: [ROOT] }),
+  });
+}
+
+export function useStockDocuments(opts: { docType?: string; limit?: number } = {}) {
+  const params = new URLSearchParams();
+  if (opts.docType) params.set("doc_type", opts.docType);
+  if (opts.limit) params.set("limit", String(opts.limit));
+  const query = params.toString();
+  return useQuery({
+    queryKey: [ROOT, "documents", { docType: opts.docType ?? null, limit: opts.limit ?? null }],
+    queryFn: () => api.get<Page<StockDocumentSummary>>(`/inventory/documents${query ? `?${query}` : ""}`),
+  });
+}
+
+export function useStockDocument(documentId: number | null) {
+  return useQuery({
+    queryKey: [ROOT, "documents", documentId],
+    queryFn: () => api.get<StockDocument>(`/inventory/documents/${documentId}`),
+    enabled: documentId !== null,
+  });
+}
+
+// --- Warehouse transfers ------------------------------------------------------------------
+
+export function usePostTransfer() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ payload, idempotencyKey }: { payload: TransferPayload; idempotencyKey: string }) =>
+      api.post<Transfer>("/inventory/transfers", payload, { "Idempotency-Key": idempotencyKey }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: [ROOT] }),
+  });
+}
+
+export function useReceiveTransfer() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      transferId,
+      receiveDate,
+      idempotencyKey,
+    }: {
+      transferId: number;
+      receiveDate?: string | null;
+      idempotencyKey: string;
+    }) =>
+      api.post<Transfer>(
+        `/inventory/transfers/${transferId}/receive`,
+        { receive_date: receiveDate ?? null },
+        { "Idempotency-Key": idempotencyKey },
+      ),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: [ROOT] }),
+  });
+}
+
+export function useCancelTransfer() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      transferId,
+      reason,
+      idempotencyKey,
+    }: {
+      transferId: number;
+      reason: string;
+      idempotencyKey: string;
+    }) =>
+      api.post<Transfer>(
+        `/inventory/transfers/${transferId}/cancel`,
+        { reason },
+        { "Idempotency-Key": idempotencyKey },
+      ),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: [ROOT] }),
+  });
+}
+
+export function useTransfers(opts: { status?: string; warehouseId?: number; limit?: number } = {}) {
+  const params = new URLSearchParams();
+  if (opts.status) params.set("status", opts.status);
+  if (opts.warehouseId) params.set("warehouse_id", String(opts.warehouseId));
+  if (opts.limit) params.set("limit", String(opts.limit));
+  const query = params.toString();
+  return useQuery({
+    queryKey: [ROOT, "transfers", { status: opts.status ?? null, warehouseId: opts.warehouseId ?? null }],
+    queryFn: () => api.get<Page<TransferSummary>>(`/inventory/transfers${query ? `?${query}` : ""}`),
+  });
+}
+
+export function useTransfer(transferId: number | null) {
+  return useQuery({
+    queryKey: [ROOT, "transfers", transferId],
+    queryFn: () => api.get<Transfer>(`/inventory/transfers/${transferId}`),
+    enabled: transferId !== null,
+  });
+}
+
+// --- Stock counts -------------------------------------------------------------------------
+
+export function useOpenCountSession() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: CountSessionPayload) => api.post<CountSession>("/inventory/counts", payload),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: [ROOT] }),
+  });
+}
+
+export function useCountSessions(opts: { status?: string; warehouseId?: number } = {}) {
+  const params = new URLSearchParams();
+  if (opts.status) params.set("status", opts.status);
+  if (opts.warehouseId) params.set("warehouse_id", String(opts.warehouseId));
+  const query = params.toString();
+  return useQuery({
+    queryKey: [ROOT, "counts", { status: opts.status ?? null, warehouseId: opts.warehouseId ?? null }],
+    queryFn: () => api.get<Page<CountSessionSummary>>(`/inventory/counts${query ? `?${query}` : ""}`),
+  });
+}
+
+export function useCountSession(sessionId: number | null) {
+  return useQuery({
+    queryKey: [ROOT, "counts", sessionId],
+    queryFn: () => api.get<CountSession>(`/inventory/counts/${sessionId}`),
+    enabled: sessionId !== null,
+  });
+}
+
+export function useAddCountLine() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ sessionId, itemId }: { sessionId: number; itemId: number }) =>
+      api.post<CountLine>(`/inventory/counts/${sessionId}/lines`, { item_id: itemId }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: [ROOT, "counts"] }),
+  });
+}
+
+export function useEnterCount() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      sessionId,
+      lineId,
+      payload,
+    }: {
+      sessionId: number;
+      lineId: number;
+      payload: CountLineEntryPayload;
+    }) => api.patch<CountLine>(`/inventory/counts/${sessionId}/lines/${lineId}`, payload),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: [ROOT, "counts"] }),
+  });
+}
+
+export function useResnapshotCountLine() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ sessionId, lineId }: { sessionId: number; lineId: number }) =>
+      api.post<CountLine>(`/inventory/counts/${sessionId}/lines/${lineId}/resnapshot`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: [ROOT, "counts"] }),
+  });
+}
+
+/** The posting before Process — from the server, exactly as it will post, never re-derived. */
+export function useCountPreview(sessionId: number | null) {
+  return useQuery({
+    queryKey: [ROOT, "counts", sessionId, "preview"],
+    queryFn: () => api.get<CountPreview>(`/inventory/counts/${sessionId}/preview`),
+    enabled: sessionId !== null,
+  });
+}
+
+export function useProcessCount() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ sessionId, idempotencyKey }: { sessionId: number; idempotencyKey: string }) =>
+      api.post<CountProcessResult>(
+        `/inventory/counts/${sessionId}/process`,
+        { session_id: sessionId },
+        { "Idempotency-Key": idempotencyKey },
+      ),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: [ROOT] }),
+  });
+}
+
+export function useCancelCount() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ sessionId, reason }: { sessionId: number; reason: string }) =>
+      api.post<CountSessionSummary>(`/inventory/counts/${sessionId}/cancel`, { reason }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: [ROOT, "counts"] }),
+  });
+}
+
+// --- On hand ------------------------------------------------------------------------------
+
+/** Quantity on hand per item at one warehouse — the figure beside each option in the item
+ * typeahead. One request for the warehouse, refetched on every posting through `ROOT`. */
+export function useOnHand(warehouseId: number | null) {
+  return useQuery({
+    queryKey: [ROOT, "on-hand", warehouseId],
+    queryFn: () => api.get<OnHandRow[]>(`/inventory/on-hand?warehouse_id=${warehouseId}`),
+    enabled: warehouseId !== null,
+    staleTime: 10_000,
   });
 }
