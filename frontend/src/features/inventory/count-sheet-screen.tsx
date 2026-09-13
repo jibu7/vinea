@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
@@ -62,6 +63,7 @@ export function CountSheetScreen({ sessionId }: { sessionId: number }) {
   const canCount = hasPermission("inv:transactions_adjust");
   const canProcess = hasPermission("inv:count_process");
 
+  const queryClient = useQueryClient();
   const session = useCountSession(sessionId);
   const preview = useCountPreview(sessionId);
   const support = useInventoryLineSupport();
@@ -194,6 +196,9 @@ export function CountSheetScreen({ sessionId }: { sessionId: number }) {
         }
         setLineErrors((prev) => ({ ...prev, ...perLine }));
         setBanner(err.message);
+        // The refusal is the first the sheet hears of the move: refetch so the stale chips
+        // and their Re-snapshot buttons show on the lines the message named.
+        void queryClient.invalidateQueries({ queryKey: ["inventory", "counts"] });
       } else {
         showApiError(err, t("processFailed"));
       }
@@ -355,10 +360,12 @@ export function CountSheetScreen({ sessionId }: { sessionId: number }) {
                           <StatusChip tone="success">{t("counted")}</StatusChip>
                         )}
                         {line.stale && (
+                          <StatusChip tone="warning">
+                            <AlertTriangle className="size-3" /> {t("stale")}
+                          </StatusChip>
+                        )}
+                        {(line.stale || error) && (
                           <>
-                            <StatusChip tone="warning">
-                              <AlertTriangle className="size-3" /> {t("stale")}
-                            </StatusChip>
                             {editable && (
                               <Button
                                 size="sm"

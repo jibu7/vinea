@@ -140,10 +140,20 @@ export function StockDocumentScreen({ variant }: { variant: StockDocumentVariant
     symbol: baseCurrency?.symbol ?? null,
   };
 
+  // A batch line that names no warehouse or type takes the header's — the same rule the
+  // server applies to `transaction_type_id`, and what a blank cell means on this grid.
   const warehouseOfRow = (row: LineGridRow): number =>
-    Number(isAdjustment ? form.warehouseId : row.warehouseId) || 0;
-  const kindOfRow = (row: LineGridRow) =>
-    support.kindOf(isAdjustment ? form.transactionTypeId : row.transactionTypeId);
+    Number(isAdjustment ? form.warehouseId : row.warehouseId || form.warehouseId) || 0;
+  const typeOfRow = (row: LineGridRow): string =>
+    isAdjustment ? form.transactionTypeId : row.transactionTypeId || form.transactionTypeId;
+  const kindOfRow = (row: LineGridRow) => support.kindOf(typeOfRow(row));
+
+  /** Changing a header default fills the cells that were still blank, so what a line will
+   * post with is what its row shows. Cells the operator set are left alone. */
+  function withDefault(field: "warehouseId" | "transactionTypeId", value: string): LineGridRow[] {
+    if (isAdjustment) return form.rows;
+    return form.rows.map((row) => (row[field] ? row : { ...row, [field]: value }));
+  }
 
   const onHand = useOnHandByWarehouse(form.rows.map(warehouseOfRow).concat(Number(form.warehouseId) || 0));
   const headerOnHand = onHand.get(Number(form.warehouseId) || 0);
@@ -163,7 +173,7 @@ export function StockDocumentScreen({ variant }: { variant: StockDocumentVariant
     (row) =>
       row.itemId &&
       (kindOfRow(row) === InventoryTransactionKind.REVALUATION ? row.value : row.quantity) &&
-      (isAdjustment || row.transactionTypeId),
+      (isAdjustment || typeOfRow(row)),
   );
 
   /** What the operator has keyed, before the server costs it: unit cost × quantity on the
@@ -224,7 +234,7 @@ export function StockDocumentScreen({ variant }: { variant: StockDocumentVariant
         uom_id: row.uomId ? Number(row.uomId) : null,
         unit_cost: increase && row.unitCost ? row.unitCost : null,
         value: revaluation ? row.value : null,
-        transaction_type_id: isAdjustment ? null : Number(row.transactionTypeId),
+        transaction_type_id: isAdjustment ? null : Number(typeOfRow(row)),
         contra_account_id: row.accountId ? Number(row.accountId) : null,
         project_id: row.projectId ? Number(row.projectId) : form.projectId ? Number(form.projectId) : null,
         description: row.description || null,
@@ -323,7 +333,7 @@ export function StockDocumentScreen({ variant }: { variant: StockDocumentVariant
           <Combobox
             options={support.typeOptions}
             value={form.transactionTypeId}
-            onValueChange={(v) => setForm({ ...form, transactionTypeId: v })}
+            onValueChange={(v) => setForm({ ...form, transactionTypeId: v, rows: withDefault("transactionTypeId", v) })}
             placeholder={td("chooseTransactionType")}
           />
         </Field>
@@ -334,7 +344,7 @@ export function StockDocumentScreen({ variant }: { variant: StockDocumentVariant
           <Combobox
             options={support.warehouseOptions}
             value={form.warehouseId}
-            onValueChange={(v) => setForm({ ...form, warehouseId: v })}
+            onValueChange={(v) => setForm({ ...form, warehouseId: v, rows: withDefault("warehouseId", v) })}
             placeholder={td("chooseWarehouse")}
           />
         </Field>
