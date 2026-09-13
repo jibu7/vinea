@@ -13,12 +13,27 @@ export type IntentLabel = "Maintenance" | "Transactions" | "Enquiries" | "Report
 export interface NavItem {
   label: string;
   module: string;
-  /** Required to see this *live* item at all; ignored once phase-tagged. */
-  permission?: string;
+  /** Required to see this *live* item at all; ignored once phase-tagged. A list means **any
+   * of** — used where the endpoint behind the screen accepts more than one permission, as
+   * the valuation report does (`inv:reports_view` or `reporting:inventory_valuation_view`),
+   * so the nav gates on exactly what the API gates on rather than on a narrower guess. */
+  permission?: string | string[];
   /** Set when the screen belongs to a later phase — always rendered, disabled, tagged. */
   phase?: string;
   /** Real route, once the screen exists; items without one fall back to a "coming soon" toast. */
   href?: string;
+}
+
+/** Whether `permissions` opens this item. A phase-tagged row is always rendered (disabled),
+ * an untagged row with no permission is open to everyone, and a list of permissions means
+ * **any of** them — matching how the endpoints behind these screens gate themselves. One
+ * predicate rather than a copy in the sidebar and another in the palette, because the two
+ * drifting is a screen that is searchable and not navigable, or the reverse. */
+export function navItemVisible(item: NavItem, permissions: Set<string>): boolean {
+  if (item.phase) return true;
+  if (!item.permission) return true;
+  const required = Array.isArray(item.permission) ? item.permission : [item.permission];
+  return required.some((permission) => permissions.has(permission));
 }
 
 export interface NavIntent {
@@ -136,7 +151,7 @@ export const navIntents: NavIntent[] = [
       { label: "Trial balance enquiry", module: "General Ledger", permission: "gl:reports_view", href: "/gl/enquiries/trial-balance" },
       { label: "Customer enquiry", module: "Accounts Receivable", permission: "ar:reports_view", href: "/ar/enquiry" },
       { label: "Supplier enquiry", module: "Accounts Payable", permission: "ap:reports_view", href: "/ap/enquiry" },
-      { label: "Item enquiry", module: "Inventory", phase: "P5" },
+      { label: "Item enquiry", module: "Inventory", permission: "inv:reports_view", href: "/inventory/enquiry" },
     ],
   },
   {
@@ -163,8 +178,18 @@ export const navIntents: NavIntent[] = [
       { label: "Supplier listing", module: "Accounts Payable", permission: "ap:reports_view", href: "/ap/reports/supplier-listing" },
       { label: "Statements", module: "Accounts Payable", permission: "ap:reports_view", href: "/ap/reports/statements" },
       { label: "Transaction listing", module: "Accounts Payable", permission: "ap:reports_view", href: "/ap/reports/transactions" },
-      { label: "Valuation", module: "Inventory", phase: "P5" },
-      { label: "Movement", module: "Inventory", phase: "P5" },
+      // Appendix C's Inventory block, in the owner's order: Movement, Count, Transaction,
+      // Valuation. The tree carried Valuation and Movement — two of the four, reversed, both
+      // tagged P5 — so the two missing rows arrive with the screens rather than being new
+      // scope. Same shape of edit as the step-6 Maintenance and step-7 Transactions blocks.
+      { label: "Movement", module: "Inventory", permission: "inv:reports_view", href: "/inventory/reports/movement" },
+      { label: "Count", module: "Inventory", permission: "inv:reports_view", href: "/inventory/reports/counts" },
+      { label: "Transaction", module: "Inventory", permission: "inv:reports_view", href: "/inventory/reports/transactions" },
+      // The one row whose endpoint takes either permission: `reporting:inventory_valuation_view`
+      // has existed since P1 for this report, and an accountant holding it and no `inv:*` right
+      // can call the endpoint. Gating the nav on `inv:reports_view` alone would leave them a
+      // screen they are allowed to open and cannot reach.
+      { label: "Valuation", module: "Inventory", permission: ["inv:reports_view", "reporting:inventory_valuation_view"], href: "/inventory/reports/valuation" },
       { label: "Sales analyses", module: "Inventory", phase: "P10" },
       { label: "Slow movers", module: "Inventory", phase: "P10" },
     ],

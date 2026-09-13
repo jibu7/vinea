@@ -4,7 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/cn";
-import { navIntents, type NavIntent, type NavItem } from "@/design/nav-tree";
+import { navIntents, navItemVisible, type NavIntent, type NavItem } from "@/design/nav-tree";
 
 
 function groupByModule(items: NavItem[]): Array<[string, NavItem[]]> {
@@ -22,7 +22,7 @@ function groupByModule(items: NavItem[]): Array<[string, NavItem[]]> {
 
 function IntentNode({ intent, permissions }: { intent: NavIntent; permissions: Set<string> }) {
   const [open, setOpen] = useState(intent.label === "Maintenance" || intent.label === "Transactions");
-  const visibleItems = intent.items.filter((item) => item.phase || !item.permission || permissions.has(item.permission));
+  const visibleItems = intent.items.filter((item) => navItemVisible(item, permissions));
   if (visibleItems.length === 0) return null;
 
   return (

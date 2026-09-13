@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { SidebarNav } from "@/design/components/module-nav";
-import { navIntents } from "@/design/nav-tree";
+import { navIntents, navItemVisible } from "@/design/nav-tree";
 import { ThemeToggle } from "@/design/components/theme-toggle";
 import { Button } from "@/design/components/button";
 import { CommandPalette, type CommandPaletteItem } from "@/design/components/command-palette";
@@ -52,7 +52,7 @@ export function AppShell({ me, children }: { me: MeResponse; children: React.Rea
   // Ctrl+K must reach every screen, listed by intent — same data source as the sidebar tree.
   const screenItems: CommandPaletteItem[] = navIntents.flatMap((intent) =>
     intent.items
-      .filter((item) => item.phase || !item.permission || permissions.has(item.permission))
+      .filter((item) => navItemVisible(item, permissions))
       .map((item) => ({
         id: `${intent.label}-${item.module}-${item.label}`,
         label: item.label,

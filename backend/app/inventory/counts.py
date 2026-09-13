@@ -471,7 +471,17 @@ def stale_lines(
     One query for the whole sheet, and one definition of staleness for everything that asks —
     the preview, the read model and Process all call this, so a line cannot look fresh on the
     screen and stale to the poster.
+
+    **Only an open session has stale lines.** Staleness means "Process would refuse this", and
+    Process only runs on a session that is still counting — it rejects a completed or
+    cancelled one before it ever gets here. Measured on a completed session the rule answers a
+    different question and gets it wrong: processing posts a move for every non-zero variance,
+    so the count's *own* posting sits above the snapshot and every line it corrected reads back
+    as stale forever. The count report then flags exactly the lines that worked, which is the
+    opposite of what the flag is for.
     """
+    if session.status != StockCountStatus.COUNTING:
+        return set()
     latest = stock_service.last_sequence_by_item(db, company_id, session.warehouse_id)
     return {
         line.id

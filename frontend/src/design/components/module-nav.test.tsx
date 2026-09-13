@@ -1,10 +1,18 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { SidebarNav } from "./module-nav";
 import { navIntents } from "@/design/nav-tree";
 
+// Flattened, because a row's `permission` may be a list meaning "any of" — the valuation
+// report's is. Taking only the first would grant a set that is not "every permission the
+// tree names", and the "shows every live item" test below would stop being true of one row
+// for a reason that has nothing to do with what it is checking.
 const allPermissions = new Set(
-  navIntents.flatMap((intent) => intent.items.map((item) => item.permission).filter(Boolean)) as string[],
+  navIntents.flatMap((intent) =>
+    intent.items.flatMap((item) =>
+      item.permission === undefined ? [] : [item.permission].flat(),
+    ),
+  ),
 );
 
 // The Maintenance and Transactions sections start expanded (module-nav.tsx); Enquiries
@@ -153,6 +161,52 @@ describe("P5 maintenance screens", () => {
     // a nav item nobody can reach, which is how the row would go unnoticed.
     const maintenance = navIntents.find((i) => i.label === "Maintenance")!;
     const tagged = maintenance.items.filter((item) => item.phase === "P5");
+    expect(tagged).toEqual([]);
+  });
+});
+
+describe("P5 enquiry and report screens", () => {
+  const invPermissions = new Set(["inv:reports_view"]);
+
+  it.each([
+    ["Enquiries", "Item enquiry", "/inventory/enquiry"],
+    ["Reports", "Movement", "/inventory/reports/movement"],
+    ["Reports", "Count", "/inventory/reports/counts"],
+    ["Reports", "Transaction", "/inventory/reports/transactions"],
+    ["Reports", "Valuation", "/inventory/reports/valuation"],
+  ])("links %s → %s to %s with no phase tag left", (intentLabel, label, href) => {
+    const intent = navIntents.find((i) => i.label === intentLabel)!;
+    const item = intent.items.find((row) => row.module === "Inventory" && row.label === label);
+    expect(item?.href).toBe(href);
+    expect(item?.phase).toBeUndefined();
+
+    render(<SidebarNav permissions={invPermissions} />);
+    // Enquiries and Reports start collapsed, so the link is in the DOM only once its
+    // section is open — open it by its heading, the way a person would.
+    fireEvent.click(screen.getByRole("button", { name: intentLabel }));
+    const links = screen.getAllByText(label).map((node) => node.closest("a")).filter(Boolean);
+    expect(links.map((a) => a?.getAttribute("href"))).toContain(href);
+  });
+
+  // The one row gated on either permission. An accountant holding
+  // `reporting:inventory_valuation_view` and no `inv:*` right can call the endpoint, so the
+  // nav has to reach them too — and must still not hand them the other three reports.
+  it("shows Valuation to a holder of reporting:inventory_valuation_view alone", () => {
+    render(<SidebarNav permissions={new Set(["reporting:inventory_valuation_view"])} />);
+    fireEvent.click(screen.getByRole("button", { name: "Reports" }));
+
+    expect(screen.getByText("Valuation")).toBeInTheDocument();
+    expect(screen.queryByText("Movement")).not.toBeInTheDocument();
+    expect(screen.queryByText("Count")).not.toBeInTheDocument();
+    expect(screen.queryByText("Transaction")).not.toBeInTheDocument();
+  });
+
+  it("leaves no P5 tag anywhere in the tree once step 8 has landed", () => {
+    const tagged = navIntents.flatMap((intent) =>
+      intent.items
+        .filter((item) => item.phase === "P5")
+        .map((item) => `${intent.label}/${item.module}/${item.label}`),
+    );
     expect(tagged).toEqual([]);
   });
 });

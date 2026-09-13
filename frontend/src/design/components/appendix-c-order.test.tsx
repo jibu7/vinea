@@ -56,6 +56,14 @@ import { navIntents, type IntentLabel } from "@/design/nav-tree";
  * appendix's order with their tags cleared, and "Journal batches" is the row that was
  * missing, not new scope. Same shape of edit as the step-6 Maintenance block: the tag was
  * covering a screen that had no row to be tagged.
+ *
+ * Amended at P5 step 8 with the Enquiries and Reports → Inventory blocks — the last P5 tags
+ * in the tree, so `navIntents` now carries none. "Item enquiry" simply lost its tag. The
+ * Reports block is the same shape of edit as steps 6 and 7: the appendix reads "Movement,
+ * Count, Transaction, Valuation"; the tree carried Valuation and Movement — two of the four,
+ * in the opposite order, both tagged — so the four rows now stand in the appendix's order
+ * with their tags cleared, and Count and Transaction are rows that were missing, not new
+ * scope. Their endpoints shipped at step 5 with the other two.
  */
 const APPENDIX_C: Record<IntentLabel, Array<[string, string, string | null]>> = {
   "Maintenance": [
@@ -125,7 +133,7 @@ const APPENDIX_C: Record<IntentLabel, Array<[string, string, string | null]>> = 
     ["General Ledger", "Trial balance enquiry", null],
     ["Accounts Receivable", "Customer enquiry", null],
     ["Accounts Payable", "Supplier enquiry", null],
-    ["Inventory", "Item enquiry", "P5"],
+    ["Inventory", "Item enquiry", null],
   ],
   "Reports": [
     ["General Ledger", "Account transactions", null],
@@ -145,8 +153,10 @@ const APPENDIX_C: Record<IntentLabel, Array<[string, string, string | null]>> = 
     ["Accounts Payable", "Supplier listing", null],
     ["Accounts Payable", "Statements", null],
     ["Accounts Payable", "Transaction listing", null],
-    ["Inventory", "Valuation", "P5"],
-    ["Inventory", "Movement", "P5"],
+    ["Inventory", "Movement", null],
+    ["Inventory", "Count", null],
+    ["Inventory", "Transaction", null],
+    ["Inventory", "Valuation", null],
     ["Inventory", "Sales analyses", "P10"],
     ["Inventory", "Slow movers", "P10"],
   ],
@@ -169,21 +179,24 @@ describe("the Appendix C navigation contract", () => {
     );
   });
 
-  it("leaves a P4 tag on the transaction, enquiry and report screens step 6 did not build", () => {
-    // Step 6 was Maintenance only. Steps 7 and 8 clear the rest; until then they must stay
-    // tagged, so an untagged-but-missing screen cannot slip through as "done".
+  it("has no P4 or P5 tag left anywhere in the tree", () => {
+    // Both phases are complete in the nav: P4 at its step 9, P5 at step 8. A tag left on a
+    // screen that exists is a row nobody can reach, which is exactly how such a row goes
+    // unnoticed — the table above would still pass, because it pins the tag it finds.
     const stillTagged = navIntents.flatMap((intent) =>
       intent.items
-        .filter((item) => item.phase === "P4")
-        .map((item) => `${intent.label}/${item.module}/${item.label}`),
+        .filter((item) => item.phase === "P4" || item.phase === "P5")
+        .map((item) => `${intent.label}/${item.module}/${item.label} (${item.phase})`),
     );
-    expect(stillTagged).toEqual([
-
-    ]);
+    expect(stillTagged).toEqual([]);
   });
 
-  it("has no P4 tag left anywhere under Maintenance", () => {
-    const maintenance = navIntents.find((i) => i.label === "Maintenance")!;
-    expect(maintenance.items.filter((item) => item.phase === "P4")).toEqual([]);
+  it("gives every untagged row a route, so nothing reads as live and goes nowhere", () => {
+    const liveWithoutHref = navIntents.flatMap((intent) =>
+      intent.items
+        .filter((item) => !item.phase && !item.href)
+        .map((item) => `${intent.label}/${item.module}/${item.label}`),
+    );
+    expect(liveWithoutHref).toEqual([]);
   });
 });
