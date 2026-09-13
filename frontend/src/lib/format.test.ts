@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { RWF, USD, dotted, formatDate, formatMoney, formatQuantity, roundHalfUp, trimDecimalString } from "./format";
+import { RWF, USD, dotted, formatDate, formatMoney, formatQuantity, monthToDateIso, roundHalfUp, todayIso, trimDecimalString } from "./format";
 
 describe("formatMoney", () => {
   it("shows RWF with no decimal places", () => {
@@ -96,5 +96,37 @@ describe("formatQuantity", () => {
   it("never prints NUMERIC scale", () => {
     // The wire value of a 12-unit line is "12.000000"; a screen must never show it.
     expect(formatQuantity(Number("12.000000"), 0)).toBe("12");
+  });
+});
+
+describe("todayIso", () => {
+  it("reads the viewer's own calendar, not UTC", () => {
+    // 00:30 local. `toISOString().slice(0, 10)` — the shape these helpers replace — renders
+    // this in UTC, which east of Greenwich is the *previous* day: in Kigali (UTC+2) that is
+    // 22:30 on the 4th, so a screen defaulting to "today" would offer the 4th on the 5th.
+    // Constructed from local parts, so the assertion holds in whatever zone CI runs in.
+    const earlyMorning = new Date(2026, 2, 5, 0, 30);
+    expect(todayIso(earlyMorning)).toBe("2026-03-05");
+  });
+
+  it("zero-pads month and day", () => {
+    expect(todayIso(new Date(2026, 0, 9, 14, 0))).toBe("2026-01-09");
+  });
+});
+
+describe("monthToDateIso", () => {
+  it("runs from the first of the current month to the given day", () => {
+    expect(monthToDateIso(new Date(2026, 8, 13, 9, 0))).toEqual({
+      from: "2026-09-01",
+      to: "2026-09-13",
+    });
+  });
+
+  it("does not roll back into the previous month on the first, early", () => {
+    // The same UTC seam, at the one date where it changes the *month* as well as the day.
+    expect(monthToDateIso(new Date(2026, 8, 1, 0, 30))).toEqual({
+      from: "2026-09-01",
+      to: "2026-09-01",
+    });
   });
 });

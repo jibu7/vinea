@@ -61,7 +61,9 @@ Item lines on partner documents, COGS on invoices, `StockSold` (all P6, together
    | 7 | Count Depot, counted 5 → variance −1, Process | value 116 · Depot 5 / 579 · avg 115.8 |
    | 8a | Adjustment out: 6, Depot, policy `block` | `insufficient_stock`, nothing posted |
    | 8b | Same, policy `allow` | value 695 · Depot −1 / −116 · move `cost_provisional` · avg stays 115.8 |
-   | 9 | Adjustment in: 3 @ 150, Depot | Depot 2 / 334 · avg 167 · no correction of 8b |
+   | 9 | Adjustment in: 3 @ 150, Depot | Depot 2 / 300 · avg 150 · residue 34 to adjustment |
+
+   Row 9 was `Depot 2 / 334 · avg 167 · no correction of 8b` when this prompt was frozen; corrected on the owner's direction at the step-2 gate — see the P5 step 2 row in `docs/approvals.md`.
 
    After every row: `assert_stock_invariants` and `assert_ledger_invariants` green, inventory account == Σ location values, Main/Depot branch balances match the per-warehouse values. **STOP.** Report with the tape output table and the invariant suite output. Wait for approval before any UI work.
 

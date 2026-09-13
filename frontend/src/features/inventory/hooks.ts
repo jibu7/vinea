@@ -11,6 +11,7 @@ import type {
   CountLineEntryPayload,
   CountPreview,
   CountProcessResult,
+  CountReport,
   CountSession,
   CountSessionPayload,
   CountSessionSummary,
@@ -19,13 +20,16 @@ import type {
   Item,
   ItemAuditRecord,
   ItemCreatePayload,
+  ItemEnquiry,
   ItemUpdatePayload,
+  MovementReport,
   OnHandRow,
   Page,
   StockDocument,
   StockDocumentPayload,
   StockDocumentReversePayload,
   StockDocumentSummary,
+  TransactionReport,
   Transfer,
   TransferPayload,
   TransferSummary,
@@ -35,6 +39,7 @@ import type {
   UomCategoryWithUnits,
   UomCreatePayload,
   UomUpdatePayload,
+  ValuationReport,
   Warehouse,
   WarehouseCreatePayload,
   WarehouseUpdatePayload,
@@ -494,5 +499,159 @@ export function useOnHand(warehouseId: number | null) {
     queryFn: () => api.get<OnHandRow[]>(`/inventory/on-hand?warehouse_id=${warehouseId}`),
     enabled: warehouseId !== null,
     staleTime: 10_000,
+  });
+}
+
+// --- Enquiry and reports (P5 step 8) ------------------------------------------------------
+
+/** Drops the params a screen left unset, so the URL carries only what the endpoint should
+ * read and two screens that differ by an untouched filter share a cache key. `false` is
+ * dropped with the empties because every boolean here is a flag whose default is off. */
+function queryString(
+  params: Record<string, string | number | boolean | null | undefined>,
+): string {
+  const out = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value === null || value === undefined || value === "" || value === false) continue;
+    out.set(key, String(value));
+  }
+  const query = out.toString();
+  return query ? `?${query}` : "";
+}
+
+export interface ItemEnquiryParams {
+  asOf?: string;
+  dateFrom?: string;
+  warehouseId?: number | null;
+  provisionalOnly?: boolean;
+  includeZeroLocations?: boolean;
+  cursor?: number | null;
+}
+
+export function useItemEnquiry(itemId: number | null, params: ItemEnquiryParams = {}) {
+  const query = queryString({
+    as_of: params.asOf,
+    date_from: params.dateFrom,
+    warehouse_id: params.warehouseId,
+    provisional_only: params.provisionalOnly,
+    include_zero_locations: params.includeZeroLocations,
+    cursor: params.cursor,
+  });
+  return useQuery({
+    queryKey: [ROOT, "enquiry", itemId, query],
+    queryFn: () => api.get<ItemEnquiry>(`/inventory/items/${itemId}/enquiry${query}`),
+    enabled: itemId !== null,
+  });
+}
+
+export interface MovementReportParams {
+  dateFrom: string;
+  dateTo: string;
+  warehouseId?: number | null;
+  branchId?: number | null;
+  itemId?: number | null;
+  includeZero?: boolean;
+  cursor?: number | null;
+}
+
+/** `null` params means the screen has not got a date range yet — the endpoint requires both,
+ * so the query stays disabled rather than firing a 422 the user would see as an error. */
+export function useMovementReport(params: MovementReportParams | null) {
+  const query = params
+    ? queryString({
+        date_from: params.dateFrom,
+        date_to: params.dateTo,
+        warehouse_id: params.warehouseId,
+        branch_id: params.branchId,
+        item_id: params.itemId,
+        include_zero: params.includeZero,
+        cursor: params.cursor,
+      })
+    : "";
+  return useQuery({
+    queryKey: [ROOT, "reports", "movement", query],
+    queryFn: () => api.get<MovementReport>(`/inventory/reports/movement${query}`),
+    enabled: params !== null,
+  });
+}
+
+export interface TransactionReportParams {
+  dateFrom: string;
+  dateTo: string;
+  itemId?: number | null;
+  warehouseId?: number | null;
+  branchId?: number | null;
+  transactionTypeId?: number | null;
+  projectId?: number | null;
+  provisionalOnly?: boolean;
+  cursor?: number | null;
+}
+
+export function useTransactionReport(params: TransactionReportParams | null) {
+  const query = params
+    ? queryString({
+        date_from: params.dateFrom,
+        date_to: params.dateTo,
+        item_id: params.itemId,
+        warehouse_id: params.warehouseId,
+        branch_id: params.branchId,
+        transaction_type_id: params.transactionTypeId,
+        project_id: params.projectId,
+        provisional_only: params.provisionalOnly,
+        cursor: params.cursor,
+      })
+    : "";
+  return useQuery({
+    queryKey: [ROOT, "reports", "transactions", query],
+    queryFn: () => api.get<TransactionReport>(`/inventory/reports/transactions${query}`),
+    enabled: params !== null,
+  });
+}
+
+export interface ValuationReportParams {
+  asOf?: string;
+  warehouseId?: number | null;
+  branchId?: number | null;
+  itemId?: number | null;
+  includeZero?: boolean;
+  cursor?: number | null;
+}
+
+export function useValuationReport(params: ValuationReportParams = {}) {
+  const query = queryString({
+    as_of: params.asOf,
+    warehouse_id: params.warehouseId,
+    branch_id: params.branchId,
+    item_id: params.itemId,
+    include_zero: params.includeZero,
+    cursor: params.cursor,
+  });
+  return useQuery({
+    queryKey: [ROOT, "reports", "valuation", query],
+    queryFn: () => api.get<ValuationReport>(`/inventory/reports/valuation${query}`),
+  });
+}
+
+export interface CountReportParams {
+  status?: string | null;
+  warehouseId?: number | null;
+  dateFrom?: string;
+  dateTo?: string;
+  variancesOnly?: boolean;
+  cursor?: number | null;
+}
+
+export function useCountReport(params: CountReportParams = {}) {
+  const query = queryString({
+    status: params.status,
+    warehouse_id: params.warehouseId,
+    date_from: params.dateFrom,
+    date_to: params.dateTo,
+    variances_only: params.variancesOnly,
+    cursor: params.cursor,
+  });
+  return useQuery({
+    queryKey: [ROOT, "reports", "counts", query],
+    queryFn: () => api.get<CountReport>(`/inventory/reports/counts${query}`),
   });
 }

@@ -88,3 +88,31 @@ export const DOT = " · ";
 export function dotted(...parts: Array<string | number | null | undefined>): string {
   return parts.filter((p) => p !== null && p !== undefined && p !== "").join(DOT);
 }
+
+/**
+ * Today as `YYYY-MM-DD`, in the **viewer's own calendar**.
+ *
+ * `new Date().toISOString().slice(0, 10)` — the shape used throughout the app before this
+ * existed — renders the date in UTC, so east of Greenwich it reads *yesterday* for the first
+ * hours of every day: at 00:30 in Kigali (UTC+2) it is 22:30 UTC on the day before, and a
+ * document defaults to the wrong date. Local calendar parts have no such seam. New screens
+ * use this; the existing local copies are a sweep of their own.
+ */
+export function todayIso(now: Date = new Date()): string {
+  return [
+    now.getFullYear(),
+    String(now.getMonth() + 1).padStart(2, "0"),
+    String(now.getDate()).padStart(2, "0"),
+  ].join("-");
+}
+
+/**
+ * The range a report opens on: the first of the current month, to today.
+ *
+ * Not "everything ever" — the movement and transaction endpoints both require a range, and a
+ * report that opens on an unbounded one asks the server to reconstruct every move a company
+ * has ever posted before anyone has said what they wanted. Both ends are editable.
+ */
+export function monthToDateIso(now: Date = new Date()): { from: string; to: string } {
+  return { from: todayIso(new Date(now.getFullYear(), now.getMonth(), 1)), to: todayIso(now) };
+}

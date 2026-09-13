@@ -16,6 +16,7 @@ same way `alembic check` fails on an un-generated migration.
 """
 
 import enum
+import os
 from pathlib import Path
 
 from app.models.company import CompanyStatus
@@ -67,7 +68,22 @@ EXPORTED: tuple[type[enum.StrEnum], ...] = (
     StockCountStatus,
 )
 
-TARGET = Path(__file__).resolve().parents[3] / "frontend" / "src" / "lib" / "api-enums.ts"
+# `REPO_ROOT` first, then the path relative to this file — the same convention
+# `tests/test_schema_invariants.py` uses, and for the same reason. `parents[3]` is the repo
+# root on a host checkout and `/` inside the backend container, where the tree is `/app` and
+# the repo is bind-mounted read-only at `/repo`. Without this the drift gate cannot find the
+# file it guards under `docker compose exec`, which is how this project runs its backend
+# checks, and fails there for a reason that has nothing to do with the enums.
+#
+# Reading is all the gate needs. Regenerating still has to happen on the host, because that
+# mount is read-only — which is what the failure messages tell you to do.
+TARGET = (
+    Path(os.environ.get("REPO_ROOT") or Path(__file__).resolve().parents[3])
+    / "frontend"
+    / "src"
+    / "lib"
+    / "api-enums.ts"
+)
 
 HEADER = '''/**
  * GENERATED FILE — do not edit by hand.

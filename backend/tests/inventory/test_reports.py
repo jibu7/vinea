@@ -610,6 +610,43 @@ def test_the_count_report_flags_a_stale_line(db: Session, stock: Stock) -> None:
     assert reports.count_report(db, stock.company_id).rows[0].lines[0].stale is True
 
 
+def test_a_processed_line_is_not_flagged_stale_by_its_own_posting(
+    db: Session, stock: Stock
+) -> None:
+    """The count's own variance move must not make the line it corrected read as stale.
+
+    Processing posts a move for every non-zero variance, and that move sits above the
+    snapshot watermark by construction — so a rule measured without regard to session status
+    flags exactly the lines that worked, forever, on every completed count in the report.
+    Staleness means "Process would refuse this", and Process refuses a completed session
+    outright, so a session that is not counting has no stale lines to report.
+    """
+    receive(db, stock, quantity=_d("10"), unit_cost=_d("100"), on=MARCH)
+    session = count_service.open_session(
+        db,
+        stock.company_id,
+        count_service.CountSessionInput(
+            warehouse_id=stock.main.id, count_date=MARCH, description="March count"
+        ),
+        actor=stock.owner,
+    )
+    line = count_service.lines_of(db, stock.company_id, session.id)[0]
+    count_service.enter_count(
+        db, stock.company_id, session.id, line.id, quantity=_d("9"), actor=stock.owner
+    )
+    session, document, _ = count_service.process_session(
+        db, stock.company_id, session.id, actor=stock.owner
+    )
+    # The variance really did post — otherwise there is no move to be wrongly flagged, and
+    # this test would pass over the bug rather than catching it.
+    assert document is not None
+    assert session.status is StockCountStatus.COMPLETED
+
+    row = reports.count_report(db, stock.company_id).rows[0]
+    assert row.lines[0].variance == _d("-1")
+    assert row.lines[0].stale is False
+
+
 def test_the_count_report_filters_and_can_drop_the_lines(db: Session, stock: Stock) -> None:
     receive(db, stock, quantity=_d("10"), unit_cost=_d("100"), on=MARCH)
     session = count_service.open_session(

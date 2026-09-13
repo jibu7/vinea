@@ -463,3 +463,220 @@ export interface OnHandRow {
   quantity: string;
   value: string;
 }
+
+// --- Item enquiry (P5 step 8) ---------------------------------------------------------------
+
+/** What one warehouse holds of the item as at the enquiry's `as_of`. */
+export interface EnquiryLocation {
+  warehouse_id: number;
+  warehouse_code: string;
+  warehouse_name: string;
+  branch_id: number;
+  is_in_transit: boolean;
+  quantity: string;
+  value: string;
+}
+
+/** One move, with every key the screen needs to drill onwards from it. */
+export interface EnquiryMove {
+  move_id: number;
+  move_date: string;
+  /** Posting order. Shown beside the date because the two differ for a backdated document,
+   * and when they differ it is the only thing that explains the value on the row. */
+  sequence_no: number;
+  warehouse_id: number;
+  warehouse_code: string;
+  quantity: string;
+  unit_cost: string | null;
+  value: string;
+  running_quantity: string;
+  running_value: string;
+  /** Costed at the last positive average because there was no stock to cost it against
+   * (decision 5). The review trail, never corrected retroactively. */
+  cost_provisional: boolean;
+  project_id: number | null;
+  journal_entry_id: number | null;
+  entry_number: string | null;
+  transaction_type_id: number | null;
+  transaction_type_code: string | null;
+  transaction_type_name: string | null;
+  source_doc_type: string | null;
+  source_doc_id: number | null;
+  source_line_id: number | null;
+  reverses_move_id: number | null;
+}
+
+export interface ItemEnquiry {
+  item_id: number;
+  item_code: string;
+  item_name: string;
+  base_uom_id: number;
+  as_of: string;
+  date_from: string | null;
+  warehouse_id: number | null;
+  provisional_only: boolean;
+  locations: EnquiryLocation[];
+  /** Item-wide as at `as_of`, across every location — a warehouse filter narrows the rows,
+   * never the average. */
+  total_quantity: string;
+  total_value: string;
+  average_cost: string;
+  opening_quantity: string;
+  opening_value: string;
+  moves: EnquiryMove[];
+  next_cursor: number | null;
+}
+
+// --- Reports (P5 step 8) ---------------------------------------------------------------------
+
+export interface MovementRow {
+  item_id: number;
+  item_code: string;
+  item_name: string;
+  warehouse_id: number;
+  warehouse_code: string;
+  warehouse_name: string;
+  branch_id: number;
+  is_in_transit: boolean;
+  opening_quantity: string;
+  opening_value: string;
+  quantity_in: string;
+  value_in: string;
+  quantity_out: string;
+  value_out: string;
+  closing_quantity: string;
+  closing_value: string;
+}
+
+export interface MovementReport {
+  date_from: string;
+  date_to: string;
+  rows: MovementRow[];
+  next_cursor: number | null;
+  /** Over the whole filtered set, not over this page. */
+  opening_value: string;
+  value_in: string;
+  value_out: string;
+  closing_value: string;
+}
+
+export interface TransactionRow {
+  move_id: number;
+  move_date: string;
+  sequence_no: number;
+  item_id: number;
+  item_code: string;
+  item_name: string;
+  warehouse_id: number;
+  warehouse_code: string;
+  branch_id: number;
+  quantity: string;
+  unit_cost: string | null;
+  value: string;
+  cost_provisional: boolean;
+  project_id: number | null;
+  transaction_type_id: number | null;
+  journal_entry_id: number | null;
+  entry_number: string | null;
+  source_doc_type: string | null;
+  source_doc_id: number | null;
+  source_line_id: number | null;
+}
+
+export interface TransactionReport {
+  date_from: string;
+  date_to: string;
+  rows: TransactionRow[];
+  next_cursor: number | null;
+  total_quantity: string;
+  total_value: string;
+  move_count: number;
+}
+
+export interface ValuationRow {
+  item_id: number;
+  item_code: string;
+  item_name: string;
+  warehouse_id: number;
+  warehouse_code: string;
+  warehouse_name: string;
+  branch_id: number;
+  is_in_transit: boolean;
+  quantity: string;
+  value: string;
+  /** Value / quantity **as at `as_of`**; null at zero quantity. Not the cost anything was
+   * posted at — a backdated receipt makes the two differ — so it is never labelled "cost". */
+  average_as_at: string | null;
+  gl_account_id: number | null;
+}
+
+export interface ValuationItemTotal {
+  item_id: number;
+  item_code: string;
+  item_name: string;
+  quantity: string;
+  value: string;
+}
+
+export interface ValuationWarehouseTotal {
+  warehouse_id: number;
+  value: string;
+}
+
+/** What the inventory account should read on `as_of` — the report states its own tie to the
+ * GL, so the screen shows the two side by side instead of taking it on trust. */
+export interface ValuationAccountTotal {
+  gl_account_id: number | null;
+  code: string | null;
+  name: string | null;
+  value: string;
+}
+
+export interface ValuationReport {
+  as_of: string;
+  include_zero: boolean;
+  rows: ValuationRow[];
+  item_totals: ValuationItemTotal[];
+  warehouse_totals: ValuationWarehouseTotal[];
+  account_totals: ValuationAccountTotal[];
+  next_cursor: number | null;
+  total_value: string;
+}
+
+export interface CountVarianceRow {
+  line_id: number;
+  line_no: number;
+  item_id: number;
+  item_code: string;
+  item_name: string;
+  system_quantity: string;
+  counted_quantity: string | null;
+  variance: string | null;
+  stale: boolean;
+  stock_move_id: number | null;
+}
+
+export interface CountReportRow {
+  session_id: number;
+  number: string;
+  warehouse_id: number;
+  warehouse_code: string;
+  warehouse_name: string;
+  branch_id: number;
+  count_date: string;
+  description: string;
+  status: string;
+  snapshot_at: string;
+  document_id: number | null;
+  document_number: string | null;
+  journal_entry_id: number | null;
+  line_count: number;
+  counted_count: number;
+  variance_count: number;
+  lines: CountVarianceRow[];
+}
+
+export interface CountReport {
+  rows: CountReportRow[];
+  next_cursor: number | null;
+}

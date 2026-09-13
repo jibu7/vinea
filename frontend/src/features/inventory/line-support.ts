@@ -25,10 +25,17 @@ import type { Item, OnHandRow, Uom } from "./types";
  * decimals, because the P5 step-6 review made that formatting load-bearing: a quantity read
  * off any of these screens is asserted as the rendered string.
  */
-export function useInventoryLineSupport() {
-  const items = useItems();
+export function useInventoryLineSupport(
+  opts: { includeInactiveItems?: boolean; includeInTransitWarehouses?: boolean } = {},
+) {
+  // Both flags exist for the reports, and neither reaches a picker: `stockItems` still
+  // filters to the active items and `warehouseOptions` still drops the in-transit location,
+  // so no document gains an option decision 6 says it must not offer. What the reports need
+  // is the *lookup* — a row naming a deactivated item prints its quantity at the wrong scale,
+  // and stock in transit is a line on the valuation report with a warehouse code to resolve.
+  const items = useItems({ includeInactive: opts.includeInactiveItems });
   const barcodes = useBarcodes();
-  const warehouses = useWarehouses();
+  const warehouses = useWarehouses({ includeInTransit: opts.includeInTransitWarehouses });
   const categories = useUomCategories();
   const types = useTransactionTypes("inv");
 
@@ -150,6 +157,16 @@ export function useInventoryLineSupport() {
     return base ? formatQuantity(Number(quantity), base.decimal_places) : trimDecimalString(String(quantity));
   }
 
+  /** The same figure with its unit — "2.500 KG". On a report that mixes items the unit is
+   * not decoration: 2.5 of one item and 2.500 of another are two different scales, and the
+   * column is unreadable without saying which. */
+  function formatBaseWithUnit(itemId: number, quantity: string | number): string {
+    const item = itemById.get(itemId);
+    const base = item ? uomById.get(item.base_uom_id) : undefined;
+    if (!base) return formatBase(itemId, quantity);
+    return `${formatQuantity(Number(quantity), base.decimal_places)} ${base.code}`;
+  }
+
   return {
     isLoading: items.isLoading || warehouses.isLoading || categories.isLoading || types.isLoading,
     stockItems,
@@ -169,6 +186,7 @@ export function useInventoryLineSupport() {
     kindOf,
     typeByKind,
     formatBase,
+    formatBaseWithUnit,
   };
 }
 

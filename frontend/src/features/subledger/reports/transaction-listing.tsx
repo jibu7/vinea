@@ -2,10 +2,14 @@
 
 import { useState } from "react";
 import { useTranslations } from "next-intl";
-import { Button } from "@/design/components/button";
 import { IsoDatePicker } from "@/design/components/date-picker";
 import { Field } from "@/design/components/input";
-import { ReportPage, ReportPanel } from "@/design/components/report-page";
+import {
+  ReportPage,
+  ReportPager,
+  ReportPanel,
+  useCursorPager,
+} from "@/design/components/report-page";
 import { TBody, TD, TH, THead, TR, Table } from "@/design/components/table";
 import { useCompanyDetails, useCurrencies } from "@/features/gl/hooks";
 import { byId } from "@/features/gl/lookups";
@@ -15,21 +19,24 @@ import { useDocumentPage, usePartners } from "../hooks";
 import type { PartnerRole } from "../types";
 
 /**
- * Transaction listing over `GET /{role}/documents` — paged **by the server**, cursor-style.
+ * Transaction listing over `GET /{role}/documents` — paged **by the server**, cursor-style
+ * through `useCursorPager` / `ReportPager`.
  *
- * The cursor is the last id of the page before, never an offset, so a document posted while
- * someone is paging cannot shift rows onto a page they have already seen. That also means
- * there is no page count to show and no jumping to page 7: the trade the kernel's ADR-11 made.
+ * That pair was factored out of this screen at P5 step 8, when four more reports needed the
+ * same forward-and-back and the alternative was five copies of it. The reasoning it carries
+ * is the one that was written here: the cursor is the last id of the page before, never an
+ * offset, so a document posted while someone is paging cannot shift rows onto a page they
+ * have already seen — and there is therefore no page count and no jumping to page 7, which
+ * is the trade the kernel's ADR-11 made.
  */
 export function TransactionListingReport({ role }: { role: PartnerRole }) {
   const t = useTranslations("reports");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
-  const [cursors, setCursors] = useState<Array<number | null>>([null]);
+  const pager = useCursorPager();
 
-  const cursor = cursors[cursors.length - 1];
   const page = useDocumentPage(role, {
-    cursor,
+    cursor: pager.cursor,
     dateFrom: dateFrom || undefined,
     dateTo: dateTo || undefined,
   });
@@ -77,22 +84,10 @@ export function TransactionListingReport({ role }: { role: PartnerRole }) {
       filters={
         <div className="grid grid-cols-1 gap-3 rounded-[var(--radius-card)] border border-[var(--vinea-border)] bg-[var(--vinea-surface-raised)] p-4 sm:grid-cols-3">
           <Field label={t("from")}>
-            <IsoDatePicker
-              value={dateFrom}
-              onValueChange={(v) => {
-                setDateFrom(v);
-                setCursors([null]);
-              }}
-            />
+            <IsoDatePicker value={dateFrom} onValueChange={pager.filter(setDateFrom)} />
           </Field>
           <Field label={t("to")}>
-            <IsoDatePicker
-              value={dateTo}
-              onValueChange={(v) => {
-                setDateTo(v);
-                setCursors([null]);
-              }}
-            />
+            <IsoDatePicker value={dateTo} onValueChange={pager.filter(setDateTo)} />
           </Field>
         </div>
       }
@@ -138,29 +133,13 @@ export function TransactionListingReport({ role }: { role: PartnerRole }) {
                 ))}
               </TBody>
             </Table>
-            <div className="flex items-center justify-between pt-3 print:hidden">
-              <p className="text-xs text-[var(--vinea-ink-subtle)]">
-                {t("showing", { count: rows.length })}
-              </p>
-              <div className="flex gap-2">
-                <Button
-                  variant="secondary"
-                  disabled={cursors.length === 1}
-                  onClick={() => setCursors((c) => c.slice(0, -1))}
-                  className="text-xs"
-                >
-                  {t("previousPage")}
-                </Button>
-                <Button
-                  variant="secondary"
-                  disabled={!page.data?.next_cursor}
-                  onClick={() => setCursors((c) => [...c, page.data?.next_cursor ?? null])}
-                  className="text-xs"
-                >
-                  {t("nextPage")}
-                </Button>
-              </div>
-            </div>
+            <ReportPager
+              count={rows.length}
+              hasPrevious={pager.hasPrevious}
+              hasNext={(page.data?.next_cursor ?? null) !== null}
+              onPrevious={pager.previous}
+              onNext={() => pager.next(page.data?.next_cursor ?? null)}
+            />
           </>
         )}
       </ReportPanel>
