@@ -305,7 +305,12 @@ class StockDocumentLineRead(ApiModel):
     uom_id: int
     quantity_base: Decimal
     unit_cost: Decimal | None
+    #: What was **keyed**. Only a revaluation states a value, so this is null on almost every
+    #: line — the engine decides an ordinary receipt's or issue's value. Read `posted_value`
+    #: for what the ledger actually recorded.
     value: Decimal | None
+    #: What the move behind this line was posted at. The figure a screen means by "value".
+    posted_value: Decimal | None = None
     transaction_type_id: int
     contra_account_id: int | None
     project_id: int | None
@@ -326,10 +331,19 @@ class StockDocumentSummary(ApiModel):
     journal_entry_id: int | None
     reversal_entry_id: int | None
     reverses_document_id: int | None
+    #: What the lines add up to — computed by the service over the whole document, never by
+    #: the screen over the rows it happens to be showing.
+    line_count: int = 0
+    total_value: Decimal = Decimal(0)
+    #: The one warehouse / transaction type every line names, or null when they differ. A
+    #: journal batch legitimately spreads across several of both (decision 9).
+    warehouse_id: int | None = None
+    transaction_type_id: int | None = None
 
 
 class StockDocumentRead(StockDocumentSummary):
-    transaction_type_id: int | None
+    # `transaction_type_id` comes from the summary now — on a document it is the header's own,
+    # on a listing row it is the one every line agrees on. Same field, same meaning.
     lines: list[StockDocumentLineRead]
 
 

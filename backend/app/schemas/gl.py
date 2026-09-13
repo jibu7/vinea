@@ -191,6 +191,10 @@ class JournalEntryRead(ApiModel):
     description: str
     reference: str | None = None
     status: JournalStatus
+    #: Which module posted this. `"gl"` for a manual journal or a cashbook entry; a module name
+    #: for an entry a module owns, which is reversed through that module rather than here — the
+    #: screen reads this to decide whether to offer Reverse at all.
+    module: str
     posted_by: int | None
     posted_at: datetime | None
     reverses_entry_id: int | None
@@ -200,6 +204,14 @@ class JournalEntryRead(ApiModel):
     reversed_by_number: str | None = None
     source_doc_type: str | None
     source_doc_id: int | None
+    #: The module document this entry belongs to, **resolved through that module's own table**
+    #: rather than read off `source_doc_id`. The link back from an entry was only wired at P5
+    #: step 9 and cannot be back-filled (both tables are append-only), so an entry posted
+    #: before then has a null `source_doc_id` and a perfectly findable document: the module's
+    #: table has always carried `journal_entry_id`. Resolving that direction gives every
+    #: entry, old or new, the link the screen needs.
+    module_document_id: int | None = None
+    module_document_number: str | None = None
     lines: list[JournalLineRead]
 
 

@@ -595,6 +595,129 @@ def test_a_cancelled_session_keeps_its_sheet(client: TestClient) -> None:
     assert len(cancelled.json()["lines"]) == 1
 
 
+def _with_permissions(
+    client: TestClient, db: Session, company_id: int, permissions: list[str], email: str
+) -> TestClient:
+    """A member holding exactly `permissions` — the Clerk role, rewritten.
+
+    Rewriting a seeded role rather than adding an endpoint call keeps this about the guard
+    under test: what matters is the permission set on the session, not how a tenant would
+    build the role in the product.
+    """
+    set_tenant(db, company_id)
+    role = db.scalars(
+        select(Role).where(Role.company_id == company_id, Role.name == "Clerk")
+    ).one()
+    role.permissions = permissions
+    db.commit()
+    client.post("/api/v1/invitations", json={"email": email, "role_ids": [role.id]})
+    token = email_service.outbox[-1].context["token"]
+    member = TestClient(client.app)
+    member.post(
+        "/api/v1/invitations/accept",
+        json={"token": token, "full_name": "Stock Taker", "password": CLERK_PASSWORD},
+    )
+    return member
+
+
+def test_a_stock_taker_counts_without_gaining_the_right_to_adjust(
+    client: TestClient, db: Session
+) -> None:
+    """`inv:count_enter` opens the sheet and nothing else (P5 step 9).
+
+    Until this permission existed, `_require_count` accepted `inv:transactions_adjust`, so the
+    only way to let somebody count was to let them post adjustments — the authority a count
+    exists to take out of their hands. The two assertions that matter are the pair: counting
+    works, and the adjustment endpoint and Process both refuse.
+    """
+    company_id = _signup(client)
+    item = _item(client)
+    main = _warehouse(client, "MAIN")
+    _stock_in(client, item, main)
+    types = client.get("/api/v1/gl/transaction-types?module=inv").json()
+    adjin = next(row for row in types if row["code"] == "ADJIN")
+
+    taker = _with_permissions(
+        client, db, company_id, ["inv:count_enter"], "taker@rugari.example"
+    )
+
+    # The masters the sheet renders are readable — a permission that opened the screen and
+    # withheld its contents would be no permission at all.
+    assert taker.get("/api/v1/inventory/items").status_code == 200
+
+    opened = taker.post(
+        "/api/v1/inventory/counts",
+        json={
+            "warehouse_id": main["id"],
+            "count_date": TODAY,
+            "description": "Aisle walk",
+        },
+    )
+    assert opened.status_code == 201, opened.text
+    session = opened.json()
+    line = session["lines"][0]
+    entered = taker.patch(
+        f"/api/v1/inventory/counts/{session['id']}/lines/{line['id']}",
+        json={"counted_quantity": "7"},
+    )
+    assert entered.status_code == 200, entered.text
+
+    # And neither half of the posting authority came with it.
+    adjusted = taker.post(
+        "/api/v1/inventory/adjustments",
+        headers={"Idempotency-Key": "taker-adj"},
+        json={
+            "document_date": TODAY,
+            "description": "not mine to post",
+            "transaction_type_id": adjin["id"],
+            "lines": [
+                {
+                    "item_id": item["id"],
+                    "warehouse_id": main["id"],
+                    "quantity": "1",
+                    "unit_cost": "100",
+                }
+            ],
+        },
+    )
+    processed = taker.post(
+        f"/api/v1/inventory/counts/{session['id']}/process",
+        headers={"Idempotency-Key": "taker-process"},
+        json={"session_id": session["id"]},
+    )
+    assert adjusted.status_code == 403, adjusted.text
+    assert processed.status_code == 403, processed.text
+
+
+def test_adjustment_rights_alone_no_longer_open_a_count(
+    client: TestClient, db: Session
+) -> None:
+    """The other direction, and the reason this is a split rather than an addition.
+
+    Leaving `inv:transactions_adjust` in `_require_count` would have made `inv:count_enter`
+    decorative: every clerk who posts adjustments would still reach the sheet, and no tenant
+    could describe a stock-taker without also describing an adjuster.
+    """
+    company_id = _signup(client)
+    item = _item(client)
+    main = _warehouse(client, "MAIN")
+    _stock_in(client, item, main)
+
+    adjuster = _with_permissions(
+        client, db, company_id, ["inv:transactions_adjust"], "adjuster@rugari.example"
+    )
+    opened = adjuster.post(
+        "/api/v1/inventory/counts",
+        json={
+            "warehouse_id": main["id"],
+            "count_date": TODAY,
+            "description": "not mine to open",
+        },
+    )
+    assert opened.status_code == 403, opened.text
+    assert item["id"]
+
+
 def test_a_clerk_can_neither_open_nor_process_a_count(
     client: TestClient, db: Session
 ) -> None:
@@ -621,3 +744,47 @@ def test_a_clerk_can_neither_open_nor_process_a_count(
     assert opened.status_code == 403, opened.text
     assert processed.status_code == 403, processed.text
     assert item["id"]
+
+
+def test_a_processed_count_entry_names_its_document_not_its_session(
+    client: TestClient, db: Session
+) -> None:
+    """P5 step 9: the entry's source document is uniform across all three kinds.
+
+    A count's moves used to point at the `stock_count_session`, because the session is the one
+    thing that exists before the posting does. It made counts the odd kind out: the documents
+    screen and the reverse path would each have needed a case for "unless it came from a
+    count", and the reverse path is the one place a special case is expensive — decision 11
+    reverses a *document*.
+
+    So the count-variance document is what the entry names, like an adjustment or a batch, and
+    the session is one hop further on through `stock_count_sessions.document_id` — where it was
+    always recorded anyway.
+    """
+    company_id = _signup(client)
+    item = _item(client)
+    main = _warehouse(client, "MAIN")
+    _stock_in(client, item, main)
+    session = _open_count(client, main)
+    line = session["lines"][0]
+    client.patch(
+        f"/api/v1/inventory/counts/{session['id']}/lines/{line['id']}",
+        json={"counted_quantity": "3"},
+    )
+    processed = client.post(
+        f"/api/v1/inventory/counts/{session['id']}/process",
+        headers={"Idempotency-Key": "cnt-source"},
+        json={"session_id": session["id"]},
+    )
+    assert processed.status_code == 200, processed.text
+    document = processed.json()["document"]
+    assert document is not None, processed.text
+
+    entry = client.get(f"/api/v1/gl/journal-entries/{document['journal_entry_id']}").json()
+    assert entry["source_doc_type"] == "inventory_document", entry
+    assert entry["source_doc_id"] == document["id"], entry
+
+    # And the session still leads to the document, which is the hop that replaces the old link.
+    reloaded = client.get(f"/api/v1/inventory/counts/{session['id']}").json()
+    assert reloaded["document_id"] == document["id"], reloaded
+    assert company_id

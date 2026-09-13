@@ -171,6 +171,16 @@ export interface JournalEntry {
   description: string;
   reference?: string | null;
   status: "draft" | "posted";
+  /** Which module posted this — `"gl"` for a manual journal or a cashbook entry, otherwise the
+   * module that owns it. An owned entry is reversed through its module, because the GL
+   * reversal writes only the ledger half and would leave that module's own side behind. */
+  module: string;
+  /** The module document this entry belongs to, resolved by the API through that module's own
+   * table (`inventory_documents.journal_entry_id`, `partner_documents.journal_entry_id`) —
+   * **not** from `source_doc_id`, which was only populated from P5 step 9 and cannot be
+   * back-filled onto a posted entry. So an entry from any phase resolves. */
+  module_document_id: number | null;
+  module_document_number: string | null;
   posted_by: number | null;
   posted_at: string | null;
   reverses_entry_id: number | null;

@@ -28,8 +28,9 @@ from app.models.audit import AuditLog
 from app.models.currency import ExchangeRate
 from app.models.fiscal import AccountingPeriod, FiscalYear, PeriodStatus
 from app.models.gl import GLSettings
-from app.models.inventory import INVENTORY_MODULE
+from app.models.inventory import INVENTORY_MODULE, InventoryDocument
 from app.models.journal import JournalEntry
+from app.models.subledger import PartnerDocument
 from app.schemas.common import Page
 from app.schemas.gl import (
     AccountAuditRead,
@@ -111,7 +112,36 @@ def _entry_read(db: Session, entry: JournalEntry) -> JournalEntryRead:
     data.reverses_entry_number = rev_num
     data.reversed_by_entry_id = rvd_by_id
     data.reversed_by_number = rvd_by_num
+    data.module_document_id, data.module_document_number = _module_document(db, loaded)
     return data
+
+
+#: Where each module keeps the documents it posts. Both tables have carried `journal_entry_id`
+#: since they were created, which is why this direction works for every entry ever posted.
+MODULE_DOCUMENT_TABLES: dict[str, type] = {
+    "inv": InventoryDocument,
+    "ar": PartnerDocument,
+    "ap": PartnerDocument,
+}
+
+
+def _module_document(db: Session, entry: JournalEntry) -> tuple[int | None, str | None]:
+    """The document a module-owned entry belongs to, or `(None, None)`.
+
+    Resolved from the document side rather than from `journal_entries.source_doc_id`: that
+    column was only populated from P5 step 9 and cannot be back-filled, because a posted entry
+    is immutable in the database and rewriting one would cost the guarantee that makes the
+    ledger worth trusting. The document's own `journal_entry_id` has always been there.
+    """
+    table = MODULE_DOCUMENT_TABLES.get(entry.module)
+    if table is None:
+        return None, None
+    found = db.execute(
+        select(table.id, table.number).where(
+            table.company_id == entry.company_id, table.journal_entry_id == entry.id
+        )
+    ).first()
+    return (found[0], found[1]) if found is not None else (None, None)
 
 
 def _posted_response(
@@ -616,6 +646,7 @@ def get_journal_entry(
     if entry is None or entry.company_id != auth.company_id:
         raise NotFoundError("Journal entry not found")
     return _entry_read(db, entry)
+
 
 
 @router.post("/journal-entries/{entry_id}/reverse", status_code=status.HTTP_201_CREATED)

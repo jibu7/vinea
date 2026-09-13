@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
-import { ArrowLeft, Sparkles } from "lucide-react";
+import { ArrowLeft, ArrowRight, Sparkles } from "lucide-react";
 import { Button } from "@/design/components/button";
 import { Field, Input } from "@/design/components/input";
 import { DatePicker } from "@/design/components/date-picker";
@@ -59,7 +59,18 @@ export default function EntryViewPage() {
   const totalCredit = entry.lines.filter((l) => !l.is_rounding_line && Number(l.base_amount) < 0).reduce((s, l) => s - Number(l.base_amount), 0);
   const isReversed = !!entry.reversed_by_entry_id;
   const isReversal = !!entry.reverses_entry_id;
-  const canReverse = !isReversed && !isReversal;
+  // A module-owned entry is reversed through its module, never from here. The GL reversal
+  // writes the ledger half and nothing else, so on an inventory adjustment it would move the
+  // inventory account while every stock move stayed put — the phase invariant, broken from
+  // this button. The API refuses it (`module_owned_entry`); this is the screen not offering
+  // an action it knows will be refused, and saying where the action does live.
+  const isModuleOwned = entry.module !== "gl";
+  const canReverse = !isReversed && !isReversal && !isModuleOwned;
+  const reverseBlockedReason = isReversed
+    ? t("reverseAlreadyReversed")
+    : isReversal
+      ? t("reverseIsAReversal")
+      : t("reverseModuleOwned", { module: entry.module });
 
   async function handleReverse() {
     setReverseError(null);
@@ -201,7 +212,23 @@ export default function EntryViewPage() {
               {baseCurrency && <Money amount={totalCredit} currency={{ code: baseCurrency.code, decimalPlaces: baseCurrency.decimal_places, symbol: baseCurrency.symbol }} className="font-semibold" />}
             </div>
           </div>
-          {canReverse ? (
+          {/* A module-owned entry is reversed from its own document, so this is the way there
+              rather than a button that cannot be honoured. The link resolves through the
+              module's document table, which means an entry posted long before the link column
+              existed still has one. */}
+          {isModuleOwned && entry.module_document_id !== null ? (
+            <Link
+              href={`/inventory/documents/${entry.module_document_id}`}
+              data-testid="reverse-via-module"
+              className="inline-flex items-center gap-1 text-sm font-medium text-[var(--vinea-brand)] underline"
+            >
+              {t("reverseViaModule", {
+                module: entry.module,
+                number: entry.module_document_number ?? "",
+              })}
+              <ArrowRight className="size-3.5" />
+            </Link>
+          ) : canReverse ? (
             <Dialog open={reverseOpen} onOpenChange={setReverseOpen}>
               <DialogTrigger asChild>
                 <Button variant="danger">{t("reverse")}</Button>
@@ -229,11 +256,7 @@ export default function EntryViewPage() {
               </DialogContent>
             </Dialog>
           ) : (
-            <Button
-              variant="danger"
-              disabled
-              title={isReversed ? "This entry has already been reversed" : "A reversal cannot be reversed"}
-            >
+            <Button variant="danger" disabled title={reverseBlockedReason}>
               {t("reverse")}
             </Button>
           )}

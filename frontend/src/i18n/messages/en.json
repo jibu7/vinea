@@ -304,7 +304,11 @@
       "ap": "AP",
       "inventory": "Inventory"
     },
-    "selectAccount": "Select account…"
+    "selectAccount": "Select account…",
+    "reverseAlreadyReversed": "This entry has already been reversed",
+    "reverseIsAReversal": "A reversal cannot be reversed",
+    "reverseModuleOwned": "Posted by the {module} module — reverse it from that module's document, so the stock or open items it moved are reversed too",
+    "reverseViaModule": "Reverse via {module} document {number}"
   },
   "maintenance": {
     "companyDetails": "Company details",
@@ -1424,7 +1428,32 @@
       "status": "Status",
       "statusPosted": "Posted",
       "statusReversed": "Reversed",
-      "statusDraft": "Draft"
+      "statusDraft": "Draft",
+      "title": "Inventory documents",
+      "subtitle": "Every posted adjustment, journal batch and count variance — and the way to reverse one.",
+      "kind": "Kind",
+      "allKinds": "All kinds",
+      "kinds": {
+        "INAJ": "Adjustment",
+        "INJN": "Journal batch",
+        "INCT": "Count variance"
+      },
+      "severalWarehouses": "Several",
+      "severalTypes": "Several",
+      "reverse": "Reverse",
+      "reverseTitle": "Reverse this document",
+      "reverseDescription": "Posts a mirror of every line, at the values they were posted at, and leaves this document standing as reversed.",
+      "reversalDate": "Reversal date",
+      "reason": "Reason",
+      "reasonPlaceholder": "Why this is being reversed",
+      "confirmReverse": "Reverse document",
+      "reversedToast": "Reversed as {number}",
+      "reverseFailed": "The reversal could not be posted",
+      "alreadyReversed": "This document has already been reversed",
+      "cannotReverseAReversal": "A reversal cannot be reversed",
+      "noReversePermission": "You do not have permission to reverse a stock document",
+      "wasReversed": "Reversed. The mirror document carries the entry that undid this one.",
+      "reversesDocument": "Reverses an earlier document"
     },
     "adjustments": {
       "title": "Inventory adjustment",
@@ -1506,7 +1535,14 @@
       "postFailed": "Couldn't post the transfer",
       "sameWarehouse": "From and To must differ.",
       "openLabel": "Open {number}",
-      "unit": "Unit"
+      "unit": "Unit",
+      "reverseTransfer": "Reverse",
+      "reverseLabel": "Reverse transfer {number}",
+      "reverseTitle": "Reverse {number}",
+      "reverseDescription": "Mirrors both legs at the values they were posted at: the stock goes back to where it came from and the in-transit account clears.",
+      "confirmReverse": "Reverse transfer",
+      "reversed": "{number} reversed",
+      "reverseFailed": "The transfer could not be reversed"
     },
     "counts": {
       "title": "Inventory counts",
@@ -1604,7 +1640,10 @@
       "drillDown": "Open journal entry {number}",
       "viewEntry": "Journal entry",
       "showAllLocations": "Show every location again",
-      "oneLocationOnly": "Narrowed to one warehouse. The figures above stay item-wide."
+      "oneLocationOnly": "Narrowed to one warehouse. The figures above stay item-wide.",
+      "openDocument": "Open document {number}",
+      "viewDocument": "Open",
+      "document": "Document"
     },
     "reports": {
       "movementTitle": "Inventory movement",

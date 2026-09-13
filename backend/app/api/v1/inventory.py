@@ -23,6 +23,7 @@ from app.inventory import masters
 from app.inventory import reports as inventory_reports
 from app.inventory import stock as stock_service
 from app.inventory import transfers as inventory_transfers
+from app.kernel.money import ZERO
 from app.models.audit import AuditLog
 from app.models.inventory import ItemType, StockCountStatus, StockTransferStatus
 from app.schemas.common import Page
@@ -94,11 +95,18 @@ router = APIRouter(prefix="/inventory", tags=["inventory"])
 
 def _require_view(auth: AuthContext) -> None:
     """Reading a master is enough for anyone who can see inventory *or* maintain it — the
-    item picker on a document is read-only but belongs to a poster, not a reporter."""
+    item picker on a document is read-only but belongs to a poster, not a reporter.
+
+    `inv:count_enter` is in the list for exactly that reason. A count sheet renders items,
+    warehouses and units; a stock-taker holding only the counting permission would otherwise
+    be able to open a session and not read the masters that fill it in, which is a permission
+    that grants a screen and withholds its contents.
+    """
     allowed = (
         permissions.INV_REPORTS_VIEW,
         permissions.INV_SETUP_MANAGE,
         permissions.INV_TRANSACTIONS_ADJUST,
+        permissions.INV_COUNT_ENTER,
     )
     if not any(permission in auth.permissions for permission in allowed):
         raise PermissionDeniedError(f"Missing required permission(s): {' or '.join(allowed)}")
@@ -635,10 +643,29 @@ def _line_inputs(payload: StockDocumentCreate) -> tuple[inventory_documents.Docu
 
 def _document_read(db: Session, company_id: int, document) -> StockDocumentRead:
     lines = inventory_documents.lines_of(db, company_id, document.id)
+    # The summary's aggregates are the listing's; on a single document they come from the
+    # document itself and its own lines, which is the same statement said with the rows in hand.
+    summary = StockDocumentSummary.model_validate(document).model_dump()
+    summary["transaction_type_id"] = document.transaction_type_id
+    summary["line_count"] = len(lines)
+    # From the moves, not from the keyed column: `value` on a line is what somebody typed, and
+    # only a revaluation types one.
+    posted = inventory_documents.posted_values(
+        db, company_id, [line.stock_move_id for line in lines if line.stock_move_id is not None]
+    )
+    summary["total_value"] = sum(
+        (posted.get(line.stock_move_id, line.value or ZERO) for line in lines), ZERO
+    )
+    warehouses = {line.warehouse_id for line in lines}
+    summary["warehouse_id"] = next(iter(warehouses)) if len(warehouses) == 1 else None
     return StockDocumentRead(
-        **StockDocumentSummary.model_validate(document).model_dump(),
-        transaction_type_id=document.transaction_type_id,
-        lines=[StockDocumentLineRead.model_validate(line) for line in lines],
+        **summary,
+        lines=[
+            StockDocumentLineRead.model_validate(line).model_copy(
+                update={"posted_value": posted.get(line.stock_move_id, line.value)}
+            )
+            for line in lines
+        ],
     )
 
 
@@ -753,6 +780,7 @@ def list_stock_documents(
     doc_type: str | None = None,
     date_from: date | None = None,
     date_to: date | None = None,
+    status_filter: str | None = Query(default=None, alias="status"),
     cursor: int | None = None,
     limit: int = Query(default=100, ge=1, le=500),
     auth: AuthContext = Depends(get_tenant_context),
@@ -765,11 +793,22 @@ def list_stock_documents(
         doc_type=doc_type,
         date_from=date_from,
         date_to=date_to,
+        status=status_filter,
         cursor=cursor,
         limit=limit,
     )
     return Page(
-        items=[StockDocumentSummary.model_validate(row) for row in rows],
+        items=[
+            StockDocumentSummary.model_validate(row.document).model_copy(
+                update={
+                    "line_count": row.line_count,
+                    "total_value": row.total_value,
+                    "warehouse_id": row.warehouse_id,
+                    "transaction_type_id": row.transaction_type_id,
+                }
+            )
+            for row in rows
+        ],
         next_cursor=next_cursor,
     )
 
@@ -984,10 +1023,17 @@ def get_transfer(
 
 
 def _require_count(auth: AuthContext) -> None:
-    """Opening and filling in a count sheet. Either permission does: a stock controller who
-    can process counts can obviously open one, and a clerk who posts adjustments is the other
-    person who walks the aisles."""
-    allowed = (permissions.INV_COUNT_PROCESS, permissions.INV_TRANSACTIONS_ADJUST)
+    """Opening a count session and keying the sheet.
+
+    `inv:count_enter`, or `inv:count_process` — whoever may post a count may obviously open
+    one. **Not `inv:transactions_adjust`.** That was the rule until P5 step 9, and it meant a
+    stock-taker could only be let near a count sheet by being given the authority to post
+    adjustments, which is exactly the authority a count exists to take out of their hands: the
+    point of counting to a sheet and processing it as one document is that nobody writes stock
+    off a shelf by hand. Counting still moves nothing on its own — the sheet is a working
+    paper until Process, which checks `inv:count_process` on its own.
+    """
+    allowed = (permissions.INV_COUNT_ENTER, permissions.INV_COUNT_PROCESS)
     if not any(permission in auth.permissions for permission in allowed):
         raise PermissionDeniedError(f"Missing required permission(s): {' or '.join(allowed)}")
 

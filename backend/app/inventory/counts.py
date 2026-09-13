@@ -57,11 +57,6 @@ from app.models.inventory import (
 from app.models.user import User
 from app.services.audit import record_audit
 
-#: What the moves of a processed count say they came from. Unlike a transfer or an
-#: adjustment, a count *can* carry its source id: the session exists long before the posting
-#: does, so the moves point back at it from the moment they are written.
-SOURCE_DOC_TYPE = "stock_count_session"
-
 
 def _audit(
     db: Session,
@@ -710,8 +705,6 @@ def process_session(
             ],
             transaction_type_id=session.transaction_type_id,
             contra_account_id=contra_account_id,
-            source_doc_type=SOURCE_DOC_TYPE,
-            source_doc_id=session.id,
             actor=actor,
             idempotency_key=idempotency_key,
             idempotency_hash=idempotency_hash,

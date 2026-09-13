@@ -722,10 +722,13 @@ def test_documents_list_newest_first_and_filter_by_type(db: Session, stock: Stoc
     )
 
     rows, _ = documents_service.list_documents(db, stock.company_id)
-    assert [row.doc_type for row in rows] == ["INJN", "INAJ"]
+    # `list_documents` returns a `DocumentSummary` per row since P5 step 9 — the header plus
+    # what its lines add up to, because the listing screen needs both and a screen that summed
+    # its own page would disagree with itself from page two onwards.
+    assert [row.document.doc_type for row in rows] == ["INJN", "INAJ"]
 
     batches, _ = documents_service.list_documents(db, stock.company_id, doc_type="INJN")
-    assert [row.doc_type for row in batches] == ["INJN"]
+    assert [row.document.doc_type for row in batches] == ["INJN"]
 
 
 # --- Lines and moves under a negative-stock crossing -------------------------------------------

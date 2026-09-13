@@ -630,16 +630,19 @@ def unallocate(
 
     entry = None
     if allocation.journal_entry_id is not None:
-        entry = posting.reverse(
-            db,
-            allocation.journal_entry_id,
-            company_id=allocation.company_id,
-            on_date=on_date,
-            reason=reason,
-            actor=actor,
-            idempotency_key=idempotency_key,
-            idempotency_hash=idempotency_hash,
-        )
+        # The module's own reversal window: this is the half of the reversal the
+        # kernel cannot do, so the kernel only lets the ledger half through from here.
+        with posting.module_reversal(allocation.role.value):
+            entry = posting.reverse(
+                db,
+                allocation.journal_entry_id,
+                company_id=allocation.company_id,
+                on_date=on_date,
+                reason=reason,
+                actor=actor,
+                idempotency_key=idempotency_key,
+                idempotency_hash=idempotency_hash,
+            )
 
     claimed = claim_number(db, allocation.company_id, DocType.ALLOCATION)
     reversal = Allocation(

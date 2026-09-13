@@ -303,14 +303,27 @@ export function useReverseStockDocument() {
   });
 }
 
-export function useStockDocuments(opts: { docType?: string; limit?: number } = {}) {
-  const params = new URLSearchParams();
-  if (opts.docType) params.set("doc_type", opts.docType);
-  if (opts.limit) params.set("limit", String(opts.limit));
-  const query = params.toString();
+export interface StockDocumentListParams {
+  docType?: string;
+  status?: string;
+  dateFrom?: string;
+  dateTo?: string;
+  cursor?: number | null;
+  limit?: number;
+}
+
+export function useStockDocuments(opts: StockDocumentListParams = {}) {
+  const query = queryString({
+    doc_type: opts.docType,
+    status: opts.status,
+    date_from: opts.dateFrom,
+    date_to: opts.dateTo,
+    cursor: opts.cursor,
+    limit: opts.limit,
+  });
   return useQuery({
-    queryKey: [ROOT, "documents", { docType: opts.docType ?? null, limit: opts.limit ?? null }],
-    queryFn: () => api.get<Page<StockDocumentSummary>>(`/inventory/documents${query ? `?${query}` : ""}`),
+    queryKey: [ROOT, "documents", query],
+    queryFn: () => api.get<Page<StockDocumentSummary>>(`/inventory/documents${query}`),
   });
 }
 
@@ -348,6 +361,33 @@ export function useReceiveTransfer() {
       api.post<Transfer>(
         `/inventory/transfers/${transferId}/receive`,
         { receive_date: receiveDate ?? null },
+        { "Idempotency-Key": idempotencyKey },
+      ),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: [ROOT] }),
+  });
+}
+
+/** Decision 11 for a transfer that already arrived: mirror both legs, at the values they were
+ * posted at. `cancel` is the other case — nothing has arrived, so there is only a dispatch to
+ * send back — and the two are separate endpoints because they undo different amounts of work.
+ * `0016_p5_transfer_reversal` split the entry column in two for exactly this. */
+export function useReverseTransfer() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      transferId,
+      reason,
+      reversalDate,
+      idempotencyKey,
+    }: {
+      transferId: number;
+      reason: string;
+      reversalDate?: string | null;
+      idempotencyKey: string;
+    }) =>
+      api.post<Transfer>(
+        `/inventory/transfers/${transferId}/reverse`,
+        { reason, reversal_date: reversalDate ?? null },
         { "Idempotency-Key": idempotencyKey },
       ),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: [ROOT] }),

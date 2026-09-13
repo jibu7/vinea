@@ -307,6 +307,7 @@ export function ItemEnquiryScreen() {
                       <TH className="text-right">{tr("value")}</TH>
                       <TH className="text-right">{tr("runningQuantity")}</TH>
                       <TH className="text-right">{tr("runningValue")}</TH>
+                      <TH className="w-24">{t("document")}</TH>
                       <TH className="w-28">{tr("entry")}</TH>
                     </TR>
                   </THead>
@@ -325,6 +326,9 @@ export function ItemEnquiryScreen() {
                         <TD className="text-right font-mono text-xs tabular-nums">
                           {money(data.opening_value)}
                         </TD>
+                        {/* Document and Entry: an opening figure is a sum, not a posting, so
+                            there is nothing for either to lead to. */}
+                        <TD />
                         <TD />
                       </TR>
                     )}
@@ -367,7 +371,28 @@ export function ItemEnquiryScreen() {
                           {money(move.running_value)}
                         </TD>
                         <TD>
-                          {/* Drill two: the move's entry. A revaluation posts no entry of
+                          {/* Drill two: the move's document — the link that is always there.
+                              A move that carried no value has no entry at all (a free-sample
+                              receipt), and that is a real posting rather than a broken row,
+                              so the document is what this row leads to. */}
+                          {move.source_doc_type === "inventory_document" &&
+                          move.source_doc_id !== null ? (
+                            <Link
+                              href={`/inventory/documents/${move.source_doc_id}`}
+                              aria-label={t("openDocument", { number: String(move.source_doc_id) })}
+                              className="inline-flex items-center gap-1 font-mono text-xs text-[var(--vinea-brand)] underline"
+                            >
+                              {t("viewDocument")}
+                              <ExternalLink className="size-3" />
+                            </Link>
+                          ) : (
+                            <span className="text-xs text-[var(--vinea-ink-subtle)]">
+                              {tr("emptyValue")}
+                            </span>
+                          )}
+                        </TD>
+                        <TD>
+                          {/* Drill three: the move's entry. A revaluation posts no entry of
                               its own on some paths, so the cell can legitimately be empty. */}
                           {move.journal_entry_id === null ? (
                             <span className="text-xs text-[var(--vinea-ink-subtle)]">

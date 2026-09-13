@@ -722,16 +722,19 @@ def reverse_document(
             f"{document.number} has already matured into the bank; reverse the maturity first",
             code="instrument_matured",
         )
-    reversal = posting.reverse(
-        db,
-        document.journal_entry_id,
-        company_id=document.company_id,
-        on_date=on_date,
-        reason=reason,
-        actor=actor,
-        idempotency_key=idempotency_key,
-        idempotency_hash=idempotency_hash,
-    )
+    # The module's own reversal window: this is the half of the reversal the
+    # kernel cannot do, so the kernel only lets the ledger half through from here.
+    with posting.module_reversal(document.role.value):
+        reversal = posting.reverse(
+            db,
+            document.journal_entry_id,
+            company_id=document.company_id,
+            on_date=on_date,
+            reason=reason,
+            actor=actor,
+            idempotency_key=idempotency_key,
+            idempotency_hash=idempotency_hash,
+        )
     document.status = DocumentStatus.REVERSED
     document.reversal_entry_id = reversal.id
     document.reversed_on = on_date

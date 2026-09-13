@@ -47,6 +47,18 @@ ORACLE = (
     #  5  transfer 6                           6 × 115.888889 = 695.333334 → 695
     ("5", "Transfer now 6, Main → Depot", "-695", "12", "1391", "6", "695", "115.888889"),
     #  6  out 12, empties Main                 flush: the whole 1 391; 695 / 6 = 115.833333…
+    #
+    #      **This row demonstrates the flush; it does not test it.** 12 x 115.888889 =
+    #      1390.666… which rounds half-up to 1391 — the same figure the flush gives, so the
+    #      row is satisfied whether the rule fires or not. Proven at the P5 step-9 sensitivity
+    #      pass: with the empty-location branch in `costing.py` disabled, both costing tapes
+    #      stay green. What actually guards the rule is the property suite and the drift test —
+    #      `test_property_stock.py` (all four cases), `test_property_documents.py`'s
+    #      dispatch-then-receive, `test_transfers.py::test_the_destination_takes_the_value_the
+    #      _source_gave_up` and `test_stock.py::test_a_large_quantity_does_not_drift_the_way_a
+    #      _six_decimal_average_would`, which is the one written for exactly this. Seven tests
+    #      fail without it. The tape's figures are the owner-approved ones and stay as they
+    #      are; this note is here so nobody reads row 6 as the flush rule's guard.
     ("6", "Adjustment out: 12, Main (empties)", "-1391", "0", "0", "6", "695", "115.833333"),
     #  7  count variance −1 @ 115.833333       115.833333 → 116; 579 / 5 = 115.8
     ("7", "Count Depot, variance -1", "-116", "0", "0", "5", "579", "115.8"),

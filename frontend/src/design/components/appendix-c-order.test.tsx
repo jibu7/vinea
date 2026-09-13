@@ -64,6 +64,15 @@ import { navIntents, type IntentLabel } from "@/design/nav-tree";
  * in the opposite order, both tagged — so the four rows now stand in the appendix's order
  * with their tags cleared, and Count and Transaction are rows that were missing, not new
  * scope. Their endpoints shipped at step 5 with the other two.
+ *
+ * Amended at P5 step 9 with **"Documents"** under Transactions → Inventory, an addition to
+ * the owner's tree recorded as **Appendix C.1.7**. Decision 11 gives every stock document a
+ * reversal and nothing called it: `useReverseStockDocument` sat unused, and the only Reverse
+ * button in the product was the general ledger's — which posts the reversing entry and no
+ * reversing moves, so on an inventory adjustment it moved the inventory account and left the
+ * stock behind. The kernel now refuses that (`reverse_via_module_document`), which would have
+ * left a document the product could post and never undo. Same shape of hole as C.1.6's
+ * post-dated instruments, and the same answer: the tree gains the screen that closes it.
  */
 const APPENDIX_C: Record<IntentLabel, Array<[string, string, string | null]>> = {
   "Maintenance": [
@@ -124,6 +133,7 @@ const APPENDIX_C: Record<IntentLabel, Array<[string, string, string | null]>> = 
     ["Inventory", "Transfers", null],
     ["Inventory", "Adjustments", null],
     ["Inventory", "Counts", null],
+    ["Inventory", "Documents", null],
     ["Bill of Materials", "Manufacture process", "P12"],
     ["Point of Sale", "Sales", "P11"],
     ["Point of Sale", "Returns", "P11"],
