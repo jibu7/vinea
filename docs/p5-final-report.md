@@ -101,14 +101,34 @@ at the definition rather than at the render, and each is proven sensitive by rev
    `_require_count` accepted `inv:transactions_adjust`, which is the authority a count exists to
    take out of their hands. Split into `inv:count_enter`, back-filled by `0017_p5_count_enter`.
 
+## The first item after P5 — not a backlog line
+
+**An AR or AP document cannot be corrected from any screen.** Two correction endpoints exist
+server-side and **neither has a single caller in the frontend**:
+
+* `POST /subledger/{role}/documents/{id}/reverse`
+* `POST /subledger/{role}/allocations/{id}/unallocate`
+
+Grepping the whole of `frontend/src` for a call to either returns nothing, and there is no
+`/ar/documents/{id}` route to put one on — P4 shipped capture screens, an enquiry and the
+reports, and no document detail. So an invoice posted in error, or an allocation made against
+the wrong invoice, is uncorrectable by anybody using the product.
+
+This is the same hole as C.1.7's, one phase older and twice over. It is **the first work after
+P5**, not a backlog entry: `/ar/documents` and `/ap/documents` with a detail screen carrying
+Reverse, and Unallocate on the allocation screen, on exactly the pattern
+`/inventory/documents` now sets.
+
+**What this PR changed about it.** Before, the GL entry page's Reverse button would act on an
+AR invoice's entry: it posted the reversing entry, left the open item standing, and broke
+`SUM(open items) == control balance` silently. That is now refused with
+`reverse_via_module_document`, which names the endpoint the reversal belongs to. So the PR
+trades a silent corruption for a visible dead end — strictly better, and still a gap that
+should not outlive the next phase boundary.
+
 ## Findings recorded, not fixed here
 
-1. **AR/AP have no document-detail screen.** P4 shipped capture screens and an enquiry, so the
-   GL entry page's "Reverse via … document" link resolves for all three modules and can only
-   land for inventory. The same C.1.7 argument applies to AR and AP: a partner document can be
-   posted and reversed only through the API. A P6 or P4-remediation item.
-
-2. **`journal_entries.source_doc_id` cannot be back-filled.** Decision 3 asks for source links
+1. **`journal_entries.source_doc_id` cannot be back-filled.** Decision 3 asks for source links
    both ways and only one way was wired; the service now reserves the document id before posting
    so new documents link both ways. Historical rows cannot be corrected: both `journal_entries`
    and `stock_moves` are append-only *in the database*, unconditionally, and a migration that
@@ -118,7 +138,7 @@ at the definition rather than at the render, and each is proven sensitive by rev
    that UPDATEs a posted table is tested against posted rows, because `make migrate-check` runs
    on an empty database and proves DDL only.
 
-3. **`toISOString().slice(0, 10)` renders "today" in UTC**, which east of Greenwich is yesterday
+2. **`toISOString().slice(0, 10)` renders "today" in UTC**, which east of Greenwich is yesterday
    for the first hours of every day. 23 files, 31 occurrences. `todayIso` / `monthToDateIso` are
    in `lib/format.ts` and the new screens use them; the sweep is its own PR with a lint rule and
    a grep test so the pattern cannot return. Filed as issue #30.

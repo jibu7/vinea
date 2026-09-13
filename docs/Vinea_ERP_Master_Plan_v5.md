@@ -395,7 +395,9 @@ The owner's original menu ordering (software_interface docx) is **adopted as the
 
    It is also the only home a **valueless** document has. A receipt at no cost (free samples) posts moves and no journal entry at all, so before this screen there was no way to reach it from anywhere in the product.
 
-   Same shape of hole as C.1.6's post-dated instruments, and the same answer: the tree gains the screen that closes it. The equivalent AR/AP document-detail screen does **not** exist — P4 shipped capture screens and an enquiry — so the GL entry page's "Reverse via … document" link resolves for all three modules but can only land for inventory. Recorded as a P4 finding in `docs/p5-final-report.md`.
+   Same shape of hole as C.1.6's post-dated instruments, and the same answer: the tree gains the screen that closes it.
+
+   **The same hole is open in AR and AP, one phase older and twice over**, and closing it is the first work after P5 rather than a backlog line. `POST /subledger/{role}/documents/{id}/reverse` and `POST /subledger/{role}/allocations/{id}/unallocate` both exist and neither has a caller anywhere in the frontend, and there is no `/ar/documents/{id}` route to put one on — P4 shipped capture screens, an enquiry and the reports, and no document detail. An invoice posted in error, or an allocation made against the wrong invoice, is uncorrectable by anybody using the product. The remedy is `/ar/documents` and `/ap/documents` with a detail screen carrying Reverse, and Unallocate on the allocation screen, on the pattern `/inventory/documents` now sets.
 
 ### C.2 Additions layered onto the owner's tree (post-spec decisions)
 

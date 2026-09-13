@@ -3,8 +3,21 @@ down: ; docker compose down
 logs: ; docker compose logs -f backend
 # In the container, not on the host: the container writes `backend/.venv` as root through the
 # bind mount, so a host `uv run` fails on `.venv/CACHEDIR.TAG` once the stack has been up.
+#
+# **This is not why the suite takes ~19 minutes.** Measured at P5 step 9 on the same 161-test
+# `tests/kernel` subset, back to back: in the container 257.19s, on the host 269.60s. The host
+# is ~5% *slower* — it reaches Postgres through the published port where the container has it
+# on the compose network. The suite was already 19:21 before this target moved. What costs the
+# time is the per-process test database and its migration run, not where pytest is invoked.
 be-test: ; docker compose exec -T backend uv run pytest -q
 be-lint: ; docker compose exec -T backend uv run ruff check .
+
+# For a machine whose `backend/.venv` is its own. Same commands on the host, opt-in, so nobody
+# whose venv works is forced through Docker — and so the comparison above stays reproducible.
+# `UV_PROJECT_ENVIRONMENT` points elsewhere if the bind-mounted venv is root-owned:
+#   UV_PROJECT_ENVIRONMENT=/tmp/vinea-hostvenv make be-test-host
+be-test-host: ; cd backend && env -u DATABASE_URL uv run pytest -q
+be-lint-host: ; cd backend && env -u DATABASE_URL uv run ruff check .
 fe-dev: ; cd frontend && npm run dev
 
 # `docker compose down -v` wipes every named volume in docker-compose.yml, not just
