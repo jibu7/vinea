@@ -35,11 +35,25 @@ export interface Project {
   is_active: boolean;
 }
 
+/**
+ * Inventory's transaction kinds (P5 decision 9). A kind is *what the type does to stock* —
+ * users add their own types of an existing kind (Damaged, Samples, ...) with their own contra
+ * account, which is what the Maintenance screen is for. `null` on every non-inventory module,
+ * where the concept does not apply.
+ *
+ * Re-exported from the generated module rather than re-declared here — imported too, because
+ * `TransactionType` below uses it.
+ */
+import type { InventoryTransactionKind } from "@/lib/api-enums";
+
+export type { InventoryTransactionKind };
+
 export interface TransactionType {
   id: number;
   module: string;
   code: string;
   name: string;
+  kind: InventoryTransactionKind | null;
   default_gl_account_id: number | null;
   is_active: boolean;
 }

@@ -3,6 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import type {
+  InventoryTransactionKind,
   AccountAuditRecord,
   AccountingPeriod,
   AccountTransactionsResponse,
@@ -471,6 +472,8 @@ export function useCreateTransactionType() {
       module: string;
       code: string;
       name: string;
+      /** Required for `module: "inv"`, rejected elsewhere — the service enforces both. */
+      kind?: InventoryTransactionKind | null;
       default_gl_account_id?: number | null;
     }) => api.post<TransactionType>("/gl/transaction-types", payload),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["gl", "transaction-types"] }),

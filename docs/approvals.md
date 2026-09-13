@@ -16,6 +16,7 @@ apart from one that was assumed.
 | P4 | 6 | Maintenance UI (review, not a plan gate) | eight AR/AP maintenance screens | `f65581e` | "Step 6 accepted with these closes" — accepted with seven follow-up items, all delivered. |
 | P5 | 2 | Stock ledger, costing engine and posting contract | `stock_moves` + the two caches, `verify_stock_balances()`, the costing rules of decision 4, `receive_stock()` / `issue_stock()`, `assert_stock_invariants` | `fb7126d` | "Step 2 — approved on conditions. Land 1–4 on p5-step-2 before opening the PR." — six conditions, all delivered before the PR: the kernel/model line-by-line report; checker sensitivity with raw output for both provers; decision 1 restated so moves post regardless of value; decision 2 generalised to every negative→non-negative crossing; the primitive-level tape rows 1–9 with row 9 = Depot 2 / 300, avg 150, residue 34; and CI green. Row 9 supersedes the figure in the phase prompt (334 / 167) on the owner's direction — the step-5 document-level tape carries the same change. |
 | P5 | 5 | Enquiry, reports and the costing tape | item enquiry, the Movement / Transaction / Valuation / Count reports, and the document-level costing tape (`backend/tests/inventory/test_costing_tape_documents.py`) | `8fcf814` | "Step 5 — approved. Before opening the PR: 1. The session created a `vinea` superuser role and database. State which role the harness connected as for the 700-run. Superusers bypass RLS entirely — FORCE has no effect on them — so if any test session ran as superuser, the RLS tests in that run could not have failed. CI will settle it either way; I want it stated. 2. Open the PR, CI green, approvals row with these words. Step 6 on green. Carry into step 8 (reports UI): 3. Any running 'average' shown on Movement or the enquiry is value ÷ quantity at that date, not the cost the issue was posted at — a backdated receipt makes the two differ in view. Either don't show one, or label it as the as-at ratio. No running average as a column named 'cost'." — conditions 1 and 3 answered below; step 6 proceeds on green CI. |
+| P5 | 6 | Maintenance UI (review, not a plan gate) | the seven Maintenance → Inventory screens, `frontend/e2e/inventory-maintenance.spec.ts`, `docs/screenshots/p5-step-6/` | `6297d4c` | "Step 6 — approved with these before the PR: 1. Variable barcodes: rename the built screen's row to 'Barcodes' (what it is: per-item barcodes with UoM and pack quantity, listing + duplicate detector). Put 'Variable barcodes' back in the tree tagged P11 — it's the POS scale-label pattern (prefix, item-code digits, weight/price digits). Note in Appendix C's order test and in the P5 final report as a plan deviation: the prompt misread the label; that's on the owner side, not the build. 2. control_type 'INV' vs 'inventory': fix the class, not the instance. One source for enum string values on the frontend (generated from the API schema, or one constants module), and a test that those values equal the backend enum. No control-type or kind literal in any screen file. 3. PLAYWRIGHT_CHROMIUM_PATH: accepted, env-gated, comment says dev-only. The 12 green ran on a hand-assembled stack; CI's compose e2e is the authority. 4. Standard for steps 7 and 8: every screen's e2e asserts at least one formatted money value and one formatted quantity (UoM decimals) read off the page, the way 8,500 is asserted now." — all four delivered before the PR; see below. |
 | P4 | 9 | Tests, CI and phase close (review, not a plan gate) | the acceptance tape (`frontend/e2e/ar-ap-acceptance.spec.ts`), the post-dated instruments screen, `docs/p4-final-report.md` | `474c9b1` | **Awaiting the owner.** The row is opened at submission, not filled in on the author's behalf: the point of this file is that an approval nobody wrote down cannot later be told apart from one that was assumed. Replace this cell with the owner's words when they arrive, and pin the commit they were looking at. The commit named is the one the report describes (`474c9b1`); this row is the commit after it, which is the closest a file can get to citing itself. |
 
 ## Conditions carried out of P5 step 5
@@ -45,6 +46,44 @@ saying why they expose no average, and the valuation report's ratio was renamed 
 the cost anything was posted at, because a backdated receipt moves the ratio while leaving
 every earlier-posted issue at the value it was given. The cost a move was actually posted at
 stays available per row as `StockMove.unit_cost`, on the transaction report and the enquiry.
+
+## Conditions carried out of P5 step 6
+
+**1 — "Variable barcodes" was the wrong screen (plan deviation → `docs/p5-final-report.md`).**
+Appendix C's "Variable barcodes" is the POS **scale-label** pattern: a prefix, then item-code
+digits, then weight or price digits, decoded at the till. That is a P11 screen sitting with the
+tills that read it. The step-6 prompt listed it among the maintenance screens to ship and the
+build read it as "the barcode listing", so what landed was the plain per-item listing — a real
+and needed screen, under a name that belongs to a different one. The appendix row keeps its
+label and position and is now tagged `P11`; the built screen sits beside it as **"Barcodes"**
+at `/maintenance/barcodes`. Recorded in `appendix-c-order.test.tsx` beside the assertion it
+changes, and to be carried into the P5 final report at step 9 as a plan deviation on the
+specification side, not the build.
+
+**2 — one source for wire enum values.** `frontend/src/lib/api-enums.ts` is generated from the
+Python enums by `backend/app/scripts/export_api_enums.py` (21 enums), with
+`backend/tests/test_api_enums_export.py` as the drift gate — regenerate, compare, fail with the
+command that fixes it, the same shape as `alembic check`. `frontend/src/lib/api-enums.test.ts`
+keeps control-type, item-type, policy and kind literals out of every file under `src/app` and
+`src/features`. Writing it surfaced **five pre-existing instances of the same defect** in P4
+code (`control_type === "bank" | "cash" | "ar" | "ap"` hard-coded in the cashbook batch screen,
+the AR/AP defaults screen and the subledger document screen); all now compare against
+`ControlType`. The guard matches on *proximity to the field or the type*, not on the value
+alone: a first cut that banned the values outright flagged twenty P4 files for `role="ap"`,
+where `"ap"` is a `PartnerRole` and not a `ControlType`, and a guard that cries wolf is a guard
+that gets switched off.
+
+**3 — `PLAYWRIGHT_CHROMIUM_PATH`.** Env-gated, unset in CI, and its comment now says
+DEVELOPMENT ONLY and names CI's `docker compose` e2e as the authority. The twelve green tests
+reported at step 6 ran against a hand-assembled local stack (Postgres + uvicorn + `next dev`,
+no Docker daemon in the sandbox) — a development signal, not evidence the suite passes.
+
+**4 — the formatting standard, binding on steps 7 and 8.** Every screen's e2e asserts at least
+one **formatted money** value and one **formatted quantity** read off the page as rendered, not
+as the raw field. Both defects step 6 shipped were that shape: a price printed at
+`NUMERIC(20,6)` scale instead of RWF's zero decimals, and a unit factor printed as
+`1.0000000000`. Written into the header of `frontend/e2e/inventory-maintenance.spec.ts`, which
+already meets it (`8,500` for money, `6` and `1` for factors).
 
 ## What a good row looks like
 

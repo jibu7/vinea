@@ -16,6 +16,7 @@ import { useCreateCashbookEntry } from "@/features/gl/hooks";
 import { useGLLookups, toOptions } from "@/features/gl/lookups";
 import type { CashbookEntryCreatePayload, CashbookLineInput } from "@/features/gl/types";
 import { useApiErrorToast } from "@/lib/use-api-error-toast";
+import { ControlType } from "@/lib/api-enums";
 import { loadDraft, saveDraft, clearDraft, newDraftId, type Draft } from "@/lib/drafts";
 
 interface CashbookDraftData {
@@ -44,7 +45,7 @@ export default function NewCashbookBatchPage() {
 
   const baseCurrency = useMemo(() => currencies.data?.find((c) => c.is_base), [currencies.data]);
   const cashAccounts = useMemo(
-    () => (accounts.data ?? []).filter((a) => a.control_type === "bank" || a.control_type === "cash"),
+    () => (accounts.data ?? []).filter((a) => a.control_type === ControlType.BANK || a.control_type === ControlType.CASH),
     [accounts.data],
   );
 
@@ -234,7 +235,7 @@ export default function NewCashbookBatchPage() {
         onRowsChange={setRows}
         errors={lineErrors}
         accountOptions={toOptions(
-          (accounts.data ?? []).filter((a) => a.is_postable && a.control_type !== "bank" && a.control_type !== "cash"),
+          (accounts.data ?? []).filter((a) => a.is_postable && a.control_type !== ControlType.BANK && a.control_type !== ControlType.CASH),
           (a) => `${a.code} \u00b7 ${a.name}`,
         )}
         branchOptions={toOptions(branches.data, (b) => `${b.code} \u00b7 ${b.name}`)}

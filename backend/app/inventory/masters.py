@@ -11,7 +11,7 @@ the same rule the chart of accounts and the partner masters follow.
 from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
 
-from sqlalchemy import or_, select
+from sqlalchemy import or_, select, tuple_
 from sqlalchemy.orm import Session
 from starlette.requests import Request
 
@@ -726,6 +726,86 @@ def list_barcodes(db: Session, company_id: int, item_id: int) -> list[ItemBarcod
             .where(ItemBarcode.company_id == company_id, ItemBarcode.item_id == item_id)
             .order_by(ItemBarcode.barcode)
         )
+    )
+
+
+@dataclass(frozen=True)
+class BarcodeListing:
+    """One barcode with the names the Variable barcodes screen shows beside it.
+
+    Carries the item and unit *resolved*, rather than leaving the screen to fetch a catalogue
+    per row: a barcode list is read by someone holding a scanner and a puzzled expression, and
+    what they need is which item and which pack the code stands for.
+    """
+
+    barcode: ItemBarcode
+    item_code: str
+    item_name: str
+    uom_code: str
+    uom_name: str
+
+
+def search_barcodes(
+    db: Session,
+    company_id: int,
+    *,
+    term: str | None = None,
+    item_id: int | None = None,
+    include_inactive: bool = False,
+    cursor: int | None = None,
+    limit: int = 100,
+) -> tuple[list[BarcodeListing], int | None]:
+    """Every barcode in the company, not one item's — the company-wide view decision 8's
+    uniqueness rule is actually about.
+
+    `list_barcodes` answers "what codes does this item have", which is the Items screen's
+    question. This answers "what does this code mean", which is the scanner's, and it is the
+    only view in which a duplicate across two items would be visible at all.
+
+    Keyset-paged on `(barcode, id)` in barcode order, the kernel's cursor shape.
+    """
+    query = (
+        select(ItemBarcode, Item, Uom)
+        .join(Item, Item.id == ItemBarcode.item_id)
+        .join(Uom, Uom.id == ItemBarcode.uom_id)
+        .where(ItemBarcode.company_id == company_id)
+    )
+    if not include_inactive:
+        query = query.where(ItemBarcode.is_active)
+    if item_id is not None:
+        query = query.where(ItemBarcode.item_id == item_id)
+    if term:
+        like = f"%{term.strip()}%"
+        query = query.where(
+            or_(ItemBarcode.barcode.ilike(like), Item.code.ilike(like), Item.name.ilike(like))
+        )
+    if cursor is not None:
+        anchor = db.execute(
+            select(ItemBarcode.barcode, ItemBarcode.id).where(
+                ItemBarcode.id == cursor, ItemBarcode.company_id == company_id
+            )
+        ).one_or_none()
+        if anchor is None:
+            raise NotFoundError("Cursor barcode not found")
+        query = query.where(tuple_(ItemBarcode.barcode, ItemBarcode.id) > tuple_(*anchor))
+
+    rows = db.execute(
+        query.order_by(ItemBarcode.barcode, ItemBarcode.id).limit(limit + 1)
+    ).all()
+    has_more = len(rows) > limit
+    page = rows[:limit]
+    return (
+        [
+            BarcodeListing(
+                barcode=barcode,
+                item_code=item.code,
+                item_name=item.name,
+                uom_code=uom.code,
+                uom_name=uom.name,
+            )
+            for barcode, item, uom in page
+        ],
+        page[-1][0].id if has_more and page else None,
     )
 
 

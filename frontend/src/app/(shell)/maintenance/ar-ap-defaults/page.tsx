@@ -14,6 +14,7 @@ import { toOptions } from "@/features/gl/lookups";
 import { useArApDefaults, useUpdateArApDefaults } from "@/features/subledger/hooks";
 import type { ArApDefaults } from "@/features/subledger/types";
 import { useApiErrorToast } from "@/lib/use-api-error-toast";
+import { ControlType } from "@/lib/api-enums";
 
 type Key = keyof ArApDefaults;
 
@@ -61,8 +62,8 @@ export default function ArApDefaultsPage() {
   const controlAccounts = useMemo(() => {
     const usable = (accounts.data ?? []).filter((a) => a.is_postable && a.is_active);
     return {
-      ar: usable.filter((a) => a.control_type === "ar"),
-      ap: usable.filter((a) => a.control_type === "ap"),
+      ar: usable.filter((a) => a.control_type === ControlType.AR),
+      ap: usable.filter((a) => a.control_type === ControlType.AP),
     };
   }, [accounts.data]);
   const postable = useMemo(

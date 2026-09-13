@@ -28,6 +28,7 @@ import { isApiError } from "@/features/auth/hooks";
 import { clearDraft, loadDraft, newDraftId, saveDraft } from "@/lib/drafts";
 import { formatMoney } from "@/lib/format";
 import { useApiErrorToast } from "@/lib/use-api-error-toast";
+import { ControlType } from "@/lib/api-enums";
 import { dueDateFor } from "./due-date";
 import type { DocumentScreenSpec } from "./document-kinds";
 import { usePartnerEnquiry, usePartners, usePaymentTerms, usePostDocument, useSalesReps } from "./hooks";
@@ -179,7 +180,10 @@ export function DocumentScreen({ spec }: { spec: DocumentScreenSpec }) {
   const cashAccounts = useMemo(
     () =>
       (accounts.data ?? []).filter(
-        (a) => a.is_postable && a.is_active && (a.control_type === "bank" || a.control_type === "cash"),
+        (a) =>
+          a.is_postable &&
+          a.is_active &&
+          (a.control_type === ControlType.BANK || a.control_type === ControlType.CASH),
       ),
     [accounts.data],
   );

@@ -181,6 +181,21 @@ class BarcodeRead(ApiModel):
 # --- Warehouses ---------------------------------------------------------------------------
 
 
+class BarcodeListingRead(ApiModel):
+    """A barcode with its item and pack resolved — what the Variable barcodes screen lists."""
+
+    id: int
+    barcode: str
+    item_id: int
+    item_code: str
+    item_name: str
+    uom_id: int
+    uom_code: str
+    uom_name: str
+    pack_quantity: Decimal
+    is_active: bool
+
+
 class WarehouseCreate(BaseModel):
     code: str = Field(min_length=1, max_length=20)
     name: str = Field(min_length=1, max_length=200)
