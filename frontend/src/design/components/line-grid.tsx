@@ -459,7 +459,7 @@ export function LineGrid({
                           // Fixed widths on the pickers, not the cells: an auto-layout
                           // table ignores a cell's max-width, and an item label with its
                           // on-hand suffix would otherwise push unit cost off the screen.
-                          className={cn("h-8 w-64", itemErr && "border-[var(--vinea-danger)]")}
+                          className={cn("h-8 w-56", itemErr && "border-[var(--vinea-danger)]")}
                           onFocus={() => startCellEdit(r, COL.item, "itemId", row.itemId)}
                           onKeyDown={(e) => onCellKeyDown(e, r, COL.item, "itemId")}
                         />
@@ -473,7 +473,7 @@ export function LineGrid({
                             onValueChange={(v) => updateRow(r, { warehouseId: v })}
                             placeholder={t("warehousePlaceholder")}
                             ariaLabel={t("warehouseAria", { row: r + 1 })}
-                            className={cn("h-8 w-40", warehouseErr && "border-[var(--vinea-danger)]")}
+                            className={cn("h-8 w-36", warehouseErr && "border-[var(--vinea-danger)]")}
                             onFocus={() => startCellEdit(r, COL.warehouse, "warehouseId", row.warehouseId)}
                             onKeyDown={(e) => onCellKeyDown(e, r, COL.warehouse, "warehouseId")}
                           />
@@ -499,7 +499,7 @@ export function LineGrid({
                             onValueChange={(v) => updateRow(r, { transactionTypeId: v })}
                             placeholder={t("transactionTypePlaceholder")}
                             ariaLabel={t("transactionTypeAria", { row: r + 1 })}
-                            className={cn("h-8 w-44", typeErr && "border-[var(--vinea-danger)]")}
+                            className={cn("h-8 w-40", typeErr && "border-[var(--vinea-danger)]")}
                             onFocus={() => startCellEdit(r, COL.transactionType, "transactionTypeId", row.transactionTypeId)}
                             onKeyDown={(e) => onCellKeyDown(e, r, COL.transactionType, "transactionTypeId")}
                           />
@@ -531,7 +531,7 @@ export function LineGrid({
                           onValueChange={(v) => updateRow(r, { uomId: v })}
                           placeholder={t("uomPlaceholder")}
                           ariaLabel={t("uomAria", { row: r + 1 })}
-                          className={cn("h-8 w-36", uomErr && "border-[var(--vinea-danger)]")}
+                          className={cn("h-8 w-28", uomErr && "border-[var(--vinea-danger)]")}
                           onFocus={() => startCellEdit(r, COL.uom, "uomId", row.uomId)}
                           onKeyDown={(e) => onCellKeyDown(e, r, COL.uom, "uomId")}
                         />
