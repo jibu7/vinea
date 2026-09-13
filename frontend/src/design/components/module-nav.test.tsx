@@ -15,7 +15,9 @@ describe("SidebarNav permission filtering", () => {
     render(<SidebarNav permissions={allPermissions} />);
 
     expect(screen.getByText("Company details")).toBeInTheDocument();
-    expect(screen.getByText("Journal batches")).toBeInTheDocument();
+    // Two "Journal batches" rows since P5 step 7 — the GL one and the Inventory one — so
+    // this reads both rather than one, the way the P4 block below handles a repeated label.
+    expect(screen.getAllByText("Journal batches")).toHaveLength(2);
     expect(screen.getByText("Cashbook batches")).toBeInTheDocument();
   });
 
@@ -23,7 +25,7 @@ describe("SidebarNav permission filtering", () => {
     render(<SidebarNav permissions={new Set()} />);
 
     expect(screen.queryByText("Company details")).not.toBeInTheDocument();
-    expect(screen.queryByText("Journal batches")).not.toBeInTheDocument();
+    expect(screen.queryAllByText("Journal batches")).toHaveLength(0);
   });
 
   it("always renders phase-tagged items, disabled, regardless of permissions", () => {
@@ -90,6 +92,31 @@ describe("P4 maintenance screens", () => {
       maintenance.items.find((item) => item.module === module && item.label === "Transaction types");
     expect(byModule("Accounts Receivable")?.href).toBe("/maintenance/ar-transaction-types");
     expect(byModule("Accounts Payable")?.href).toBe("/maintenance/ap-transaction-types");
+  });
+});
+
+describe("P5 transaction screens", () => {
+  const invPermissions = new Set(["inv:transactions_adjust"]);
+
+  it.each([
+    ["Inventory", "Journal batches", "/inventory/journal-batches/new"],
+    ["Inventory", "Transfers", "/inventory/transfers"],
+    ["Inventory", "Adjustments", "/inventory/adjustments/new"],
+    ["Inventory", "Counts", "/inventory/counts"],
+  ])("links %s → %s to %s with no phase tag left", (module, label, href) => {
+    const transactions = navIntents.find((i) => i.label === "Transactions")!;
+    const item = transactions.items.find((row) => row.module === module && row.label === label);
+    expect(item?.href).toBe(href);
+    expect(item?.phase).toBeUndefined();
+
+    render(<SidebarNav permissions={invPermissions} />);
+    const links = screen.getAllByText(label).map((node) => node.closest("a")).filter(Boolean);
+    expect(links.map((a) => a?.getAttribute("href"))).toContain(href);
+  });
+
+  it("leaves no P5 tag in the Transactions block once step 7 has landed", () => {
+    const transactions = navIntents.find((i) => i.label === "Transactions")!;
+    expect(transactions.items.filter((item) => item.phase === "P5")).toEqual([]);
   });
 });
 

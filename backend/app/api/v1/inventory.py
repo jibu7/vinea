@@ -21,6 +21,7 @@ from app.inventory import documents as inventory_documents
 from app.inventory import enquiries as inventory_enquiries
 from app.inventory import masters
 from app.inventory import reports as inventory_reports
+from app.inventory import stock as stock_service
 from app.inventory import transfers as inventory_transfers
 from app.models.audit import AuditLog
 from app.models.inventory import ItemType, StockCountStatus, StockTransferStatus
@@ -56,6 +57,7 @@ from app.schemas.inventory import (
     ItemUpdate,
     MovementReportRead,
     MovementRowRead,
+    OnHandRead,
     StockDocumentCreate,
     StockDocumentLineRead,
     StockDocumentRead,
@@ -551,6 +553,27 @@ def update_warehouse(
 
 
 # --- Defaults -----------------------------------------------------------------------------
+
+
+@router.get("/on-hand")
+def on_hand(
+    warehouse_id: int,
+    auth: AuthContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+) -> list[OnHandRead]:
+    """Quantity on hand per item at one warehouse — what the item typeahead on a stock document
+    shows beside each option (P5 step 7), in one request rather than one per option.
+
+    The cache, not a reconstruction: "now" is the question here, and `verify_stock_balances()`
+    is what makes the cache an answer. Not paginated, like `/items`: one row per item the
+    warehouse has ever held, bounded by the catalogue and scoped by RLS.
+    """
+    _require_view(auth)
+    masters.get_warehouse(db, auth.company_id, warehouse_id)
+    return [
+        OnHandRead.model_validate(row)
+        for row in stock_service.warehouse_balances(db, auth.company_id, warehouse_id)
+    ]
 
 
 @router.get("/defaults")

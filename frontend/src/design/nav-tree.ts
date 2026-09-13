@@ -115,9 +115,15 @@ export const navIntents: NavIntent[] = [
       { label: "Post-dated payments", module: "Accounts Payable", permission: "ap:reports_view", href: "/ap/post-dated" },
       { label: "Account payable batches", module: "Accounts Payable", permission: "ap:transactions_post", href: "/ap/batches/new" },
       { label: "Sales order", module: "Order Entry", phase: "P6" },
-      { label: "Adjustments", module: "Inventory", phase: "P5" },
-      { label: "Transfers", module: "Inventory", phase: "P5" },
-      { label: "Counts", module: "Inventory", phase: "P5" },
+      // Appendix C's Inventory block, in the owner's order: Journal batches, Transfers,
+      // Adjustments, Counts. The tree carried three of the four, out of order, under a P5
+      // tag; the screens landed at P5 step 7 and the row the tag was covering arrived with
+      // them. Counts opens on the posting permission because the sheet is what a stock-taker
+      // fills in; Process is the step that checks `inv:count_process`, on the button.
+      { label: "Journal batches", module: "Inventory", permission: "inv:transactions_adjust", href: "/inventory/journal-batches/new" },
+      { label: "Transfers", module: "Inventory", permission: "inv:transactions_adjust", href: "/inventory/transfers" },
+      { label: "Adjustments", module: "Inventory", permission: "inv:transactions_adjust", href: "/inventory/adjustments/new" },
+      { label: "Counts", module: "Inventory", permission: "inv:transactions_adjust", href: "/inventory/counts" },
       { label: "Manufacture process", module: "Bill of Materials", phase: "P12" },
       { label: "Sales", module: "Point of Sale", phase: "P11" },
       { label: "Returns", module: "Point of Sale", phase: "P11" },

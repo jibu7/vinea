@@ -52,7 +52,13 @@ export function Combobox({
             className,
           )}
         >
-          <span className={selected ? "" : "text-[var(--vinea-ink-subtle)]"}>
+          {/* One line, ellipsised: a long label ("WINE-750 · Rugari Red 750ml — 120 EA")
+              in a dense grid cell must not wrap into the row above. The full text is the
+              button's title, and the popover shows it whole. */}
+          <span
+            className={cn("truncate", selected ? "" : "text-[var(--vinea-ink-subtle)]")}
+            title={selected?.label}
+          >
             {selected?.label ?? hint}
           </span>
           <ChevronsUpDown className="size-4 shrink-0 text-[var(--vinea-ink-subtle)]" />
@@ -78,6 +84,7 @@ export function Combobox({
                 <CommandPrimitive.Item
                   key={opt.value}
                   value={opt.label}
+                  keywords={opt.keywords}
                   onSelect={() => {
                     onValueChange?.(opt.value);
                     setOpen(false);

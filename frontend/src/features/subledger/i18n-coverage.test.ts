@@ -157,8 +157,8 @@ describe("keys built from a template literal still resolve", () => {
     ["dashboard.kpi", ["cashPosition", "receivables", "payables", "netIncome"]],
     // features/gl/types.ts: controlTypeLabel() over CONTROL_TYPE_KEYS, plus the null case
     ["gl.controlTypeShort", ["none", "bank", "cash", "ar", "ap", "inventory"]],
-    // line-grid.tsx: t(`${mode}Lines`) over the grid's four modes
-    ["lineGrid", ["journalLines", "cashbookLines", "documentLines", "batchLines"]],
+    // line-grid.tsx: t(`${mode}Lines`) over the grid's five modes
+    ["lineGrid", ["journalLines", "cashbookLines", "documentLines", "batchLines", "inventoryLines"]],
   ];
 
   it.each(dynamic)("%s resolves for every value the call site can produce", (prefix, keys) => {

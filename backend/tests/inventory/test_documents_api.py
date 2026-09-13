@@ -335,3 +335,49 @@ def test_a_clerk_may_not_post_a_stock_document(client: TestClient, db: Session) 
     )
 
     assert response.status_code == 403
+
+
+# --- Quantity on hand for the typeahead (P5 step 7) --------------------------------------------
+
+
+def test_on_hand_reads_what_the_warehouse_holds_after_a_posting(client: TestClient) -> None:
+    """The figure the item typeahead shows beside each option — from the cache the step-2
+    checker proves, after a real posting rather than a seeded row."""
+    _signup(client)
+    payload = _adjustment_payload(client)
+    warehouse_id = payload["lines"][0]["warehouse_id"]
+    item_id = payload["lines"][0]["item_id"]
+
+    assert client.get(f"/api/v1/inventory/on-hand?warehouse_id={warehouse_id}").json() == []
+
+    client.post("/api/v1/inventory/adjustments", json=payload, headers={"Idempotency-Key": "oh-1"})
+
+    rows = client.get(f"/api/v1/inventory/on-hand?warehouse_id={warehouse_id}").json()
+    assert [row["item_id"] for row in rows] == [item_id]
+    assert Decimal(rows[0]["quantity"]) == Decimal(10)
+    assert Decimal(rows[0]["value"]) == Decimal(1000)
+    assert rows[0]["warehouse_id"] == warehouse_id
+
+
+def test_on_hand_is_per_warehouse(client: TestClient) -> None:
+    _signup(client)
+    payload = _adjustment_payload(client)
+    client.post("/api/v1/inventory/adjustments", json=payload, headers={"Idempotency-Key": "oh-2"})
+    other = client.post(
+        "/api/v1/inventory/warehouses",
+        json={"code": "DEPOT", "name": "Depot", "branch_id": 1},
+    ).json()
+
+    assert client.get(f"/api/v1/inventory/on-hand?warehouse_id={other['id']}").json() == []
+
+
+def test_on_hand_of_an_unknown_warehouse_is_a_404(client: TestClient) -> None:
+    _signup(client)
+    assert client.get("/api/v1/inventory/on-hand?warehouse_id=999999").status_code == 404
+
+
+def test_on_hand_needs_an_inventory_permission(client: TestClient, db: Session) -> None:
+    company_id = _signup(client)
+    warehouse_id = _main_warehouse(client)["id"]
+    clerk = _clerk(client, db, company_id)
+    assert clerk.get(f"/api/v1/inventory/on-hand?warehouse_id={warehouse_id}").status_code == 403

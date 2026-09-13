@@ -220,6 +220,15 @@ class WarehouseRead(ApiModel):
     is_active: bool
 
 
+class OnHandRead(ApiModel):
+    """One cache row: what a warehouse holds of an item, right now."""
+
+    item_id: int
+    warehouse_id: int
+    quantity: Decimal
+    value: Decimal
+
+
 # --- Defaults -----------------------------------------------------------------------------
 
 

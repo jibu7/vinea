@@ -49,6 +49,13 @@ import { navIntents, type IntentLabel } from "@/design/nav-tree";
  * appendix does not repeat it.
  *
  * Nothing outside the Inventory block moved.
+ *
+ * Amended at P5 step 7 with the Transactions → Inventory block. The appendix reads "Journal
+ * batches, Transfers, Adjustments, Counts"; the tree carried Adjustments, Transfers, Counts —
+ * three of the four, in a different order, all tagged P5. The four rows now stand in the
+ * appendix's order with their tags cleared, and "Journal batches" is the row that was
+ * missing, not new scope. Same shape of edit as the step-6 Maintenance block: the tag was
+ * covering a screen that had no row to be tagged.
  */
 const APPENDIX_C: Record<IntentLabel, Array<[string, string, string | null]>> = {
   "Maintenance": [
@@ -105,9 +112,10 @@ const APPENDIX_C: Record<IntentLabel, Array<[string, string, string | null]>> = 
     ["Accounts Payable", "Post-dated payments", null],
     ["Accounts Payable", "Account payable batches", null],
     ["Order Entry", "Sales order", "P6"],
-    ["Inventory", "Adjustments", "P5"],
-    ["Inventory", "Transfers", "P5"],
-    ["Inventory", "Counts", "P5"],
+    ["Inventory", "Journal batches", null],
+    ["Inventory", "Transfers", null],
+    ["Inventory", "Adjustments", null],
+    ["Inventory", "Counts", null],
     ["Bill of Materials", "Manufacture process", "P12"],
     ["Point of Sale", "Sales", "P11"],
     ["Point of Sale", "Returns", "P11"],

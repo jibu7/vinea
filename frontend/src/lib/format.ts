@@ -37,6 +37,29 @@ export function formatMoney(
   return showCode ? `${label} ${formatted}` : formatted;
 }
 
+/**
+ * A quantity, to its unit's decimal places — grouped like money, but no code and no symbol,
+ * because a count of bottles is not an amount of anything.
+ *
+ * `decimalPlaces` comes from the `uoms` master (`Uom.decimal_places`: EA = 0, KG = 3), never
+ * hard-coded, for the same reason `formatMoney` takes the currency's. The step-6 review made
+ * this a standard: every screen's e2e reads at least one quantity off the page *formatted*,
+ * because the raw `NUMERIC(20,6)` string ("12.000000") is what the column holds and is not
+ * what anyone should be shown.
+ */
+export function formatQuantity(
+  amount: number,
+  decimalPlaces: number,
+  opts: { locale?: string } = {},
+): string {
+  const { locale = APP_LOCALE } = opts;
+  const rounded = roundHalfUp(amount, decimalPlaces);
+  return new Intl.NumberFormat(locale, {
+    minimumFractionDigits: decimalPlaces,
+    maximumFractionDigits: decimalPlaces,
+  }).format(rounded);
+}
+
 /** dd/MM/yyyy, per the owner's correction — explicit digits, not locale dateStyle. */
 export function formatDate(date: Date | string, opts: { locale?: string } = {}): string {
   const { locale = APP_LOCALE } = opts;
