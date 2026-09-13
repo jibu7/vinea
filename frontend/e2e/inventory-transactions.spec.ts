@@ -150,6 +150,10 @@ test.describe("Inventory transactions", () => {
     await page.getByLabel("Unit cost, row 1").fill("4000");
     // The keyed estimate: 2.5 × 4,000, in base currency at zero decimals.
     await expect(page.getByTestId("footer-value")).toHaveText("FRw 10,000");
+    // One line by definition — the grid offers no second, and Enter on the row stays put.
+    await expect(page.getByRole("button", { name: "+ Add line" })).toHaveCount(0);
+    await page.getByLabel("Quantity, row 1").press("Enter");
+    await expect(page.getByLabel("Quantity, row 2")).toHaveCount(0);
 
     await setTheme(page, "dark");
     await assertNoSeriousViolations(page);

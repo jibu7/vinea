@@ -187,6 +187,10 @@ export interface LineGridProps {
    * asked for. Null while no type is chosen. */
   lineKindFor?: (row: LineGridRow) => InventoryTransactionKind | null;
   inventoryColumns?: InventoryColumns;
+  /** Caps the grid at this many rows: the add-line control goes and Enter on the last row
+   * stays put. An inventory adjustment is one line by definition (the service refuses
+   * more), so its grid must not offer a second. */
+  maxRows?: number;
   baseCurrencyId?: string;
   /** Looks up the latest dated rate for a currency, to prefill the rate cell. */
   rateForCurrency?: (currencyId: string) => string | undefined;
@@ -219,6 +223,7 @@ export function LineGrid({
   conversionFor,
   lineKindFor,
   inventoryColumns,
+  maxRows,
   baseCurrencyId,
   rateForCurrency,
   rowDefaults,
@@ -254,7 +259,10 @@ export function LineGrid({
     onRowsChange(next);
   }
 
+  const canAddRow = maxRows === undefined || rows.length < maxRows;
+
   function addRow() {
+    if (!canAddRow) return;
     onRowsChange([...rows, emptyLineGridRow(rowDefaults)]);
   }
 
@@ -448,7 +456,10 @@ export function LineGrid({
                           onValueChange={(v) => updateRow(r, { itemId: v, uomId: "" })}
                           placeholder={t("itemPlaceholder")}
                           ariaLabel={t("itemAria", { row: r + 1 })}
-                          className={cn("h-8", itemErr && "border-[var(--vinea-danger)]")}
+                          // Fixed widths on the pickers, not the cells: an auto-layout
+                          // table ignores a cell's max-width, and an item label with its
+                          // on-hand suffix would otherwise push unit cost off the screen.
+                          className={cn("h-8 w-64", itemErr && "border-[var(--vinea-danger)]")}
                           onFocus={() => startCellEdit(r, COL.item, "itemId", row.itemId)}
                           onKeyDown={(e) => onCellKeyDown(e, r, COL.item, "itemId")}
                         />
@@ -462,7 +473,7 @@ export function LineGrid({
                             onValueChange={(v) => updateRow(r, { warehouseId: v })}
                             placeholder={t("warehousePlaceholder")}
                             ariaLabel={t("warehouseAria", { row: r + 1 })}
-                            className={cn("h-8", warehouseErr && "border-[var(--vinea-danger)]")}
+                            className={cn("h-8 w-40", warehouseErr && "border-[var(--vinea-danger)]")}
                             onFocus={() => startCellEdit(r, COL.warehouse, "warehouseId", row.warehouseId)}
                             onKeyDown={(e) => onCellKeyDown(e, r, COL.warehouse, "warehouseId")}
                           />
@@ -488,7 +499,7 @@ export function LineGrid({
                             onValueChange={(v) => updateRow(r, { transactionTypeId: v })}
                             placeholder={t("transactionTypePlaceholder")}
                             ariaLabel={t("transactionTypeAria", { row: r + 1 })}
-                            className={cn("h-8", typeErr && "border-[var(--vinea-danger)]")}
+                            className={cn("h-8 w-44", typeErr && "border-[var(--vinea-danger)]")}
                             onFocus={() => startCellEdit(r, COL.transactionType, "transactionTypeId", row.transactionTypeId)}
                             onKeyDown={(e) => onCellKeyDown(e, r, COL.transactionType, "transactionTypeId")}
                           />
@@ -520,7 +531,7 @@ export function LineGrid({
                           onValueChange={(v) => updateRow(r, { uomId: v })}
                           placeholder={t("uomPlaceholder")}
                           ariaLabel={t("uomAria", { row: r + 1 })}
-                          className={cn("h-8", uomErr && "border-[var(--vinea-danger)]")}
+                          className={cn("h-8 w-36", uomErr && "border-[var(--vinea-danger)]")}
                           onFocus={() => startCellEdit(r, COL.uom, "uomId", row.uomId)}
                           onKeyDown={(e) => onCellKeyDown(e, r, COL.uom, "uomId")}
                         />
@@ -537,7 +548,7 @@ export function LineGrid({
                         {uomErr && <p className="mt-0.5 px-1 text-xs text-[var(--vinea-danger)]">{uomErr}</p>}
                       </td>
                       {inv.unitCost && (
-                        <td data-row={r} data-col={COL.unitCost} className="w-32 p-1 align-top">
+                        <td data-row={r} data-col={COL.unitCost} className="min-w-28 p-1 align-top">
                           {takesUnitCost ? (
                             <input
                               value={displayAmount(row.unitCost, activeCell?.row === r && activeCell.col === COL.unitCost)}
@@ -568,7 +579,7 @@ export function LineGrid({
                         </td>
                       )}
                       {inv.value && (
-                        <td data-row={r} data-col={COL.value} className="w-32 p-1 align-top">
+                        <td data-row={r} data-col={COL.value} className="min-w-28 p-1 align-top">
                           {takesValue ? (
                             <input
                               value={displayAmount(row.value, activeCell?.row === r && activeCell.col === COL.value)}
@@ -863,13 +874,15 @@ export function LineGrid({
             })}
           </tbody>
         </table>
-        <button
-          type="button"
-          onClick={addRow}
-          className="w-full border-t border-[var(--vinea-border)] px-3 py-2 text-left text-xs font-medium text-[var(--vinea-brand)] hover:bg-[var(--vinea-surface-sunken)]"
-        >
-          {mode === "document" || mode === "batch" || isInventory ? t("addLine") : "+ Add line"}
-        </button>
+        {canAddRow && (
+          <button
+            type="button"
+            onClick={addRow}
+            className="w-full border-t border-[var(--vinea-border)] px-3 py-2 text-left text-xs font-medium text-[var(--vinea-brand)] hover:bg-[var(--vinea-surface-sunken)]"
+          >
+            {mode === "document" || mode === "batch" || isInventory ? t("addLine") : "+ Add line"}
+          </button>
+        )}
       </div>
     </div>
   );

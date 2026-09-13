@@ -66,10 +66,10 @@ const INCREASE_KINDS: ReadonlySet<string> = new Set([
 /**
  * The two stock documents an operator keys by hand.
  *
- * An **adjustment** names its type and warehouse once, in the header, and its lines are items
- * and quantities: the grid hides the per-line warehouse and type columns because every line
- * shares the header's. A **journal batch** is the same grid with those columns shown — many
- * lines, each its own type and warehouse, the header's values only the defaults a new line
+ * An **adjustment** is one line: its type and warehouse are on the header, the grid is capped
+ * at a single row, and the service refuses anything wider (`adjustment_is_single_line`). A
+ * **journal batch** is the same grid uncapped and with the warehouse and type columns shown —
+ * many lines, each its own type and warehouse, the header's values only the defaults a line
  * starts with. Both post through the same service; the batch is one unit of work.
  *
  * Nothing here computes a cost. An increase carries the unit cost the operator keyed, a
@@ -391,6 +391,7 @@ export function StockDocumentScreen({ variant }: { variant: StockDocumentVariant
           errors={lineErrors}
           rowDefaults={isAdjustment ? {} : { warehouseId: form.warehouseId, transactionTypeId: form.transactionTypeId }}
           inventoryColumns={isAdjustment ? { warehouse: false, transactionType: false } : undefined}
+          maxRows={isAdjustment ? 1 : undefined}
           itemOptions={itemOptions}
           warehouseOptions={support.warehouseOptions}
           transactionTypeOptions={support.typeOptions}
