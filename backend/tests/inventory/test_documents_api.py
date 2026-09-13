@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from app.db import set_tenant
 from app.models.membership import Role
 from app.services import email as email_service
+from tests.inventory.invariants import assert_stock_invariants
 
 OWNER = {
     "company_name": "Rugari Wines Ltd",
@@ -381,3 +382,89 @@ def test_on_hand_needs_an_inventory_permission(client: TestClient, db: Session) 
     warehouse_id = _main_warehouse(client)["id"]
     clerk = _clerk(client, db, company_id)
     assert clerk.get(f"/api/v1/inventory/on-hand?warehouse_id={warehouse_id}").status_code == 403
+
+
+# --- Reversal belongs to the module that posted ------------------------------------------------
+
+
+def test_the_gl_reversal_endpoint_refuses_an_inventory_entry(
+    client: TestClient, db: Session
+) -> None:
+    """The phase invariant, defended at the one door that could walk through it.
+
+    `ReversalRequested` skips the control-account guard by design — it mirrors an entry that
+    was legitimately posted — and inherits the original's module, so
+    `POST /gl/journal-entries/{id}/reverse` could write the reversing side of an INV account.
+    What it could not do is write the reversing *moves*: the inventory account moved and the
+    stock did not, and `assert_stock_invariants` fails with "INV line N has no stock move
+    behind it". The phase invariant, broken from a button — the adjustment screen navigates to
+    `/gl/entries/{id}` after posting, and that screen offers Reverse.
+    """
+    company_id = _signup(client)
+    posted = client.post(
+        "/api/v1/inventory/adjustments",
+        json=_adjustment_payload(client),
+        headers={"Idempotency-Key": "adj-for-gl-reversal"},
+    ).json()
+    entry_id = posted["journal_entry_id"]
+    assert entry_id is not None
+
+    refused = client.post(
+        f"/api/v1/gl/journal-entries/{entry_id}/reverse",
+        headers={"Idempotency-Key": "gl-rev-inv"},
+        json={"entry_date": TODAY, "reason": "wrong module"},
+    )
+
+    # 409, the kernel's code for "this state does not permit that" — not 422, which would
+    # say the request was malformed. The request is well-formed and the answer is still no.
+    assert refused.status_code == 409, refused.text
+    body = refused.json()
+    assert body["code"] == "module_owned_entry", body
+    # It names where the reversal does belong, rather than only saying no.
+    assert "/inventory/documents/" in body["message"], body
+
+    # Nothing moved: the stock side and the ledger side still agree.
+    set_tenant(db, company_id)
+    assert_stock_invariants(db, company_id)
+
+    # And the module's own path still works, which is the point of the refusal.
+    undone = client.post(
+        f"/api/v1/inventory/documents/{posted['id']}/reverse",
+        headers={"Idempotency-Key": "inv-rev-ok"},
+        json={"reversal_date": TODAY, "reason": "keyed twice"},
+    )
+    assert undone.status_code == 201, undone.text
+    set_tenant(db, company_id)
+    assert_stock_invariants(db, company_id)
+
+
+def test_a_manual_journal_is_still_reversible_through_the_ledger(client: TestClient) -> None:
+    """Anti-overreach: the guard must refuse module-owned entries and nothing else.
+
+    A refusal that caught every entry would break the kernel's own correction path, which is
+    the only way a manual journal is ever undone (ADR-04: corrections are never edits).
+    """
+    _signup(client)
+    accounts = client.get("/api/v1/gl/accounts").json()
+    postable = [a for a in accounts if a["is_postable"] and not a["is_control"]]
+    entry = client.post(
+        "/api/v1/gl/journal-entries",
+        headers={"Idempotency-Key": "manual-1"},
+        json={
+            "entry_date": TODAY,
+            "description": "a manual journal",
+            "lines": [
+                {"gl_account_id": postable[0]["id"], "debit": "500", "description": "d"},
+                {"gl_account_id": postable[1]["id"], "credit": "500", "description": "c"},
+            ],
+        },
+    )
+    assert entry.status_code == 201, entry.text
+    assert entry.json()["module"] == "gl"
+
+    undone = client.post(
+        f"/api/v1/gl/journal-entries/{entry.json()['id']}/reverse",
+        headers={"Idempotency-Key": "manual-rev"},
+        json={"entry_date": TODAY, "reason": "keyed twice"},
+    )
+    assert undone.status_code == 201, undone.text

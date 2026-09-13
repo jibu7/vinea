@@ -171,6 +171,10 @@ export interface JournalEntry {
   description: string;
   reference?: string | null;
   status: "draft" | "posted";
+  /** Which module posted this — `"gl"` for a manual journal or a cashbook entry, otherwise the
+   * module that owns it. An owned entry is reversed through its module, because the GL
+   * reversal writes only the ledger half and would leave that module's own side behind. */
+  module: string;
   posted_by: number | null;
   posted_at: string | null;
   reverses_entry_id: number | null;

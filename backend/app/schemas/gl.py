@@ -191,6 +191,10 @@ class JournalEntryRead(ApiModel):
     description: str
     reference: str | None = None
     status: JournalStatus
+    #: Which module posted this. `"gl"` for a manual journal or a cashbook entry; a module name
+    #: for an entry a module owns, which is reversed through that module rather than here — the
+    #: screen reads this to decide whether to offer Reverse at all.
+    module: str
     posted_by: int | None
     posted_at: datetime | None
     reverses_entry_id: int | None

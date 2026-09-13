@@ -59,7 +59,18 @@ export default function EntryViewPage() {
   const totalCredit = entry.lines.filter((l) => !l.is_rounding_line && Number(l.base_amount) < 0).reduce((s, l) => s - Number(l.base_amount), 0);
   const isReversed = !!entry.reversed_by_entry_id;
   const isReversal = !!entry.reverses_entry_id;
-  const canReverse = !isReversed && !isReversal;
+  // A module-owned entry is reversed through its module, never from here. The GL reversal
+  // writes the ledger half and nothing else, so on an inventory adjustment it would move the
+  // inventory account while every stock move stayed put — the phase invariant, broken from
+  // this button. The API refuses it (`module_owned_entry`); this is the screen not offering
+  // an action it knows will be refused, and saying where the action does live.
+  const isModuleOwned = entry.module !== "gl";
+  const canReverse = !isReversed && !isReversal && !isModuleOwned;
+  const reverseBlockedReason = isReversed
+    ? t("reverseAlreadyReversed")
+    : isReversal
+      ? t("reverseIsAReversal")
+      : t("reverseModuleOwned", { module: entry.module });
 
   async function handleReverse() {
     setReverseError(null);
@@ -229,11 +240,7 @@ export default function EntryViewPage() {
               </DialogContent>
             </Dialog>
           ) : (
-            <Button
-              variant="danger"
-              disabled
-              title={isReversed ? "This entry has already been reversed" : "A reversal cannot be reversed"}
-            >
+            <Button variant="danger" disabled title={reverseBlockedReason}>
               {t("reverse")}
             </Button>
           )}

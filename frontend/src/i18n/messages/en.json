@@ -304,7 +304,10 @@
       "ap": "AP",
       "inventory": "Inventory"
     },
-    "selectAccount": "Select account…"
+    "selectAccount": "Select account…",
+    "reverseAlreadyReversed": "This entry has already been reversed",
+    "reverseIsAReversal": "A reversal cannot be reversed",
+    "reverseModuleOwned": "Posted by the {module} module — reverse it from that module's document, so the stock or open items it moved are reversed too"
   },
   "maintenance": {
     "companyDetails": "Company details",
