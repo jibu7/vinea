@@ -94,11 +94,18 @@ router = APIRouter(prefix="/inventory", tags=["inventory"])
 
 def _require_view(auth: AuthContext) -> None:
     """Reading a master is enough for anyone who can see inventory *or* maintain it — the
-    item picker on a document is read-only but belongs to a poster, not a reporter."""
+    item picker on a document is read-only but belongs to a poster, not a reporter.
+
+    `inv:count_enter` is in the list for exactly that reason. A count sheet renders items,
+    warehouses and units; a stock-taker holding only the counting permission would otherwise
+    be able to open a session and not read the masters that fill it in, which is a permission
+    that grants a screen and withholds its contents.
+    """
     allowed = (
         permissions.INV_REPORTS_VIEW,
         permissions.INV_SETUP_MANAGE,
         permissions.INV_TRANSACTIONS_ADJUST,
+        permissions.INV_COUNT_ENTER,
     )
     if not any(permission in auth.permissions for permission in allowed):
         raise PermissionDeniedError(f"Missing required permission(s): {' or '.join(allowed)}")
@@ -984,10 +991,17 @@ def get_transfer(
 
 
 def _require_count(auth: AuthContext) -> None:
-    """Opening and filling in a count sheet. Either permission does: a stock controller who
-    can process counts can obviously open one, and a clerk who posts adjustments is the other
-    person who walks the aisles."""
-    allowed = (permissions.INV_COUNT_PROCESS, permissions.INV_TRANSACTIONS_ADJUST)
+    """Opening a count session and keying the sheet.
+
+    `inv:count_enter`, or `inv:count_process` — whoever may post a count may obviously open
+    one. **Not `inv:transactions_adjust`.** That was the rule until P5 step 9, and it meant a
+    stock-taker could only be let near a count sheet by being given the authority to post
+    adjustments, which is exactly the authority a count exists to take out of their hands: the
+    point of counting to a sheet and processing it as one document is that nobody writes stock
+    off a shelf by hand. Counting still moves nothing on its own — the sheet is a working
+    paper until Process, which checks `inv:count_process` on its own.
+    """
+    allowed = (permissions.INV_COUNT_ENTER, permissions.INV_COUNT_PROCESS)
     if not any(permission in auth.permissions for permission in allowed):
         raise PermissionDeniedError(f"Missing required permission(s): {' or '.join(allowed)}")
 

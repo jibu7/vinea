@@ -133,12 +133,17 @@ export const navIntents: NavIntent[] = [
       // Appendix C's Inventory block, in the owner's order: Journal batches, Transfers,
       // Adjustments, Counts. The tree carried three of the four, out of order, under a P5
       // tag; the screens landed at P5 step 7 and the row the tag was covering arrived with
-      // them. Counts opens on the posting permission because the sheet is what a stock-taker
-      // fills in; Process is the step that checks `inv:count_process`, on the button.
+      // them.
       { label: "Journal batches", module: "Inventory", permission: "inv:transactions_adjust", href: "/inventory/journal-batches/new" },
       { label: "Transfers", module: "Inventory", permission: "inv:transactions_adjust", href: "/inventory/transfers" },
       { label: "Adjustments", module: "Inventory", permission: "inv:transactions_adjust", href: "/inventory/adjustments/new" },
-      { label: "Counts", module: "Inventory", permission: "inv:transactions_adjust", href: "/inventory/counts" },
+      // Counts opens on `inv:count_enter`, not on the adjustment permission it used to share.
+      // A stock-taker keys the sheet and must not receive the authority to post adjustments as
+      // a side effect of counting — that authority is what a count exists to take out of their
+      // hands. `inv:count_process` is checked on the Process button, so counting and posting
+      // can be two people. `inv:count_process` alone also opens the screen (the API says so),
+      // so a controller who posts counts is not locked out of the sheet they post.
+      { label: "Counts", module: "Inventory", permission: ["inv:count_enter", "inv:count_process"], href: "/inventory/counts" },
       { label: "Manufacture process", module: "Bill of Materials", phase: "P12" },
       { label: "Sales", module: "Point of Sale", phase: "P11" },
       { label: "Returns", module: "Point of Sale", phase: "P11" },

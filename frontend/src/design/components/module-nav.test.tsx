@@ -104,7 +104,10 @@ describe("P4 maintenance screens", () => {
 });
 
 describe("P5 transaction screens", () => {
-  const invPermissions = new Set(["inv:transactions_adjust"]);
+  // Counts is deliberately not on this set: P5 step 9 split `inv:count_enter` out, so the
+  // adjustment permission alone no longer reaches the sheet. The pair of tests below the
+  // table pins both halves of that.
+  const invPermissions = new Set(["inv:transactions_adjust", "inv:count_enter"]);
 
   it.each([
     ["Inventory", "Journal batches", "/inventory/journal-batches/new"],
@@ -125,6 +128,34 @@ describe("P5 transaction screens", () => {
   it("leaves no P5 tag in the Transactions block once step 7 has landed", () => {
     const transactions = navIntents.find((i) => i.label === "Transactions")!;
     expect(transactions.items.filter((item) => item.phase === "P5")).toEqual([]);
+  });
+
+  // A stock-taker must not receive adjustment rights as a side effect of counting, and the
+  // nav is half of that promise: gating Counts on the adjustment permission would hand every
+  // adjuster the sheet and leave a counting-only role with nothing to click.
+  it("opens Counts to a stock-taker holding only inv:count_enter", () => {
+    render(<SidebarNav permissions={new Set(["inv:count_enter"])} />);
+
+    expect(screen.getByText("Counts").closest("a")).toHaveAttribute("href", "/inventory/counts");
+    expect(screen.queryByText("Adjustments")).not.toBeInTheDocument();
+    expect(screen.queryByText("Transfers")).not.toBeInTheDocument();
+    expect(screen.queryAllByText("Journal batches")).toHaveLength(0);
+  });
+
+  // And `inv:count_process` alone opens it too, matching `_require_count`: a controller who
+  // posts counts is not locked out of the sheet they post.
+  it("opens Counts to a holder of inv:count_process alone, and nothing else in the block", () => {
+    render(<SidebarNav permissions={new Set(["inv:count_process"])} />);
+
+    expect(screen.getByText("Counts").closest("a")).toHaveAttribute("href", "/inventory/counts");
+    expect(screen.queryByText("Adjustments")).not.toBeInTheDocument();
+  });
+
+  it("does not open Counts to adjustment rights alone", () => {
+    render(<SidebarNav permissions={new Set(["inv:transactions_adjust"])} />);
+
+    expect(screen.getByText("Adjustments")).toBeInTheDocument();
+    expect(screen.queryByText("Counts")).not.toBeInTheDocument();
   });
 });
 

@@ -60,8 +60,15 @@ AP_CREDIT_LIMIT_OVERRIDE = "ap:credit_limit_override"
 INV_SETUP_MANAGE = "inv:setup_manage"
 INV_TRANSACTIONS_ADJUST = "inv:transactions_adjust"
 INV_REPORTS_VIEW = "inv:reports_view"
+# Opening a count session and keying the sheet. Its own permission because counting is a
+# **stock-taker's** job and adjustment posting is not: while this was folded into
+# `inv:transactions_adjust`, the only way to let somebody count was to let them post
+# adjustments, which is the authority a count exists to take out of their hands. Entering a
+# count moves nothing — the sheet is a working paper until Process.
+INV_COUNT_ENTER = "inv:count_enter"
 # Processing a count session posts a variance document against every counted line at once, so
-# it is separated from ordinary adjustment posting the way the AR write-off approval is.
+# it is separated from ordinary adjustment posting the way the AR write-off approval is — and
+# from `inv:count_enter` above, so the person who counts is not the person who posts.
 INV_COUNT_PROCESS = "inv:count_process"
 # Renaming an item code moves every enquiry and report that reads by code, so — like the
 # customer/supplier rename — it is its own permission rather than part of setup.
@@ -141,6 +148,7 @@ ALL_PERMISSIONS: tuple[str, ...] = (
     INV_SETUP_MANAGE,
     INV_TRANSACTIONS_ADJUST,
     INV_REPORTS_VIEW,
+    INV_COUNT_ENTER,
     INV_COUNT_PROCESS,
     INV_ITEM_RENAME,
     OE_SETUP_MANAGE,

@@ -31,14 +31,25 @@ db-reset:
 # `DATABASE_URL=…/somewhere_else alembic downgrade base` silently targets the dev database
 # and wipes it. CI gets the same gate for free because its `vinea` database is untouched by
 # pytest, which works in a per-process `vinea_test_<pid>` database (see backend/tests/conftest.py).
+#
+# Runs **inside the backend container**, like every other backend check here. It used to shell
+# out to `cd backend && uv run`, which cannot work on a machine that has ever brought the stack
+# up: the container writes `backend/.venv` as root through the bind mount, so the host `uv`
+# then fails with `Permission denied` on `.venv/CACHEDIR.TAG` before alembic is even reached.
+# A gate nobody can run locally is a gate that only CI enforces, which is the drift this
+# project treats as a bug rather than a fact of life.
+#
+# `db:5432` rather than `localhost:5432` because the URL is resolved from inside the container,
+# and `env -u DATABASE_URL` inside the shell rather than `-e DATABASE_URL=` on the exec: the
+# latter sets it to an empty string, which SQLAlchemy then fails to parse.
 MIGRATION_SCRATCH_DB ?= vinea_migration_check
 migrate-check:
 	docker compose exec -T db psql -U vinea -d postgres -q \
 	  -c 'DROP DATABASE IF EXISTS $(MIGRATION_SCRATCH_DB)' \
 	  -c 'CREATE DATABASE $(MIGRATION_SCRATCH_DB)'
-	cd backend && env -u DATABASE_URL \
-	  MIGRATION_DATABASE_URL=postgresql+psycopg://vinea:vinea@localhost:5432/$(MIGRATION_SCRATCH_DB) \
-	  sh -c 'uv run alembic upgrade head && uv run alembic check && uv run alembic downgrade base'
+	docker compose exec -T \
+	  -e MIGRATION_DATABASE_URL=postgresql+psycopg://vinea:vinea@db:5432/$(MIGRATION_SCRATCH_DB) \
+	  backend sh -c 'env -u DATABASE_URL sh -c "uv run alembic upgrade head && uv run alembic check && uv run alembic downgrade base"'
 	docker compose exec -T db psql -U vinea -d postgres -q \
 	  -c 'DROP DATABASE IF EXISTS $(MIGRATION_SCRATCH_DB)'
 	@echo "migrate-check: upgrade-from-zero, alembic check and downgrade-to-base all green"
