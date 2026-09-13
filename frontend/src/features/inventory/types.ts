@@ -289,10 +289,17 @@ export interface StockDocumentSummary {
   journal_entry_id: number | null;
   reversal_entry_id: number | null;
   reverses_document_id: number | null;
+  /** What the lines add up to, computed by the server over the whole document — never by the
+   * screen over the rows it happens to be showing. */
+  line_count: number;
+  total_value: string;
+  /** The one warehouse / transaction type every line names, or null when they differ. A
+   * journal batch legitimately spreads across several of both (decision 9). */
+  warehouse_id: number | null;
+  transaction_type_id: number | null;
 }
 
 export interface StockDocument extends StockDocumentSummary {
-  transaction_type_id: number | null;
   lines: StockDocumentLine[];
 }
 

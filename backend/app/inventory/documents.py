@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 from starlette.requests import Request
 
@@ -352,6 +352,27 @@ def _replay(
     return document
 
 
+def _reserve_document_id(db: Session) -> int:
+    """Take the next `inventory_documents.id` before anything is written.
+
+    Decision 3 asks for source links **both ways**, and the write order fights it: the moves
+    and the entry go first (a move's `source_doc_id` cannot be filled in afterwards —
+    `stock_moves` refuses UPDATE — and the document's number is the entry's), so by the time
+    the header exists there is nothing left that will accept a link back to it.
+
+    Reserving the id breaks that cycle without reordering anything. `nextval` hands out a
+    number that is ours whether or not this transaction commits; a rolled-back posting burns
+    one, which is what a sequence is for and is not a gap in anything anyone counts — the
+    *document number* comes from `document_sequences` and stays gapless.
+    """
+    return int(
+        db.execute(
+            text("SELECT nextval(pg_get_serial_sequence(:table, 'id'))"),
+            {"table": "inventory_documents"},
+        ).scalar_one()
+    )
+
+
 def _write_document(
     db: Session,
     company_id: int,
@@ -361,6 +382,13 @@ def _write_document(
     resolved: Sequence[_Resolved],
     posting: stock_service.StockPosting,
     actor: User,
+    #: Reserved before the posting so the entry and the moves could carry it — see
+    #: `_reserve_document_id`. The header is written with it rather than taking a fresh one,
+    #: or the links the posting already wrote would point at a document that never existed.
+    #: `None` for the count-variance document, whose moves point at the **session** instead:
+    #: a count session exists long before its posting does, so it has an id to link to and
+    #: nothing here needs reserving.
+    document_id: int | None = None,
     idempotency_key: str | None,
     idempotency_hash: str | None,
     request: Request | None,
@@ -383,6 +411,7 @@ def _write_document(
         number = claim_number(db, company_id, doc_type).number
 
     document = InventoryDocument(
+        **({"id": document_id} if document_id is not None else {}),
         company_id=company_id,
         doc_type=str(doc_type),
         number=number,
@@ -494,6 +523,7 @@ def post_document(
     resolved = [
         _resolve(db, company_id, data, index, line) for index, line in enumerate(data.lines)
     ]
+    document_id = _reserve_document_id(db)
     document = stock_service.StockDocument(
         doc_type=str(doc_type),
         move_date=data.document_date,
@@ -501,6 +531,7 @@ def post_document(
         reference=data.reference,
         transaction_type_id=data.transaction_type_id,
         source_doc_type="inventory_document",
+        source_doc_id=document_id,
         idempotency_key=idempotency_key,
         idempotency_hash=idempotency_hash,
     )
@@ -543,6 +574,7 @@ def post_document(
             resolved=resolved,
             posting=posting,
             actor=actor,
+            document_id=document_id,
             idempotency_key=idempotency_key,
             idempotency_hash=idempotency_hash,
             request=request,
@@ -720,14 +752,18 @@ def post_count_variance(
     lines: Sequence[VarianceLine],
     transaction_type_id: int,
     contra_account_id: int | None = None,
-    source_doc_type: str,
-    source_doc_id: int,
     actor: User,
     idempotency_key: str | None = None,
     idempotency_hash: str | None = None,
     request: Request | None = None,
 ) -> tuple[InventoryDocument, bool]:
     """The document a processed count posts: every non-zero variance, in one entry.
+
+    The entry names **this document**, not the session that produced it. P5 step 9 made that
+    uniform across all three kinds, so every inventory entry leads to an `inventory_document`
+    and the documents screen and the reverse path need no count-specific case. The session is
+    one hop further on, through `stock_count_sessions.document_id`, which is where it was
+    already recorded.
 
     It is an ordinary `inventory_documents` row of doc type `INCT`, which is the whole point —
     a count variance is reversed, listed, numbered and drilled into by exactly the machinery
@@ -779,14 +815,15 @@ def post_count_variance(
         )
         for line in lines
     ]
+    document_id = _reserve_document_id(db)
     document = stock_service.StockDocument(
         doc_type=str(DocType.INV_COUNT),
         move_date=data.document_date,
         description=data.description,
         reference=data.reference,
         transaction_type_id=transaction_type_id,
-        source_doc_type=source_doc_type,
-        source_doc_id=source_doc_id,
+        source_doc_type="inventory_document",
+        source_doc_id=document_id,
         idempotency_key=idempotency_key,
         idempotency_hash=idempotency_hash,
     )
@@ -822,6 +859,7 @@ def post_count_variance(
             resolved=resolved,
             posting=posting,
             actor=actor,
+            document_id=document_id,
             idempotency_key=idempotency_key,
             idempotency_hash=idempotency_hash,
             request=request,
@@ -1008,6 +1046,27 @@ def lines_of(
     )
 
 
+@dataclass(frozen=True)
+class DocumentSummary:
+    """A document as the listing shows it: the header, plus what its lines add up to.
+
+    The aggregates are here rather than on the screen because a listing that summed its own
+    page would disagree with itself the moment the page changed — and because "which warehouse"
+    is a question with three answers (none, one, several) that a `warehouse_id` column cannot
+    hold honestly.
+    """
+
+    document: InventoryDocument
+    line_count: int
+    total_value: Decimal
+    #: The single warehouse every line names, or `None` when they differ — a journal batch may
+    #: spread across several, and the screen says so rather than naming the first.
+    warehouse_id: int | None
+    #: The single transaction type every line names, or `None` when they differ. A batch's
+    #: lines carry their own types (decision 9), so this is genuinely often null.
+    transaction_type_id: int | None
+
+
 def list_documents(
     db: Session,
     company_id: int,
@@ -1015,13 +1074,16 @@ def list_documents(
     doc_type: str | None = None,
     date_from: date | None = None,
     date_to: date | None = None,
+    status: str | None = None,
     cursor: int | None = None,
     limit: int = 100,
-) -> tuple[list[InventoryDocument], int | None]:
+) -> tuple[list[DocumentSummary], int | None]:
     """Newest first, keyset-paged on the id — the P4 listing shape."""
     query = select(InventoryDocument).where(InventoryDocument.company_id == company_id)
     if doc_type is not None:
         query = query.where(InventoryDocument.doc_type == str(doc_type))
+    if status is not None:
+        query = query.where(InventoryDocument.status == status)
     if date_from is not None:
         query = query.where(InventoryDocument.document_date >= date_from)
     if date_to is not None:
@@ -1030,4 +1092,33 @@ def list_documents(
         query = query.where(InventoryDocument.id < cursor)
     rows = list(db.scalars(query.order_by(InventoryDocument.id.desc()).limit(limit + 1)))
     next_cursor = rows[limit].id if len(rows) > limit else None
-    return rows[:limit], next_cursor
+    rows = rows[:limit]
+
+    # One query for every line on the page, not one per row.
+    lines_by_document: dict[int, list[InventoryDocumentLine]] = {}
+    if rows:
+        for line in db.scalars(
+            select(InventoryDocumentLine).where(
+                InventoryDocumentLine.company_id == company_id,
+                InventoryDocumentLine.document_id.in_([row.id for row in rows]),
+            )
+        ):
+            lines_by_document.setdefault(line.document_id, []).append(line)
+
+    def _single(values: list) -> int | None:
+        distinct = {value for value in values if value is not None}
+        return next(iter(distinct)) if len(distinct) == 1 else None
+
+    summaries = []
+    for row in rows:
+        lines = lines_by_document.get(row.id, [])
+        summaries.append(
+            DocumentSummary(
+                document=row,
+                line_count=len(lines),
+                total_value=sum((line.value or ZERO for line in lines), ZERO),
+                warehouse_id=_single([line.warehouse_id for line in lines]),
+                transaction_type_id=_single([line.transaction_type_id for line in lines]),
+            )
+        )
+    return summaries, next_cursor

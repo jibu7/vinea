@@ -1,8 +1,10 @@
 up: ; docker compose up --build -d
 down: ; docker compose down
 logs: ; docker compose logs -f backend
-be-test: ; cd backend && uv run pytest -q
-be-lint: ; cd backend && uv run ruff check .
+# In the container, not on the host: the container writes `backend/.venv` as root through the
+# bind mount, so a host `uv run` fails on `.venv/CACHEDIR.TAG` once the stack has been up.
+be-test: ; docker compose exec -T backend uv run pytest -q
+be-lint: ; docker compose exec -T backend uv run ruff check .
 fe-dev: ; cd frontend && npm run dev
 
 # `docker compose down -v` wipes every named volume in docker-compose.yml, not just

@@ -303,14 +303,27 @@ export function useReverseStockDocument() {
   });
 }
 
-export function useStockDocuments(opts: { docType?: string; limit?: number } = {}) {
-  const params = new URLSearchParams();
-  if (opts.docType) params.set("doc_type", opts.docType);
-  if (opts.limit) params.set("limit", String(opts.limit));
-  const query = params.toString();
+export interface StockDocumentListParams {
+  docType?: string;
+  status?: string;
+  dateFrom?: string;
+  dateTo?: string;
+  cursor?: number | null;
+  limit?: number;
+}
+
+export function useStockDocuments(opts: StockDocumentListParams = {}) {
+  const query = queryString({
+    doc_type: opts.docType,
+    status: opts.status,
+    date_from: opts.dateFrom,
+    date_to: opts.dateTo,
+    cursor: opts.cursor,
+    limit: opts.limit,
+  });
   return useQuery({
-    queryKey: [ROOT, "documents", { docType: opts.docType ?? null, limit: opts.limit ?? null }],
-    queryFn: () => api.get<Page<StockDocumentSummary>>(`/inventory/documents${query ? `?${query}` : ""}`),
+    queryKey: [ROOT, "documents", query],
+    queryFn: () => api.get<Page<StockDocumentSummary>>(`/inventory/documents${query}`),
   });
 }
 

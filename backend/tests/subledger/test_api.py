@@ -1358,3 +1358,52 @@ def test_ageing_endpoint_hides_zero_balances_by_default(api: Api) -> None:
         "/api/v1/subledger/ar/partners", params={"include_zero_balance": "false"}
     ).json()
     assert [row["id"] for row in listed] == [owing["id"]]
+
+
+def test_the_gl_reversal_endpoint_refuses_a_partner_document_entry(api: Api) -> None:
+    """The same rule, checked on the P4 side — and it was the same defect there since P4.
+
+    A partner document's reversal reopens what the original settled and puts the open item
+    back; the ledger half alone would move the AR control account and leave the subledger
+    holding the old figure, so `SUM(open items) == control balance` would stop being true the
+    way it stops being true for stock. Nothing distinguished AR from inventory here: the hole
+    was one hole, and `reverse_via_module_document` closes it for every module that owns a
+    document.
+    """
+    partner = api.client.post(
+        "/api/v1/subledger/ar/partners",
+        json={"name": "Amahoro Retail", "customer_code": "CUST900"},
+    ).json()
+    accounts = {row["code"]: row["id"] for row in api.client.get("/api/v1/gl/accounts").json()}
+    invoice = api.client.post(
+        "/api/v1/subledger/ar/documents",
+        headers={"Idempotency-Key": "inv-gl-rev"},
+        json={
+            "kind": "invoice",
+            "partner_id": partner["id"],
+            "document_date": MARCH.isoformat(),
+            "description": "Consulting",
+            "lines": [{"unit_price": "100000", "gl_account_id": accounts["4100"]}],
+        },
+    ).json()
+    entry_id = invoice["journal_entry_id"]
+    assert entry_id is not None
+
+    refused = api.client.post(
+        f"/api/v1/gl/journal-entries/{entry_id}/reverse",
+        headers={"Idempotency-Key": "gl-rev-ar"},
+        json={"entry_date": MARCH.isoformat(), "reason": "wrong door"},
+    )
+
+    assert refused.status_code == 409, refused.text
+    body = refused.json()
+    assert body["code"] == "reverse_via_module_document", body
+    assert "ar module" in body["message"], body
+
+    # The module's own path still works, which is the point of the refusal.
+    undone = api.client.post(
+        f"/api/v1/subledger/ar/documents/{invoice['id']}/reverse",
+        headers={"Idempotency-Key": "ar-rev-ok"},
+        json={"on_date": MARCH.isoformat(), "reason": "keyed twice"},
+    )
+    assert undone.status_code == 201, undone.text

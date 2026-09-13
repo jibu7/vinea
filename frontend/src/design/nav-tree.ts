@@ -144,6 +144,14 @@ export const navIntents: NavIntent[] = [
       // can be two people. `inv:count_process` alone also opens the screen (the API says so),
       // so a controller who posts counts is not locked out of the sheet they post.
       { label: "Counts", module: "Inventory", permission: ["inv:count_enter", "inv:count_process"], href: "/inventory/counts" },
+      // Not in the owner's tree, and neither is the action it carries: P5 decision 11 gives
+      // every stock document a reversal, and until step 9 nothing called it — the only Reverse
+      // button in the product was the general ledger's, which undoes the ledger half and
+      // leaves the stock where it was. That button is now refused for a module-owned entry, so
+      // this is where the reversal lives. It is also the only home a **valueless** document
+      // has: one that moved no value has no journal entry to be found through.
+      // Appendix C.1.7, on the same footing as C.1.6's post-dated screens.
+      { label: "Documents", module: "Inventory", permission: "inv:reports_view", href: "/inventory/documents" },
       { label: "Manufacture process", module: "Bill of Materials", phase: "P12" },
       { label: "Sales", module: "Point of Sale", phase: "P11" },
       { label: "Returns", module: "Point of Sale", phase: "P11" },

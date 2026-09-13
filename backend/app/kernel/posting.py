@@ -11,7 +11,9 @@ the structural rules, so a bug here cannot produce an unbalanced or back-dated e
 """
 
 from collections import defaultdict
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -836,6 +838,15 @@ def post(
                 code="reversal_before_original",
                 field_errors={"entry_date": ["must be on/after the original entry date"]},
             )
+        if original.module != "gl" and _module_reversal.get() != original.module:
+            raise LedgerStateError(
+                f"{original.number} was posted by the {original.module} module and is reversed "
+                f"through that module's document, not through the general ledger",
+                code="reverse_via_module_document",
+                field_errors={
+                    "entry_id": [f"reverse this through its {original.module} document"]
+                },
+            )
         specs = _reversal_specs(original)
         doc_type = original.doc_type
         # A reversal belongs to the module that posted the original, or it would trip the
@@ -869,6 +880,35 @@ def post(
         reverses_entry_id=reverses_entry_id,
         reversal_reason=reversal_reason,
     )
+
+
+#: Which module's own reversal service is currently running, if any. Same shape as the
+#: `app.posting_engine` flag below and for the same reason: a window that something opens
+#: deliberately, narrow, and shut again the moment it is done.
+_module_reversal: ContextVar[str | None] = ContextVar("module_reversal", default=None)
+
+
+@contextmanager
+def module_reversal(module: str) -> Iterator[None]:
+    """Open the window in which `module`'s own reversal service may reverse its own entries.
+
+    A module-owned entry has two halves. The ledger half is this engine's reversing entry; the
+    other half is the module's — reversing stock moves for inventory (P5 decision 11), the
+    reopening of what was settled for the subledger. Reversing the ledger alone leaves the
+    module's side untouched, and for inventory that means the INV control account moves while
+    every stock move stays where it was: `assert_stock_invariants` then fails with "INV line N
+    has no stock move behind it". The phase invariant, undone by a correction.
+
+    `ReversalRequested` cannot defend itself here — it deliberately skips the control-account
+    guard, because it mirrors an entry that was legitimately posted — so the rule is this
+    window instead: the module's reversal service brackets its call, and a reversal asked for
+    from anywhere else is refused with `reverse_via_module_document`.
+    """
+    token = _module_reversal.set(module)
+    try:
+        yield
+    finally:
+        _module_reversal.reset(token)
 
 
 def _set_posting_engine(db: Session, *, on: bool) -> None:

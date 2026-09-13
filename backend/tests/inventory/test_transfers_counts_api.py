@@ -744,3 +744,47 @@ def test_a_clerk_can_neither_open_nor_process_a_count(
     assert opened.status_code == 403, opened.text
     assert processed.status_code == 403, processed.text
     assert item["id"]
+
+
+def test_a_processed_count_entry_names_its_document_not_its_session(
+    client: TestClient, db: Session
+) -> None:
+    """P5 step 9: the entry's source document is uniform across all three kinds.
+
+    A count's moves used to point at the `stock_count_session`, because the session is the one
+    thing that exists before the posting does. It made counts the odd kind out: the documents
+    screen and the reverse path would each have needed a case for "unless it came from a
+    count", and the reverse path is the one place a special case is expensive — decision 11
+    reverses a *document*.
+
+    So the count-variance document is what the entry names, like an adjustment or a batch, and
+    the session is one hop further on through `stock_count_sessions.document_id` — where it was
+    always recorded anyway.
+    """
+    company_id = _signup(client)
+    item = _item(client)
+    main = _warehouse(client, "MAIN")
+    _stock_in(client, item, main)
+    session = _open_count(client, main)
+    line = session["lines"][0]
+    client.patch(
+        f"/api/v1/inventory/counts/{session['id']}/lines/{line['id']}",
+        json={"counted_quantity": "3"},
+    )
+    processed = client.post(
+        f"/api/v1/inventory/counts/{session['id']}/process",
+        headers={"Idempotency-Key": "cnt-source"},
+        json={"session_id": session["id"]},
+    )
+    assert processed.status_code == 200, processed.text
+    document = processed.json()["document"]
+    assert document is not None, processed.text
+
+    entry = client.get(f"/api/v1/gl/journal-entries/{document['journal_entry_id']}").json()
+    assert entry["source_doc_type"] == "inventory_document", entry
+    assert entry["source_doc_id"] == document["id"], entry
+
+    # And the session still leads to the document, which is the hop that replaces the old link.
+    reloaded = client.get(f"/api/v1/inventory/counts/{session['id']}").json()
+    assert reloaded["document_id"] == document["id"], reloaded
+    assert company_id

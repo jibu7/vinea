@@ -9,8 +9,10 @@ RLS-enforcing role.
 from datetime import date
 from decimal import Decimal
 
+import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import select, text
+from sqlalchemy.exc import DatabaseError
 from sqlalchemy.orm import Session
 
 from app.db import set_tenant
@@ -393,8 +395,8 @@ def test_the_gl_reversal_endpoint_refuses_an_inventory_entry(
     """The phase invariant, defended at the one door that could walk through it.
 
     `ReversalRequested` skips the control-account guard by design — it mirrors an entry that
-    was legitimately posted — and inherits the original's module, so
-    `POST /gl/journal-entries/{id}/reverse` could write the reversing side of an INV account.
+    was legitimately posted — and inherits the original's module, so a reversal asked for
+    anywhere but the module's own service could write the reversing side of an INV account.
     What it could not do is write the reversing *moves*: the inventory account moved and the
     stock did not, and `assert_stock_invariants` fails with "INV line N has no stock move
     behind it". The phase invariant, broken from a button — the adjustment screen navigates to
@@ -419,9 +421,9 @@ def test_the_gl_reversal_endpoint_refuses_an_inventory_entry(
     # say the request was malformed. The request is well-formed and the answer is still no.
     assert refused.status_code == 409, refused.text
     body = refused.json()
-    assert body["code"] == "module_owned_entry", body
+    assert body["code"] == "reverse_via_module_document", body
     # It names where the reversal does belong, rather than only saying no.
-    assert "/inventory/documents/" in body["message"], body
+    assert "inv module" in body["message"], body
 
     # Nothing moved: the stock side and the ledger side still agree.
     set_tenant(db, company_id)
@@ -468,3 +470,115 @@ def test_a_manual_journal_is_still_reversible_through_the_ledger(client: TestCli
         json={"entry_date": TODAY, "reason": "keyed twice"},
     )
     assert undone.status_code == 201, undone.text
+
+
+def test_a_posted_document_links_both_ways_to_its_entry(client: TestClient) -> None:
+    """Decision 3: "source links both ways". Until P5 step 9 only one way was wired.
+
+    The write order forces the moves and the entry to go first — a move's `source_doc_id`
+    cannot be filled in afterwards because `stock_moves` refuses UPDATE, and the document's
+    number is the entry's — so the header linked forward and nothing linked back:
+    `journal_entries.source_doc_id` came back null and the entry knew only that *an* inventory
+    document had caused it. `_reserve_document_id` takes the id from the sequence before the
+    posting runs, which costs a burned id on a rolled-back posting and nothing else.
+    """
+    _signup(client)
+    posted = client.post(
+        "/api/v1/inventory/adjustments",
+        json=_adjustment_payload(client),
+        headers={"Idempotency-Key": "adj-source-links"},
+    ).json()
+
+    # Forward: the document names its entry.
+    assert posted["journal_entry_id"] is not None
+
+    # Back: the entry names the document, by id and not merely by type.
+    entry = client.get(f"/api/v1/gl/journal-entries/{posted['journal_entry_id']}").json()
+    assert entry["source_doc_type"] == "inventory_document", entry
+    assert entry["source_doc_id"] == posted["id"], entry
+
+    # And the moves carry the same link, which is what the enquiry's drill reads.
+    moves = client.get(
+        "/api/v1/inventory/reports/transactions",
+        params={"date_from": TODAY, "date_to": TODAY},
+    ).json()["rows"]
+    assert moves, moves
+    assert all(row["source_doc_type"] == "inventory_document" for row in moves), moves
+    assert all(row["source_doc_id"] == posted["id"] for row in moves), moves
+
+
+def test_a_posted_entrys_source_link_cannot_be_rewritten_afterwards(
+    client: TestClient, db: Session
+) -> None:
+    """Why the fix is forward-only, pinned so nobody tries the back-fill again.
+
+    Decision 3's links were one-way for every document posted before P5 step 9, and the
+    obvious remedy — a data migration filling `journal_entries.source_doc_id` from
+    `inventory_documents.journal_entry_id` — cannot run. Both tables are append-only and say
+    so in the database, unconditionally and with no escape hatch: `VN001` on a posted entry,
+    `stock move % is posted and immutable` on a move. A migration that reached for
+    `DISABLE TRIGGER` would be trading the kernel's central guarantee for a convenience
+    column, which is the trade architecture rule 3 exists to refuse.
+
+    Nothing is lost. `inventory_documents.journal_entry_id` is the direction that always
+    worked, so a historical entry's document is still one join away — it is the *entry* that
+    cannot name it, not the pair that cannot be resolved.
+    """
+    company_id = _signup(client)
+    posted = client.post(
+        "/api/v1/inventory/adjustments",
+        json=_adjustment_payload(client),
+        headers={"Idempotency-Key": "adj-immutable"},
+    ).json()
+    set_tenant(db, company_id)
+
+    with pytest.raises(DatabaseError, match="posted and immutable"):
+        db.execute(
+            text("UPDATE journal_entries SET source_doc_id = NULL WHERE id = :id"),
+            {"id": posted["journal_entry_id"]},
+        )
+    db.rollback()
+    set_tenant(db, company_id)
+
+    with pytest.raises(DatabaseError, match="posted and immutable"):
+        db.execute(
+            text("UPDATE stock_moves SET source_doc_id = NULL WHERE journal_entry_id = :id"),
+            {"id": posted["journal_entry_id"]},
+        )
+    db.rollback()
+
+
+def test_an_entry_resolves_its_document_even_with_no_source_link(
+    client: TestClient, db: Session
+) -> None:
+    """The link the screen uses must work for entries posted before the link existed.
+
+    `journal_entries.source_doc_id` was only populated from P5 step 9 and cannot be
+    back-filled — a posted entry is immutable in the database, and rewriting one would cost
+    the guarantee that makes the ledger worth trusting. So the screen resolves the other way,
+    through `inventory_documents.journal_entry_id`, which has been there since 0014.
+
+    Simulated by clearing the column on the *document* side of the pair rather than the entry
+    (which cannot be touched): what is asserted is that resolution never reads `source_doc_id`
+    at all, so an entry that has none is no worse off.
+    """
+    company_id = _signup(client)
+    posted = client.post(
+        "/api/v1/inventory/adjustments",
+        json=_adjustment_payload(client),
+        headers={"Idempotency-Key": "adj-resolve"},
+    ).json()
+    entry_id = posted["journal_entry_id"]
+
+    entry = client.get(f"/api/v1/gl/journal-entries/{entry_id}").json()
+    assert entry["module_document_id"] == posted["id"], entry
+    assert entry["module_document_number"] == posted["number"], entry
+
+    # A pre-step-9 entry differs from this one only in `source_doc_id`, which resolution does
+    # not consult — so proving it is unused proves the old entry resolves too.
+    set_tenant(db, company_id)
+    source = db.execute(
+        text("SELECT source_doc_id FROM journal_entries WHERE id = :id"), {"id": entry_id}
+    ).scalar_one()
+    assert source == posted["id"], "step 9 writes it forward"
+    assert entry["module_document_id"] == source, "and resolution agrees without needing it"

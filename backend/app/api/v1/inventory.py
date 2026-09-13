@@ -23,6 +23,7 @@ from app.inventory import masters
 from app.inventory import reports as inventory_reports
 from app.inventory import stock as stock_service
 from app.inventory import transfers as inventory_transfers
+from app.kernel.money import ZERO
 from app.models.audit import AuditLog
 from app.models.inventory import ItemType, StockCountStatus, StockTransferStatus
 from app.schemas.common import Page
@@ -642,9 +643,16 @@ def _line_inputs(payload: StockDocumentCreate) -> tuple[inventory_documents.Docu
 
 def _document_read(db: Session, company_id: int, document) -> StockDocumentRead:
     lines = inventory_documents.lines_of(db, company_id, document.id)
+    # The summary's aggregates are the listing's; on a single document they come from the
+    # document itself and its own lines, which is the same statement said with the rows in hand.
+    summary = StockDocumentSummary.model_validate(document).model_dump()
+    summary["transaction_type_id"] = document.transaction_type_id
+    summary["line_count"] = len(lines)
+    summary["total_value"] = sum((line.value or ZERO for line in lines), ZERO)
+    warehouses = {line.warehouse_id for line in lines}
+    summary["warehouse_id"] = next(iter(warehouses)) if len(warehouses) == 1 else None
     return StockDocumentRead(
-        **StockDocumentSummary.model_validate(document).model_dump(),
-        transaction_type_id=document.transaction_type_id,
+        **summary,
         lines=[StockDocumentLineRead.model_validate(line) for line in lines],
     )
 
@@ -760,6 +768,7 @@ def list_stock_documents(
     doc_type: str | None = None,
     date_from: date | None = None,
     date_to: date | None = None,
+    status_filter: str | None = Query(default=None, alias="status"),
     cursor: int | None = None,
     limit: int = Query(default=100, ge=1, le=500),
     auth: AuthContext = Depends(get_tenant_context),
@@ -772,11 +781,22 @@ def list_stock_documents(
         doc_type=doc_type,
         date_from=date_from,
         date_to=date_to,
+        status=status_filter,
         cursor=cursor,
         limit=limit,
     )
     return Page(
-        items=[StockDocumentSummary.model_validate(row) for row in rows],
+        items=[
+            StockDocumentSummary.model_validate(row.document).model_copy(
+                update={
+                    "line_count": row.line_count,
+                    "total_value": row.total_value,
+                    "warehouse_id": row.warehouse_id,
+                    "transaction_type_id": row.transaction_type_id,
+                }
+            )
+            for row in rows
+        ],
         next_cursor=next_cursor,
     )
 

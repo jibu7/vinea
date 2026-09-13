@@ -28,8 +28,9 @@ from app.models.audit import AuditLog
 from app.models.currency import ExchangeRate
 from app.models.fiscal import AccountingPeriod, FiscalYear, PeriodStatus
 from app.models.gl import GLSettings
-from app.models.inventory import INVENTORY_MODULE
+from app.models.inventory import INVENTORY_MODULE, InventoryDocument
 from app.models.journal import JournalEntry
+from app.models.subledger import PartnerDocument
 from app.schemas.common import Page
 from app.schemas.gl import (
     AccountAuditRead,
@@ -111,7 +112,36 @@ def _entry_read(db: Session, entry: JournalEntry) -> JournalEntryRead:
     data.reverses_entry_number = rev_num
     data.reversed_by_entry_id = rvd_by_id
     data.reversed_by_number = rvd_by_num
+    data.module_document_id, data.module_document_number = _module_document(db, loaded)
     return data
+
+
+#: Where each module keeps the documents it posts. Both tables have carried `journal_entry_id`
+#: since they were created, which is why this direction works for every entry ever posted.
+MODULE_DOCUMENT_TABLES: dict[str, type] = {
+    "inv": InventoryDocument,
+    "ar": PartnerDocument,
+    "ap": PartnerDocument,
+}
+
+
+def _module_document(db: Session, entry: JournalEntry) -> tuple[int | None, str | None]:
+    """The document a module-owned entry belongs to, or `(None, None)`.
+
+    Resolved from the document side rather than from `journal_entries.source_doc_id`: that
+    column was only populated from P5 step 9 and cannot be back-filled, because a posted entry
+    is immutable in the database and rewriting one would cost the guarantee that makes the
+    ledger worth trusting. The document's own `journal_entry_id` has always been there.
+    """
+    table = MODULE_DOCUMENT_TABLES.get(entry.module)
+    if table is None:
+        return None, None
+    found = db.execute(
+        select(table.id, table.number).where(
+            table.company_id == entry.company_id, table.journal_entry_id == entry.id
+        )
+    ).first()
+    return (found[0], found[1]) if found is not None else (None, None)
 
 
 def _posted_response(
@@ -619,46 +649,6 @@ def get_journal_entry(
 
 
 
-#: Which endpoint undoes a document for each module that owns one. A module's reversal is not
-#: only a journal entry — inventory also writes reversing stock moves (P5 decision 11), and the
-#: subledger also reopens what the original settled — so the ledger half alone is not a
-#: reversal, it is half of one.
-MODULE_REVERSAL_PATHS = {
-    "inv": "POST /inventory/documents/{id}/reverse (or /transfers/{id}/reverse)",
-    "ar": "POST /subledger/ar/documents/{id}/reverse",
-    "ap": "POST /subledger/ap/documents/{id}/reverse",
-}
-
-
-def _refuse_module_owned(db: Session, company_id: int, entry_id: int) -> None:
-    """A module-owned entry is reversed through its module, never through the GL.
-
-    `ReversalRequested` deliberately skips the control-account guard — it mirrors an entry that
-    was legitimately posted — and inherits the original's `module`, which together mean this
-    endpoint *can* write the reversing side of an INV or AR/AP control account. What it cannot
-    do is reverse the module's own half. Posting an inventory adjustment, landing on its entry
-    and pressing Reverse therefore moved the inventory account while every stock move stayed
-    where it was, and `assert_stock_invariants` fails with "INV line N has no stock move behind
-    it" — the phase invariant, broken from a button.
-
-    So the guard is here, at the boundary, rather than in `posting.reverse`: the modules call
-    that function themselves for the ledger half of their own reversals, and must go on being
-    able to.
-    """
-    entry = db.get(JournalEntry, entry_id)
-    if entry is None or entry.company_id != company_id:
-        return  # `posting.reverse` raises the not-found, with its own code
-    path = MODULE_REVERSAL_PATHS.get(entry.module)
-    if path is None:
-        return
-    raise LedgerStateError(
-        f"{entry.number} was posted by the {entry.module} module and is reversed through it, "
-        f"not through the general ledger: {path}",
-        code="module_owned_entry",
-        field_errors={"entry_id": [f"reverse this through the {entry.module} module"]},
-    )
-
-
 @router.post("/journal-entries/{entry_id}/reverse", status_code=status.HTTP_201_CREATED)
 def reverse_journal_entry(
     entry_id: int,
@@ -669,7 +659,6 @@ def reverse_journal_entry(
     db: Session = Depends(get_db),
 ) -> JournalEntryRead:
     request_hash = _fingerprint(f"reverse:{entry_id}", payload)
-    _refuse_module_owned(db, auth.company_id, entry_id)
     existing = posting.replay(db, auth.company_id, idempotency_key, request_hash)
     if existing is not None:
         return _posted_response(db, response, existing, replayed=True)

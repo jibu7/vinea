@@ -1180,16 +1180,19 @@ def reverse_stock_posting(
             -move.quantity, -move.value
         )
 
-    reversal = posting.reverse(
-        db,
-        entry_id,
-        company_id=company_id,
-        on_date=on_date,
-        reason=reason,
-        actor=actor,
-        idempotency_key=idempotency_key,
-        idempotency_hash=idempotency_hash,
-    )
+    # The module's own reversal window: this is the half of the reversal the
+    # kernel cannot do, so the kernel only lets the ledger half through from here.
+    with posting.module_reversal("inv"):
+        reversal = posting.reverse(
+            db,
+            entry_id,
+            company_id=company_id,
+            on_date=on_date,
+            reason=reason,
+            actor=actor,
+            idempotency_key=idempotency_key,
+            idempotency_hash=idempotency_hash,
+        )
     period_id = reversal.period_id
     mirrored_line = {line.source_line_id: line for line in reversal.lines}
 

@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
-import { ArrowLeft, Sparkles } from "lucide-react";
+import { ArrowLeft, ArrowRight, Sparkles } from "lucide-react";
 import { Button } from "@/design/components/button";
 import { Field, Input } from "@/design/components/input";
 import { DatePicker } from "@/design/components/date-picker";
@@ -212,7 +212,23 @@ export default function EntryViewPage() {
               {baseCurrency && <Money amount={totalCredit} currency={{ code: baseCurrency.code, decimalPlaces: baseCurrency.decimal_places, symbol: baseCurrency.symbol }} className="font-semibold" />}
             </div>
           </div>
-          {canReverse ? (
+          {/* A module-owned entry is reversed from its own document, so this is the way there
+              rather than a button that cannot be honoured. The link resolves through the
+              module's document table, which means an entry posted long before the link column
+              existed still has one. */}
+          {isModuleOwned && entry.module_document_id !== null ? (
+            <Link
+              href={`/inventory/documents/${entry.module_document_id}`}
+              data-testid="reverse-via-module"
+              className="inline-flex items-center gap-1 text-sm font-medium text-[var(--vinea-brand)] underline"
+            >
+              {t("reverseViaModule", {
+                module: entry.module,
+                number: entry.module_document_number ?? "",
+              })}
+              <ArrowRight className="size-3.5" />
+            </Link>
+          ) : canReverse ? (
             <Dialog open={reverseOpen} onOpenChange={setReverseOpen}>
               <DialogTrigger asChild>
                 <Button variant="danger">{t("reverse")}</Button>
