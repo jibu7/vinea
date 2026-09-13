@@ -109,9 +109,11 @@ async function inventoryAccountBalance(page: Page, code: string): Promise<number
   const res = await pageFetch(page, `/gl/trial-balance?as_of=${iso}`);
   if (!res.ok) throw new Error(`trial balance failed: ${JSON.stringify(res.json)}`);
   const rows = (res.json as { rows: Array<{ code: string; debit: string; credit: string }> }).rows;
+  // A trial balance omits an account nothing has posted to, which on a freshly seeded company
+  // is exactly where the inventory account starts. No row means no postings means nil — not a
+  // missing account, and not an error.
   const row = rows.find((r) => r.code === code);
-  if (!row) throw new Error(`no trial-balance row for account ${code}`);
-  return Number(row.debit) - Number(row.credit);
+  return row ? Number(row.debit) - Number(row.credit) : 0;
 }
 
 test.describe("P5 acceptance", () => {
@@ -169,7 +171,11 @@ test.describe("P5 acceptance", () => {
       await page.getByRole("button", { name: /New warehouse/i }).click();
       await dialog(page).getByLabel("Code").fill(DEPOT);
       await dialog(page).getByLabel("Name", { exact: true }).fill("Musanze Depot");
-      await dialog(page).getByRole("button", { name: "Create", exact: true }).click();
+      // A warehouse belongs to a branch — Save stays disabled until it names one, which is
+      // what made this step pass on a dirty database and time out on a fresh one.
+      await pick(page, /^Branch$/, "MAIN");
+      await dialog(page).getByRole("button", { name: "Save", exact: true }).click();
+      await closeOverlays(page);
     }
     await expect(page.locator("tbody tr", { hasText: DEPOT }).first()).toBeVisible();
 
