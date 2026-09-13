@@ -265,6 +265,7 @@ test.describe("Inventory transactions", () => {
     await row.getByRole("link", { name: /Dispatch entry/ }).click();
     await page.waitForURL(/\/gl\/entries\/\d+/);
     await expect(page.getByText("FRw 4,000").first()).toBeVisible();
+
   });
 
   test("count: sheet, a stale line refused on the line, re-snapshot, Process", async ({ page }) => {
@@ -342,4 +343,28 @@ test.describe("Inventory transactions", () => {
     await expect(page.locator("tbody tr[data-count-session]").first()).toContainText("Completed");
     await assertNoSeriousViolations(page);
   });
+
+  // Last in the file on purpose: reversing puts the transferred stock back at MAIN, which
+  // every figure in the count test above is measured against.
+  test("transfer: a received transfer can be reversed from the list", async ({ page }) => {
+    await login(page, PRIMARY_EMAIL);
+    await page.goto("/inventory/transfers");
+    await page.waitForSelector("h1:has-text('Warehouse transfers')");
+
+    // `REVERSED` was a status this list could render and nothing could produce until P5 step
+    // 9: `0016_p5_transfer_reversal` added the second entry column so a transfer that had
+    // *arrived* could be mirrored, and no screen ever called the endpoint.
+    // `test_api_has_a_caller` is what found that.
+    const received = page.locator("tbody tr[data-transfer]", { hasText: "Received" }).first();
+    await expect(received).toBeVisible();
+    await received.getByRole("button", { name: /^Reverse transfer / }).click();
+    const dialog = page.getByRole("dialog");
+    await dialog.getByRole("textbox").fill("sent to the wrong depot");
+    await dialog.getByRole("button", { name: "Reverse transfer", exact: true }).click();
+
+    await expect(
+      page.locator("tbody tr[data-transfer]", { hasText: "Reversed" }).first(),
+    ).toBeVisible();
+  });
+
 });

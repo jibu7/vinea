@@ -367,6 +367,33 @@ export function useReceiveTransfer() {
   });
 }
 
+/** Decision 11 for a transfer that already arrived: mirror both legs, at the values they were
+ * posted at. `cancel` is the other case — nothing has arrived, so there is only a dispatch to
+ * send back — and the two are separate endpoints because they undo different amounts of work.
+ * `0016_p5_transfer_reversal` split the entry column in two for exactly this. */
+export function useReverseTransfer() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      transferId,
+      reason,
+      reversalDate,
+      idempotencyKey,
+    }: {
+      transferId: number;
+      reason: string;
+      reversalDate?: string | null;
+      idempotencyKey: string;
+    }) =>
+      api.post<Transfer>(
+        `/inventory/transfers/${transferId}/reverse`,
+        { reason, reversal_date: reversalDate ?? null },
+        { "Idempotency-Key": idempotencyKey },
+      ),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: [ROOT] }),
+  });
+}
+
 export function useCancelTransfer() {
   const queryClient = useQueryClient();
   return useMutation({

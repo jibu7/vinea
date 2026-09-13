@@ -17,7 +17,13 @@ import { StockTransferStatus } from "@/lib/api-enums";
 import { newDraftId } from "@/lib/drafts";
 import { dotted, formatDate, formatQuantity } from "@/lib/format";
 import { useApiErrorToast } from "@/lib/use-api-error-toast";
-import { useCancelTransfer, useReceiveTransfer, useTransfer, useTransfers } from "./hooks";
+import {
+  useCancelTransfer,
+  useReceiveTransfer,
+  useReverseTransfer,
+  useTransfer,
+  useTransfers,
+} from "./hooks";
 import { useInventoryLineSupport } from "./line-support";
 import type { TransferSummary } from "./types";
 
@@ -62,12 +68,14 @@ export function TransfersScreen() {
   const support = useInventoryLineSupport();
   const receive = useReceiveTransfer();
   const cancel = useCancelTransfer();
+  const reverseTransfer = useReverseTransfer();
 
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const selected = useTransfer(selectedId);
   const [receiving, setReceiving] = useState<TransferSummary | null>(null);
   const [receiveDate, setReceiveDate] = useState(today);
   const [cancelling, setCancelling] = useState<TransferSummary | null>(null);
+  const [reversing, setReversing] = useState<TransferSummary | null>(null);
   const [reason, setReason] = useState("");
   // One key per dialog opening: a retry of the same click replays, a fresh opening is new.
   const [actionKey, setActionKey] = useState<string>(newDraftId);
@@ -99,6 +107,28 @@ export function TransfersScreen() {
       setActionKey(newDraftId());
     } catch (err) {
       showApiError(err, t("cancelFailed"));
+    }
+  }
+
+  /** Decision 11 for a transfer that already arrived. `cancel` covers the other case — nothing
+   * has landed, so only the dispatch is sent back — and the endpoints are separate because
+   * they undo different amounts of work. Until P5 step 9 the screen offered neither for a
+   * received transfer, so `REVERSED` was a status the list could render and nothing could
+   * produce; the `test_api_has_a_caller` sweep is what found it. */
+  async function handleReverse() {
+    if (!reversing || !reason.trim()) return;
+    try {
+      const undone = await reverseTransfer.mutateAsync({
+        transferId: reversing.id,
+        reason: reason.trim(),
+        idempotencyKey: actionKey,
+      });
+      toast.show({ title: t("reversed", { number: undone.number }), tone: "success" });
+      setReversing(null);
+      setReason("");
+      setActionKey(newDraftId());
+    } catch (err) {
+      showApiError(err, t("reverseFailed"));
     }
   }
 
@@ -210,6 +240,16 @@ export function TransfersScreen() {
                     </Button>
                   </span>
                 )}
+                {canPost && row.status === StockTransferStatus.COMPLETED && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => setReversing(row)}
+                    aria-label={t("reverseLabel", { number: row.number })}
+                  >
+                    {t("reverseTransfer")}
+                  </Button>
+                )}
               </TD>
             </TR>
           ))}
@@ -267,6 +307,33 @@ export function TransfersScreen() {
                 </Button>
                 <Button variant="primary" onClick={handleReceive} disabled={receive.isPending}>
                   {receive.isPending ? t("receiving") : t("receive")}
+                </Button>
+              </div>
+            </div>
+          </DialogContent>
+        )}
+      </Dialog>
+
+      <Dialog open={reversing !== null} onOpenChange={(open) => !open && setReversing(null)}>
+        {reversing && (
+          <DialogContent
+            title={t("reverseTitle", { number: reversing.number })}
+            description={t("reverseDescription")}
+          >
+            <div className="space-y-4">
+              <Field label={t("cancelReason")}>
+                <Input value={reason} onChange={(e) => setReason(e.target.value)} />
+              </Field>
+              <div className="flex justify-end gap-2">
+                <Button variant="ghost" onClick={() => setReversing(null)}>
+                  {tc("close")}
+                </Button>
+                <Button
+                  variant="primary"
+                  onClick={handleReverse}
+                  disabled={reverseTransfer.isPending || !reason.trim()}
+                >
+                  {t("confirmReverse")}
                 </Button>
               </div>
             </div>

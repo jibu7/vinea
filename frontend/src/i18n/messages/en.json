@@ -1535,7 +1535,14 @@
       "postFailed": "Couldn't post the transfer",
       "sameWarehouse": "From and To must differ.",
       "openLabel": "Open {number}",
-      "unit": "Unit"
+      "unit": "Unit",
+      "reverseTransfer": "Reverse",
+      "reverseLabel": "Reverse transfer {number}",
+      "reverseTitle": "Reverse {number}",
+      "reverseDescription": "Mirrors both legs at the values they were posted at: the stock goes back to where it came from and the in-transit account clears.",
+      "confirmReverse": "Reverse transfer",
+      "reversed": "{number} reversed",
+      "reverseFailed": "The transfer could not be reversed"
     },
     "counts": {
       "title": "Inventory counts",
