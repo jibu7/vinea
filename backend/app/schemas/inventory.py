@@ -305,7 +305,12 @@ class StockDocumentLineRead(ApiModel):
     uom_id: int
     quantity_base: Decimal
     unit_cost: Decimal | None
+    #: What was **keyed**. Only a revaluation states a value, so this is null on almost every
+    #: line — the engine decides an ordinary receipt's or issue's value. Read `posted_value`
+    #: for what the ledger actually recorded.
     value: Decimal | None
+    #: What the move behind this line was posted at. The figure a screen means by "value".
+    posted_value: Decimal | None = None
     transaction_type_id: int
     contra_account_id: int | None
     project_id: int | None

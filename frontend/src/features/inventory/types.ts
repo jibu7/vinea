@@ -269,7 +269,11 @@ export interface StockDocumentLine {
   uom_id: number;
   quantity_base: string;
   unit_cost: string | null;
+  /** What was **keyed** — only a revaluation states a value, so this is null on almost every
+   * line. Read `posted_value` for what the ledger recorded. */
   value: string | null;
+  /** What the move behind this line was posted at: the figure a screen means by "value". */
+  posted_value: string | null;
   transaction_type_id: number;
   contra_account_id: number | null;
   project_id: number | null;

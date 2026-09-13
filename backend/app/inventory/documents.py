@@ -1046,6 +1046,25 @@ def lines_of(
     )
 
 
+def posted_values(db: Session, company_id: int, move_ids: Sequence[int]) -> dict[int, Decimal]:
+    """`{stock_move_id: value}` — what the engine actually posted each line at.
+
+    A document line records what was *keyed*; only a revaluation keys a value at all, so the
+    column is null on almost every line and a total built from it reads zero. The move carries
+    what the costing engine decided, which is the figure a listing means by "value".
+    """
+    if not move_ids:
+        return {}
+    return {
+        move_id: value
+        for move_id, value in db.execute(
+            select(StockMove.id, StockMove.value).where(
+                StockMove.company_id == company_id, StockMove.id.in_(list(move_ids))
+            )
+        ).all()
+    }
+
+
 @dataclass(frozen=True)
 class DocumentSummary:
     """A document as the listing shows it: the header, plus what its lines add up to.
@@ -1096,6 +1115,7 @@ def list_documents(
 
     # One query for every line on the page, not one per row.
     lines_by_document: dict[int, list[InventoryDocumentLine]] = {}
+    move_ids: list[int] = []
     if rows:
         for line in db.scalars(
             select(InventoryDocumentLine).where(
@@ -1104,6 +1124,14 @@ def list_documents(
             )
         ):
             lines_by_document.setdefault(line.document_id, []).append(line)
+            if line.stock_move_id is not None:
+                move_ids.append(line.stock_move_id)
+
+    # What each line was *posted* at, from its move. `InventoryDocumentLine.value` is the
+    # value somebody **keyed**, which only a revaluation states — an ordinary receipt or issue
+    # leaves it null and the engine decides, so summing that column reads zero for almost
+    # every document ever posted. The move is where the answer lives.
+    value_by_move = posted_values(db, company_id, move_ids)
 
     def _single(values: list) -> int | None:
         distinct = {value for value in values if value is not None}
@@ -1116,7 +1144,15 @@ def list_documents(
             DocumentSummary(
                 document=row,
                 line_count=len(lines),
-                total_value=sum((line.value or ZERO for line in lines), ZERO),
+                total_value=sum(
+                    (
+                        value_by_move.get(line.stock_move_id, line.value or ZERO)
+                        if line.stock_move_id is not None
+                        else (line.value or ZERO)
+                        for line in lines
+                    ),
+                    ZERO,
+                ),
                 warehouse_id=_single([line.warehouse_id for line in lines]),
                 transaction_type_id=_single([line.transaction_type_id for line in lines]),
             )

@@ -210,9 +210,11 @@ export function InventoryDocumentScreen({ documentId }: { documentId: number }) 
                       : formatQuantity(Number(line.unit_cost), 6)}
                   </TD>
                   <TD className="text-right font-mono text-xs tabular-nums">
-                    {line.value === null
+                    {/* What the engine posted, not what was keyed: only a revaluation keys a
+                        value, so `line.value` is null on almost every line. */}
+                    {line.posted_value === null
                       ? tr("emptyValue")
-                      : formatMoney(Number(line.value), baseLike, { showCode: false })}
+                      : formatMoney(Number(line.posted_value), baseLike, { showCode: false })}
                   </TD>
                 </TR>
               );

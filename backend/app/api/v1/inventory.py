@@ -648,12 +648,24 @@ def _document_read(db: Session, company_id: int, document) -> StockDocumentRead:
     summary = StockDocumentSummary.model_validate(document).model_dump()
     summary["transaction_type_id"] = document.transaction_type_id
     summary["line_count"] = len(lines)
-    summary["total_value"] = sum((line.value or ZERO for line in lines), ZERO)
+    # From the moves, not from the keyed column: `value` on a line is what somebody typed, and
+    # only a revaluation types one.
+    posted = inventory_documents.posted_values(
+        db, company_id, [line.stock_move_id for line in lines if line.stock_move_id is not None]
+    )
+    summary["total_value"] = sum(
+        (posted.get(line.stock_move_id, line.value or ZERO) for line in lines), ZERO
+    )
     warehouses = {line.warehouse_id for line in lines}
     summary["warehouse_id"] = next(iter(warehouses)) if len(warehouses) == 1 else None
     return StockDocumentRead(
         **summary,
-        lines=[StockDocumentLineRead.model_validate(line) for line in lines],
+        lines=[
+            StockDocumentLineRead.model_validate(line).model_copy(
+                update={"posted_value": posted.get(line.stock_move_id, line.value)}
+            )
+            for line in lines
+        ],
     )
 
 

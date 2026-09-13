@@ -582,3 +582,34 @@ def test_an_entry_resolves_its_document_even_with_no_source_link(
     ).scalar_one()
     assert source == posted["id"], "step 9 writes it forward"
     assert entry["module_document_id"] == source, "and resolution agrees without needing it"
+
+
+def test_the_documents_listing_totals_what_was_posted_not_what_was_keyed(
+    client: TestClient,
+) -> None:
+    """The listing's Value column, against the figure the ledger holds.
+
+    `inventory_document_lines.value` is what somebody **keyed**, and only a revaluation keys a
+    value — an ordinary receipt states a quantity and a unit cost and lets the engine decide,
+    an issue states only a quantity. So a total summed from that column reads **zero** on
+    almost every document ever posted, which is what the first cut of this screen showed: a
+    full page of postings with 0 in every row. Exactly the P4 defect class rule 13 exists for,
+    and it took opening the screen with data to see it.
+    """
+    _signup(client)
+    posted = client.post(
+        "/api/v1/inventory/adjustments",
+        json=_adjustment_payload(client),
+        headers={"Idempotency-Key": "adj-listing-total"},
+    ).json()
+
+    # 10 @ 100.
+    assert Decimal(posted["total_value"]) == Decimal(1000), posted
+    assert Decimal(posted["lines"][0]["posted_value"]) == Decimal(1000), posted
+    # And the keyed column really is empty, so the assertion above is not a coincidence.
+    assert posted["lines"][0]["value"] is None, posted
+
+    listed = client.get("/api/v1/inventory/documents").json()["items"]
+    row = next(r for r in listed if r["id"] == posted["id"])
+    assert Decimal(row["total_value"]) == Decimal(1000), row
+    assert row["line_count"] == 1, row
