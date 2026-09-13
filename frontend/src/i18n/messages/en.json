@@ -1504,7 +1504,9 @@
       "receiveLabel": "Receive {number}",
       "cancelLabel": "Cancel {number}",
       "postFailed": "Couldn't post the transfer",
-      "sameWarehouse": "From and To must differ."
+      "sameWarehouse": "From and To must differ.",
+      "openLabel": "Open {number}",
+      "unit": "Unit"
     },
     "counts": {
       "title": "Inventory counts",
