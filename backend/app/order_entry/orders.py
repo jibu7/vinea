@@ -83,6 +83,14 @@ class OrderLineInput:
     warehouse_id: int | None = None
     project_id: int | None = None
     description: str | None = None
+    #: Consent to throw away a hand-edited kit explosion (decision 8).
+    #:
+    #: Changing a kit line's quantity re-explodes it from the catalogue definition, which
+    #: silently discards whatever Breakup put there. That is a decision, not a side effect, so
+    #: the edit is refused with `kit_breakup_would_reset` until somebody says yes — the step-7
+    #: screen asks before it sends this. Meaningless on a line that is not a breakup-edited kit
+    #: parent, and ignored there.
+    reset_breakup: bool = False
 
 
 @dataclass(frozen=True)
@@ -807,6 +815,7 @@ def update_sales_order(
         default_tax_code_id=getattr(settings, "default_tax_code_id", None),
     )
     _assert_no_line_goes_below_fulfilment(priced, order.lines, fulfilment)
+    _assert_breakup_is_not_silently_reset(priced, order.lines)
     _assert_within_available(db, company_id, priced, exclude_order_id=order.id)
 
     order.order_date = data.order_date
@@ -981,6 +990,53 @@ def _assert_no_line_goes_below_fulfilment(
             )
 
 
+def _assert_breakup_is_not_silently_reset(
+    priced: Sequence[_PricedLine], existing: Sequence
+) -> None:
+    """A hand-edited kit explosion is not thrown away without somebody saying so.
+
+    Changing a kit line's quantity has to re-explode it, because the components are quantities
+    and they no longer match. Re-exploding reads the **catalogue definition**, which is exactly
+    what Breakup was used to override — so an operator who ordered 2 gift packs, substituted a
+    375ml bottle for one of the 750s, and then changed the quantity to 3 would get three
+    catalogue packs and no warning that their substitution had gone.
+
+    Scaling the edited explosion instead is not the better answer: it would have to decide what
+    to do with the rounding, and the answer would be invisible on the screen that made the edit.
+    So the edit is refused with `kit_breakup_would_reset` and the caller re-sends it with
+    `reset_breakup=True` — the step-7 Sales order screen asks first. An edit that leaves the
+    quantity alone keeps the explosion untouched and needs no consent at all, which is what stops
+    a change of reference or expected date from quietly costing a substitution.
+    """
+    by_id = {row.id: row for row in existing}
+    for line in priced:
+        row = by_id.get(line.source.line_id) if line.source.line_id is not None else None
+        if row is None or not row.kit_breakup_edited or line.source.reset_breakup:
+            continue
+        if line.base_quantity != row.base_quantity:
+            raise LedgerStateError(
+                f"Line {row.line_no} was broken up by hand; changing its quantity from "
+                f"{row.base_quantity} to {line.base_quantity} would re-explode it from the "
+                "catalogue and lose that",
+                code="kit_breakup_would_reset",
+                field_errors={"lines": ["the hand-edited breakup would be lost"]},
+            )
+
+
+def _keeps_its_breakup(line: _PricedLine, row) -> bool:  # noqa: ANN001
+    """Whether this edit leaves a hand-edited explosion exactly as it is.
+
+    True only for a breakup-edited parent whose quantity has not moved and whose caller did not
+    ask for a reset — the one case where there is nothing to re-explode.
+    """
+    return (
+        row is not None
+        and row.kit_breakup_edited
+        and not line.source.reset_breakup
+        and line.base_quantity == row.base_quantity
+    )
+
+
 def _replace_sales_lines(
     db: Session,
     order: SalesOrder,
@@ -989,10 +1045,11 @@ def _replace_sales_lines(
 ) -> None:
     """Update the lines the caller kept, add the ones it introduced, delete the rest.
 
-    A kit line is **re-exploded from the definition** whenever it is edited, and
-    `kit_breakup_edited` goes back to false with it. Scaling a hand-edited explosion to a new
-    quantity would have to decide what to do with the rounding, and the answer would be invisible
-    on the screen that made the edit; re-exploding is predictable, and Breakup is one click away.
+    A kit line is **re-exploded from the definition** when its quantity changes, and
+    `kit_breakup_edited` goes back to false with it — but only with the caller's consent, which
+    `_assert_breakup_is_not_silently_reset` has already obtained by the time this runs. An edit
+    that does not touch the quantity leaves a hand-edited explosion exactly where it is.
+
     A component that something has already invoiced is kept and re-quantified rather than
     replaced, because its id is what that invoice line points at.
     """
@@ -1021,6 +1078,18 @@ def _replace_sales_lines(
         row.warehouse_id = line.warehouse.id
         row.project_id = line.source.project_id
         row.kit_parent_line_id = None
+        db.flush()
+        if _keeps_its_breakup(line, existing.get(line.source.line_id)):
+            # Nothing to re-explode. The stored components stay as Breakup left them, and so
+            # does the flag that records that somebody put them there.
+            for component_row in [
+                candidate for candidate in order.lines if candidate.kit_parent_line_id == row.id
+            ]:
+                line_no += 1
+                component_row.line_no = line_no
+                seen.add(id(component_row))
+            db.flush()
+            continue
         row.kit_breakup_edited = False
         db.flush()
         for component in line.components:

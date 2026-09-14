@@ -186,6 +186,7 @@ def _line_inputs(payload) -> tuple[orders_service.OrderLineInput, ...]:  # noqa:
             warehouse_id=line.warehouse_id,
             project_id=line.project_id,
             description=line.description,
+            reset_breakup=line.reset_breakup,
         )
         for line in payload.lines
     )

@@ -67,6 +67,10 @@ class OrderLineIn(BaseModel):
     warehouse_id: int | None = None
     project_id: int | None = None
     description: str | None = Field(default=None, max_length=500)
+    #: Consent to re-explode a hand-edited kit line from the catalogue, losing what Breakup put
+    #: there. Without it, changing such a line's quantity is refused with
+    #: `kit_breakup_would_reset`; the Sales order screen asks before setting this.
+    reset_breakup: bool = False
 
 
 class SalesOrderWrite(BaseModel):

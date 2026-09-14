@@ -363,3 +363,154 @@ def test_an_invoice_raised_from_an_order_ships_what_the_order_promised(
     # `invoiced` at all.
     assert order.status == SalesOrderStatus.INVOICED
     assert_order_invariants(db, order_entry.company_id)
+
+
+# --- Editing a kit line whose breakup was hand-edited -----------------------------------------
+
+
+def _edit_kit_quantity(
+    db: Session,
+    fixture: OrderEntry,
+    order,  # noqa: ANN001
+    quantity: Decimal,
+    *,
+    reset_breakup: bool = False,
+):  # noqa: ANN202
+    parent = order.lines[0]
+    return orders_service.update_sales_order(
+        db,
+        fixture.company_id,
+        order,
+        orders_service.SalesOrderInput(
+            partner_id=fixture.customer.id,
+            order_date=MARCH,
+            description="Gift packs",
+            warehouse_id=fixture.main.id,
+            lines=(
+                orders_service.OrderLineInput(
+                    line_id=parent.id,
+                    item_id=parent.item_id,
+                    quantity=quantity,
+                    unit_price=Decimal(3500),
+                    reset_breakup=reset_breakup,
+                ),
+            ),
+        ),
+        actor=fixture.owner,
+    )
+
+
+def _break_up(db: Session, fixture: OrderEntry, order, bottles: Decimal) -> None:  # noqa: ANN001
+    orders_service.breakup_sales_order_line(
+        db,
+        fixture.company_id,
+        order,
+        order.lines[0].id,
+        (
+            order_kits.ComponentInput(
+                item_id=fixture.stock_item.id, base_quantity=bottles
+            ),
+        ),
+        actor=fixture.owner,
+    )
+    db.refresh(order)
+
+
+def test_changing_a_hand_broken_up_kit_lines_quantity_is_refused(
+    db: Session, order_entry: OrderEntry
+) -> None:
+    """Re-exploding reads the **catalogue definition** — which is exactly what Breakup was used
+    to override. An operator who substituted a component and then changed the quantity would get
+    the catalogue back with no warning that their substitution had gone.
+    """
+    order = _kit_order(db, order_entry, Decimal(2))
+    _break_up(db, order_entry, order, Decimal(7))
+    assert order.lines[0].kit_breakup_edited is True
+
+    with pytest.raises(LedgerStateError) as refused:
+        _edit_kit_quantity(db, order_entry, order, Decimal(3))
+
+    assert refused.value.code == "kit_breakup_would_reset"
+    # And the refusal wrote nothing: the order still has its hand-edited explosion and its
+    # original quantity, so the caller can re-send with consent rather than repair anything.
+    db.refresh(order)
+    assert order.lines[0].base_quantity == Decimal(2)
+    assert order.lines[0].kit_breakup_edited is True
+    assert [line.base_quantity for line in _components(order)] == [Decimal(7)]
+    assert_order_invariants(db, order_entry.company_id)
+
+
+def test_reset_breakup_re_explodes_from_the_definition(
+    db: Session, order_entry: OrderEntry
+) -> None:
+    """The other path: the screen asked, somebody said yes, and the explosion goes back to what
+    the catalogue says for the new quantity."""
+    order = _kit_order(db, order_entry, Decimal(2))
+    _break_up(db, order_entry, order, Decimal(7))
+
+    _edit_kit_quantity(db, order_entry, order, Decimal(3), reset_breakup=True)
+    db.refresh(order)
+
+    parent = order.lines[0]
+    assert parent.base_quantity == Decimal(3)
+    # 3 kits x 2 bottles per kit, from the definition — the hand-edited 7 is gone, as asked.
+    assert [line.base_quantity for line in _components(order)] == [Decimal(6)]
+    assert parent.kit_breakup_edited is False
+    assert_order_invariants(db, order_entry.company_id)
+
+
+def test_an_edit_that_leaves_the_quantity_alone_keeps_the_breakup(
+    db: Session, order_entry: OrderEntry
+) -> None:
+    """Consent is only needed where there is something to re-explode.
+
+    Changing a reference or an expected date must not cost a substitution, and requiring
+    `reset_breakup` for every edit would either train operators to send it always or make the
+    header un-editable on any order with a kit on it.
+    """
+    order = _kit_order(db, order_entry, Decimal(2))
+    _break_up(db, order_entry, order, Decimal(7))
+
+    orders_service.update_sales_order(
+        db,
+        order_entry.company_id,
+        order,
+        orders_service.SalesOrderInput(
+            partner_id=order_entry.customer.id,
+            order_date=MARCH,
+            description="Gift packs",
+            reference="Their PO 4471",
+            warehouse_id=order_entry.main.id,
+            lines=(
+                orders_service.OrderLineInput(
+                    line_id=order.lines[0].id,
+                    item_id=order.lines[0].item_id,
+                    quantity=Decimal(2),
+                    unit_price=Decimal(3500),
+                ),
+            ),
+        ),
+        actor=order_entry.owner,
+    )
+    db.refresh(order)
+
+    assert order.reference == "Their PO 4471"
+    assert order.lines[0].kit_breakup_edited is True
+    assert [line.base_quantity for line in _components(order)] == [Decimal(7)]
+    assert_order_invariants(db, order_entry.company_id)
+
+
+def test_an_untouched_kit_line_needs_no_consent_to_change_quantity(
+    db: Session, order_entry: OrderEntry
+) -> None:
+    """The refusal is about *losing an edit*, not about kits. A line nobody broke up has nothing
+    to lose, so it re-explodes as it always did."""
+    order = _kit_order(db, order_entry, Decimal(2))
+    assert order.lines[0].kit_breakup_edited is False
+
+    _edit_kit_quantity(db, order_entry, order, Decimal(5))
+    db.refresh(order)
+
+    assert order.lines[0].base_quantity == Decimal(5)
+    assert [line.base_quantity for line in _components(order)] == [Decimal(10)]
+    assert_order_invariants(db, order_entry.company_id)
