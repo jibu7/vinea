@@ -153,6 +153,12 @@ def assert_order_invariants(db: Session, company_id: int) -> None:
           the residue rule, and it is what makes clause 7 reachable: a document whose shares
           summed to a franc less than its amount would leave the clearing account holding that
           franc forever, and no later allocation could take it off.
+       9. Every landed-cost document's entries are exactly the ones it claims, and a reversed
+          one has exactly one reversal. This is the clause that stands in for the kernel's
+          reversal bookkeeping: a landed cost does not reverse through `posting.reverse`, so
+          its reversing entry carries no `reverses_entry_id` and the unique index on that
+          column is not protecting it. The document-level link is the proof instead, and this
+          is what proves the proof.
     """
     settings = gl_settings_for(db, company_id)
     accrual_account_id = settings.grn_accrual_account_id
@@ -246,6 +252,9 @@ def assert_order_invariants(db: Session, company_id: int) -> None:
 
     # 7 and 8. The landed-cost clearing proof, and the residue rule underneath it.
     _assert_clearing_clears(db, company_id, settings.landed_cost_clearing_account_id)
+
+    # 9. The document-level reversal link, which is all there is for a landed cost.
+    assert_landed_cost_entries_tie_back(db, company_id)
 
 
 def _assert_clearing_clears(db: Session, company_id: int, clearing_account_id: int | None) -> None:
@@ -347,3 +356,62 @@ def verify_order_statuses(db: Session, company_id: int) -> list[str]:
         if order.status != expected_purchase:
             drift.append(f"{order.number}: stored {order.status}, derived {expected_purchase}")
     return drift
+
+
+def assert_landed_cost_entries_tie_back(db: Session, company_id: int) -> None:
+    """Every `LCA-` entry belongs to the document that claims it, and a reversed document has
+    exactly one reversal.
+
+    **Why this clause exists.** Every other document in the phase reverses through
+    `posting.reverse`, which writes `journal_entries.reverses_entry_id` and is protected by a
+    unique partial index — one reversal per entry, enforced by the database. A landed cost
+    cannot reverse that way: the value it posted moves on through cost of sales, so its
+    reversal is not a mirror of its entry and the kernel will not link it (see
+    `reverse_landed_cost`). That leaves `landed_cost_documents.reversal_entry_id` carrying the
+    link on its own, and a column carrying a link on its own is a column that can drift.
+
+    So the link is proved from both ends: the document names its entries, and the entries name
+    the document back through `source_doc_type` / `source_doc_id`. A posted document owns
+    exactly its posting entry; a reversed one owns exactly that and its reversal, and nothing
+    else. A second reversal would show up here as a third entry, which is the thing the
+    kernel's index would have refused.
+    """
+    documents = list(
+        db.scalars(
+            select(LandedCostDocument).where(LandedCostDocument.company_id == company_id)
+        )
+    )
+    if not documents:
+        return
+    rows = db.execute(
+        select(JournalEntry.id, JournalEntry.source_doc_id)
+        .where(
+            JournalEntry.company_id == company_id,
+            JournalEntry.source_doc_type == "landed_cost_document",
+            JournalEntry.status == JournalStatus.POSTED,
+        )
+    ).all()
+    by_document: dict[int, set[int]] = defaultdict(set)
+    for entry_id, source_doc_id in rows:
+        assert source_doc_id is not None, (
+            f"entry {entry_id} is a landed cost and names no document"
+        )
+        by_document[int(source_doc_id)].add(int(entry_id))
+
+    for document in documents:
+        found = by_document.get(document.id, set())
+        expected = {document.journal_entry_id} if document.journal_entry_id else set()
+        if document.status == LandedCostStatus.REVERSED:
+            assert document.reversal_entry_id is not None, (
+                f"{document.number} is reversed and names no reversal entry"
+            )
+            expected = expected | {document.reversal_entry_id}
+        else:
+            assert document.reversal_entry_id is None, (
+                f"{document.number} is not reversed but names reversal entry "
+                f"{document.reversal_entry_id}"
+            )
+        assert found == expected, (
+            f"{document.number} claims entries {sorted(expected)} and the ledger carries "
+            f"{sorted(found)} back to it"
+        )

@@ -154,6 +154,24 @@ class StockLine:
     #: that read the balance first could have it emptied underneath it between the read and
     #: the posting, and would then quietly put freight into the cost of goods that are gone.
     stockless_account_id: int | None = None
+    #: **Unconditionally** post this line's value to this account and write no move, whatever
+    #: the location holds. The sibling of `stockless_account_id`, and deliberately a second
+    #: field rather than the same one: that one names an account to fall back to and lets the
+    #: service decide, under the lock, whether the fallback applies; this one is the caller
+    #: having already decided.
+    #:
+    #: P6 uses it to reverse a landed cost. A share allocated onto 100 units of which 60 have
+    #: since been sold is 40% still in carrying value and 60% already gone out through cost of
+    #: sales, so the reversal is a *proportional* split of one target across two accounts —
+    #: something no conditional test can express, because the location is neither empty nor
+    #: untouched. The caller works the proportion out from what has been issued since the
+    #: allocation and passes both halves as lines.
+    #:
+    #: Safe to decide outside the lock in a way `stockless_account_id` is not: the two halves
+    #: are struck to sum to the share exactly, so a concurrent issue can shift a franc between
+    #: cost of sales and inventory but cannot change what the posting takes off the clearing
+    #: account, and no invariant depends on the split.
+    expense_account_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -637,11 +655,13 @@ class _Planned:
     unit_cost: Decimal | None
     cost_provisional: bool = False
     is_residue: bool = False
-    #: A landed-cost share against a location that holds none of the item (P6 decision 9).
-    #: It is a journal line and nothing else: `account_id` is the caller's stockless account
-    #: rather than the inventory account, no move is written, and the caches do not move —
-    #: there is no carrying value for it to be part of.
-    is_stockless: bool = False
+    #: Value that never enters carrying value, so the plan is a journal line and nothing else:
+    #: `account_id` is the caller's account rather than the inventory account, no move is
+    #: written, and the caches do not move. Two callers set it, both P6 landed cost — a share
+    #: against a location holding none of the item (`stockless_account_id`, decided here under
+    #: the lock) and a share the caller has already decided is out of stock
+    #: (`expense_account_id`).
+    writes_no_move: bool = False
     journal_line_index: int | None = None
     #: True when the contra account is itself item-required — P6's GRN accrual. Such a contra
     #: cannot be aggregated across items: the guard that protects it (VN008) demands an item
@@ -671,6 +691,26 @@ def _plan(
 
         item_state_now = ctx.item_states[item.id]
         location_now = ctx.location_states[location]
+        if line.expense_account_id is not None:
+            # Value that is not entering carrying value at all, by the caller's decision: it
+            # posts to the named account and writes no move, whatever the location holds. See
+            # `StockLine.expense_account_id`.
+            planned.append(
+                _Planned(
+                    line=line,
+                    item=item,
+                    warehouse=warehouse,
+                    account_id=line.expense_account_id,
+                    contra_account_id=contra_id,
+                    transaction_type_id=type_id,
+                    quantity=ZERO,
+                    value=line.value if line.value is not None else ZERO,
+                    unit_cost=None,
+                    writes_no_move=True,
+                    contra_requires_item=ctx.contra_requires_item(contra_id),
+                )
+            )
+            continue
         if signed.quantity == ZERO and location_now.quantity == ZERO and not signed.is_correction:
             if line.stockless_account_id is not None:
                 # **The stockless target** (P6 decision 9). The cost was incurred for goods
@@ -694,7 +734,7 @@ def _plan(
                         quantity=ZERO,
                         value=line.value if line.value is not None else ZERO,
                         unit_cost=None,
-                        is_stockless=True,
+                        writes_no_move=True,
                         contra_requires_item=ctx.contra_requires_item(contra_id),
                     )
                 )
@@ -963,7 +1003,7 @@ def _write_moves(
     _stock_service(db, on=True)
     try:
         for plan in planned:
-            if plan.is_stockless:
+            if plan.writes_no_move:
                 moves.append(None)
                 continue
             line = (

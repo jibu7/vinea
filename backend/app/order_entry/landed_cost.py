@@ -34,6 +34,14 @@ location outright (`nothing_to_revalue`); it now accepts a line carrying `stockl
 and posts it to that account with no move. Decision 9 named that choice — extend the primitive
 minimally rather than post a second entry — and the extension is one branch in `_plan`, under
 the existing tests, with the refusal still the default for every caller that does not opt in.
+
+**Reversal is not a mirror**, and that is the other thing worth knowing before reading on. The
+value an allocation posts does not stay where it was put: it leaves through cost of sales as
+the goods are sold, which is the whole purpose of having put it there. So reversing takes each
+share back from wherever it now sits — partly off inventory, partly out of cost of sales, in
+the proportion the position calls for. `_split_for_reversal` is that rule and its docstring is
+the argument for it. It is the one document in the phase that does not reverse through
+`posting.reverse`, and `reverse_landed_cost` states what that costs.
 """
 
 from collections.abc import Sequence
@@ -42,7 +50,7 @@ from datetime import date
 from decimal import Decimal
 
 from fastapi import Request
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.errors import NotFoundError
@@ -51,7 +59,13 @@ from app.kernel.errors import LedgerStateError
 from app.kernel.money import base_currency, round_amount
 from app.kernel.posting import gl_settings_for
 from app.kernel.sequences import DocType
-from app.models.inventory import GoodsReceivedNote, GoodsReceivedNoteLine, GrnStatus, Item
+from app.models.inventory import (
+    GoodsReceivedNote,
+    GoodsReceivedNoteLine,
+    GrnStatus,
+    Item,
+    StockMove,
+)
 from app.models.order_entry import (
     LandedCostBasis,
     LandedCostDocument,
@@ -416,6 +430,12 @@ def post_landed_cost(
     # service decided under the lock rather than re-derived here from a balance that has since
     # been written.
     moves = dict(zip((index for index, _ in posting_shares), posting.keyed_moves, strict=True))
+    # **Read after the posting, not before it.** This is what the target's location holds now
+    # that the allocation has landed — and since a revaluation moves value and no quantity, it
+    # is also what it held when the allocation was struck. The posting took `FOR UPDATE` on
+    # these rows and this transaction still holds those locks, so the reading is exact rather
+    # than a snapshot somebody raced. The reversal divides the share by it; see
+    # `LandedCostLine.quantity_at_posting`.
     db.add_all(
         [
             LandedCostLine(
@@ -428,6 +448,9 @@ def post_landed_cost(
                 weight=share.weight,
                 share=share.share,
                 went_to_cogs=index in moves and moves[index] is None,
+                quantity_at_posting=stock_service.location_balance(
+                    db, company_id, share.grn_line.item_id, share.grn_line.warehouse_id
+                ).quantity,
                 stock_move_id=moves[index].id if moves.get(index) is not None else None,
             )
             for index, share in enumerate(shares)
@@ -457,6 +480,100 @@ def post_landed_cost(
 # --- Reversal -------------------------------------------------------------------------------
 
 
+@dataclass(frozen=True)
+class _ReversalSplit:
+    """One line's share, divided between the carrying value it is still part of and the cost
+    of sales it has already gone out through."""
+
+    line: LandedCostLine
+    #: Of the quantity the location held when the allocation posted, what is still there.
+    remaining: Decimal
+    #: Comes off the inventory account, as a revaluation move.
+    to_inventory: Decimal
+    #: Comes off cost of sales, as a journal line with no move.
+    to_cogs: Decimal
+
+
+def _issued_since(db: Session, line: LandedCostLine) -> Decimal:
+    """How much has gone out of the target's location since this allocation posted.
+
+    Measured from the allocation's own move, by sequence rather than by date: costing is in
+    posting order (P5 decision 4), and a back-dated issue posted afterwards still took its
+    value out at the average this allocation had already raised.
+    """
+    if line.stock_move_id is None:
+        return ZERO
+    origin = db.get(StockMove, line.stock_move_id)
+    if origin is None:
+        return ZERO
+    issued = db.scalar(
+        select(func.coalesce(func.sum(StockMove.quantity), 0)).where(
+            StockMove.company_id == line.company_id,
+            StockMove.item_id == line.item_id,
+            StockMove.warehouse_id == line.warehouse_id,
+            StockMove.sequence_no > origin.sequence_no,
+            StockMove.quantity < ZERO,
+        )
+    )
+    return -Decimal(issued)
+
+
+def _split_for_reversal(
+    db: Session, document: LandedCostDocument, decimal_places: int
+) -> list[_ReversalSplit]:
+    """Where each share has to come back from — **the mirror of the posting rule applied to
+    today's position, not a mirror of the entry**.
+
+    This is the one place the landed-cost reversal departs from the shape every other document
+    in the phase uses, and it departs deliberately. A kernel reversal mirrors the entry it
+    reverses, line for line. That is right whenever the value is still where the entry put it,
+    and it is wrong here: a share put into the carrying value of 100 units, 60 of which have
+    since been sold, is only 40% still in inventory. The other 60% left through cost of sales
+    when those units were issued at the average this allocation had raised. Mirroring the entry
+    would take the whole share off the 40 units still on the shelf — understating them, and
+    leaving the 60% sitting in cost of sales with nothing ever to take it out.
+
+    So each line splits: `share x remaining / quantity_at_posting` off inventory, and the rest
+    off cost of sales. **The residue rule again** — cost of sales takes the remainder rather
+    than its own rounded share, so the two halves sum to the share exactly and the clearing
+    account goes back to holding precisely what it held before.
+
+    A line that went to cost of sales at posting time is the extreme of the same rule: nothing
+    was there, so nothing comes off inventory and the whole share comes out of cost of sales.
+    """
+    splits: list[_ReversalSplit] = []
+    for line in document.lines:
+        if line.share == ZERO:
+            continue
+        if line.went_to_cogs or line.quantity_at_posting <= ZERO:
+            splits.append(
+                _ReversalSplit(line=line, remaining=ZERO, to_inventory=ZERO, to_cogs=line.share)
+            )
+            continue
+        remaining = line.quantity_at_posting - _issued_since(db, line)
+        if remaining <= ZERO:
+            # Everything the share was put onto has gone. Note that later receipts do not
+            # bring it back: they added stock that never bore this cost, and charging them for
+            # it would move one consignment's freight into the next one's cost.
+            splits.append(
+                _ReversalSplit(line=line, remaining=ZERO, to_inventory=ZERO, to_cogs=line.share)
+            )
+            continue
+        remaining = min(remaining, line.quantity_at_posting)
+        to_inventory = round_amount(
+            line.share * remaining / line.quantity_at_posting, decimal_places
+        )
+        splits.append(
+            _ReversalSplit(
+                line=line,
+                remaining=remaining,
+                to_inventory=to_inventory,
+                to_cogs=line.share - to_inventory,
+            )
+        )
+    return splits
+
+
 def reverse_landed_cost(
     db: Session,
     document: LandedCostDocument,
@@ -468,36 +585,90 @@ def reverse_landed_cost(
     idempotency_hash: str | None = None,
     request: Request | None = None,
 ) -> LandedCostDocument:
-    """Take the allocation back out — the P5 stock reversal at the original values.
+    """Take the allocation back out — off inventory where it still is, out of cost of sales
+    where it has already gone.
 
-    One call does both halves: the revaluation moves mirror exactly, and the cost-of-sales
-    lines come back with them because they are lines on the same entry.
+    **Not a kernel reversal, and that is the decision this function turns on.** Every other
+    document in the phase reverses by mirroring its entry through `posting.reverse`. A landed
+    cost cannot: the value it posted moves on afterwards, through the very sales the allocation
+    was there to cost correctly, so a mirror would credit an inventory account that no longer
+    holds it. `_split_for_reversal` works out where each share actually sits now, and this
+    posts that — one entry, in the `LCA-` run, Dr Clearing against Cr Inventory and Cr COGS in
+    whatever proportion the position calls for.
 
-    **The fallible half goes first, and here it is the only half** — the step-3 rule, which
-    this document is a caller of rather than a second copy of. `reverse_stock_posting()` is
-    what can refuse: under `block` it will not take value back off a location the goods have
-    since left. Everything after it is a status column and an audit row, neither of which can
-    fail, so a refused reversal has written nothing at the point it raises. That matters
-    because this function is a **multi-step caller** — a caller that reverses as one step of
-    several and has no savepoint to unwind — and `test_a_refused_reversal_leaves_nothing_behind`
-    is the shape of the test that holds it to it.
+    **What that costs, and what covers it.** The reversing entry carries no `reverses_entry_id`,
+    because the kernel sets that only on a mirror and this is not one. The link that survives is
+    `landed_cost_documents.reversal_entry_id`, and the guard against reversing twice is this
+    document's own `status` rather than the kernel's one-reversal-per-entry index. Two things
+    make that safe rather than merely true:
+
+    * **Clause 9 of `assert_order_invariants`** proves the document-level link from both ends —
+      a reversed document names exactly one reversal, the entries name the document back through
+      `source_doc_type` / `source_doc_id`, and no document has two. That clause stands in for
+      the unique index, and `test_clause_9_*` corrupts the rows three ways to show it catches.
+    * **P6 step 8 owes the enquiry.** The GL entry page pairs "reverses / reversed by" off
+      `reverses_entry_id`, so on an `LCA-` entry it comes back empty; step 8 resolves it through
+      the document instead. The note is at the join itself, in `app/api/v1/gl.py`.
+
+    **The fallible leg still goes first** — the step-3 rule, and here it is still the only leg.
+    `revalue_stock()` locks the period and the costing rows before it writes anything, so a
+    refusal arrives before the first write; everything after it is a status, a date and an
+    audit row, none of which can fail. `reverse_landed_cost` is a multi-step caller with no
+    savepoint, and `test_a_refused_landed_cost_reversal_leaves_nothing_behind` holds it to that
+    without one.
     """
     if document.status == LandedCostStatus.REVERSED:
         raise LedgerStateError(
             f"{document.number} was already reversed", code="landed_cost_already_reversed"
         )
-    if document.journal_entry_id is not None:
-        reversal = stock_service.reverse_stock_posting(
+    settings = gl_settings_for(db, document.company_id)
+    clearing_account_id = _clearing_account_id(db, document.company_id)
+    decimal_places = base_currency(db, document.company_id).decimal_places
+    splits = _split_for_reversal(db, document, decimal_places)
+
+    lines: list[stock_service.StockLine] = []
+    for split in splits:
+        item = db.get(Item, split.line.item_id)
+        cogs_account_id = _cogs_account_id(item, settings.cogs_account_id)
+        shared = {
+            "item_id": split.line.item_id,
+            "warehouse_id": split.line.warehouse_id,
+            "contra_account_id": clearing_account_id,
+            "description": f"Reversal of {document.number}: {reason}",
+            "source_line_id": split.line.grn_line_id,
+        }
+        if split.to_inventory != ZERO:
+            lines.append(stock_service.StockLine(value=-split.to_inventory, **shared))
+        if split.to_cogs != ZERO:
+            # Out of cost of sales, unconditionally — this part of the share left with the
+            # goods, whatever the location holds now. Never the inventory adjustment account:
+            # nothing was adjusted and no variance arose, the cost simply belonged to units
+            # that had been sold. And never P5's reversal-residue path, which exists to clear
+            # value a *negative-stock* crossing stranded and flags what it writes provisional.
+            lines.append(
+                stock_service.StockLine(
+                    value=-split.to_cogs, expense_account_id=cogs_account_id, **shared
+                )
+            )
+
+    if lines:
+        posting = stock_service.revalue_stock(
             db,
             document.company_id,
-            entry_id=document.journal_entry_id,
-            on_date=on_date,
-            reason=reason,
+            document=stock_service.StockDocument(
+                doc_type=str(DocType.LANDED_COST),
+                move_date=on_date,
+                description=f"Reversal of {document.number}: {reason}",
+                reference=document.reference,
+                source_doc_type="landed_cost_document",
+                source_doc_id=document.id,
+                idempotency_key=idempotency_key,
+                idempotency_hash=idempotency_hash,
+            ),
+            lines=lines,
             actor=actor,
-            idempotency_key=idempotency_key,
-            idempotency_hash=idempotency_hash,
         )
-        document.reversal_entry_id = reversal.entry.id if reversal.entry is not None else None
+        document.reversal_entry_id = posting.entry.id if posting.entry is not None else None
     document.status = LandedCostStatus.REVERSED
     document.reversed_on = on_date
     db.flush()
@@ -509,7 +680,12 @@ def reverse_landed_cost(
         entity_id=document.id,
         actor_user_id=actor.id,
         actor_email=actor.email,
-        after={"reason": reason, "on": on_date.isoformat()},
+        after={
+            "reason": reason,
+            "on": on_date.isoformat(),
+            "off_inventory": str(sum((split.to_inventory for split in splits), ZERO)),
+            "off_cogs": str(sum((split.to_cogs for split in splits), ZERO)),
+        },
         request=request,
     )
     return document

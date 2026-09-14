@@ -105,6 +105,22 @@ def _entry_read(db: Session, entry: JournalEntry) -> JournalEntryRead:
         .options(selectinload(JournalEntry.lines))
         .where(JournalEntry.id == entry.id)
     ).first()
+    # **`LCA-` entries are the one kind this join cannot pair up, and P6 step 8 owes the fix.**
+    #
+    # Both halves above hang off `journal_entries.reverses_entry_id`, which the kernel writes
+    # only when a reversal *mirrors* the entry it reverses. A landed cost does not reverse that
+    # way: the value it posted leaves through cost of sales as the goods are sold, so its
+    # reversal takes each share back from wherever it now sits and is not a mirror of anything
+    # (see `app/order_entry/landed_cost.py::reverse_landed_cost`). Its link lives on the
+    # document instead — `landed_cost_documents.journal_entry_id` and `.reversal_entry_id` —
+    # and clause 9 of `assert_order_invariants` is what proves that link from both ends.
+    #
+    # So on an `LCA-` entry this pair currently comes back empty, and the enquiry shows a
+    # reversal with nothing said about what it reverses. **Step 8 resolves it through the
+    # document**: given an entry whose `source_doc_type` is `landed_cost_document`, read the
+    # document by `source_doc_id` and fill `reverses_entry_number` / `reversed_by_*` from its
+    # two columns, so the page shows the pair the kernel field would have carried. Nothing else
+    # about the page changes, and no other doc type is affected.
     if row is None:
         raise NotFoundError("Journal entry not found")
     loaded, rev_num, rvd_by_id, rvd_by_num = row

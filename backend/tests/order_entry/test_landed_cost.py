@@ -41,9 +41,35 @@ true. Read it as the step's own acceptance list.
     existing tests rather than post a second entry — **and say so**."* See the note below.
     `test_a_revaluation_of_an_empty_location_is_still_refused_without_the_opt_in`, beside P5's
     own `test_a_revaluation_of_a_location_holding_no_stock_is_refused`, which is untouched.
-11. *Reversal through `reverse_stock_posting()` at the original values.* `reverse_landed_cost`;
-    `test_a_reversal_takes_the_allocation_back_out` and
-    `test_a_stockless_allocation_reverses_too`.
+11. *Reversal.* Decision 9 says "through `reverse_stock_posting()` at the original values",
+    and that is **not** what this does — see the deviation below. `reverse_landed_cost` and
+    `_split_for_reversal`; `test_a_reversal_takes_the_allocation_back_out`,
+    `test_a_stockless_allocation_reverses_too`,
+    `test_reversing_a_landed_cost_is_never_blocked_by_the_goods_having_gone`,
+    `test_a_partly_sold_target_splits_its_share_on_reversal`,
+    `test_the_residue_rule_applies_to_the_reversal_split` and
+    `test_stock_received_after_the_sale_does_not_take_back_the_freight`.
+
+**Deviation from clause 11, and why** (owner's condition on the step-4 branch). "At the
+original values" reads as a mirror of the entry, and a mirror is wrong here: the value an
+allocation posts leaves through cost of sales as the goods are sold. Reversing a share whose
+target no longer holds the item must credit **cost of sales** — the mirror of the posting-time
+stockless rule — and never the inventory adjustment account, which is where a stock-valuation
+variance goes and no variance arose, nor P5's reversal-residue path, which exists to clear
+value a negative-stock crossing stranded and flags what it writes provisional. Before the
+change, a mirror plus that residue path is exactly what happened: `1300` net unchanged, `5100`
+untouched, and `5200` carrying −7 777 nobody could explain. A partly-sold target splits
+proportionally, with the residue rule on the split. The cost of this is that the reversing
+entry carries no `reverses_entry_id`; see `reverse_landed_cost`.
+
+**What covers that cost.** Clause 9 of `assert_order_invariants` proves the document-level link
+from both ends — a reversed document names exactly one reversal, the entries name the document
+back through `source_doc_type` / `source_doc_id`, and no document has two — standing in for the
+kernel's unique index on `reverses_entry_id`. The three `test_clause_9_*` tests below break it
+three ways. The remaining gap is the **GL entry page**, whose "reverses / reversed by" pair
+hangs off that same kernel column and so comes back empty on an `LCA-` entry; **P6 step 8** owes
+resolving it through the document, and the note is written at the join itself in
+`app/api/v1/gl.py::get_journal_entry`.
 
 **Saying so** (clause 10). `revalue_stock()` could not carry a stockless target: it refused an
 empty location outright with `nothing_to_revalue`. It was extended — one branch in `_plan`,
@@ -66,7 +92,7 @@ records why the obvious plan for that test does not work. See its docstring.
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.inventory import masters as inventory_masters
@@ -86,7 +112,10 @@ from app.subledger import documents as documents_service
 from tests.inventory.invariants import assert_stock_invariants
 from tests.kernel.invariants import assert_ledger_invariants
 from tests.order_entry.conftest import APRIL, MARCH, OrderEntry
-from tests.order_entry.invariants import assert_order_invariants
+from tests.order_entry.invariants import (
+    assert_landed_cost_entries_tie_back,
+    assert_order_invariants,
+)
 from tests.subledger.invariants import assert_subledger_invariants
 
 ZERO = Decimal(0)
@@ -781,13 +810,26 @@ def test_a_refused_landed_cost_reversal_leaves_nothing_behind(
 def test_reversing_a_landed_cost_is_never_blocked_by_the_goods_having_gone(
     db: Session, order_entry: OrderEntry
 ) -> None:
-    """The positive half of the note above, asserted rather than left as a remark.
+    """Reversing a landed cost whose target no longer holds the item: **Dr Clearing / Cr COGS**.
 
-    A revaluation moves value and no quantity, so taking one back can never push a location
-    below zero and `block` has nothing to refuse — even when every unit the cost was allocated
-    onto has since been sold. If a later change ever makes this raise, the reversal ordering in
-    `reverse_landed_cost` stops being merely correct and starts being load-bearing, and the
-    test above stops being the only thing standing behind it.
+    Two things at once, because they are the same fact seen from two sides.
+
+    *It is never refused.* A revaluation moves value and no quantity, so taking one back can
+    never push a location below zero and `block` has nothing to refuse — even when every unit
+    the cost was allocated onto has been sold. (That is why the refused-reversal test above
+    uses a closed period: there is no negative-stock refusal to be had here.)
+
+    *And it comes out of cost of sales.* The share went into the carrying value of 100 units;
+    those units were then issued at the average it had raised, so the share left with them,
+    through COGS. Reversing it has to take it back out of COGS — the mirror of the posting-time
+    stockless rule, which sends a share to COGS when there is nothing on the shelf to carry it.
+
+    **Never the inventory adjustment account, and never P5's reversal-residue path.** Both
+    would be available and both would be wrong. `5200` is where a stock-valuation *variance*
+    goes, and no variance arose here; the residue path exists to clear value a negative-stock
+    crossing stranded, and flags what it writes `cost_provisional`, which this is not. Before
+    this was fixed, a mirror reversal plus the residue path is exactly what happened: `1300`
+    net unchanged, `5100` untouched, and `5200` carrying −7 777 that nobody could explain.
     """
     order_entry.settings.negative_stock_policy = NegativeStockPolicy.BLOCK
     db.flush()
@@ -795,13 +837,157 @@ def test_reversing_a_landed_cost_is_never_blocked_by_the_goods_having_gone(
     line = _receive(db, order_entry, "100", "1000")
     document = _allocate(db, order_entry, "7777", (line.id,))
     _sell(db, order_entry, "100")  # every unit it was allocated onto is gone
+    before = {code: _balance(db, order_entry, code) for code in ("1300", "5100", "1370", "5200")}
 
     landed_cost_service.reverse_landed_cost(
         db, document, on_date=APRIL, reason="Reassessed", actor=order_entry.owner
     )
 
     assert document.status == LandedCostStatus.REVERSED
-    assert _balance(db, order_entry, "1370") == Decimal(7777)
+    after = {code: _balance(db, order_entry, code) for code in ("1300", "5100", "1370", "5200")}
+    assert after["1300"] == before["1300"], "inventory moved; there was nothing there to move"
+    assert after["5100"] == before["5100"] - Decimal(7777), "the share did not come out of COGS"
+    assert after["1370"] == Decimal(7777), "the cost is unallocated again"
+    assert after["5200"] == before["5200"], "the inventory adjustment account was touched"
+
+    # And the entry says so directly, rather than only netting out that way.
+    amounts = _amounts_by_account(db, order_entry, document.reversal_entry_id)
+    assert amounts == {"1370": Decimal(7777), "5100": Decimal(-7777)}, amounts
+    assert (
+        db.scalars(
+            select(StockMove).where(StockMove.journal_entry_id == document.reversal_entry_id)
+        ).all()
+        == []
+    ), "a reversal that touched no carrying value wrote a move"
+    _assert_everything(db, order_entry.company_id)
+
+
+def test_a_partly_sold_target_splits_its_share_on_reversal(
+    db: Session, order_entry: OrderEntry
+) -> None:
+    """60 of 100 sold, then reverse: 40/100 off inventory, 60/100 out of cost of sales.
+
+    The share of 7 777 was put into the carrying value of 100 units. 60 have since been issued
+    at the average it raised, taking 60% of it out through COGS; 40 are still on the shelf
+    carrying the other 40%. So the reversal is a split, and neither half is the whole.
+
+    **The residue rule, on the split.** 40/100 of 7 777 is 3 110.8, which rounds to 3 111 in a
+    zero-decimal base; cost of sales takes the remainder, 4 666, rather than its own rounded
+    share of 4 666.2 → 4 666. Here they agree, but the rule is what guarantees the two halves
+    sum to 7 777 whatever the proportion — and the clearing account has to go back to holding
+    exactly 7 777, not 7 776 or 7 778.
+
+    A mirror reversal would have taken the whole 7 777 off the 40 units still on the shelf,
+    understating them by 4 666 and leaving that much sitting in cost of sales for good. Nothing
+    would have flagged it: the location stays positive, so no value is stranded and the residue
+    path never fires.
+    """
+    _book_to_clearing(db, order_entry, "7777")
+    line = _receive(db, order_entry, "100", "1000")
+    document = _allocate(db, order_entry, "7777", (line.id,))
+    # Average is now (100 000 + 7 777) / 100 = 1 077.77.
+    _sell(db, order_entry, "60")
+    before = {code: _balance(db, order_entry, code) for code in ("1300", "5100", "1370", "5200")}
+
+    landed_cost_service.reverse_landed_cost(
+        db, document, on_date=APRIL, reason="Reassessed", actor=order_entry.owner
+    )
+
+    amounts = _amounts_by_account(db, order_entry, document.reversal_entry_id)
+    assert amounts == {
+        "1370": Decimal(7777),
+        "1300": Decimal(-3111),
+        "5100": Decimal(-4666),
+    }, amounts
+    assert amounts["1300"] + amounts["5100"] == -Decimal(7777), "the split does not sum"
+
+    after = {code: _balance(db, order_entry, code) for code in ("1300", "5100", "1370", "5200")}
+    assert after["1300"] == before["1300"] - Decimal(3111)
+    assert after["5100"] == before["5100"] - Decimal(4666)
+    assert after["1370"] == Decimal(7777)
+    assert after["5200"] == before["5200"], "the inventory adjustment account was touched"
+
+    # The 40 still on the shelf are back to what they cost before the freight: 40 x 1 000.
+    position = stock_service.location_balance(
+        db, order_entry.company_id, order_entry.stock_item.id, order_entry.main.id
+    )
+    assert (position.quantity, position.value) == (Decimal(40), Decimal(40_000))
+    _assert_everything(db, order_entry.company_id)
+
+
+def test_the_residue_rule_applies_to_the_reversal_split(
+    db: Session, order_entry: OrderEntry
+) -> None:
+    """Half sold, and an amount that lands exactly on a half-franc — where rounding the two
+    halves of the split independently overshoots.
+
+    50 of 100 sold, share 7 777. Each half is 3 888.5. Rounded half-up **independently** they
+    are 3 889 and 3 889, and the reversal would take 7 778 off the clearing account — a franc
+    more than the allocation ever put on it, leaving it at −1 with nothing able to clear it.
+    The residue rule makes cost of sales take the remainder instead: 3 889 off inventory and
+    3 888 out of COGS, summing to 7 777 exactly.
+
+    The 40/100 case above does not catch this — both halves round consistently there — so this
+    is the one that makes the rule load-bearing rather than incidentally true. Written after
+    the first sensitivity run, which disabled the split's residue rule and left the 40/100 test
+    green.
+    """
+    _book_to_clearing(db, order_entry, "7777")
+    line = _receive(db, order_entry, "100", "1000")
+    document = _allocate(db, order_entry, "7777", (line.id,))
+    _sell(db, order_entry, "50")
+
+    landed_cost_service.reverse_landed_cost(
+        db, document, on_date=APRIL, reason="Reassessed", actor=order_entry.owner
+    )
+
+    amounts = _amounts_by_account(db, order_entry, document.reversal_entry_id)
+    assert amounts == {
+        "1370": Decimal(7777),
+        "1300": Decimal(-3889),
+        "5100": Decimal(-3888),
+    }, amounts
+    assert _balance(db, order_entry, "1370") == Decimal(7777), (
+        "the clearing account did not go back to exactly what was booked to it"
+    )
+    _assert_everything(db, order_entry.company_id)
+
+
+def test_stock_received_after_the_sale_does_not_take_back_the_freight(
+    db: Session, order_entry: OrderEntry
+) -> None:
+    """The case that makes the denominator a stored column rather than today's quantity.
+
+    Allocate onto 100, sell all 100, then receive 50 more. The location holds 50 again — but
+    none of them bore this freight, and all of the share has already gone out through COGS.
+    Splitting by what is on the shelf *now* would take half of it off the new 50, moving one
+    consignment's freight into the next one's cost and leaving the other half in COGS forever.
+
+    So the split measures what has been **issued since the allocation** against what the
+    location held **when it posted**, both of which are facts about the past that a later
+    receipt cannot change.
+    """
+    _book_to_clearing(db, order_entry, "7777")
+    line = _receive(db, order_entry, "100", "1000")
+    document = _allocate(db, order_entry, "7777", (line.id,))
+    _sell(db, order_entry, "100")
+    _receive(db, order_entry, "50", "1000")
+    before = {code: _balance(db, order_entry, code) for code in ("1300", "5100")}
+
+    landed_cost_service.reverse_landed_cost(
+        db, document, on_date=APRIL, reason="Reassessed", actor=order_entry.owner
+    )
+
+    amounts = _amounts_by_account(db, order_entry, document.reversal_entry_id)
+    assert amounts == {"1370": Decimal(7777), "5100": Decimal(-7777)}, amounts
+    after = {code: _balance(db, order_entry, code) for code in ("1300", "5100")}
+    assert after["1300"] == before["1300"], "the new consignment was charged for old freight"
+    assert after["5100"] == before["5100"] - Decimal(7777)
+    # The 50 new units are worth what they cost, and nothing else.
+    position = stock_service.location_balance(
+        db, order_entry.company_id, order_entry.stock_item.id, order_entry.main.id
+    )
+    assert (position.quantity, position.value) == (Decimal(50), Decimal(50_000))
     _assert_everything(db, order_entry.company_id)
 
 
@@ -896,3 +1082,107 @@ def test_allocated_per_grn_line_is_a_query_over_unreversed_documents(
         db, order_entry.company_id, [first.id, second.id]
     ) == {}, "a reversed allocation still counted"
     _assert_everything(db, order_entry.company_id)
+
+
+# --- Clause 9: the document-level reversal link, and whether it is actually proved -------------
+#
+# A landed cost does not reverse through `posting.reverse`, so its reversing entry carries no
+# `reverses_entry_id` and the kernel's unique index on that column is not protecting it. The
+# document-level link stands alone, and a link that stands alone is a link that can drift. These
+# three break it on purpose and watch clause 9 say so — a clause that has never been shown
+# failing is an assertion about itself.
+#
+# **Each one targets the clause directly, and then checks the whole suite refuses too.** Not for
+# tidiness: clause 7 (the clearing proof) reads the same two columns to decide which entries are
+# allocations, so every corruption here trips it *first*. Asserting on
+# `assert_order_invariants` alone would therefore prove clause 7 and say nothing about clause 9,
+# which is the one under test.
+
+
+def _reversed_landed_cost(db: Session, fixture: OrderEntry):  # noqa: ANN202
+    _book_to_clearing(db, fixture, "7777")
+    line = _receive(db, fixture, "100", "1000")
+    document = _allocate(db, fixture, "7777", (line.id,))
+    landed_cost_service.reverse_landed_cost(
+        db, document, on_date=APRIL, reason="Reassessed", actor=fixture.owner
+    )
+    db.flush()
+    assert_order_invariants(db, fixture.company_id)  # green before it is broken
+    return document
+
+
+def test_clause_9_catches_a_reversed_document_that_lost_its_reversal_link(
+    db: Session, order_entry: OrderEntry
+) -> None:
+    """The drift the kernel's `reverses_entry_id` would have made impossible: a document marked
+    reversed whose reversal entry nothing points at. The entry is still in the ledger, still
+    naming the document; the document has simply stopped naming it back."""
+    document = _reversed_landed_cost(db, order_entry)
+
+    db.execute(
+        text("UPDATE landed_cost_documents SET reversal_entry_id = NULL WHERE id = :id"),
+        {"id": document.id},
+    )
+    db.expire_all()
+
+    with pytest.raises(AssertionError, match="is reversed and names no reversal entry"):
+        assert_landed_cost_entries_tie_back(db, order_entry.company_id)
+    with pytest.raises(AssertionError):
+        assert_order_invariants(db, order_entry.company_id)
+    db.rollback()
+
+
+def test_clause_9_catches_a_second_reversal_entry(
+    db: Session, order_entry: OrderEntry
+) -> None:
+    """**What the kernel's unique index would have refused**: two reversing entries against one
+    landed cost. The document names the later one and the ledger carries both.
+
+    Reached by forcing the document's `status` back and reversing again, because that is the
+    only way to reach it. The obvious route — inserting a second entry with raw SQL, the way
+    the other two tests corrupt their rows — is refused by the database itself: *"journal rows
+    may only be written by the Posting Engine (ADR-05)"*. That guard is why this corruption has
+    to come through the service, and it is worth knowing that a forged `LCA-` entry is not a
+    thing that can exist.
+    """
+    document = _reversed_landed_cost(db, order_entry)
+    first_reversal_id = document.reversal_entry_id
+
+    db.execute(
+        text("UPDATE landed_cost_documents SET status = 'posted' WHERE id = :id"),
+        {"id": document.id},
+    )
+    db.expire_all()
+    document = landed_cost_service.get_landed_cost(db, order_entry.company_id, document.id)
+    landed_cost_service.reverse_landed_cost(
+        db, document, on_date=APRIL, reason="Again", actor=order_entry.owner
+    )
+    db.flush()
+    assert document.reversal_entry_id != first_reversal_id, "no second reversal was posted"
+
+    with pytest.raises(AssertionError, match="and the ledger carries"):
+        assert_landed_cost_entries_tie_back(db, order_entry.company_id)
+    with pytest.raises(AssertionError):
+        assert_order_invariants(db, order_entry.company_id)
+    db.rollback()
+
+
+def test_clause_9_catches_a_posted_document_that_claims_a_reversal(
+    db: Session, order_entry: OrderEntry
+) -> None:
+    """The mirror of the first: a document still marked posted while naming a reversal entry.
+    Either the status is wrong or the link is, and neither is something a reader should have to
+    guess at from a listing that filters on status."""
+    _book_to_clearing(db, order_entry, "1000")
+    line = _receive(db, order_entry, "10", "100")
+    document = _allocate(db, order_entry, "1000", (line.id,))
+
+    db.execute(
+        text("UPDATE landed_cost_documents SET reversal_entry_id = :e WHERE id = :id"),
+        {"e": document.journal_entry_id, "id": document.id},
+    )
+    db.expire_all()
+
+    with pytest.raises(AssertionError, match="is not reversed but names reversal entry"):
+        assert_landed_cost_entries_tie_back(db, order_entry.company_id)
+    db.rollback()

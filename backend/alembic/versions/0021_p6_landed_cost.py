@@ -40,6 +40,7 @@ branch_labels = None
 depends_on = None
 
 MONEY = sa.Numeric(20, 6)
+QUANTITY = sa.Numeric(20, 6)
 
 TENANT_TABLES = ("landed_cost_documents", "landed_cost_lines")
 
@@ -157,6 +158,12 @@ def upgrade() -> None:
         sa.Column("weight", MONEY, nullable=False),
         sa.Column("share", MONEY, nullable=False),
         sa.Column("went_to_cogs", sa.Boolean(), nullable=False, server_default=sa.false()),
+        # What the target's location held when this allocation posted — the denominator the
+        # reversal splits the share by. Stored because "how much was there to begin with" is
+        # not answerable once the position has moved on; see `LandedCostLine`.
+        sa.Column(
+            "quantity_at_posting", QUANTITY, nullable=False, server_default=sa.text("0")
+        ),
         sa.Column("stock_move_id", sa.BigInteger()),
         *_audit_columns(),
         sa.UniqueConstraint("company_id", "id", name="uq_landed_cost_lines_company_id_id"),
@@ -172,6 +179,10 @@ def upgrade() -> None:
         _tenant_fk("fk_landed_cost_lines_warehouse", "warehouse_id", "warehouses"),
         _tenant_fk("fk_landed_cost_lines_stock_move", "stock_move_id", "stock_moves"),
         sa.CheckConstraint("weight >= 0", name=op.f("ck_landed_cost_lines_weight_not_negative")),
+        sa.CheckConstraint(
+            "quantity_at_posting >= 0",
+            name=op.f("ck_landed_cost_lines_quantity_at_posting_not_negative"),
+        ),
         sa.CheckConstraint("share >= 0", name=op.f("ck_landed_cost_lines_share_not_negative")),
         sa.CheckConstraint(
             "NOT went_to_cogs OR stock_move_id IS NULL",

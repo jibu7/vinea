@@ -676,6 +676,7 @@ class LandedCostLine(AuditedMixin, CompanyScopedMixin, Base):
         Index("ix_landed_cost_lines_grn_line", "company_id", "grn_line_id"),
         Index("ix_landed_cost_lines_document", "company_id", "document_id"),
         CheckConstraint("weight >= 0", name="weight_not_negative"),
+        CheckConstraint("quantity_at_posting >= 0", name="quantity_at_posting_not_negative"),
         CheckConstraint("share >= 0", name="share_not_negative"),
         # The stockless rule, stated where it cannot drift: what went to cost of sales did not
         # go into carrying value, so it has no move.
@@ -710,6 +711,20 @@ class LandedCostLine(AuditedMixin, CompanyScopedMixin, Base):
     #: True when the location held none of the item and the share went to COGS instead of into
     #: carrying value. Checked against `stock_move_id` by a constraint above.
     went_to_cogs: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    #: **What the target's location held when this allocation posted** — the denominator the
+    #: reversal splits the share by, and the reason it is stored rather than looked up again.
+    #:
+    #: A share put into the carrying value of 100 units is 40% still there once 60 have been
+    #: issued, and reversing it has to take 40% off inventory and 60% out of cost of sales,
+    #: where it went when those 60 were sold. "How much has been issued since" is answerable
+    #: from the moves; "how much was there to begin with" is not, once the position has moved
+    #: on. Read back from the balance the posting itself left, under the row lock that posting
+    #: still holds, so it is exact rather than a reading taken just before.
+    #:
+    #: Zero on a line that went to cost of sales at posting time: there was nothing there.
+    quantity_at_posting: Mapped[Decimal] = mapped_column(
+        QUANTITY, nullable=False, default=Decimal(0)
+    )
     stock_move_id: Mapped[int | None] = mapped_column(BigInteger)
 
     document: Mapped[LandedCostDocument] = relationship(back_populates="lines")
