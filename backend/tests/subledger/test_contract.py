@@ -180,8 +180,15 @@ def test_the_registry_seeds_the_subledger_pairs(db: Session, subledger: Subledge
         (ControlType.AR, "ar"),
         (ControlType.AP, "ap"),
         (ControlType.INVENTORY, "inv"),
+        # P6: the GRN accrual is written by `inv` on receipt and relieved by `ap` on the
+        # match, so it is the one control type that registers two modules.
+        (ControlType.GRN_ACCRUAL, "inv"),
+        (ControlType.GRN_ACCRUAL, "ap"),
     }
     assert posting.control_account_modules(db)[ControlType.AR] == frozenset({"ar"})
+    assert posting.control_account_modules(db)[ControlType.GRN_ACCRUAL] == frozenset(
+        {"inv", "ap"}
+    )
 
 
 def test_registering_a_module_opens_the_control_account_to_it(

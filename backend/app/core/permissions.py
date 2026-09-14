@@ -80,6 +80,11 @@ OE_SALES_ORDERS_MANAGE = "oe:sales_orders_manage"
 OE_PURCHASE_ORDERS_MANAGE = "oe:purchase_orders_manage"
 OE_GRV_PROCESS = "oe:grv_process"
 OE_REPORTS_VIEW = "oe:reports_view"
+# Posting a landed cost moves value into stock that is already on hand and, where it is not,
+# straight to COGS — it restates nothing earlier but it does change what everything sold from
+# here on costs. Its own permission (P6 decision 11) rather than folding into `oe:grv_process`,
+# because receiving goods and revaluing them are different authorities.
+OE_LANDED_COST_POST = "oe:landed_cost_post"
 
 # Reporting & analytics
 REPORTING_FINANCIAL_STATEMENTS_VIEW = "reporting:financial_statements_view"
@@ -156,6 +161,7 @@ ALL_PERMISSIONS: tuple[str, ...] = (
     OE_PURCHASE_ORDERS_MANAGE,
     OE_GRV_PROCESS,
     OE_REPORTS_VIEW,
+    OE_LANDED_COST_POST,
     REPORTING_FINANCIAL_STATEMENTS_VIEW,
     REPORTING_FINANCIAL_STATEMENTS_GENERATE,
     REPORTING_TEMPLATES_MANAGE,

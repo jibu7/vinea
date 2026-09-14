@@ -25,6 +25,7 @@ from app.models.inventory import (
     UOM_CONVERSION_SCALE,
     Item,
     ItemBarcode,
+    ItemKitComponent,
     ItemType,
     NegativeStockPolicy,
     Uom,
@@ -377,10 +378,12 @@ class ItemInput:
     inventory_account_id: int | None = None
     cogs_account_id: int | None = None
     sales_account_id: int | None = None
+    purchase_account_id: int | None = None
     default_sales_tax_code_id: int | None = None
     default_purchase_tax_code_id: int | None = None
     selling_price: Decimal = Decimal(0)
     price_includes_tax: bool = False
+    weight_per_base_unit: Decimal | None = None
 
 
 def list_items(
@@ -508,6 +511,7 @@ def _validate_item_defaults(db: Session, company_id: int, data: ItemInput) -> No
     _assert_inventory_control_account(db, company_id, data.inventory_account_id)
     _assert_postable_contra(db, company_id, data.cogs_account_id, "cogs_account_id")
     _assert_postable_contra(db, company_id, data.sales_account_id, "sales_account_id")
+    _assert_postable_contra(db, company_id, data.purchase_account_id, "purchase_account_id")
     _assert_tax_code(db, company_id, data.default_sales_tax_code_id, "default_sales_tax_code_id")
     _assert_tax_code(
         db, company_id, data.default_purchase_tax_code_id, "default_purchase_tax_code_id"
@@ -538,10 +542,12 @@ def create_item(
         inventory_account_id=data.inventory_account_id,
         cogs_account_id=data.cogs_account_id,
         sales_account_id=data.sales_account_id,
+        purchase_account_id=data.purchase_account_id,
         default_sales_tax_code_id=data.default_sales_tax_code_id,
         default_purchase_tax_code_id=data.default_purchase_tax_code_id,
         selling_price=data.selling_price,
         price_includes_tax=data.price_includes_tax,
+        weight_per_base_unit=data.weight_per_base_unit,
         is_active=True,
     )
     db.add(item)
@@ -605,10 +611,12 @@ def update_item(
     inventory_account_id: int | None | object = ...,
     cogs_account_id: int | None | object = ...,
     sales_account_id: int | None | object = ...,
+    purchase_account_id: int | None | object = ...,
     default_sales_tax_code_id: int | None | object = ...,
     default_purchase_tax_code_id: int | None | object = ...,
     selling_price: Decimal | None = None,
     price_includes_tax: bool | None = None,
+    weight_per_base_unit: Decimal | None | object = ...,
     is_active: bool | None = None,
     actor: User,
     request: Request | None = None,
@@ -666,6 +674,7 @@ def update_item(
     for field, value in (
         ("cogs_account_id", cogs_account_id),
         ("sales_account_id", sales_account_id),
+        ("purchase_account_id", purchase_account_id),
     ):
         if value is ...:
             continue
@@ -689,6 +698,14 @@ def update_item(
         item.selling_price = selling_price
     if price_includes_tax is not None:
         item.price_includes_tax = price_includes_tax
+    if weight_per_base_unit is not ...:
+        if weight_per_base_unit is not None and weight_per_base_unit <= 0:
+            raise LedgerStateError(
+                "A weight must be greater than zero",
+                code="invalid_weight",
+                field_errors={"weight_per_base_unit": ["must be greater than zero"]},
+            )
+        item.weight_per_base_unit = weight_per_base_unit  # type: ignore[assignment]
     if is_active is not None:
         item.is_active = is_active
     db.flush()
@@ -1209,3 +1226,132 @@ def _assert_inventory_control_setting(
             code="invalid_inventory_account",
             field_errors={field: ["not an inventory control account"]},
         )
+
+
+# --- Kit components (P6 decision 8) ----------------------------------------------------------
+
+
+def list_kit_components(db: Session, company_id: int, kit_item_id: int) -> list[ItemKitComponent]:
+    return list(
+        db.scalars(
+            select(ItemKitComponent)
+            .where(
+                ItemKitComponent.company_id == company_id,
+                ItemKitComponent.kit_item_id == kit_item_id,
+            )
+            .order_by(ItemKitComponent.line_no)
+        )
+    )
+
+
+def replace_kit_components(
+    db: Session,
+    company_id: int,
+    kit: Item,
+    components: list[dict],
+    *,
+    actor: User,
+    request: Request | None = None,
+) -> list[ItemKitComponent]:
+    """Set a kit's whole definition at once, replacing whatever was there.
+
+    A **whole-list replace** rather than per-row create/update/delete, because a kit is only
+    meaningful as a set: "2 x bottle + 1 x box" is one fact, and a screen that saved it one
+    row at a time would leave the definition briefly wrong between two requests and
+    permanently wrong if the second failed. One request, one definition, one audit record
+    showing the before and the after.
+
+    Editing a definition changes what the *next* kit line explodes into and restates nothing:
+    orders already taken keep the component lines they were keyed with, which is what lets
+    Breakup edit one order without the catalogue moving under it.
+    """
+    if kit.item_type != ItemType.KIT:
+        raise LedgerStateError(
+            f"{kit.code} is not a kit",
+            code="not_a_kit",
+            field_errors={"item_id": ["not a kit"]},
+        )
+    before = [
+        {"component_item_id": row.component_item_id, "quantity_per_kit": str(row.quantity_per_kit)}
+        for row in list_kit_components(db, company_id, kit.id)
+    ]
+
+    seen: set[int] = set()
+    prepared: list[tuple[int, Decimal]] = []
+    for index, component in enumerate(components):
+        component_item_id = int(component["component_item_id"])
+        quantity = Decimal(str(component["quantity_per_kit"]))
+        if component_item_id == kit.id:
+            raise LedgerStateError(
+                "A kit cannot contain itself",
+                code="kit_is_its_own_component",
+                field_errors={f"components.{index}.component_item_id": ["is this kit"]},
+            )
+        if component_item_id in seen:
+            raise LedgerStateError(
+                "A component may appear only once — combine the quantities instead",
+                code="duplicate_kit_component",
+                field_errors={f"components.{index}.component_item_id": ["already on this kit"]},
+            )
+        if quantity <= 0:
+            raise LedgerStateError(
+                "A component quantity must be greater than zero",
+                code="invalid_component_quantity",
+                field_errors={
+                    f"components.{index}.quantity_per_kit": ["must be greater than zero"]
+                },
+            )
+        component_item = get_item(db, company_id, component_item_id)
+        # No nesting in v1 (decision 8): the explosion is one level, so it terminates by
+        # construction rather than by a depth limit somebody has to remember to enforce.
+        if component_item.item_type == ItemType.KIT:
+            raise LedgerStateError(
+                f"{component_item.code} is itself a kit — kits do not nest",
+                code="nested_kit",
+                field_errors={f"components.{index}.component_item_id": ["is a kit"]},
+            )
+        if not component_item.is_active:
+            raise LedgerStateError(
+                f"{component_item.code} is not active",
+                code="component_not_active",
+                field_errors={f"components.{index}.component_item_id": ["not active"]},
+            )
+        seen.add(component_item_id)
+        prepared.append((component_item_id, quantity))
+
+    for row in list_kit_components(db, company_id, kit.id):
+        db.delete(row)
+    # Flushed before the inserts so the unique constraints see the cleared table rather than
+    # the old rows — a re-ordered definition reuses line numbers.
+    db.flush()
+
+    rows = [
+        ItemKitComponent(
+            company_id=company_id,
+            kit_item_id=kit.id,
+            component_item_id=component_item_id,
+            quantity_per_kit=quantity,
+            line_no=index + 1,
+        )
+        for index, (component_item_id, quantity) in enumerate(prepared)
+    ]
+    db.add_all(rows)
+    db.flush()
+
+    after = [
+        {"component_item_id": row.component_item_id, "quantity_per_kit": str(row.quantity_per_kit)}
+        for row in rows
+    ]
+    if before != after:
+        _audit(
+            db,
+            company_id,
+            "item_kit_components.replaced",
+            "items",
+            kit.id,
+            actor=actor,
+            before={"components": before},
+            after={"components": after},
+            request=request,
+        )
+    return rows

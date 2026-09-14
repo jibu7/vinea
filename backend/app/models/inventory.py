@@ -66,6 +66,12 @@ class ItemType(enum.StrEnum):
     STOCK = "stock"
     SERVICE = "service"
     NON_STOCK = "non_stock"
+    #: P6 decision 8 — a **virtual bundle**, not a manufactured thing. A kit never has a move
+    #: and is never received (`kit_not_purchasable` refuses it on the AP side): a kit line on
+    #: an order or an invoice is stored as the parent revenue line plus the component lines it
+    #: explodes into at entry, and commitment and COGS come from those components. Assembly
+    #: into stock, and nesting, are P12.
+    KIT = "kit"
 
 
 class NegativeStockPolicy(enum.StrEnum):
@@ -203,6 +209,12 @@ class Item(AuditedMixin, CompanyScopedMixin, Base):
             ondelete="RESTRICT",
         ),
         ForeignKeyConstraint(
+            ["company_id", "purchase_account_id"],
+            ["gl_accounts.company_id", "gl_accounts.id"],
+            name="fk_items_purchase_account",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
             ["company_id", "default_sales_tax_code_id"],
             ["tax_codes.company_id", "tax_codes.id"],
             name="fk_items_default_sales_tax_code",
@@ -215,6 +227,10 @@ class Item(AuditedMixin, CompanyScopedMixin, Base):
             ondelete="RESTRICT",
         ),
         CheckConstraint("selling_price >= 0", name="selling_price_not_negative"),
+        CheckConstraint(
+            "weight_per_base_unit IS NULL OR weight_per_base_unit > 0",
+            name="weight_per_base_unit_positive",
+        ),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
@@ -229,16 +245,30 @@ class Item(AuditedMixin, CompanyScopedMixin, Base):
     inventory_account_id: Mapped[int | None] = mapped_column(BigInteger)
     cogs_account_id: Mapped[int | None] = mapped_column(BigInteger)
     sales_account_id: Mapped[int | None] = mapped_column(BigInteger)
+    #: P6 decision 1 — where an AP line for a **service or non-stock** item expenses to. A
+    #: stock item never reads this: its AP line debits the GRN accrual, because the cost is
+    #: already in inventory from the receipt and the invoice only relieves what was accrued.
+    purchase_account_id: Mapped[int | None] = mapped_column(BigInteger)
     default_sales_tax_code_id: Mapped[int | None] = mapped_column(BigInteger)
     default_purchase_tax_code_id: Mapped[int | None] = mapped_column(BigInteger)
     # One default selling price (decision 8); price lists are explicitly out of scope.
     selling_price: Mapped[Decimal] = mapped_column(MONEY, nullable=False, default=Decimal(0))
     price_includes_tax: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    #: Mass of one base unit, in whatever unit the company weighs things in — the number is
+    #: only ever used as a *ratio* between the lines sharing one landed-cost document, so it
+    #: needs to be consistent, not to name a unit. Nullable, and a `weight`-basis allocation
+    #: refuses a target whose item has none (`weight_missing`) rather than treating it as zero
+    #: and quietly giving that line no share of the freight (P6 decision 9).
+    weight_per_base_unit: Mapped[Decimal | None] = mapped_column(QUANTITY)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
     @property
     def is_stock(self) -> bool:
         return self.item_type == ItemType.STOCK
+
+    @property
+    def is_kit(self) -> bool:
+        return self.item_type == ItemType.KIT
 
 
 class ItemBarcode(AuditedMixin, CompanyScopedMixin, Base):
@@ -272,6 +302,60 @@ class ItemBarcode(AuditedMixin, CompanyScopedMixin, Base):
     # Units of `uom_id` per scan — a case of 12 scanned in cases is 1, in bottles 12.
     pack_quantity: Mapped[Decimal] = mapped_column(QUANTITY, nullable=False, default=Decimal(1))
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+
+class ItemKitComponent(AuditedMixin, CompanyScopedMixin, Base):
+    """What a kit explodes into (P6 decision 8).
+
+    A **definition**, not a posting: these rows are the defaults a kit line reads when it is
+    keyed, and the line stores its own copy as component lines carrying `kit_parent_line_id`.
+    That is what lets Breakup edit one order's explosion — substituting a component, changing
+    a quantity — without rewriting the catalogue or restating orders already taken. Editing
+    the definition changes what the *next* kit line explodes into and nothing that has already
+    been keyed.
+
+    `quantity_per_kit` is in the **component's own base unit**, so the arithmetic at line
+    entry is a multiplication and never a unit conversion: kit quantity x per-kit = component
+    base quantity. No nesting in v1 — a component may not itself be a kit — so the explosion
+    is one level and terminates by construction rather than by a depth limit.
+    """
+
+    __tablename__ = "item_kit_components"
+    __table_args__ = (
+        # One row per component per kit: a component wanted twice is one row with a larger
+        # quantity, which is also the only shape Breakup can present as a single editable row.
+        UniqueConstraint(
+            "company_id", "kit_item_id", "component_item_id", name="uq_item_kit_components_pair"
+        ),
+        UniqueConstraint(
+            "company_id", "kit_item_id", "line_no", name="uq_item_kit_components_line_no"
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "kit_item_id"],
+            ["items.company_id", "items.id"],
+            name="fk_item_kit_components_kit_item",
+            ondelete="CASCADE",
+        ),
+        # RESTRICT, not CASCADE: deleting an item that some kit is built from should fail
+        # loudly rather than silently shrink the kit to something that no longer costs what
+        # it sells for.
+        ForeignKeyConstraint(
+            ["company_id", "component_item_id"],
+            ["items.company_id", "items.id"],
+            name="fk_item_kit_components_component_item",
+            ondelete="RESTRICT",
+        ),
+        Index("ix_item_kit_components_company_kit", "company_id", "kit_item_id"),
+        CheckConstraint("quantity_per_kit > 0", name="quantity_per_kit_positive"),
+        CheckConstraint("kit_item_id <> component_item_id", name="kit_is_not_its_own_component"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    kit_item_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    component_item_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    #: In the component's base unit.
+    quantity_per_kit: Mapped[Decimal] = mapped_column(QUANTITY, nullable=False)
+    line_no: Mapped[int] = mapped_column(SmallInteger, nullable=False)
 
 
 class Warehouse(AuditedMixin, CompanyScopedMixin, Base):

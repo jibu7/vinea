@@ -75,6 +75,7 @@ export const ControlType = {
   AR: "ar",
   AP: "ap",
   INVENTORY: "inventory",
+  GRN_ACCRUAL: "grn_accrual",
 } as const;
 export type ControlType = (typeof ControlType)[keyof typeof ControlType];
 
@@ -131,10 +132,17 @@ export const InstrumentType = {
 } as const;
 export type InstrumentType = (typeof InstrumentType)[keyof typeof InstrumentType];
 
+export const BackorderPolicy = {
+  ALLOW: "allow",
+  BLOCK: "block",
+} as const;
+export type BackorderPolicy = (typeof BackorderPolicy)[keyof typeof BackorderPolicy];
+
 export const ItemType = {
   STOCK: "stock",
   SERVICE: "service",
   NON_STOCK: "non_stock",
+  KIT: "kit",
 } as const;
 export type ItemType = (typeof ItemType)[keyof typeof ItemType];
 

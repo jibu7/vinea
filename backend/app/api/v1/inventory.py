@@ -6,6 +6,7 @@ serves every module, so inventory gets a `module` filter rather than a second en
 """
 
 from datetime import date
+from decimal import Decimal
 
 from fastapi import APIRouter, Depends, Query, Request, Response, status
 from sqlalchemy import select
@@ -56,6 +57,8 @@ from app.schemas.inventory import (
     ItemLookupRead,
     ItemRead,
     ItemUpdate,
+    KitComponentRead,
+    KitComponentsUpdate,
     MovementReportRead,
     MovementRowRead,
     OnHandRead,
@@ -340,6 +343,9 @@ def update_item(
         ),
         cogs_account_id=_optional(payload.cogs_account_id, payload.clear_cogs_account),
         sales_account_id=_optional(payload.sales_account_id, payload.clear_sales_account),
+        purchase_account_id=_optional(
+            payload.purchase_account_id, payload.clear_purchase_account
+        ),
         default_sales_tax_code_id=_optional(
             payload.default_sales_tax_code_id, payload.clear_sales_tax_code
         ),
@@ -348,6 +354,9 @@ def update_item(
         ),
         selling_price=payload.selling_price,
         price_includes_tax=payload.price_includes_tax,
+        weight_per_base_unit=_optional_decimal(
+            payload.weight_per_base_unit, payload.clear_weight_per_base_unit
+        ),
         is_active=payload.is_active,
         actor=auth.user,
         request=request,
@@ -359,6 +368,13 @@ def update_item(
 def _optional(value: int | None, clear: bool) -> int | None | object:
     """`...` means "leave alone"; `None` means "clear" — the P4 convention, so a PATCH that
     omits a field never silently blanks it."""
+    if clear:
+        return None
+    return ... if value is None else value
+
+
+def _optional_decimal(value: Decimal | None, clear: bool) -> Decimal | None | object:
+    """`_optional` for a non-id field; same convention, different type."""
     if clear:
         return None
     return ... if value is None else value
@@ -389,6 +405,43 @@ def get_item_history(
 
 
 # --- Barcodes -----------------------------------------------------------------------------
+
+
+@router.get("/items/{item_id}/kit-components")
+def list_kit_components(
+    item_id: int,
+    auth: AuthContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+) -> list[KitComponentRead]:
+    _require_view(auth)
+    item = masters.get_item(db, auth.company_id, item_id)
+    return [
+        KitComponentRead.model_validate(row)
+        for row in masters.list_kit_components(db, auth.company_id, item.id)
+    ]
+
+
+@router.put("/items/{item_id}/kit-components")
+def replace_kit_components(
+    item_id: int,
+    payload: KitComponentsUpdate,
+    request: Request,
+    auth: AuthContext = permissions.require(permissions.INV_SETUP_MANAGE),
+    db: Session = Depends(get_db),
+) -> list[KitComponentRead]:
+    """The kit's whole definition in one request — a PUT, because a kit is only meaningful
+    as a set and a half-saved definition is a kit that costs the wrong thing."""
+    item = masters.get_item(db, auth.company_id, item_id)
+    rows = masters.replace_kit_components(
+        db,
+        auth.company_id,
+        item,
+        [component.model_dump() for component in payload.components],
+        actor=auth.user,
+        request=request,
+    )
+    db.commit()
+    return [KitComponentRead.model_validate(row) for row in rows]
 
 
 @router.get("/items/{item_id}/barcodes")

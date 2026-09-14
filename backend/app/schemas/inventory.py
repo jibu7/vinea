@@ -87,8 +87,10 @@ class ItemCreate(BaseModel):
     sales_account_id: int | None = None
     default_sales_tax_code_id: int | None = None
     default_purchase_tax_code_id: int | None = None
+    purchase_account_id: int | None = None
     selling_price: NonNegativeMoney = Decimal(0)
     price_includes_tax: bool = False
+    weight_per_base_unit: PositiveQuantity | None = None
 
 
 class ItemUpdate(BaseModel):
@@ -109,10 +111,14 @@ class ItemUpdate(BaseModel):
     clear_cogs_account: bool = False
     sales_account_id: int | None = None
     clear_sales_account: bool = False
+    purchase_account_id: int | None = None
+    clear_purchase_account: bool = False
     default_sales_tax_code_id: int | None = None
     clear_sales_tax_code: bool = False
     default_purchase_tax_code_id: int | None = None
     clear_purchase_tax_code: bool = False
+    weight_per_base_unit: PositiveQuantity | None = None
+    clear_weight_per_base_unit: bool = False
     selling_price: NonNegativeMoney | None = None
     price_includes_tax: bool | None = None
     is_active: bool | None = None
@@ -129,11 +135,35 @@ class ItemRead(ApiModel):
     inventory_account_id: int | None
     cogs_account_id: int | None
     sales_account_id: int | None
+    purchase_account_id: int | None
     default_sales_tax_code_id: int | None
     default_purchase_tax_code_id: int | None
     selling_price: Decimal
     price_includes_tax: bool
+    weight_per_base_unit: Decimal | None
     is_active: bool
+
+
+class KitComponentIn(BaseModel):
+    component_item_id: int
+    #: In the component's own base unit, so the explosion is a multiplication.
+    quantity_per_kit: PositiveQuantity
+
+
+class KitComponentsUpdate(BaseModel):
+    """The kit's whole definition. An empty list clears it — a kit with no components is a
+    kit nobody has finished defining, which the Items screen shows and an order line refuses,
+    rather than something this endpoint should guess at."""
+
+    components: list[KitComponentIn] = Field(default_factory=list)
+
+
+class KitComponentRead(ApiModel):
+    id: int
+    kit_item_id: int
+    component_item_id: int
+    quantity_per_kit: Decimal
+    line_no: int
 
 
 class ItemLookupRead(BaseModel):

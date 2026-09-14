@@ -8,6 +8,7 @@ from app.api.v1 import (
     invitations,
     memberships,
     operator,
+    order_entry,
     subledger,
 )
 
@@ -20,3 +21,4 @@ api_router.include_router(operator.router)
 api_router.include_router(gl.router)
 api_router.include_router(subledger.router)
 api_router.include_router(inventory.router)
+api_router.include_router(order_entry.router)

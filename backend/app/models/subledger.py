@@ -100,6 +100,12 @@ class PartnerDocument(AuditedMixin, CompanyScopedMixin, Base):
             ondelete="RESTRICT",
         ),
         ForeignKeyConstraint(
+            ["company_id", "stock_entry_id"],
+            ["journal_entries.company_id", "journal_entries.id"],
+            name="fk_partner_documents_stock_entry",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
             ["company_id", "currency_id"],
             ["currencies.company_id", "currencies.id"],
             name="fk_partner_documents_currency",
@@ -183,6 +189,13 @@ class PartnerDocument(AuditedMixin, CompanyScopedMixin, Base):
     exchange_rate: Mapped[Decimal] = mapped_column(RATE, nullable=False)
     branch_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     project_id: Mapped[int | None] = mapped_column(BigInteger)
+    #: The **companion stock entry** (P6 decision 2). A document carrying valued stock lines
+    #: posts two entries in one transaction — the partner side through `ar`/`ap`, and this one
+    #: through `inv` via the P5 primitives, which posts first so its value is known to the
+    #: partner side. `NULL` when the document moved no stock, which is every P4 document and
+    #: every P6 document whose lines are all service or non-stock: no stock line, no companion,
+    #: and no number claimed from the `STK` run.
+    stock_entry_id: Mapped[int | None] = mapped_column(BigInteger)
     payment_terms_id: Mapped[int | None] = mapped_column(BigInteger)
     sales_rep_id: Mapped[int | None] = mapped_column(BigInteger)
     tax_mode: Mapped[TaxMode] = mapped_column(tax_mode_type, nullable=False)
@@ -217,12 +230,35 @@ class PartnerDocument(AuditedMixin, CompanyScopedMixin, Base):
 
 
 class PartnerDocumentLine(AuditedMixin, CompanyScopedMixin, Base):
-    """GL/service lines. Item lines arrive with inventory (P5/P6) — the table is shaped to
-    take an `item_id` then, and carries nothing item-specific now."""
+    """One line of a partner document — a GL line, or an **item line** (P6 decision 1).
+
+    Both shapes live in this one table and one service handles both: a document may carry a GL
+    line and an item line at once, which is what an invoice with a delivery charge on it looks
+    like. What makes a line an item line is `item_id`; everything else here is nullable and
+    describes how that item was sold or bought.
+
+    Only a **stock** item moves stock. A service or non-stock item line is an ordinary line
+    that happens to carry an item dimension, which is what lets P10 report on it.
+
+    `quantity` stays the quantity as keyed, in `uom_id`; `base_quantity` is the same amount
+    converted to the item's base unit and is what every derived figure counts — committed, on
+    order, received, matched. Keeping both means a line keyed in cases still reads as cases on
+    the screen it was keyed on, while the arithmetic never has to know about packs.
+
+    The four link columns each point at the row this line answers to, and each is the join a
+    derived quantity is computed over rather than a running total anybody maintains:
+    `order_line_id` the SO line (AR) or PO line (AP) being fulfilled, `grn_line_id` the GRN
+    line this invoice line matches, `returns_line_id` the invoice line a credit note returns —
+    which is how a return is valued at the cost that was actually issued rather than today's
+    average — and `kit_parent_line_id` the kit line this component was exploded from.
+    """
 
     __tablename__ = "partner_document_lines"
     __table_args__ = (
         UniqueConstraint("document_id", "line_no", name="uq_partner_document_lines_line_no"),
+        # The composite-FK target the self-references below need. Every other tenant table
+        # carries one; this table had no reason to until a line could point at another line.
+        UniqueConstraint("company_id", "id", name="uq_partner_document_lines_company_id_id"),
         ForeignKeyConstraint(
             ["company_id", "document_id"],
             ["partner_documents.company_id", "partner_documents.id"],
@@ -253,7 +289,63 @@ class PartnerDocumentLine(AuditedMixin, CompanyScopedMixin, Base):
             name="fk_partner_document_lines_project",
             ondelete="RESTRICT",
         ),
+        ForeignKeyConstraint(
+            ["company_id", "item_id"],
+            ["items.company_id", "items.id"],
+            name="fk_partner_document_lines_item",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "uom_id"],
+            ["uoms.company_id", "uoms.id"],
+            name="fk_partner_document_lines_uom",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "warehouse_id"],
+            ["warehouses.company_id", "warehouses.id"],
+            name="fk_partner_document_lines_warehouse",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "returns_line_id"],
+            ["partner_document_lines.company_id", "partner_document_lines.id"],
+            name="fk_partner_document_lines_returns_line",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "kit_parent_line_id"],
+            ["partner_document_lines.company_id", "partner_document_lines.id"],
+            name="fk_partner_document_lines_kit_parent_line",
+            ondelete="CASCADE",
+        ),
         Index("ix_partner_document_lines_document", "company_id", "document_id"),
+        # The derived quantities of decision 4 are these three joins and nothing else, so each
+        # gets the partial index that makes them a lookup rather than a scan of every line
+        # ever posted. Partial because an item line is a minority of lines on most documents
+        # and a linked one rarer still.
+        Index(
+            "ix_partner_document_lines_order_line",
+            "company_id",
+            "order_line_id",
+            postgresql_where=text("order_line_id IS NOT NULL"),
+        ),
+        Index(
+            "ix_partner_document_lines_grn_line",
+            "company_id",
+            "grn_line_id",
+            postgresql_where=text("grn_line_id IS NOT NULL"),
+        ),
+        Index(
+            "ix_partner_document_lines_item",
+            "company_id",
+            "item_id",
+            postgresql_where=text("item_id IS NOT NULL"),
+        ),
+        CheckConstraint(
+            "base_quantity IS NULL OR item_id IS NOT NULL",
+            name="base_quantity_needs_an_item",
+        ),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
@@ -270,8 +362,28 @@ class PartnerDocumentLine(AuditedMixin, CompanyScopedMixin, Base):
     net_amount: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
     tax_amount: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
     gross_amount: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
+    # --- P6 item line (decision 1); all nullable, a GL line carries none of them ----------
+    item_id: Mapped[int | None] = mapped_column(BigInteger)
+    uom_id: Mapped[int | None] = mapped_column(BigInteger)
+    #: `quantity` converted to the item's base unit. Every derived figure counts this.
+    base_quantity: Mapped[Decimal | None] = mapped_column(MONEY)
+    warehouse_id: Mapped[int | None] = mapped_column(BigInteger)
+    #: The SO line (AR) or PO line (AP) this line fulfils. No foreign key yet — the order
+    #: tables arrive with the order service, and the constraint arrives with them.
+    order_line_id: Mapped[int | None] = mapped_column(BigInteger)
+    #: The GRN line this supplier-invoice line matches. Same: constrained once GRNs exist.
+    grn_line_id: Mapped[int | None] = mapped_column(BigInteger)
+    #: The invoice line this credit-note line returns, so the return is valued at the cost
+    #: that was issued rather than at today's average.
+    returns_line_id: Mapped[int | None] = mapped_column(BigInteger)
+    #: Set on a component line, pointing at the kit line it was exploded from.
+    kit_parent_line_id: Mapped[int | None] = mapped_column(BigInteger)
 
     document: Mapped[PartnerDocument] = relationship(back_populates="lines")
+
+    @property
+    def is_item_line(self) -> bool:
+        return self.item_id is not None
 
 
 class Allocation(AuditedMixin, CompanyScopedMixin, Base):

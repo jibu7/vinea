@@ -18,7 +18,14 @@ from app.kernel.sequences import DEFAULT_PREFIXES, ensure_sequence
 from app.models.company import Branch, Company
 from app.models.currency import Currency
 from app.models.fiscal import FiscalYear
-from app.models.gl import AccountClass, ControlType, GLAccount, GLSettings, GLTransactionType
+from app.models.gl import (
+    AccountClass,
+    BackorderPolicy,
+    ControlType,
+    GLAccount,
+    GLSettings,
+    GLTransactionType,
+)
 from app.models.inventory import (
     INVENTORY_MODULE,
     InventoryTransactionKind,
@@ -76,6 +83,17 @@ ACCOUNT_INVENTORY_ADJUSTMENTS = "5200"
 # suspense account, the same place an opening trial balance lands.
 ACCOUNT_OPENING_BALANCE_SUSPENSE = "3400"
 
+# --- P6 order entry -------------------------------------------------------------------------
+#: Goods received and not yet invoiced. A control account (decision 5): `inv` credits it on
+#: receipt, `ap` debits it on the match, and its balance at any date is the value of what has
+#: been received and not yet billed.
+ACCOUNT_GRN_ACCRUAL = "2350"
+#: Freight and duty booked before they are spread over the goods they belong to. Deliberately
+#: a plain account — the costs arrive as an ordinary supplier-invoice line or a cashbook
+#: payment, and a control account would refuse both.
+ACCOUNT_LANDED_COST_CLEARING = "1370"
+ACCOUNT_PURCHASE_PRICE_VARIANCE = "5300"
+
 RWANDA_TAX_CODES = [
     {
         "code": "VAT-OUT-18",
@@ -131,6 +149,8 @@ RW_SME_V1_ACCOUNTS: tuple[
     # Stock dispatched on a transfer and not yet received is still ours and still an asset;
     # it is a place with a balance, not a gap between two postings (P5 decision 6).
     ("1350", "Stock in Transit", _A, "1100", True, ControlType.INVENTORY),
+    # Freight and duty land here on the way to the goods; cleared to zero by the allocation.
+    (ACCOUNT_LANDED_COST_CLEARING, "Landed Cost Clearing", _A, "1100", True, None),
     (ACCOUNT_VAT_INPUT, "VAT Input (Receivable)", _A, "1100", True, None),
     ("1500", "Prepayments & Deposits", _A, "1100", True, None),
     ("1600", "Non-current Assets", _A, "1000", False, None),
@@ -141,6 +161,16 @@ RW_SME_V1_ACCOUNTS: tuple[
     ("2150", "Post-dated Payables", _L, "2000", True, None),
     (ACCOUNT_VAT_OUTPUT, "VAT Output (Payable)", _L, "2000", True, None),
     ("2300", "Accrued Expenses", _L, "2000", True, None),
+    # The GRV two-step in one account: credited by the receipt, debited by the invoice that
+    # matches it, and zero on any line that has been fully matched.
+    (
+        ACCOUNT_GRN_ACCRUAL,
+        "Goods Received Not Invoiced",
+        _L,
+        "2000",
+        True,
+        ControlType.GRN_ACCRUAL,
+    ),
     ("2400", "PAYE & Social Security Payable", _L, "2000", True, None),
     ("2500", "Loans Payable", _L, "2000", True, None),
     ("3000", "Equity", _E, None, False, None),
@@ -287,6 +317,12 @@ def seed_chart_of_accounts(db: Session, company: Company) -> dict[str, GLAccount
             stock_count_variance_account_id=accounts[ACCOUNT_INVENTORY_ADJUSTMENTS].id,
             cogs_account_id=accounts[ACCOUNT_COGS].id,
             negative_stock_policy=NegativeStockPolicy.BLOCK,
+            grn_accrual_account_id=accounts[ACCOUNT_GRN_ACCRUAL].id,
+            purchase_price_variance_account_id=accounts[ACCOUNT_PURCHASE_PRICE_VARIANCE].id,
+            landed_cost_clearing_account_id=accounts[ACCOUNT_LANDED_COST_CLEARING].id,
+            # Commitments are advisory; a sales order may promise what is not on the shelf
+            # and the shortfall shows as a backorder (decision 7).
+            backorder_policy=BackorderPolicy.ALLOW,
         )
     )
     db.flush()

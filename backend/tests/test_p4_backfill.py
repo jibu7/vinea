@@ -253,7 +253,18 @@ def test_p4_backfills_a_pre_p4_tenant(pre_p4_engine: Engine) -> None:
                 text("SELECT control_type, module FROM control_account_modules")
             )
         }
-        assert registry == {("ar", "ar"), ("ap", "ap"), ("inventory", "inv")}
+        # The fixture upgrades a P4-era tenant to **head**, not to 0011, so the registry
+        # carries every row every later phase has added — P5's `inventory` and P6's two
+        # `grn_accrual` rows included. What this assertion pins is that upgrading an old
+        # tenant produces exactly the registry a new one gets, with nothing missing and
+        # nothing extra.
+        assert registry == {
+            ("ar", "ar"),
+            ("ap", "ap"),
+            ("inventory", "inv"),
+            ("grn_accrual", "inv"),
+            ("grn_accrual", "ap"),
+        }
 
 
 # --- 0011: transaction_type on documents that predate it -------------------------------------
