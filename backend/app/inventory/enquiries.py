@@ -36,13 +36,24 @@ from app.inventory.costing import ItemState, LocationState
 from app.models.gl import GLTransactionType
 from app.models.inventory import Item, StockMove, Warehouse
 from app.models.journal import JournalEntry
+from app.order_entry import quantities as order_quantities
 
 ZERO = Decimal(0)
 
 
 @dataclass(frozen=True)
 class LocationPosition:
-    """One (item, warehouse) cell of the enquiry's top half."""
+    """One (item, warehouse) cell of the enquiry's top half.
+
+    `quantity` is what is on the shelf; the three P6 columns beside it are what has been
+    promised out of it and what is coming in (decision 4). Each is a query over open order
+    lines — `app.order_entry.quantities` — and none of them is a column on any table.
+
+    `available` may be **negative**, and the enquiry shows it that way. That is a backorder: the
+    company has sold more than it holds, which `backorder_policy = allow` permits and which this
+    screen exists to make visible. Clamping it at zero would hide the only number a buyer
+    actually needs.
+    """
 
     warehouse_id: int
     warehouse_code: str
@@ -51,6 +62,14 @@ class LocationPosition:
     is_in_transit: bool
     quantity: Decimal
     value: Decimal
+    #: Σ (ordered − invoiced) over the lines of open sales orders at this warehouse.
+    committed: Decimal = ZERO
+    #: Σ (ordered − received) over the lines of open purchase orders at this warehouse.
+    on_order: Decimal = ZERO
+
+    @property
+    def available(self) -> Decimal:
+        return self.quantity - self.committed
 
 
 @dataclass(frozen=True)
@@ -155,6 +174,20 @@ def _positions(
     return positions, state
 
 
+def _every_location(
+    positions: dict[int, LocationState],
+    committed: dict[int, Decimal],
+    on_order: dict[int, Decimal],
+) -> dict[int, LocationState | None]:
+    """Warehouse → its stock position, or `None` where it holds none of the item but has a
+    commitment or an order against it. The union of the three, so a location that is empty and
+    oversold still appears on the enquiry with its backorder visible."""
+    out: dict[int, LocationState | None] = dict(positions)
+    for warehouse_id in set(committed) | set(on_order):
+        out.setdefault(warehouse_id, None)
+    return out
+
+
 def item_enquiry(
     db: Session,
     company_id: int,
@@ -184,6 +217,11 @@ def item_enquiry(
     if warehouse_id is not None and warehouse_id not in warehouses:
         raise NotFoundError("Warehouse not found")
 
+    # Committed and on order are read per item, not per location: a warehouse holding none of
+    # the item can still have 100 on order against it, and a listing built only from
+    # `stock_balances` would show the buyer nothing at all.
+    committed = order_quantities.committed_by_warehouse(db, company_id, item_id)
+    on_order = order_quantities.on_order_by_warehouse(db, company_id, item_id)
     locations = [
         LocationPosition(
             warehouse_id=known,
@@ -191,13 +229,20 @@ def item_enquiry(
             warehouse_name=warehouses[known].name,
             branch_id=warehouses[known].branch_id,
             is_in_transit=warehouses[known].is_in_transit,
-            quantity=position.quantity,
-            value=position.value,
+            quantity=position.quantity if position is not None else ZERO,
+            value=position.value if position is not None else ZERO,
+            committed=committed.get(known, ZERO),
+            on_order=on_order.get(known, ZERO),
         )
-        for known, position in positions.items()
+        for known, position in _every_location(positions, committed, on_order).items()
         if known in warehouses
         and (warehouse_id is None or known == warehouse_id)
-        and (include_zero_locations or position.quantity != ZERO or position.value != ZERO)
+        and (
+            include_zero_locations
+            or (position is not None and (position.quantity != ZERO or position.value != ZERO))
+            or committed.get(known, ZERO) != ZERO
+            or on_order.get(known, ZERO) != ZERO
+        )
     ]
     locations.sort(key=lambda row: row.warehouse_code)
 

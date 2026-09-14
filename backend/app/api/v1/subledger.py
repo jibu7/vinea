@@ -2,6 +2,7 @@
 one set of schemas and one service behind both modules."""
 
 from datetime import date
+from decimal import Decimal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Path, Query, Request, Response, status
 from fastapi.responses import Response as RawResponse
@@ -41,6 +42,7 @@ from app.schemas.subledger import (
     ContactRead,
     ContactUpdate,
     DocumentCreate,
+    DocumentLineIn,
     DocumentRead,
     DocumentSummary,
     InstrumentRunRow,
@@ -600,6 +602,29 @@ def _document_read(db: Session, document: PartnerDocument) -> DocumentRead:
     return DocumentRead.model_validate(loaded)
 
 
+def _kit_components(line: DocumentLineIn) -> tuple[documents_service.LineInput, ...] | None:
+    """A kit line's explosion as the caller sent it, or `None` to explode from the definition.
+
+    `None` and an empty list are deliberately different: `None` means "I am not telling you what
+    is in this kit, use the catalogue", and a screen invoicing a broken-up sales order sends the
+    components it was shown instead.
+    """
+    if line.kit_components is None:
+        return None
+    return tuple(
+        documents_service.LineInput(
+            item_id=component.item_id,
+            quantity=component.quantity,
+            unit_price=Decimal(0),
+            warehouse_id=component.warehouse_id,
+            project_id=component.project_id,
+            description=component.description,
+            sales_order_line_id=component.sales_order_line_id,
+        )
+        for component in line.kit_components
+    )
+
+
 @router.post("/{role}/documents", status_code=status.HTTP_201_CREATED)
 def post_document(
     payload: DocumentCreate,
@@ -636,6 +661,16 @@ def post_document(
                 tax_code_id=line.tax_code_id,
                 branch_id=line.branch_id,
                 project_id=line.project_id,
+                # --- P6 item line (decision 1). One shape, one service: what an item adds is
+                # a catalogue to default from and, for a stock item, a companion stock move.
+                item_id=line.item_id,
+                uom_id=line.uom_id,
+                warehouse_id=line.warehouse_id,
+                grn_line_id=line.grn_line_id,
+                returns_line_id=line.returns_line_id,
+                sales_order_line_id=line.sales_order_line_id,
+                purchase_order_line_id=line.purchase_order_line_id,
+                kit_components=_kit_components(line),
             )
             for line in payload.lines
         ),
