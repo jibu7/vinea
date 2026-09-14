@@ -683,25 +683,25 @@ def _open_purchase_orders(db: Session, fixture: OrderEntry) -> list:
 def _drive(db: Session, fixture: OrderEntry, plan: list[tuple]) -> None:
     _assert_everything(db, fixture.company_id)
     for operation, quantity, cost, pick, use_depot, cross_branch in plan:
-        # **A savepoint per step**, so a refused step leaves nothing behind.
+        # **A savepoint per step**, so a refused step leaves nothing behind whatever the service
+        # did before refusing.
         #
         # This used to run without one, on the premise that every service in the phase refuses
-        # before it writes — so there was nothing to undo — and a plain rollback was rejected
-        # because it would discard the tenant itself: the company, its partners and its items
-        # are created in this same transaction.
+        # before it writes, and a plain rollback was rejected because it would discard the tenant
+        # itself: the company, its partners and its items are created in this same transaction.
         #
-        # The premise is false, and the machine found where. `reverse_document` **cannot**
-        # refuse before it writes: it posts the partner-side reversal first and only then asks
-        # the inventory service to reverse the companion, which under `block` can raise
-        # `insufficient_stock` once the goods have been sold on. Swallowing that left a posted
-        # reversal entry in the ledger for a document still marked posted and still fully open —
-        # `AR control account is 16.00 as of 2026-03-10 but open items total 15.00`, on the plan
+        # The premise was false, and the machine found where — `reverse_document` posted the
+        # partner-side reversal before asking the inventory service to reverse the companion,
+        # which under `block` raises `insufficient_stock` once the goods have been sold on. That
+        # left a posted reversal entry for a document still marked posted and still fully open:
+        # `AR control account is 16.00 but open items total 15.00`, on the plan
         # receive 1 · receive 14 · return_in 1 · sell 16 · reverse · receive 1.
         #
-        # That is not a product defect: the endpoint commits only on success, so the exception
-        # unwinds the whole transaction and the operator sees a clean refusal. It is a defect in
-        # *this driver*, and the savepoint is the fix that does not depend on a claim about every
-        # service — it undoes the step and keeps the tenant, which is exactly what was wanted.
+        # The ordering is fixed at the source now — the companion goes first, because it is the
+        # only half that can fail — and `test_a_refused_reversal_leaves_nothing_behind` holds the
+        # service to it **without** a savepoint. This stays because the premise should be
+        # enforced here rather than assumed of every service a later step adds: it undoes the
+        # step and keeps the tenant, which is exactly what was wanted.
         step = db.begin_nested()
         try:
             _step(
@@ -847,14 +847,16 @@ def test_a_refused_reversal_leaves_nothing_behind(db: Session, order_entry: Orde
     """The plan the machine shrank to, written out — because a Hypothesis example database is
     not committed and the next contributor would find this only by drawing it again.
 
-    `reverse_document` is the one operation in this phase that **cannot** refuse before it
-    writes. It posts the partner-side reversal, then asks the inventory service to reverse the
-    companion; under `block` that raises `insufficient_stock` once the goods have been sold on.
-    Whoever catches that refusal has to unwind the work already done — the endpoint does it by
-    never reaching its commit, and the property driver does it with a savepoint.
+    `reverse_document` used to post the partner-side reversal and only then ask the inventory
+    service to reverse the companion; under `block` that raises `insufficient_stock` once the
+    goods have been sold on, so the refusal arrived after the ledger had been written. The
+    caller was left holding a posted reversal entry for a document still marked posted and still
+    fully open: `AR control account is 16.00 but open items total 15.00`.
 
-    Without the unwind the ledger keeps a posted reversal entry for a document still marked
-    posted and still fully open: `AR control account is 16.00 but open items total 15.00`.
+    The companion goes first now, because it is the only half that can fail. This test drives
+    the plan with **no savepoint and no rollback**, so it passes only while that holds — an
+    endpoint would hide the difference, because closing its session rolls the whole request back
+    either way.
     """
     _use_a_two_decimal_base(db, order_entry)
     plan = [
@@ -865,16 +867,18 @@ def test_a_refused_reversal_leaves_nothing_behind(db: Session, order_entry: Orde
         ("reverse", Decimal(1), Decimal("1.00")),
         ("receive", Decimal(1), Decimal("1.00")),
     ]
+    # **Driven without savepoints, deliberately.** The claim here is about the *service*: that
+    # `reverse_document` refuses before it writes, so a caller inside a larger unit of work is
+    # left with nothing to unwind. An endpoint gets that for free — its session is closed, and
+    # closing rolls back — but the property driver does not, and neither will the landed-cost
+    # reversal or any other caller that reverses a document as one step of several.
     refusals: list[str] = []
     for operation, quantity, cost in plan:
-        step = db.begin_nested()
         try:
             _step(db, order_entry, operation, quantity, cost, 0, False, False)
         except (LedgerStateError, PostingError) as refused:
-            step.rollback()
             refusals.append(refused.code)
-        else:
-            step.commit()
+        db.flush()
         _assert_everything(db, order_entry.company_id)
 
     # The reversal really was refused — an assertion that only proved the invariants would pass

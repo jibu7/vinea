@@ -1445,6 +1445,10 @@ def reverse_document(
     `module_reversal` window: this function never opens the `inv` window itself, because the
     stock half of that reversal is the inventory module's to do and reversing the ledger alone
     is the defect `reverse_via_module_document` exists to prevent.
+
+    **The companion goes first**, because it is the only half that can fail — see the comment
+    at the call. That makes this function refuse before it writes, which is the premise every
+    caller in the phase relies on.
     """
     if document.status != DocumentStatus.POSTED:
         raise LedgerStateError(
@@ -1460,8 +1464,36 @@ def reverse_document(
             f"{document.number} has already matured into the bank; reverse the maturity first",
             code="instrument_matured",
         )
-    # The module's own reversal window: this is the half of the reversal the
-    # kernel cannot do, so the kernel only lets the ledger half through from here.
+    # **The companion goes first, and that ordering is the whole of whether this function can
+    # be trusted to refuse before it writes.**
+    #
+    # Only the stock half can fail. Undoing a receipt takes goods back off a shelf they may
+    # since have left, and under `block` that is `insufficient_stock` — a refusal that arrives
+    # after the work, not before it. With the partner side posted first, a caller who caught
+    # that refusal was left holding a posted reversal entry for a document still marked posted
+    # and still fully open: the ledger said one thing and the open items another, by exactly the
+    # document's value. The property machine found it as `AR control account is 16.000000 but
+    # open items total 15.000000`.
+    #
+    # Nothing depends on the order — the two entries are independent, and neither reads the
+    # other — so putting the fallible half first costs nothing and makes the failure arrive
+    # before the first write. Note that this is **not** the mirror of the posting order that
+    # decision 2 describes; see the step-3 report.
+    #
+    # The window is the inventory service's own, opened by it — and the reversing moves are at
+    # the original values, so the two sides cancel exactly rather than re-costing at today's
+    # average and leaving a difference behind.
+    if document.stock_entry_id is not None:
+        stock_service.reverse_stock_posting(
+            db,
+            document.company_id,
+            entry_id=document.stock_entry_id,
+            on_date=on_date,
+            reason=reason,
+            actor=actor,
+        )
+    # The module's own reversal window: this is the half of the reversal the kernel cannot do,
+    # so the kernel only lets the ledger half through from here.
     with posting.module_reversal(document.role.value):
         reversal = posting.reverse(
             db,
@@ -1472,18 +1504,6 @@ def reverse_document(
             actor=actor,
             idempotency_key=idempotency_key,
             idempotency_hash=idempotency_hash,
-        )
-    if document.stock_entry_id is not None:
-        # Its own window, opened by the inventory service — and the reversing moves are at the
-        # original values, so the two sides cancel exactly rather than re-costing at today's
-        # average and leaving a difference behind.
-        stock_service.reverse_stock_posting(
-            db,
-            document.company_id,
-            entry_id=document.stock_entry_id,
-            on_date=on_date,
-            reason=reason,
-            actor=actor,
         )
     document.status = DocumentStatus.REVERSED
     document.reversal_entry_id = reversal.id
