@@ -32,6 +32,12 @@ class OrderEntry:
     stock_item: Item
     service_item: Item
     accounts: dict[str, GLAccount]
+    #: A virtual bundle of 2 x `stock_item` (P6 decision 8). A kit is never on a shelf, never
+    #: received and never purchased; what it does is explode at line entry into components that
+    #: are, which is the whole of what the kit tests exercise.
+    kit_item: Item | None = None
+    #: Units of `stock_item` per kit.
+    kit_per_unit: Decimal = Decimal(2)
     #: A depot in a branch of its own. The accrual is proved **per branch**, so a company with
     #: one branch can never exercise that half of the proof: every posting lands in the same
     #: bucket and a rule that used the wrong branch would look perfectly correct.
@@ -133,6 +139,29 @@ def _build(db: Session, inventory: Inventory) -> OrderEntry:
         ),
         actor=inventory.owner,
     )
+    kit_item = inventory_masters.create_item(
+        db,
+        company_id,
+        inventory_masters.ItemInput(
+            code="GIFT-2",
+            name="Two-bottle gift pack",
+            uom_category_id=inventory.count.id,
+            base_uom_id=inventory.each.id,
+            item_type=ItemType.KIT,
+            selling_price=Decimal(3500),
+            sales_account_id=accounts["4100"].id,
+            cogs_account_id=accounts["5100"].id,
+        ),
+        actor=inventory.owner,
+    )
+    inventory_masters.replace_kit_components(
+        db,
+        company_id,
+        kit_item,
+        [{"component_item_id": stock_item.id, "quantity_per_kit": Decimal(2)}],
+        actor=inventory.owner,
+    )
+
     depot_branch = Branch(
         company_id=company_id, code="DEPOT", name="Musanze Depot", is_main=False
     )
@@ -148,6 +177,7 @@ def _build(db: Session, inventory: Inventory) -> OrderEntry:
     )
     db.flush()
     return OrderEntry(
+        kit_item=kit_item,
         depot=depot,
         depot_branch_id=depot_branch.id,
         inventory=inventory,
