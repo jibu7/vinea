@@ -12,6 +12,7 @@ import { PRIMARY_EMAIL, login, pickCombobox } from "./support/fixtures";
  */
 
 const REVENUE = "4100"; // Sales Revenue
+const EXPENSE = "6990"; // Sundry Expenses
 const BANK = "1120"; // Bank Account
 
 async function pickLineAccount(page: Page, code: string) {
@@ -27,6 +28,18 @@ async function makeCustomer(page: Page, code: string, name: string) {
   await page.getByRole("button", { name: /New customer/i }).click();
   const dialog = page.getByRole("dialog");
   await dialog.getByLabel("Customer code").fill(code);
+  await dialog.getByLabel("Name", { exact: true }).fill(name);
+  await dialog.getByRole("button", { name: "Create", exact: true }).click();
+  await expect(page.getByRole("dialog").filter({ hasText: name })).toBeVisible();
+  await page.keyboard.press("Escape");
+}
+
+async function makeSupplier(page: Page, code: string, name: string) {
+  await page.goto("/maintenance/suppliers");
+  await page.waitForSelector("h1:has-text('Suppliers')");
+  await page.getByRole("button", { name: /New supplier/i }).click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByLabel("Supplier code").fill(code);
   await dialog.getByLabel("Name", { exact: true }).fill(name);
   await dialog.getByRole("button", { name: "Create", exact: true }).click();
   await expect(page.getByRole("dialog").filter({ hasText: name })).toBeVisible();
@@ -56,13 +69,16 @@ function ageAnalysisRow(page: Page, customerName: string) {
   return page.getByRole("row").filter({ hasText: customerName });
 }
 
-async function openAgeAnalysis(page: Page) {
-  await page.goto("/ar/reports/age-analysis");
+async function openAgeAnalysisFor(page: Page, role: "ar" | "ap") {
+  await page.goto(`/${role}/reports/age-analysis`);
   await page.waitForSelector("h1:has-text('Age analysis')");
   // The grand-total row is the last thing the table renders, so its presence means the
   // report has loaded and an empty result is an empty result rather than a pending one.
   await page.getByText("Grand total").first().waitFor({ state: "visible", timeout: 20_000 });
 }
+
+const openAgeAnalysis = (page: Page) => openAgeAnalysisFor(page, "ar");
+const openApAgeAnalysis = (page: Page) => openAgeAnalysisFor(page, "ap");
 
 test.describe("AR corrections", () => {
   // PATH: customer → invoice → /ar/documents (listing, with figures) → /ar/documents/{id} →
@@ -184,6 +200,14 @@ test.describe("AR corrections", () => {
     const allocation = page.getByTestId("allocation-amount").first();
     await expect(allocation).toHaveText("20,000");
 
+    // Reverse is refused while the document is allocated — `document_allocated` — and the
+    // button says so rather than raising it when pressed. The two corrections are ordered,
+    // and the screen states the order beside the action that satisfies it.
+    const blocked = page.getByTestId("reverse-blocked");
+    await expect(blocked).toBeVisible();
+    await expect(blocked).toBeDisabled();
+    await expect(blocked).toHaveAttribute("title", "Unallocate first");
+
     // --- Unallocate --------------------------------------------------------------------
     await page.getByRole("button", { name: "Unallocate", exact: true }).first().click();
     const dialog = page.getByRole("dialog");
@@ -198,10 +222,86 @@ test.describe("AR corrections", () => {
       page.getByRole("button", { name: "Unallocate", exact: true }).first(),
     ).toBeDisabled();
 
+    // With nothing allocated against it, Reverse is live: the order the screen stated is
+    // the order the service enforces, and satisfying it releases the action.
+    await expect(page.getByTestId("reverse-blocked")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Reverse", exact: true })).toBeEnabled();
+
     // ...and the receipt has its 20,000 available to allocate again.
     await page.goto("/ar/allocations/new");
     await page.waitForSelector("h1:has-text('Allocate')");
     await pickCombobox(page, "Partner", code);
     await expect(page.getByText("FRw 60,000").first()).toBeVisible({ timeout: 20_000 });
+  });
+});
+
+test.describe("AP corrections", () => {
+  // PATH: supplier → /ap/supplier-invoices/new → /ap/documents → /ap/documents/{id} →
+  // Reverse → the AP age analysis afterwards. The AP screens are the same two components
+  // with `role="ap"`, so what this covers that the AR tests do not is the role wiring:
+  // the supplier partner list, the AP document kinds under their own names, the AP
+  // permission on Reverse, and the payable side of the control account unwinding.
+  // CANNOT SEE: an AP allocation being undone — that path is identical to AR's and is
+  // covered there; this test is about the role, not a second copy of the mechanism.
+  test("reverses a supplier invoice from the AP document detail", async ({ page }) => {
+    await login(page, PRIMARY_EMAIL);
+    const suffix = String(Date.now()).slice(-6);
+    const code = `E2EAPR${suffix}`;
+    const name = `AP Reversal Supplier ${suffix}`;
+    await makeSupplier(page, code, name);
+
+    // Nothing owed yet, so the supplier has no row on the AP age analysis.
+    await openApAgeAnalysis(page);
+    await expect(ageAnalysisRow(page, name)).toHaveCount(0);
+
+    // 3 x 25,000 = 75,000.
+    await page.goto("/ap/supplier-invoices/new");
+    await page.waitForSelector("h1:has-text('Supplier invoice')");
+    await pickCombobox(page, "Supplier", code);
+    await page.getByLabel("Description", { exact: true }).fill(`AP reversal invoice ${suffix}`);
+    await pickLineAccount(page, EXPENSE);
+    await page.getByLabel("Quantity, row 1").fill("3");
+    await page.getByLabel("Unit price, row 1").fill("25000");
+    await page.getByRole("button", { name: /^Post/ }).click();
+    await page.waitForURL(/\/gl\/entries\/\d+/, { timeout: 20_000 });
+
+    // --- the AP listing ----------------------------------------------------------------
+    await page.goto("/ap/documents");
+    await page.waitForSelector("h1:has-text('Supplier documents')");
+    const row = page.getByRole("row").filter({ hasText: name }).first();
+    await expect(row).toBeVisible({ timeout: 20_000 });
+    // The owner's menu names this document "Supplier invoice", not "Invoice" — the AP
+    // catalogue, not AR's, which is the role wiring this test exists for.
+    await expect(row).toContainText("Supplier invoice");
+    await expect(row.getByTestId("document-total")).toHaveText("FRw 75,000");
+
+    // --- the AP detail -----------------------------------------------------------------
+    await row.getByRole("link").first().click();
+    await page.waitForURL(/\/ap\/documents\/\d+/);
+    // One formatted money value and one formatted quantity, read off the page.
+    await expect(page.getByTestId("document-total")).toHaveText("FRw 75,000");
+    await expect(page.getByTestId("document-open")).toHaveText("FRw 75,000");
+    await expect(page.getByRole("cell", { name: "3.00", exact: true }).first()).toBeVisible();
+
+    // The payable is on the age analysis.
+    await openApAgeAnalysis(page);
+    await expect(ageAnalysisRow(page, name).getByText("75,000").first()).toBeVisible();
+    await page.goBack();
+    await page.waitForURL(/\/ap\/documents\/\d+/);
+
+    // --- Reverse ------------------------------------------------------------------------
+    await page.getByRole("button", { name: "Reverse", exact: true }).click();
+    const dialog = page.getByRole("dialog");
+    await dialog.getByLabel("Reason").fill("Supplier billed the wrong company");
+    await dialog.getByRole("button", { name: "Reverse document", exact: true }).click();
+    await expect(page.getByText(/SIN-\d+ reversed/).first()).toBeVisible({ timeout: 20_000 });
+
+    await expect(page.getByTestId("document-reversed")).toBeVisible();
+    await expect(page.getByTestId("document-open")).toHaveText("FRw 0");
+
+    // And the supplier drops off the AP age analysis: no open item left to bucket, so the
+    // payable control is back where it started.
+    await openApAgeAnalysis(page);
+    await expect(ageAnalysisRow(page, name)).toHaveCount(0);
   });
 });

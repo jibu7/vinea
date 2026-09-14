@@ -78,6 +78,28 @@ export function PartnerDocumentDetailScreen({
   const data = document.data;
   const isReversed = data?.status === DocumentStatus.REVERSED;
 
+  /**
+   * Why Reverse cannot be pressed, or `null` when it can.
+   *
+   * These are the service's own three refusals, in its order — `document_already_reversed`,
+   * `document_allocated`, `instrument_matured` — read off the document before the button is
+   * drawn rather than discovered by pressing it. A document that is allocated *can* be
+   * reversed, but only after the allocation beside it is undone, and the reversal would
+   * otherwise leave the counterparty's open item pointing at an entry that no longer
+   * stands; saying "Unallocate first" beside a live Unallocate button is the whole answer.
+   *
+   * Amounts are compared as numbers: the wire carries `NUMERIC(20,6)` strings, so
+   * "60000.000000" and "60000.0" are the same amount and different strings.
+   */
+  function reverseBlockedReason(): string | null {
+    if (!canPost) return t("noReversePermission");
+    if (!data) return null;
+    if (isReversed) return t("alreadyReversed");
+    if (Number(data.open_amount) !== Number(data.total_amount)) return t("mustUnallocateFirst");
+    if (data.matured_entry_id !== null) return t("instrumentMatured");
+    return null;
+  }
+
   async function handleReverse() {
     setReverseError(null);
     try {
@@ -135,6 +157,7 @@ export function PartnerDocumentDetailScreen({
   const partnerName =
     (partners.data ?? []).find((p) => p.id === data.partner_id)?.name ?? String(data.partner_id);
   const allocationRows = allocations.data ?? [];
+  const reverseBlocked = reverseBlockedReason();
 
   return (
     <ReportPage
@@ -357,12 +380,8 @@ export function PartnerDocumentDetailScreen({
       </ReportPanel>
 
       <div className="flex justify-end print:hidden">
-        {isReversed || !canPost ? (
-          <Button
-            variant="danger"
-            disabled
-            title={isReversed ? t("alreadyReversed") : t("noReversePermission")}
-          >
+        {reverseBlocked !== null ? (
+          <Button variant="danger" disabled title={reverseBlocked} data-testid="reverse-blocked">
             {t("reverse")}
           </Button>
         ) : (

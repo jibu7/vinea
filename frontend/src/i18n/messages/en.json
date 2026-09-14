@@ -1111,6 +1111,8 @@
       "reversedToast": "{number} reversed",
       "reverseFailed": "The document could not be reversed",
       "alreadyReversed": "Already reversed",
+      "mustUnallocateFirst": "Unallocate first",
+      "instrumentMatured": "Reverse the maturity first",
       "noReversePermission": "You do not have permission to reverse documents",
       "allocations": "Allocations",
       "noAllocations": "Nothing allocated against this document",
