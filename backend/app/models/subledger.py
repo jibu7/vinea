@@ -67,6 +67,12 @@ class PartnerDocument(AuditedMixin, CompanyScopedMixin, Base):
     __tablename__ = "partner_documents"
     __table_args__ = (
         UniqueConstraint("company_id", "id", name="uq_partner_documents_company_id_id"),
+        # The target of `partner_document_lines`' role foreign key. Redundant as a *key* — the
+        # one above already makes (company_id, id) unique — and that is the point: it lets a
+        # line reference the document **together with its role**, so the role denormalised onto
+        # the line cannot disagree with the document's, and the document's cannot change
+        # underneath it (P6 decision 1, the declarative form of the AR/AP link rule).
+        UniqueConstraint("company_id", "id", "role", name="uq_partner_documents_company_id_role"),
         UniqueConstraint("company_id", "number", name="uq_partner_documents_company_number"),
         # Sales/purchase figures key on the transaction type, never on `kind` — see 0011.
         Index(
@@ -220,7 +226,12 @@ class PartnerDocument(AuditedMixin, CompanyScopedMixin, Base):
     idempotency_hash: Mapped[str | None] = mapped_column(String(64))
 
     lines: Mapped[list["PartnerDocumentLine"]] = relationship(
-        back_populates="document", order_by="PartnerDocumentLine.line_no"
+        back_populates="document",
+        order_by="PartnerDocumentLine.line_no",
+        # Two foreign keys now run from the line table to this one — the plain
+        # (company_id, document_id) and the (company_id, document_id, role) that holds the
+        # denormalised role true — so the join has to be named rather than inferred.
+        foreign_keys="[PartnerDocumentLine.company_id, PartnerDocumentLine.document_id]",
     )
 
     @property
@@ -245,12 +256,22 @@ class PartnerDocumentLine(AuditedMixin, CompanyScopedMixin, Base):
     order, received, matched. Keeping both means a line keyed in cases still reads as cases on
     the screen it was keyed on, while the arithmetic never has to know about packs.
 
-    The four link columns each point at the row this line answers to, and each is the join a
-    derived quantity is computed over rather than a running total anybody maintains:
-    `order_line_id` the SO line (AR) or PO line (AP) being fulfilled, `grn_line_id` the GRN
-    line this invoice line matches, `returns_line_id` the invoice line a credit note returns —
-    which is how a return is valued at the cost that was actually issued rather than today's
-    average — and `kit_parent_line_id` the kit line this component was exploded from.
+    The link columns each point at the row this line answers to, and each is the join a derived
+    quantity is computed over rather than a running total anybody maintains:
+    `sales_order_line_id` the SO line being invoiced, `purchase_order_line_id` the PO line being
+    fulfilled, `grn_line_id` the GRN line this invoice line matches, `returns_line_id` the
+    invoice line a credit note returns — which is how a return is valued at the cost that was
+    actually issued rather than today's average — and `kit_parent_line_id` the kit line this
+    component was exploded from.
+
+    **The role is denormalised here, and it is not a cache.** An AR line may not name a purchase
+    order and an AP line may not name a sales order; the rule is enforced by a plain CHECK over
+    `role` and the two link columns, with no trigger involved. What keeps the copy honest is the
+    composite foreign key `(company_id, document_id, role)` into the matching unique constraint
+    on `partner_documents` — a line whose role disagreed with its document's references nothing
+    and cannot exist, and the document's role cannot move while lines point at it. That makes
+    `role` a restatement of a fact rather than a second copy of it, in the strict sense that no
+    pair of rows can disagree.
     """
 
     __tablename__ = "partner_document_lines"
@@ -263,6 +284,13 @@ class PartnerDocumentLine(AuditedMixin, CompanyScopedMixin, Base):
             ["company_id", "document_id"],
             ["partner_documents.company_id", "partner_documents.id"],
             name="fk_partner_document_lines_document",
+            ondelete="RESTRICT",
+        ),
+        # The role copy, held true by the document it came from. See the class docstring.
+        ForeignKeyConstraint(
+            ["company_id", "document_id", "role"],
+            ["partner_documents.company_id", "partner_documents.id", "partner_documents.role"],
+            name="fk_partner_document_lines_document_role",
             ondelete="RESTRICT",
         ),
         ForeignKeyConstraint(
@@ -314,6 +342,18 @@ class PartnerDocumentLine(AuditedMixin, CompanyScopedMixin, Base):
             ondelete="RESTRICT",
         ),
         ForeignKeyConstraint(
+            ["company_id", "sales_order_line_id"],
+            ["sales_order_lines.company_id", "sales_order_lines.id"],
+            name="fk_partner_document_lines_sales_order_line",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "purchase_order_line_id"],
+            ["purchase_order_lines.company_id", "purchase_order_lines.id"],
+            name="fk_partner_document_lines_purchase_order_line",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
             ["company_id", "returns_line_id"],
             ["partner_document_lines.company_id", "partner_document_lines.id"],
             name="fk_partner_document_lines_returns_line",
@@ -331,10 +371,16 @@ class PartnerDocumentLine(AuditedMixin, CompanyScopedMixin, Base):
         # ever posted. Partial because an item line is a minority of lines on most documents
         # and a linked one rarer still.
         Index(
-            "ix_partner_document_lines_order_line",
+            "ix_partner_document_lines_sales_order_line",
             "company_id",
-            "order_line_id",
-            postgresql_where=text("order_line_id IS NOT NULL"),
+            "sales_order_line_id",
+            postgresql_where=text("sales_order_line_id IS NOT NULL"),
+        ),
+        Index(
+            "ix_partner_document_lines_purchase_order_line",
+            "company_id",
+            "purchase_order_line_id",
+            postgresql_where=text("purchase_order_line_id IS NOT NULL"),
         ),
         Index(
             "ix_partner_document_lines_grn_line",
@@ -352,10 +398,21 @@ class PartnerDocumentLine(AuditedMixin, CompanyScopedMixin, Base):
             "base_quantity IS NULL OR item_id IS NOT NULL",
             name="base_quantity_needs_an_item",
         ),
+        # An AR line fulfils a sales order, an AP line a purchase order, and neither the other
+        # (P6 decision 1). A plain CHECK rather than a trigger, because `role` above is held
+        # equal to the document's by a foreign key and therefore cannot lie.
+        CheckConstraint(
+            "(role <> 'ar' OR purchase_order_line_id IS NULL) "
+            "AND (role <> 'ap' OR sales_order_line_id IS NULL)",
+            name="order_link_matches_role",
+        ),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     document_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    #: The document's role, copied here so the order-link rule can be a CHECK. Held equal to
+    #: `partner_documents.role` by a composite foreign key — see the class docstring.
+    role: Mapped[PartnerRole] = mapped_column(partner_role_type, nullable=False)
     line_no: Mapped[int] = mapped_column(SmallInteger, nullable=False)
     description: Mapped[str | None] = mapped_column(String(500))
     quantity: Mapped[Decimal] = mapped_column(MONEY, nullable=False, default=Decimal(1))
@@ -374,9 +431,14 @@ class PartnerDocumentLine(AuditedMixin, CompanyScopedMixin, Base):
     #: `quantity` converted to the item's base unit. Every derived figure counts this.
     base_quantity: Mapped[Decimal | None] = mapped_column(MONEY)
     warehouse_id: Mapped[int | None] = mapped_column(BigInteger)
-    #: The SO line (AR) or PO line (AP) this line fulfils. No foreign key yet — the order
-    #: tables arrive with the order service, and the constraint arrives with them.
-    order_line_id: Mapped[int | None] = mapped_column(BigInteger)
+    #: The sales order line this AR invoice line fulfils. `invoiced` per SO line is the sum of
+    #: this column over posted, unreversed invoice lines — the `sales_order_line_quantities`
+    #: view — and never a column on the order.
+    sales_order_line_id: Mapped[int | None] = mapped_column(BigInteger)
+    #: The purchase order line this AP line fulfils. On a **service** line it is what receives
+    #: the order (a service has no GRN); on a stock line carrying no `grn_line_id` it is a
+    #: direct purchase, where the goods arrive on the invoice itself.
+    purchase_order_line_id: Mapped[int | None] = mapped_column(BigInteger)
     #: The GRN line this supplier-invoice line matches — the join the relieved value and
     #: the matched quantity are both computed over.
     grn_line_id: Mapped[int | None] = mapped_column(BigInteger)
@@ -396,7 +458,10 @@ class PartnerDocumentLine(AuditedMixin, CompanyScopedMixin, Base):
     #: be off by a franc and would stay off.
     accrual_relieved: Mapped[Decimal | None] = mapped_column(MONEY)
 
-    document: Mapped[PartnerDocument] = relationship(back_populates="lines")
+    document: Mapped[PartnerDocument] = relationship(
+        back_populates="lines",
+        foreign_keys="[PartnerDocumentLine.company_id, PartnerDocumentLine.document_id]",
+    )
 
     @property
     def is_item_line(self) -> bool:

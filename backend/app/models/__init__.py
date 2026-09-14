@@ -44,6 +44,16 @@ from app.models.journal import (
     PeriodBalance,
 )
 from app.models.membership import CompanyMembership, MembershipRole, MembershipStatus, Role
+from app.models.order_entry import (
+    OPEN_PURCHASE_STATUSES,
+    OPEN_SALES_STATUSES,
+    PurchaseOrder,
+    PurchaseOrderLine,
+    PurchaseOrderStatus,
+    SalesOrder,
+    SalesOrderLine,
+    SalesOrderStatus,
+)
 from app.models.partner import (
     AgeingBasis,
     AgeingBucket,
@@ -113,6 +123,8 @@ __all__ = [
     "MembershipRole",
     "MembershipStatus",
     "NegativeStockPolicy",
+    "OPEN_PURCHASE_STATUSES",
+    "OPEN_SALES_STATUSES",
     "Partner",
     "PartnerApSettings",
     "PartnerArSettings",
@@ -124,8 +136,14 @@ __all__ = [
     "PeriodBalance",
     "PeriodStatus",
     "Project",
+    "PurchaseOrder",
+    "PurchaseOrderLine",
+    "PurchaseOrderStatus",
     "RefreshToken",
     "Role",
+    "SalesOrder",
+    "SalesOrderLine",
+    "SalesOrderStatus",
     "SalesRep",
     "StockBalance",
     "StockCountLine",

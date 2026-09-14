@@ -138,6 +138,32 @@ export const BackorderPolicy = {
 } as const;
 export type BackorderPolicy = (typeof BackorderPolicy)[keyof typeof BackorderPolicy];
 
+export const SalesOrderStatus = {
+  OPEN: "open",
+  PARTIALLY_INVOICED: "partially_invoiced",
+  INVOICED: "invoiced",
+  CLOSED: "closed",
+  CANCELLED: "cancelled",
+} as const;
+export type SalesOrderStatus = (typeof SalesOrderStatus)[keyof typeof SalesOrderStatus];
+
+export const PurchaseOrderStatus = {
+  OPEN: "open",
+  PARTIALLY_RECEIVED: "partially_received",
+  RECEIVED: "received",
+  CLOSED: "closed",
+  CANCELLED: "cancelled",
+} as const;
+export type PurchaseOrderStatus = (typeof PurchaseOrderStatus)[keyof typeof PurchaseOrderStatus];
+
+export const GrnStatus = {
+  RECEIVED: "received",
+  PARTIALLY_MATCHED: "partially_matched",
+  MATCHED: "matched",
+  REVERSED: "reversed",
+} as const;
+export type GrnStatus = (typeof GrnStatus)[keyof typeof GrnStatus];
+
 export const ItemType = {
   STOCK: "stock",
   SERVICE: "service",
