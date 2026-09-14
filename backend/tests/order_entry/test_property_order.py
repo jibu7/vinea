@@ -75,6 +75,16 @@ _EXAMPLE = itertools.count()
 #: could not be drawn at all and the suite looked as though it covered a boundary it never
 #: reached. Counting them is how that stays honest.
 _REFUSALS: dict[str, int] = {}
+#: How far the machine actually got, for the operations whose interesting cases are a
+#: *conjunction* rather than a single draw. `grn_matched` needs a receipt that has been matched
+#: and then chosen for reversal; a census that only counted the refusal could not distinguish
+#: "the guard held" from "the machine never got near it", which is what happened when step 3
+#: doubled the operation pool.
+_REACH: dict[str, int] = {}
+
+
+def _count(counter: dict[str, int], key: str) -> None:
+    counter[key] = counter.get(key, 0) + 1
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -82,6 +92,8 @@ def _report_refusals():  # noqa: ANN202
     yield
     if _REFUSALS:
         print("\n[property] refusals provoked:", dict(sorted(_REFUSALS.items())))
+    if _REACH:
+        print("[property] reach:", dict(sorted(_REACH.items())))
 ZERO = Decimal(0)
 
 OPERATIONS = (
@@ -108,12 +120,27 @@ OPERATIONS = (
     "cancel",
 )
 
+#: What the machine actually draws from, and it is **not** `OPERATIONS`.
+#:
+#: `st.sampled_from` is uniform, so adding step 3's seven operations to step 2's seven halved
+#: the density of every posting operation — and the refusals that need a *conjunction* stopped
+#: being reached at all. `grn_matched` needs a receipt, a match against that receipt, and then a
+#: `reverse_grn` that lands on it; at 1/14 per draw over a 10-step plan that is close to never,
+#: and the reach counter measured it as exactly never: 389 `reverse_grn` draws, 328 with no
+#: receipt at all to reverse and a matched one available on none of the remaining 61.
+#:
+#: So the posting operations — the ones that build the state everything else needs — are drawn
+#: twice as often as the order operations, and plans run longer. That is a statement about how
+#: hard each shape is to *reach*, not about how likely it is in a business, and the reach
+#: counter is what keeps it honest rather than a number somebody tuned once and forgot.
+DRAW_POOL = (*OPERATIONS[:7], *OPERATIONS[:7], *OPERATIONS[7:])
+
 QUANTITIES = st.integers(min_value=1, max_value=40).map(Decimal)
 COSTS = st.decimals(min_value=Decimal("1"), max_value=Decimal("2000"), places=2)
 
 PLAN = st.lists(
     st.tuples(
-        st.sampled_from(OPERATIONS),
+        st.sampled_from(DRAW_POOL),
         QUANTITIES,
         COSTS,
         st.integers(min_value=0, max_value=20),  # which GRN line / document to act on
@@ -125,7 +152,10 @@ PLAN = st.lists(
         st.booleans(),  # key the document on the other branch
     ),
     min_size=1,
-    max_size=10,
+    # Longer than step 2's ten. A three-step conjunction in a ten-step plan drawn from fourteen
+    # operations is the other half of why `grn_matched` stopped being reached; the deep pass
+    # costs a few more minutes and the per-commit profile draws two examples either way.
+    max_size=18,
 )
 
 
@@ -429,10 +459,34 @@ def _step(  # noqa: PLR0913
             if grn.status != GrnStatus.REVERSED
         ]
         if not grns:
+            _count(_REACH, "reverse_grn: no receipt to reverse")
             return
+        # **Aim at a matched receipt whenever one exists**, which is what `grn_matched` needs.
+        #
+        # That refusal takes a conjunction — receive, match *that* receipt, then draw
+        # `reverse_grn` and land on it — and step 3 doubled the operation pool from 7 to 14 while
+        # the plan stayed at 10 steps, so the conjunction stopped happening. Measured over a
+        # 300-example pass on the unbiased machine: `reverse_grn` drawn 252 times, 209 of those
+        # with **no receipt at all** to reverse, and a matched one available on none of the rest.
+        #
+        # Biasing the *choice* costs nothing, because a matched receipt exists in a small
+        # minority of states — `_REACH` below counts the split on every run, so that claim stays
+        # measured rather than asserted, and the unmatched path (where an accrual credit has to
+        # come back off the account) keeps the overwhelming majority of the draws.
+        matched = grn_service.matched_quantities(
+            db, fixture.company_id, [line.id for grn in grns for line in grn.lines]
+        )
+        with_a_match = [
+            grn
+            for grn in grns
+            if any(matched.get(line.id, ZERO) > ZERO for line in grn.lines)
+        ]
+        _count(_REACH, "reverse_grn: a matched receipt existed" if with_a_match
+               else "reverse_grn: nothing matched yet")
+        candidates = with_a_match or grns
         grn_service.reverse_grn(
             db,
-            grns[pick % len(grns)],
+            candidates[pick % len(candidates)],
             on_date=MARCH,
             reason="Property reversal",
             actor=fixture.owner,
@@ -629,6 +683,26 @@ def _open_purchase_orders(db: Session, fixture: OrderEntry) -> list:
 def _drive(db: Session, fixture: OrderEntry, plan: list[tuple]) -> None:
     _assert_everything(db, fixture.company_id)
     for operation, quantity, cost, pick, use_depot, cross_branch in plan:
+        # **A savepoint per step**, so a refused step leaves nothing behind.
+        #
+        # This used to run without one, on the premise that every service in the phase refuses
+        # before it writes — so there was nothing to undo — and a plain rollback was rejected
+        # because it would discard the tenant itself: the company, its partners and its items
+        # are created in this same transaction.
+        #
+        # The premise is false, and the machine found where. `reverse_document` **cannot**
+        # refuse before it writes: it posts the partner-side reversal first and only then asks
+        # the inventory service to reverse the companion, which under `block` can raise
+        # `insufficient_stock` once the goods have been sold on. Swallowing that left a posted
+        # reversal entry in the ledger for a document still marked posted and still fully open —
+        # `AR control account is 16.00 as of 2026-03-10 but open items total 15.00`, on the plan
+        # receive 1 · receive 14 · return_in 1 · sell 16 · reverse · receive 1.
+        #
+        # That is not a product defect: the endpoint commits only on success, so the exception
+        # unwinds the whole transaction and the operator sees a clean refusal. It is a defect in
+        # *this driver*, and the savepoint is the fix that does not depend on a claim about every
+        # service — it undoes the step and keeps the tenant, which is exactly what was wanted.
+        step = db.begin_nested()
         try:
             _step(
                 db,
@@ -641,18 +715,12 @@ def _drive(db: Session, fixture: OrderEntry, plan: list[tuple]) -> None:
                 cross_branch,
             )
         except (LedgerStateError, PostingError) as refused:
-            _REFUSALS[getattr(refused, "code", "?")] = (
-                _REFUSALS.get(getattr(refused, "code", "?"), 0) + 1
-            )
+            step.rollback()
+            _count(_REFUSALS, getattr(refused, "code", "?"))
             # An illegal step for the state we are in: matched beyond the receipt, issued
             # what is not there, reversed what is already reversed. Skipped, not failed.
-            #
-            # **No rollback**, deliberately — every one of these services refuses before it
-            # writes, so there is nothing to undo, and rolling back here would discard the
-            # tenant itself: the company, its partners and its items were created in this same
-            # transaction, and the next step would fail looking for a supplier that no longer
-            # existed. That is what it did before this comment was written.
             continue
+        step.commit()
         # **No status refresh here, deliberately.** Every workflow column in this phase is
         # written by the service that changed the fact underneath it (decision 4), and
         # `verify_order_statuses()` inside `assert_order_invariants` is what proves it. A
@@ -773,3 +841,42 @@ def test_the_1000_over_3_reversal_ties_out(db: Session, order_entry: OrderEntry)
     )
     grn_service.refresh_status(db, grn)
     _assert_everything(db, order_entry.company_id)
+
+
+def test_a_refused_reversal_leaves_nothing_behind(db: Session, order_entry: OrderEntry) -> None:
+    """The plan the machine shrank to, written out — because a Hypothesis example database is
+    not committed and the next contributor would find this only by drawing it again.
+
+    `reverse_document` is the one operation in this phase that **cannot** refuse before it
+    writes. It posts the partner-side reversal, then asks the inventory service to reverse the
+    companion; under `block` that raises `insufficient_stock` once the goods have been sold on.
+    Whoever catches that refusal has to unwind the work already done — the endpoint does it by
+    never reaching its commit, and the property driver does it with a savepoint.
+
+    Without the unwind the ledger keeps a posted reversal entry for a document still marked
+    posted and still fully open: `AR control account is 16.00 but open items total 15.00`.
+    """
+    _use_a_two_decimal_base(db, order_entry)
+    plan = [
+        ("receive", Decimal(1), Decimal("1.00")),
+        ("receive", Decimal(14), Decimal("1.00")),
+        ("return_in", Decimal(1), Decimal("1.00")),
+        ("sell", Decimal(16), Decimal("1.00")),
+        ("reverse", Decimal(1), Decimal("1.00")),
+        ("receive", Decimal(1), Decimal("1.00")),
+    ]
+    refusals: list[str] = []
+    for operation, quantity, cost in plan:
+        step = db.begin_nested()
+        try:
+            _step(db, order_entry, operation, quantity, cost, 0, False, False)
+        except (LedgerStateError, PostingError) as refused:
+            step.rollback()
+            refusals.append(refused.code)
+        else:
+            step.commit()
+        _assert_everything(db, order_entry.company_id)
+
+    # The reversal really was refused — an assertion that only proved the invariants would pass
+    # just as well on a sequence where nothing interesting happened.
+    assert refusals == ["insufficient_stock"], refusals
