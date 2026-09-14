@@ -15,9 +15,12 @@ uv.lock.tmp
 next-env.d.ts
 *.tsbuildinfo
 frontend/screenshots/
-frontend/playwright-report/
-frontend/test-results/
 frontend/coverage/
+# Playwright writes these relative to whatever cwd it was launched from, so the rules are
+# path-independent: a run started from backend/ once left a test-results/ there, and a
+# frontend-only rule does not catch it.
+playwright-report/
+test-results/
 # Local Postgres data directories (rootless dev instances)
 vinea-pgdata/
 vinea-pgdata
