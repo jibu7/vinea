@@ -34,7 +34,7 @@ from app.kernel.money import (
 from app.kernel.sequences import DocType
 from app.models.currency import Currency
 from app.models.gl import CASHBOOK_CONTROL_TYPES, GLAccount
-from app.models.inventory import Item, ItemType
+from app.models.inventory import GoodsReceivedNote, GoodsReceivedNoteLine, Item, ItemType
 from app.models.journal import JournalEntry
 from app.models.partner import Partner, PartnerRole, PaymentTerms, TaxMode
 from app.models.subledger import (
@@ -200,6 +200,17 @@ class _ComputedLine:
     line_id: int | None = None
     #: The GRN line this one matched, once resolved.
     matched_grn_line: object | None = None
+    #: The branch of the warehouse the goods actually moved through.
+    #:
+    #: **Every GRN-accrual line carries this, not the document's branch.** The accrual is
+    #: proved per branch, and goods received into a depot in one branch must be relieved in
+    #: that same branch however the invoice was keyed — otherwise a receipt in B billed on a
+    #: document defaulting to A leaves +X in A and −X in B, an accrual that nets to zero in
+    #: total and is wrong in both places. On a match it is the *GRN line's* warehouse, not
+    #: this line's: the invoice says what the goods cost, the receipt says where they went.
+    #: Purchase price variance is not this — a price disagreement belongs to the document
+    #: that noticed it, so PPV stays on the document's branch.
+    accrual_branch_id: int | None = None
 
     @property
     def gross(self) -> Decimal:
@@ -432,6 +443,13 @@ def post_document(
         )
         line.accrual_relieved = relieved
         line.matched_grn_line = grn_line
+        # The receipt says where the goods went; the invoice only says what they cost. So the
+        # relieving leg posts to the *GRN line's* branch, whatever branch this document was
+        # keyed on — otherwise one branch is credited and another debited, and the accrual
+        # nets to zero in total while being wrong in both.
+        line.accrual_branch_id = inventory_masters.get_warehouse(
+            db, company_id, grn_line.warehouse_id
+        ).branch_id
 
     partner_dimension = {
         "partner_type": PARTNER_TYPE_FOR_ROLE[role],
@@ -493,7 +511,8 @@ def post_document(
                         description=line.source.description or data.description,
                         currency_id=base.id,
                         exchange_rate=ONE,
-                        branch_id=line.branch_id,
+                        # The branch the goods moved through, not the one the document was keyed on.
+                        branch_id=line.accrual_branch_id or line.branch_id,
                         **partner_dimension,
                     )
                 )
@@ -556,7 +575,8 @@ def post_document(
                         description=line.source.description or data.description,
                         currency_id=base.id,
                         exchange_rate=ONE,
-                        branch_id=line.branch_id,
+                        # The branch the goods moved through, not the one the document was keyed on.
+                        branch_id=line.accrual_branch_id or line.branch_id,
                         **partner_dimension,
                     )
                 )
@@ -599,6 +619,14 @@ def post_document(
                     )
                 continue
             net_positions.append(len(specs))
+            # A direct purchase's goods line *is* an accrual leg — the goods arrive on this
+            # document rather than on a GRN — so it follows the same branch rule as every
+            # other accrual line. Any other item line keeps the document's branch.
+            line_branch_id = (
+                line.accrual_branch_id or line.branch_id
+                if line.gl_account_id == gl_settings.grn_accrual_account_id
+                else line.branch_id
+            )
             specs.append(
                 LineSpec(
                     amount=-spec.direction * line.net,
@@ -614,7 +642,7 @@ def post_document(
                     description=line.source.description or data.description,
                     currency_id=currency.id,
                     exchange_rate=data.exchange_rate,
-                    branch_id=line.branch_id,
+                    branch_id=line_branch_id,
                     **partner_dimension,
                 )
             )
@@ -731,6 +759,7 @@ def post_document(
         ]
     )
     db.flush()
+    _refresh_matched_receipts(db, computed)
     audit(
         db,
         company_id,
@@ -882,6 +911,7 @@ def _resolve_item_line(
     base_quantity = inventory_masters.to_base_quantity(line.quantity, uom, item)
 
     warehouse_id: int | None = None
+    warehouse_branch_id: int | None = None
     if item.item_type == ItemType.STOCK:
         warehouse_id = line.warehouse_id or default_warehouse_id
         if warehouse_id is None:
@@ -897,6 +927,7 @@ def _resolve_item_line(
                 code="in_transit_warehouse_locked",
                 field_errors={f"lines.{index}.warehouse_id": ["not selectable"]},
             )
+        warehouse_branch_id = warehouse.branch_id
 
     # Price: the line's, or the item's selling price turned to suit the document's tax mode.
     # `price_includes_tax` is a fact about the *catalogue* price; `tax_mode` is a fact about
@@ -921,7 +952,16 @@ def _resolve_item_line(
             gl_account_id = accrual_account_id
         else:
             gl_account_id = item.purchase_account_id
-    return item, uom.id, base_quantity, warehouse_id, unit_price, tax_code_id, gl_account_id
+    return (
+        item,
+        uom.id,
+        base_quantity,
+        warehouse_id,
+        warehouse_branch_id,
+        unit_price,
+        tax_code_id,
+        gl_account_id,
+    )
 
 
 def _compute_lines(
@@ -950,6 +990,7 @@ def _compute_lines(
     computed: list[_ComputedLine] = []
     for index, line in enumerate(data.lines):
         item: Item | None = None
+        warehouse_branch_id: int | None = None
         uom_id: int | None = None
         base_quantity: Decimal | None = None
         warehouse_id: int | None = None
@@ -962,6 +1003,7 @@ def _compute_lines(
                 uom_id,
                 base_quantity,
                 warehouse_id,
+                warehouse_branch_id,
                 unit_price,
                 tax_code_id,
                 gl_account_id,
@@ -1018,6 +1060,7 @@ def _compute_lines(
                 base_quantity=base_quantity,
                 warehouse_id=warehouse_id,
                 unit_price=unit_price,
+                accrual_branch_id=warehouse_branch_id,
             )
         )
     return computed
@@ -1170,6 +1213,9 @@ def reverse_document(
     document.reversed_on = on_date
     document.open_amount = ZERO
     db.flush()
+    # `matched` is a query over posted, unreversed lines, so reversing this document has
+    # already changed it. The stored status on every receipt it touched has to follow.
+    _refresh_reversed_receipts(db, document)
     audit(
         db,
         document.company_id,
@@ -1463,6 +1509,45 @@ def _replay_batch(
                     code="idempotency_key_reused",
                 )
     return rows
+
+
+def _refresh_matched_receipts(db: Session, computed: list) -> None:
+    """Bring every GRN this document touched back in line with what its lines now imply.
+
+    Decision 4 makes the GRN status a **stored workflow column written only by the order
+    service** — so the service that changes what has matched is the service that must write
+    it. Leaving it to callers meant every test and every endpoint had to remember, and
+    `verify_order_statuses()` would report drift for a posting that was otherwise perfectly
+    correct. It is a cache over a query, and the query just moved.
+    """
+    from app.order_entry import grn as grn_service
+
+    seen: set[int] = set()
+    for line in computed:
+        grn_line = getattr(line, "matched_grn_line", None)
+        if grn_line is None or grn_line.grn_id in seen:
+            continue
+        seen.add(grn_line.grn_id)
+        grn = db.get(GoodsReceivedNote, grn_line.grn_id)
+        if grn is not None:
+            grn_service.refresh_status(db, grn)
+
+
+def _refresh_reversed_receipts(db: Session, document: PartnerDocument) -> None:
+    """The reversal half of `_refresh_matched_receipts`."""
+    from app.order_entry import grn as grn_service
+
+    seen: set[int] = set()
+    for line in document.lines:
+        if line.grn_line_id is None:
+            continue
+        grn_line = db.get(GoodsReceivedNoteLine, line.grn_line_id)
+        if grn_line is None or grn_line.grn_id in seen:
+            continue
+        seen.add(grn_line.grn_id)
+        grn = db.get(GoodsReceivedNote, grn_line.grn_id)
+        if grn is not None:
+            grn_service.refresh_status(db, grn)
 
 
 def _reserve_document_id(db: Session) -> int:

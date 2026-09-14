@@ -87,6 +87,12 @@ PLAN = st.lists(
         QUANTITIES,
         COSTS,
         st.integers(min_value=0, max_value=20),  # which GRN line / document to act on
+        # Which warehouse the goods move through, and — **drawn independently** — which
+        # branch the document is keyed on. Independently is the whole point: the accrual is
+        # proved per branch, and a rule that used the document's branch instead of the
+        # warehouse's is invisible until the two differ.
+        st.booleans(),  # depot, or main
+        st.booleans(),  # key the document on the other branch
     ),
     min_size=1,
     max_size=10,
@@ -123,8 +129,25 @@ def _documents(db: Session, fixture: OrderEntry) -> list[PartnerDocument]:
     )
 
 
-def _step(db: Session, fixture: OrderEntry, operation: str, quantity, cost, pick: int) -> None:
+def _step(  # noqa: PLR0913
+    db: Session,
+    fixture: OrderEntry,
+    operation: str,
+    quantity,  # noqa: ANN001
+    cost,  # noqa: ANN001
+    pick: int,
+    use_depot: bool,
+    cross_branch: bool,
+) -> None:
     """One operation, or nothing when the draw does not describe a legal one."""
+    warehouse_id = fixture.depot.id if use_depot else fixture.main.id
+    # The branch the *document* is keyed on, which may be neither the warehouse's nor the
+    # default. `None` lets the document resolve its own.
+    document_branch_id = (
+        (fixture.main.branch_id if use_depot else fixture.depot_branch_id)
+        if cross_branch
+        else None
+    )
     if operation == "receive":
         grn_service.post_grn(
             db,
@@ -133,7 +156,7 @@ def _step(db: Session, fixture: OrderEntry, operation: str, quantity, cost, pick
                 partner_id=fixture.supplier.id,
                 grn_date=MARCH,
                 description="Receipt",
-                warehouse_id=fixture.main.id,
+                warehouse_id=warehouse_id,
                 lines=(
                     grn_service.GrnLineInput(
                         item_id=fixture.stock_item.id, quantity=quantity, unit_cost=cost
@@ -162,6 +185,7 @@ def _step(db: Session, fixture: OrderEntry, operation: str, quantity, cost, pick
                 kind=DocumentKind.INVOICE,
                 partner_id=fixture.supplier.id,
                 document_date=MARCH,
+                branch_id=document_branch_id,
                 description="Supplier invoice",
                 lines=(
                     documents_service.LineInput(
@@ -185,13 +209,14 @@ def _step(db: Session, fixture: OrderEntry, operation: str, quantity, cost, pick
                 kind=DocumentKind.INVOICE if operation == "sell" else DocumentKind.CREDIT_NOTE,
                 partner_id=fixture.customer.id,
                 document_date=MARCH,
+                branch_id=document_branch_id,
                 description="Sale" if operation == "sell" else "Return",
                 lines=(
                     documents_service.LineInput(
                         item_id=fixture.stock_item.id,
                         quantity=quantity,
                         unit_price=cost,
-                        warehouse_id=fixture.main.id,
+                        warehouse_id=warehouse_id,
                     ),
                 ),
             ),
@@ -208,13 +233,14 @@ def _step(db: Session, fixture: OrderEntry, operation: str, quantity, cost, pick
                 kind=DocumentKind.CREDIT_NOTE,
                 partner_id=fixture.supplier.id,
                 document_date=MARCH,
+                branch_id=document_branch_id,
                 description="Return to supplier",
                 lines=(
                     documents_service.LineInput(
                         item_id=fixture.stock_item.id,
                         quantity=quantity,
                         unit_price=cost,
-                        warehouse_id=fixture.main.id,
+                        warehouse_id=warehouse_id,
                     ),
                 ),
             ),
@@ -255,9 +281,18 @@ def _step(db: Session, fixture: OrderEntry, operation: str, quantity, cost, pick
 
 def _drive(db: Session, fixture: OrderEntry, plan: list[tuple]) -> None:
     _assert_everything(db, fixture.company_id)
-    for operation, quantity, cost, pick in plan:
+    for operation, quantity, cost, pick, use_depot, cross_branch in plan:
         try:
-            _step(db, fixture, operation, quantity, Decimal(cost), pick)
+            _step(
+                db,
+                fixture,
+                operation,
+                quantity,
+                Decimal(cost),
+                pick,
+                use_depot,
+                cross_branch,
+            )
         except (LedgerStateError, PostingError) as refused:
             _REFUSALS[getattr(refused, "code", "?")] = (
                 _REFUSALS.get(getattr(refused, "code", "?"), 0) + 1

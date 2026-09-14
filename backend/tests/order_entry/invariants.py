@@ -61,15 +61,22 @@ def _received_less_relieved(
     receipt is a negative balance on the account.
     """
     events: list[tuple[object, int, Decimal]] = []
+    # Both sides bucket by **the branch of the warehouse the goods moved through**, never by
+    # a document header's branch. The header's is derived from the warehouse and the two
+    # cannot disagree, but the *invoice* that relieves an accrual may be keyed anywhere, and
+    # bucketing its relief by its own branch is exactly the drift this clause exists to catch.
+    from app.models.inventory import Warehouse
+
     grn_rows = db.execute(
         select(
             GoodsReceivedNote.grn_date,
-            GoodsReceivedNote.branch_id,
+            Warehouse.branch_id,
             GoodsReceivedNoteLine.value,
             GoodsReceivedNote.status,
             GoodsReceivedNote.reversed_on,
         )
         .join(GoodsReceivedNoteLine, GoodsReceivedNoteLine.grn_id == GoodsReceivedNote.id)
+        .join(Warehouse, Warehouse.id == GoodsReceivedNoteLine.warehouse_id)
         .where(GoodsReceivedNote.company_id == company_id)
     ).all()
     for grn_date, branch_id, value, status, reversed_on in grn_rows:
@@ -80,10 +87,15 @@ def _received_less_relieved(
     match_rows = db.execute(
         select(
             PartnerDocument.document_date,
-            PartnerDocumentLine.branch_id,
+            Warehouse.branch_id,
             PartnerDocumentLine.accrual_relieved,
         )
         .join(PartnerDocument, PartnerDocument.id == PartnerDocumentLine.document_id)
+        .join(
+            GoodsReceivedNoteLine,
+            GoodsReceivedNoteLine.id == PartnerDocumentLine.grn_line_id,
+        )
+        .join(Warehouse, Warehouse.id == GoodsReceivedNoteLine.warehouse_id)
         .where(
             PartnerDocumentLine.company_id == company_id,
             PartnerDocumentLine.accrual_relieved.is_not(None),

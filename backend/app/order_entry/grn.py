@@ -329,7 +329,24 @@ def post_grn(
         rate=rate,
         default_warehouse_id=settings.default_warehouse_id,
     )
-    branch_id = data.branch_id or resolved[0].warehouse.branch_id
+    # **The branch is the warehouse's, always.** A receipt happens where the goods land, and
+    # the accrual is proved per branch — so a header branch that disagreed with the warehouse
+    # would credit one branch for stock that arrived in another. A caller may state it, and it
+    # is checked rather than trusted.
+    warehouse_branches = {line.warehouse.branch_id for line in resolved}
+    if len(warehouse_branches) > 1:
+        raise LedgerStateError(
+            "A goods receipt cannot span branches — one receipt, one place the goods landed",
+            code="grn_spans_branches",
+            field_errors={"lines": ["warehouses in more than one branch"]},
+        )
+    branch_id = warehouse_branches.pop()
+    if data.branch_id is not None and data.branch_id != branch_id:
+        raise LedgerStateError(
+            "The branch does not match the warehouse the goods were received into",
+            code="branch_warehouse_mismatch",
+            field_errors={"branch_id": ["does not match the warehouse's branch"]},
+        )
 
     grn_id = _reserve_grn_id(db)
     document = stock_service.StockDocument(

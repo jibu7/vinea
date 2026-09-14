@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.inventory import masters as inventory_masters
+from app.models.company import Branch
 from app.models.gl import GLAccount, GLSettings
 from app.models.inventory import Item, ItemType, Uom, Warehouse
 from app.models.partner import Partner
@@ -31,6 +32,11 @@ class OrderEntry:
     stock_item: Item
     service_item: Item
     accounts: dict[str, GLAccount]
+    #: A depot in a branch of its own. The accrual is proved **per branch**, so a company with
+    #: one branch can never exercise that half of the proof: every posting lands in the same
+    #: bucket and a rule that used the wrong branch would look perfectly correct.
+    depot: Warehouse | None = None
+    depot_branch_id: int | None = None
 
     @property
     def company_id(self) -> int:
@@ -127,8 +133,23 @@ def _build(db: Session, inventory: Inventory) -> OrderEntry:
         ),
         actor=inventory.owner,
     )
+    depot_branch = Branch(
+        company_id=company_id, code="DEPOT", name="Musanze Depot", is_main=False
+    )
+    db.add(depot_branch)
+    db.flush()
+    depot = inventory_masters.create_warehouse(
+        db,
+        company_id,
+        code="DEP",
+        name="Musanze store",
+        branch_id=depot_branch.id,
+        actor=inventory.owner,
+    )
     db.flush()
     return OrderEntry(
+        depot=depot,
+        depot_branch_id=depot_branch.id,
         inventory=inventory,
         customer=customer,
         supplier=supplier,
