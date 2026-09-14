@@ -134,8 +134,19 @@ def test_the_registry_pairs_the_inventory_control_type_with_the_inv_module_alone
         (ControlType.AR, "ar"),
         (ControlType.AP, "ap"),
         (ControlType.INVENTORY, INVENTORY_MODULE),
+        # P6 registered its own rows rather than the guard being loosened for it, which is
+        # what the paragraph above predicted it would have to do.
+        (ControlType.GRN_ACCRUAL, "inv"),
+        (ControlType.GRN_ACCRUAL, "ap"),
     }
     assert {module for control, module in rows if control == ControlType.INVENTORY} == {"inv"}
+    # The GRN accrual is the first control type owned by *two* modules, and deliberately so:
+    # `inv` credits it when goods are received and `ap` debits it when the invoice matches.
+    # Two is still deny-by-default — every other module is refused.
+    assert {module for control, module in rows if control == ControlType.GRN_ACCRUAL} == {
+        "inv",
+        "ap",
+    }
 
 
 def test_the_inventory_accounts_are_control_accounts_in_a_seeded_tenant(

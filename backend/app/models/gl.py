@@ -40,16 +40,47 @@ PROFIT_AND_LOSS_CLASSES = frozenset({AccountClass.INCOME, AccountClass.EXPENSE})
 
 class ControlType(enum.StrEnum):
     """Accounts owned by a module. Manual journals may not post to them; the owning
-    module (cashbook for bank/cash, AR/AP/Inventory subledgers from P4/P5) does."""
+    module (cashbook for bank/cash, AR/AP/Inventory subledgers from P4/P5, order entry
+    from P6) does."""
 
     BANK = "bank"
     CASH = "cash"
     AR = "ar"
     AP = "ap"
     INVENTORY = "inventory"
+    #: P6 decision 5 — Goods Received Not Invoiced. Written by `inv` when a GRN receives
+    #: stock and relieved by `ap` when the supplier invoice matches it, which is why it
+    #: registers two modules rather than one. Its balance is provable at any date: the sum
+    #: over GRN lines of (received value − relieved value), asserted by
+    #: `assert_order_invariants`. Every line on it carries an item, like the INV accounts.
+    GRN_ACCRUAL = "grn_accrual"
 
 
 CASHBOOK_CONTROL_TYPES = frozenset({ControlType.BANK, ControlType.CASH})
+
+#: Control accounts whose every journal line must carry an `item_id`. Inventory has required
+#: it since P5; the GRN accrual joins it because the accrual proof is per GRN line, and a line
+#: with no item cannot be attributed to one. Enforced in the engine *and* by the VN008 branch
+#: of `kernel_check_subledger_line`, which reads this same pair of values.
+ITEM_REQUIRED_CONTROL_TYPES = frozenset({ControlType.INVENTORY, ControlType.GRN_ACCRUAL})
+
+
+class BackorderPolicy(enum.StrEnum):
+    """Whether a sales order may commit more than is available (P6 decision 7).
+
+    `ALLOW` is the default and the Evolution behaviour: the order takes the quantity, the
+    shortfall shows as backordered on the order, the enquiry and the grid, and nothing is
+    blocked. `BLOCK` refuses the line with `exceeds_available`.
+
+    Commitments are advisory either way — this policy governs the *order*, never the posting.
+    The hard stop on issuing stock you do not have stays `negative_stock_policy`.
+    """
+
+    ALLOW = "allow"
+    BLOCK = "block"
+
+
+backorder_policy_enum = pg_enum(BackorderPolicy, "backorder_policy")
 
 
 class ControlAccountModule(Base):
@@ -124,6 +155,10 @@ SETTINGS_ACCOUNT_FIELDS = (
     "inventory_in_transit_account_id",
     "stock_count_variance_account_id",
     "cogs_account_id",
+    # P6 order-entry defaults.
+    "grn_accrual_account_id",
+    "purchase_price_variance_account_id",
+    "landed_cost_clearing_account_id",
 )
 
 
@@ -177,6 +212,24 @@ class GLSettings(AuditedMixin, CompanyScopedMixin, Base):
     stock_count_variance_account_id: Mapped[int | None] = mapped_column(BigInteger)
     # Seeded now, first read by P6's `StockSold`; P5 posts nothing to it.
     cogs_account_id: Mapped[int | None] = mapped_column(BigInteger)
+    # --- P6 order-entry defaults ---------------------------------------------------------
+    # The GRN accrual is a control account (decision 5): only `inv` and `ap` may post to it
+    # and every line carries an item, so it is guarded exactly like the INV accounts.
+    grn_accrual_account_id: Mapped[int | None] = mapped_column(BigInteger)
+    # Where a match writes the difference between what was accrued and what was invoiced —
+    # price *and* rate movements both land here (decision 6).
+    purchase_price_variance_account_id: Mapped[int | None] = mapped_column(BigInteger)
+    # Deliberately a **plain** account, not a control one: freight arrives on a forwarder's
+    # supplier invoice as an ordinary GL line and duty as a cashbook payment to RRA, and both
+    # have to be able to land on it. Its proof is arithmetic rather than a guard — booked
+    # minus allocated, zero when everything is allocated.
+    landed_cost_clearing_account_id: Mapped[int | None] = mapped_column(BigInteger)
+    backorder_policy: Mapped[BackorderPolicy] = mapped_column(
+        backorder_policy_enum,
+        nullable=False,
+        default=BackorderPolicy.ALLOW,
+        server_default=BackorderPolicy.ALLOW.value,
+    )
     # Policy, not an account: the same settings row rather than a second settings store.
     negative_stock_policy: Mapped[NegativeStockPolicy] = mapped_column(
         negative_stock_policy_enum,

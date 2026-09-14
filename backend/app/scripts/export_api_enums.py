@@ -21,7 +21,7 @@ from pathlib import Path
 
 from app.models.company import CompanyStatus
 from app.models.fiscal import PeriodStatus
-from app.models.gl import AccountClass, ControlType
+from app.models.gl import AccountClass, BackorderPolicy, ControlType
 from app.models.inventory import (
     InventoryDocumentStatus,
     InventoryTransactionKind,
@@ -59,6 +59,8 @@ EXPORTED: tuple[type[enum.StrEnum], ...] = (
     DocumentKind,
     DocumentStatus,
     InstrumentType,
+    # Order entry
+    BackorderPolicy,
     # Inventory
     ItemType,
     NegativeStockPolicy,

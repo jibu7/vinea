@@ -55,6 +55,19 @@ class DocType(enum.StrEnum):
     # session claiming one would leave a hole where a posting should be (the gapless check in
     # `tests/kernel/invariants.py` states exactly that).
     INV_COUNT_SESSION = "INCS"
+    # P6 — order entry. `STK` is the companion stock entry a stock-bearing partner document
+    # posts beside its own (decision 2); it is a *separate run* from the document's number
+    # because the two entries are two postings and an auditor following either run must not
+    # find a hole where the other one was.
+    #
+    # `SO`, `PO`, `GRN` and `LCA` are **not** here yet, deliberately. A doc type with no
+    # claimant fails `test_every_doc_type_registers_a_claimant`, and a claimant naming a table
+    # that does not exist fails `test_every_claimant_names_a_real_table_and_column` — so a run
+    # enters this enum in the same commit as the table that holds its numbers, which is the
+    # step that creates `sales_orders`, `purchase_orders`, `goods_received_notes` and
+    # `landed_cost_documents`. `STK` can be here now only because its claimant is
+    # `journal_entries`, which has existed since P2.
+    STOCK_COMPANION = "STK"
 
 
 DEFAULT_PREFIXES: dict[str, str] = {
@@ -77,6 +90,7 @@ DEFAULT_PREFIXES: dict[str, str] = {
     DocType.INV_TRANSFER: "TRF-",
     DocType.INV_COUNT: "CNT-",
     DocType.INV_COUNT_SESSION: "CNS-",
+    DocType.STOCK_COMPANION: "STK-",
 }
 
 
@@ -126,6 +140,9 @@ _COUNT_SHEET = SequenceClaimant(table="stock_count_sessions")
 #: alone (P4).
 _ALLOCATION = SequenceClaimant(table="allocations")
 
+#: A claimant is checked against the live schema, so a run can only be registered once the
+#: table that holds its numbers exists — see the P6 note in `DocType`.
+#:
 #: **doc type → who may hold its numbers.** Every `DocType` must appear here, and
 #: `tests/kernel/test_sequence_registry.py` fails the build if one does not;
 #: `assert_ledger_invariants` fails on any sequence a company actually uses whose doc type is
@@ -150,6 +167,9 @@ SEQUENCE_CLAIMANTS: dict[str, tuple[SequenceClaimant, ...]] = {
     DocType.INV_TRANSFER: (_ENTRY, _VALUELESS_TRANSFER),
     DocType.INV_COUNT: (_ENTRY, _VALUELESS_STOCK_DOCUMENT),
     DocType.INV_COUNT_SESSION: (_COUNT_SHEET,),
+    # The companion entry is always an entry — a stock line with no value posts no companion
+    # at all and claims no number — so `_ENTRY` is its only claimant (decision 2).
+    DocType.STOCK_COMPANION: (_ENTRY,),
 }
 
 
