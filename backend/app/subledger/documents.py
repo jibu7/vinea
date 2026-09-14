@@ -10,12 +10,14 @@ from dataclasses import dataclass, field, replace
 from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 from starlette.requests import Request
 
 from app.core.errors import ConflictError, NotFoundError
 from app.core.permissions import AP_CREDIT_LIMIT_OVERRIDE, AR_CREDIT_LIMIT_OVERRIDE
+from app.inventory import masters as inventory_masters
+from app.inventory import stock as stock_service
 from app.kernel import posting
 from app.kernel.errors import LedgerStateError, PostingError
 from app.kernel.events import InstrumentMatured, LineSpec, PartnerDocumentPosted
@@ -23,6 +25,7 @@ from app.kernel.money import (
     ZERO,
     base_currency,
     is_rounded,
+    rate_on,
     resolve_tax_code,
     round_amount,
     split_tax,
@@ -31,6 +34,7 @@ from app.kernel.money import (
 from app.kernel.sequences import DocType
 from app.models.currency import Currency
 from app.models.gl import CASHBOOK_CONTROL_TYPES, GLAccount
+from app.models.inventory import GoodsReceivedNote, GoodsReceivedNoteLine, Item, ItemType
 from app.models.journal import JournalEntry
 from app.models.partner import Partner, PartnerRole, PaymentTerms, TaxMode
 from app.models.subledger import (
@@ -41,6 +45,8 @@ from app.models.subledger import (
     PartnerDocumentLine,
 )
 from app.models.user import User
+from app.order_entry import companion as order_companion
+from app.order_entry import matching as order_matching
 from app.subledger import masters
 from app.subledger.common import (
     PARTNER_TYPE_FOR_ROLE,
@@ -103,7 +109,19 @@ CREDIT_LIMIT_OVERRIDE = {
 
 @dataclass(frozen=True)
 class LineInput:
-    unit_price: Decimal
+    """A GL line, or an **item line** when `item_id` is set (P6 decision 1).
+
+    One shape, one service. What an item adds is a catalogue to default from — the price, the
+    tax code and the account all fall back to the item's — and, for a *stock* item, a
+    companion stock move. Service and non-stock items are ordinary lines that happen to carry
+    an item dimension, which is what lets P10 report on them.
+
+    `unit_price` stays required for a GL line and becomes optional for an item line, where
+    `None` means "take the item's selling price", converted between inclusive and exclusive to
+    suit the document's tax mode.
+    """
+
+    unit_price: Decimal | None = None
     quantity: Decimal = ONE
     discount_percent: Decimal = ZERO
     description: str | None = None
@@ -112,6 +130,21 @@ class LineInput:
     tax_code_id: int | None = None
     branch_id: int | None = None
     project_id: int | None = None
+    # --- P6 item line ------------------------------------------------------------------
+    item_id: int | None = None
+    #: The unit `quantity` is keyed in; defaults to the item's base unit.
+    uom_id: int | None = None
+    #: Where the stock moves from or to. Only a stock item uses it.
+    warehouse_id: int | None = None
+    #: The GRN line this supplier-invoice line matches (decision 6).
+    grn_line_id: int | None = None
+    #: The invoice line a credit-note line returns, so the return is valued at the cost that
+    #: was actually issued rather than at today's average.
+    returns_line_id: int | None = None
+    #: Set on a component line; the index (1-based) of the kit line it was exploded from.
+    kit_parent_line_no: int | None = None
+    #: The SO line (AR) or PO line (AP) this line fulfils. Unused until step 3.
+    order_line_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -150,10 +183,52 @@ class _ComputedLine:
     project_id: int | None
     net: Decimal
     tax: Decimal
+    # --- P6 item line ------------------------------------------------------------------
+    item: Item | None = None
+    uom_id: int | None = None
+    base_quantity: Decimal | None = None
+    warehouse_id: int | None = None
+    unit_price: Decimal = ZERO
+    #: Base-currency value the companion stock posting moved for this line: the cost issued
+    #: on a sale, the cost received on a return or an unmatched purchase. Filled in after the
+    #: companion posts, which is why the companion posts first.
+    stock_value: Decimal | None = None
+    #: What this line took off the GRN accrual, when it matched one.
+    accrual_relieved: Decimal | None = None
+    #: The id this line will be written with, reserved before the companion posts so its
+    #: moves can point back at it.
+    line_id: int | None = None
+    #: The GRN line this one matched, once resolved.
+    matched_grn_line: object | None = None
+    #: The branch of the warehouse the goods actually moved through.
+    #:
+    #: **Every GRN-accrual line carries this, not the document's branch.** The accrual is
+    #: proved per branch, and goods received into a depot in one branch must be relieved in
+    #: that same branch however the invoice was keyed — otherwise a receipt in B billed on a
+    #: document defaulting to A leaves +X in A and −X in B, an accrual that nets to zero in
+    #: total and is wrong in both places. On a match it is the *GRN line's* warehouse, not
+    #: this line's: the invoice says what the goods cost, the receipt says where they went.
+    #: Purchase price variance is not this — a price disagreement belongs to the document
+    #: that noticed it, so PPV stays on the document's branch.
+    accrual_branch_id: int | None = None
 
     @property
     def gross(self) -> Decimal:
         return self.net + self.tax
+
+    @property
+    def is_item_line(self) -> bool:
+        return self.item is not None
+
+    @property
+    def moves_stock(self) -> bool:
+        """Only a stock item moves stock, and a matched purchase line moves none: the goods
+        arrived on the GRN, and the invoice only says what they cost."""
+        return (
+            self.item is not None
+            and self.item.item_type == ItemType.STOCK
+            and self.source.grn_line_id is None
+        )
 
 
 # --- Reads ----------------------------------------------------------------------------------
@@ -261,6 +336,7 @@ def post_document(
         raise LedgerStateError(f"{partner.name} is on hold", code="partner_on_hold")
 
     accounts = role_accounts(db, company_id, role)
+    gl_settings = posting.gl_settings_for(db, company_id)
     control_account_id = control_account_for(db, company_id, role, settings.control_account_id)
     currency = _resolve_currency(db, company_id, data.currency_id or partner.currency_id)
     tax_mode = data.tax_mode or settings.tax_mode
@@ -279,11 +355,14 @@ def post_document(
             db,
             company_id,
             data,
+            role=role,
             currency=currency,
             tax_mode=tax_mode,
             settings=settings,
             branch_id=branch_id,
             project_id=project_id,
+            default_warehouse_id=gl_settings.default_warehouse_id,
+            accrual_account_id=gl_settings.grn_accrual_account_id,
         )
         net_total = sum((line.net for line in computed), ZERO)
         tax_total = sum((line.tax for line in computed), ZERO)
@@ -310,6 +389,67 @@ def post_document(
         permissions=permissions or set(),
         request=request,
     )
+
+    # The companion stock entry goes first (decision 2): a return to supplier and an
+    # unmatched purchase both need the value the stock ledger actually moved before their
+    # partner side can be built at all. Its `source_doc_id` is this document's, which does
+    # not exist yet — so the id is reserved the way `inventory_documents` reserves its own.
+    booking_rate = _booking_rate(db, currency, data)
+    document_id = _reserve_document_id(db)
+    # And one id per line that will be written. The companion's moves carry `source_line_id`
+    # so a return can later find the exact cost its original line was issued at, and
+    # `stock_moves` refuses UPDATE — so the ids have to exist before the moves do.
+    line_ids = [_reserve_document_line_id(db) for _ in computed]
+    for line, line_id in zip(computed, line_ids, strict=True):
+        line.line_id = line_id
+    companion = order_companion.post_companion(
+        db,
+        company_id,
+        role=role,
+        kind=data.kind,
+        computed=computed,
+        document_date=data.document_date,
+        description=data.description,
+        reference=data.reference,
+        document_id=document_id,
+        rate=booking_rate,
+        accrual_account_id=gl_settings.grn_accrual_account_id,
+        cogs_account_id_for=lambda item: _cogs_account_id(item, gl_settings),
+        actor=actor,
+    )
+    for index, value in companion.values.items():
+        computed[index].stock_value = value
+
+    # The three-way match (decision 6). A matched line moved no stock — the goods arrived on
+    # the GRN — so this runs after the companion and touches only the ledger.
+    base = base_currency(db, company_id)
+    for index, line in enumerate(computed):
+        if line.source.grn_line_id is None:
+            continue
+        if role != PartnerRole.AP or data.kind != DocumentKind.INVOICE:
+            raise LedgerStateError(
+                "Only a supplier invoice line can match a goods receipt",
+                code="match_not_allowed",
+                field_errors={f"lines.{index}.grn_line_id": ["not a supplier invoice"]},
+            )
+        grn_line, relieved = order_matching.resolve_match(
+            db,
+            company_id,
+            index=index,
+            grn_line_id=line.source.grn_line_id,
+            base_quantity=line.base_quantity or ZERO,
+            supplier_id=partner.id,
+            decimal_places=base.decimal_places,
+        )
+        line.accrual_relieved = relieved
+        line.matched_grn_line = grn_line
+        # The receipt says where the goods went; the invoice only says what they cost. So the
+        # relieving leg posts to the *GRN line's* branch, whatever branch this document was
+        # keyed on — otherwise one branch is credited and another debited, and the accrual
+        # nets to zero in total while being wrong in both.
+        line.accrual_branch_id = inventory_masters.get_warehouse(
+            db, company_id, grn_line.warehouse_id
+        ).branch_id
 
     partner_dimension = {
         "partner_type": PARTNER_TYPE_FOR_ROLE[role],
@@ -347,19 +487,162 @@ def post_document(
         )
     else:
         for line in computed:
+            if (
+                role == PartnerRole.AP
+                and data.kind == DocumentKind.CREDIT_NOTE
+                and line.stock_value is not None
+            ):
+                # Goods going back. The companion already debited the accrual with what they
+                # actually cost us; this credits it with the same amount, so the accrual nets
+                # to **zero inside the document**. What the supplier is credited with is what
+                # we are claiming back, and the difference between claim and cost is purchase
+                # price variance — the same account a price movement on the way in lands in.
+                issued = abs(line.stock_value)
+                claim_base = round_amount(line.net * booking_rate, base.decimal_places)
+                variance = claim_base - issued
+                net_positions.append(len(specs))
+                specs.append(
+                    LineSpec(
+                        amount=-spec.direction * issued,
+                        gl_account_id=line.gl_account_id,
+                        transaction_type=line.transaction_type or spec.transaction_type,
+                        project_id=line.project_id,
+                        item_id=line.item.id if line.item is not None else None,
+                        description=line.source.description or data.description,
+                        currency_id=base.id,
+                        exchange_rate=ONE,
+                        # The branch the goods moved through, not the one the document was keyed on.
+                        branch_id=line.accrual_branch_id or line.branch_id,
+                        **partner_dimension,
+                    )
+                )
+                if variance != ZERO:
+                    specs.append(
+                        LineSpec(
+                            amount=-spec.direction * variance,
+                            gl_account_id=_variance_account_id(gl_settings),
+                            project_id=line.project_id,
+                            item_id=line.item.id if line.item is not None else None,
+                            description=line.source.description or data.description,
+                            currency_id=base.id,
+                            exchange_rate=ONE,
+                            branch_id=line.branch_id,
+                            **partner_dimension,
+                        )
+                    )
+                if line.tax != ZERO:
+                    tax_code = resolve_tax_code(
+                        db, company_id, line.tax_code_id, data.document_date
+                    )
+                    if tax_code.gl_account_id is None:
+                        raise PostingError(
+                            f"Tax code {tax_code.code} has no GL account",
+                            code="tax_code_without_account",
+                            field_errors={"tax_code_id": ["no GL account"]},
+                        )
+                    specs.append(
+                        LineSpec(
+                            amount=-spec.direction * line.tax,
+                            gl_account_id=tax_code.gl_account_id,
+                            project_id=line.project_id,
+                            tax_code_id=line.tax_code_id,
+                            description=line.source.description or data.description,
+                            currency_id=currency.id,
+                            exchange_rate=data.exchange_rate,
+                            branch_id=line.branch_id,
+                            **partner_dimension,
+                        )
+                    )
+                continue
+            if line.accrual_relieved is not None:
+                # A matched line posts **two** legs instead of one: the accrual comes off for
+                # exactly what the receipt put there, and whatever the invoice disagrees by
+                # goes to purchase price variance. Both are base-currency lines beside the
+                # invoice's document-currency ones (decision 14). They are *posted* in base
+                # at a rate of one rather than carrying a `base_amount` override — the kernel
+                # reserves that override for reversals — which gets the same frozen amount
+                # through the conversion the engine already does.
+                net_base = round_amount(line.net * booking_rate, base.decimal_places)
+                variance = net_base - line.accrual_relieved
+                net_positions.append(len(specs))
+                specs.append(
+                    LineSpec(
+                        amount=-spec.direction * line.accrual_relieved,
+                        gl_account_id=line.gl_account_id,
+                        transaction_type=line.transaction_type or spec.transaction_type,
+                        project_id=line.project_id,
+                        item_id=line.item.id if line.item is not None else None,
+                        description=line.source.description or data.description,
+                        currency_id=base.id,
+                        exchange_rate=ONE,
+                        # The branch the goods moved through, not the one the document was keyed on.
+                        branch_id=line.accrual_branch_id or line.branch_id,
+                        **partner_dimension,
+                    )
+                )
+                if variance != ZERO:
+                    specs.append(
+                        LineSpec(
+                            amount=-spec.direction * variance,
+                            gl_account_id=_variance_account_id(gl_settings),
+                            project_id=line.project_id,
+                            item_id=line.item.id if line.item is not None else None,
+                            description=line.source.description or data.description,
+                            currency_id=base.id,
+                            exchange_rate=ONE,
+                            branch_id=line.branch_id,
+                            **partner_dimension,
+                        )
+                    )
+                if line.tax != ZERO:
+                    tax_code = resolve_tax_code(
+                        db, company_id, line.tax_code_id, data.document_date
+                    )
+                    if tax_code.gl_account_id is None:
+                        raise PostingError(
+                            f"Tax code {tax_code.code} has no GL account",
+                            code="tax_code_without_account",
+                            field_errors={"tax_code_id": ["no GL account"]},
+                        )
+                    specs.append(
+                        LineSpec(
+                            amount=-spec.direction * line.tax,
+                            gl_account_id=tax_code.gl_account_id,
+                            project_id=line.project_id,
+                            tax_code_id=line.tax_code_id,
+                            description=line.source.description or data.description,
+                            currency_id=currency.id,
+                            exchange_rate=data.exchange_rate,
+                            branch_id=line.branch_id,
+                            **partner_dimension,
+                        )
+                    )
+                continue
             net_positions.append(len(specs))
+            # A direct purchase's goods line *is* an accrual leg — the goods arrive on this
+            # document rather than on a GRN — so it follows the same branch rule as every
+            # other accrual line. Any other item line keeps the document's branch.
+            line_branch_id = (
+                line.accrual_branch_id or line.branch_id
+                if line.gl_account_id == gl_settings.grn_accrual_account_id
+                else line.branch_id
+            )
             specs.append(
                 LineSpec(
                     amount=-spec.direction * line.net,
                     gl_account_id=line.gl_account_id,
                     transaction_type=line.transaction_type or spec.transaction_type,
                     project_id=line.project_id,
+                    # Decision 1: the revenue or expense line of an item line carries the
+                    # item, which is what P10's sales analysis reads — and what the VN008
+                    # guard demands the moment that account is the accrual.
+                    item_id=line.item.id if line.item is not None else None,
                     tax_code_id=line.tax_code_id,
                     tax_amount=-spec.direction * line.tax,
                     description=line.source.description or data.description,
                     currency_id=currency.id,
                     exchange_rate=data.exchange_rate,
-                    branch_id=line.branch_id,
+                    branch_id=line_branch_id,
                     **partner_dimension,
                 )
             )
@@ -405,6 +688,7 @@ def post_document(
     assert entry is not None
 
     document = PartnerDocument(
+        id=document_id,
         company_id=company_id,
         role=role,
         kind=data.kind,
@@ -434,6 +718,7 @@ def post_document(
         instrument_type=data.instrument_type,
         maturity_date=data.maturity_date,
         cash_account_id=data.cash_account_id,
+        stock_entry_id=companion.entry_id,
         status=DocumentStatus.POSTED,
         idempotency_key=idempotency_key,
         idempotency_hash=idempotency_hash,
@@ -443,12 +728,16 @@ def post_document(
     db.add_all(
         [
             PartnerDocumentLine(
+                id=line.line_id,
                 company_id=company_id,
                 document_id=document.id,
                 line_no=index,
                 description=line.source.description,
                 quantity=line.source.quantity,
-                unit_price=line.source.unit_price,
+                # The **resolved** price, not the keyed one: an item line may have taken it
+                # from the catalogue, and the line has to record what it was actually priced
+                # at rather than the blank the operator left.
+                unit_price=line.unit_price,
                 discount_percent=line.source.discount_percent,
                 gl_account_id=_line_account_id(entry, net_positions[index - 1]),
                 tax_code_id=line.tax_code_id,
@@ -457,11 +746,20 @@ def post_document(
                 net_amount=line.net,
                 tax_amount=line.tax,
                 gross_amount=line.gross,
+                item_id=line.item.id if line.item is not None else None,
+                uom_id=line.uom_id,
+                base_quantity=line.base_quantity,
+                warehouse_id=line.warehouse_id,
+                order_line_id=line.source.order_line_id,
+                grn_line_id=line.source.grn_line_id,
+                returns_line_id=line.source.returns_line_id,
+                accrual_relieved=line.accrual_relieved,
             )
             for index, line in enumerate(computed, 1)
         ]
     )
     db.flush()
+    _refresh_matched_receipts(db, computed)
     audit(
         db,
         company_id,
@@ -570,25 +868,164 @@ def _settlement_account(
     return account.id
 
 
+def _resolve_item_line(
+    db: Session,
+    company_id: int,
+    role: PartnerRole,
+    index: int,
+    line: LineInput,
+    *,
+    tax_mode: TaxMode,
+    default_warehouse_id: int | None,
+    accrual_account_id: int | None,
+) -> tuple[Item, int, Decimal, int | None, Decimal, int | None, int | None]:
+    """Everything an item line takes from the catalogue (decision 1).
+
+    Returns `(item, uom_id, base_quantity, warehouse_id, unit_price, tax_code_id,
+    gl_account_id)`. Each default is the 3rd link of the ADR-05 chain: a value keyed on the
+    line always wins, and only where the line is silent does the item speak.
+
+    **The account depends on the side and on the kind of item**, and the asymmetry is the
+    whole GRV design. An AR line credits revenue. An AP line for a *stock* item debits the
+    **GRN accrual**, not an expense: the cost is already in inventory — it arrived with the
+    goods — and the invoice only relieves what was accrued for them. An AP line for a service
+    or non-stock item has no goods behind it and expenses to the item's purchase account.
+    """
+    item = inventory_masters.get_item(db, company_id, line.item_id)  # type: ignore[arg-type]
+    if not item.is_active:
+        raise LedgerStateError(
+            f"{item.code} is not active",
+            code="item_not_active",
+            field_errors={f"lines.{index}.item_id": ["not active"]},
+        )
+    if item.item_type == ItemType.KIT and role == PartnerRole.AP:
+        # A kit is a virtual bundle that exists to be sold, never bought (decision 8).
+        raise LedgerStateError(
+            f"{item.code} is a kit and cannot be purchased",
+            code="kit_not_purchasable",
+            field_errors={f"lines.{index}.item_id": ["a kit cannot be purchased"]},
+        )
+
+    uom_id = line.uom_id or item.base_uom_id
+    uom = inventory_masters.get_uom(db, company_id, uom_id)
+    base_quantity = inventory_masters.to_base_quantity(line.quantity, uom, item)
+
+    warehouse_id: int | None = None
+    warehouse_branch_id: int | None = None
+    if item.item_type == ItemType.STOCK:
+        warehouse_id = line.warehouse_id or default_warehouse_id
+        if warehouse_id is None:
+            raise LedgerStateError(
+                "No warehouse on the line or in the defaults",
+                code="warehouse_required",
+                field_errors={f"lines.{index}.warehouse_id": ["required"]},
+            )
+        warehouse = inventory_masters.get_warehouse(db, company_id, warehouse_id)
+        if warehouse.is_in_transit:
+            raise LedgerStateError(
+                "The in-transit warehouse is not selectable on a document",
+                code="in_transit_warehouse_locked",
+                field_errors={f"lines.{index}.warehouse_id": ["not selectable"]},
+            )
+        warehouse_branch_id = warehouse.branch_id
+
+    # Price: the line's, or the item's selling price turned to suit the document's tax mode.
+    # `price_includes_tax` is a fact about the *catalogue* price; `tax_mode` is a fact about
+    # the document. When they disagree the price has to be converted, or an inclusive
+    # catalogue sold on an exclusive document silently charges tax twice.
+    unit_price = line.unit_price
+    if unit_price is None:
+        unit_price = item.selling_price if role == PartnerRole.AR else ZERO
+    tax_code_id = line.tax_code_id
+    if tax_code_id is None:
+        tax_code_id = (
+            item.default_sales_tax_code_id
+            if role == PartnerRole.AR
+            else item.default_purchase_tax_code_id
+        )
+
+    gl_account_id = line.gl_account_id
+    if gl_account_id is None:
+        if role == PartnerRole.AR:
+            gl_account_id = item.sales_account_id
+        elif item.item_type == ItemType.STOCK:
+            gl_account_id = accrual_account_id
+        else:
+            gl_account_id = item.purchase_account_id
+    return (
+        item,
+        uom.id,
+        base_quantity,
+        warehouse_id,
+        warehouse_branch_id,
+        unit_price,
+        tax_code_id,
+        gl_account_id,
+    )
+
+
 def _compute_lines(
     db: Session,
     company_id: int,
     data: DocumentInput,
     *,
+    role: PartnerRole,
     currency: Currency,
     tax_mode: TaxMode,
     settings: object,
     branch_id: int | None,
     project_id: int | None,
+    default_warehouse_id: int | None = None,
+    accrual_account_id: int | None = None,
 ) -> list[_ComputedLine]:
     """Per-line tax, half-up to the document currency's decimals (decision 11). Exclusive:
-    the entered amount is net. Inclusive: it is gross and the tax is carved out of it."""
+    the entered amount is net. Inclusive: it is gross and the tax is carved out of it.
+
+    An **item line** resolves its defaults from the catalogue first (`_resolve_item_line`) and
+    is then priced exactly like a GL line — one code path, as decision 2 asks, rather than a
+    second service that would have to agree with this one about tax forever.
+    """
     places = currency.decimal_places
     default_tax_code_id = getattr(settings, "default_tax_code_id", None)
     computed: list[_ComputedLine] = []
     for index, line in enumerate(data.lines):
+        item: Item | None = None
+        warehouse_branch_id: int | None = None
+        uom_id: int | None = None
+        base_quantity: Decimal | None = None
+        warehouse_id: int | None = None
+        unit_price = line.unit_price
+        tax_code_id = line.tax_code_id
+        gl_account_id = line.gl_account_id
+        if line.item_id is not None:
+            (
+                item,
+                uom_id,
+                base_quantity,
+                warehouse_id,
+                warehouse_branch_id,
+                unit_price,
+                tax_code_id,
+                gl_account_id,
+            ) = _resolve_item_line(
+                db,
+                company_id,
+                role,
+                index,
+                line,
+                tax_mode=tax_mode,
+                default_warehouse_id=default_warehouse_id,
+                accrual_account_id=accrual_account_id,
+            )
+        if unit_price is None:
+            raise PostingError(
+                f"Line {index + 1} has no price",
+                code="invalid_amount",
+                field_errors={f"lines.{index}.unit_price": ["required"]},
+            )
+
         gross_or_net = round_amount(
-            line.quantity * line.unit_price * (ONE - line.discount_percent / HUNDRED), places
+            line.quantity * unit_price * (ONE - line.discount_percent / HUNDRED), places
         )
         if gross_or_net <= ZERO:
             raise PostingError(
@@ -596,7 +1033,8 @@ def _compute_lines(
                 code="invalid_amount",
                 field_errors={f"lines.{index}.unit_price": ["must be positive"]},
             )
-        tax_code_id = line.tax_code_id if line.tax_code_id is not None else default_tax_code_id
+        if tax_code_id is None:
+            tax_code_id = default_tax_code_id
         net, tax = gross_or_net, ZERO
         if tax_code_id is not None:
             tax_code = resolve_tax_code(db, company_id, tax_code_id, data.document_date)
@@ -610,13 +1048,19 @@ def _compute_lines(
         computed.append(
             _ComputedLine(
                 source=line,
-                gl_account_id=line.gl_account_id,
+                gl_account_id=gl_account_id,
                 transaction_type=line.transaction_type,
                 tax_code_id=tax_code_id,
                 branch_id=line.branch_id or branch_id,
                 project_id=line.project_id or project_id,
                 net=net,
                 tax=tax,
+                item=item,
+                uom_id=uom_id,
+                base_quantity=base_quantity,
+                warehouse_id=warehouse_id,
+                unit_price=unit_price,
+                accrual_branch_id=warehouse_branch_id,
             )
         )
     return computed
@@ -708,9 +1152,23 @@ def reverse_document(
     idempotency_hash: str | None = None,
     request: Request | None = None,
 ) -> PartnerDocument:
-    """The kernel reversal plus the open-item unwind. A document that has been allocated
-    must be unallocated first — otherwise the reversal would leave the counterparty's open
-    item pointing at a document that no longer exists in the ledger."""
+    """The kernel reversal, the open-item unwind, **and the companion stock entry**.
+
+    A document that has been allocated must be unallocated first — otherwise the reversal
+    would leave the counterparty's open item pointing at a document that no longer exists in
+    the ledger.
+
+    **Both entries come back or neither does** (decision 2). A stock-bearing document posted
+    two entries; reversing only the partner side leaves the stock where it is and the accrual
+    or the inventory account holding a leg whose counterpart is gone. The property suite found
+    exactly that on a three-step sequence — receive one, return it to the supplier, reverse the
+    return — where the accrual read zero while the unreversed receipt still said one.
+
+    The companion is reversed **through the inventory service**, which opens its own
+    `module_reversal` window: this function never opens the `inv` window itself, because the
+    stock half of that reversal is the inventory module's to do and reversing the ledger alone
+    is the defect `reverse_via_module_document` exists to prevent.
+    """
     if document.status != DocumentStatus.POSTED:
         raise LedgerStateError(
             f"{document.number} was already reversed", code="document_already_reversed"
@@ -738,11 +1196,26 @@ def reverse_document(
             idempotency_key=idempotency_key,
             idempotency_hash=idempotency_hash,
         )
+    if document.stock_entry_id is not None:
+        # Its own window, opened by the inventory service — and the reversing moves are at the
+        # original values, so the two sides cancel exactly rather than re-costing at today's
+        # average and leaving a difference behind.
+        stock_service.reverse_stock_posting(
+            db,
+            document.company_id,
+            entry_id=document.stock_entry_id,
+            on_date=on_date,
+            reason=reason,
+            actor=actor,
+        )
     document.status = DocumentStatus.REVERSED
     document.reversal_entry_id = reversal.id
     document.reversed_on = on_date
     document.open_amount = ZERO
     db.flush()
+    # `matched` is a query over posted, unreversed lines, so reversing this document has
+    # already changed it. The stored status on every receipt it touched has to follow.
+    _refresh_reversed_receipts(db, document)
     audit(
         db,
         document.company_id,
@@ -1036,3 +1509,101 @@ def _replay_batch(
                     code="idempotency_key_reused",
                 )
     return rows
+
+
+def _refresh_matched_receipts(db: Session, computed: list) -> None:
+    """Bring every GRN this document touched back in line with what its lines now imply.
+
+    Decision 4 makes the GRN status a **stored workflow column written only by the order
+    service** — so the service that changes what has matched is the service that must write
+    it. Leaving it to callers meant every test and every endpoint had to remember, and
+    `verify_order_statuses()` would report drift for a posting that was otherwise perfectly
+    correct. It is a cache over a query, and the query just moved.
+    """
+    from app.order_entry import grn as grn_service
+
+    seen: set[int] = set()
+    for line in computed:
+        grn_line = getattr(line, "matched_grn_line", None)
+        if grn_line is None or grn_line.grn_id in seen:
+            continue
+        seen.add(grn_line.grn_id)
+        grn = db.get(GoodsReceivedNote, grn_line.grn_id)
+        if grn is not None:
+            grn_service.refresh_status(db, grn)
+
+
+def _refresh_reversed_receipts(db: Session, document: PartnerDocument) -> None:
+    """The reversal half of `_refresh_matched_receipts`."""
+    from app.order_entry import grn as grn_service
+
+    seen: set[int] = set()
+    for line in document.lines:
+        if line.grn_line_id is None:
+            continue
+        grn_line = db.get(GoodsReceivedNoteLine, line.grn_line_id)
+        if grn_line is None or grn_line.grn_id in seen:
+            continue
+        seen.add(grn_line.grn_id)
+        grn = db.get(GoodsReceivedNote, grn_line.grn_id)
+        if grn is not None:
+            grn_service.refresh_status(db, grn)
+
+
+def _reserve_document_id(db: Session) -> int:
+    """Take the next `partner_documents.id` before anything is written.
+
+    The same cycle-breaker `inventory_documents` uses, and for the same reason: the companion
+    stock entry's moves carry `source_doc_id` and `stock_moves` refuses UPDATE, so the id has
+    to exist before the companion posts — and the companion posts before the partner side,
+    which is what produces the number the document is finally written with.
+    """
+    return int(
+        db.execute(
+            text("SELECT nextval(pg_get_serial_sequence('partner_documents', 'id'))")
+        ).scalar_one()
+    )
+
+
+def _reserve_document_line_id(db: Session) -> int:
+    """One `partner_document_lines.id`, reserved before the companion posts. A rolled-back
+    posting burns one, which is what a sequence is for — the *document number* comes from
+    `document_sequences` and stays gapless."""
+    return int(
+        db.execute(
+            text("SELECT nextval(pg_get_serial_sequence('partner_document_lines', 'id'))")
+        ).scalar_one()
+    )
+
+
+def _booking_rate(db: Session, currency: Currency, data: DocumentInput) -> Decimal:
+    """The rate the document books at — the keyed one, or the dated one for its date."""
+    if data.exchange_rate is not None:
+        return data.exchange_rate
+    return rate_on(db, currency, data.document_date)
+
+
+def _variance_account_id(gl_settings: object) -> int:
+    """Where the difference between what was accrued and what was billed lands."""
+    account_id = getattr(gl_settings, "purchase_price_variance_account_id", None)
+    if account_id is None:
+        raise LedgerStateError(
+            "No purchase price variance account is configured — set it on Order defaults",
+            code="gl_setting_missing",
+            field_errors={"purchase_price_variance_account_id": ["required"]},
+        )
+    return int(account_id)
+
+
+def _cogs_account_id(item: Item, gl_settings: object) -> int:
+    """Where a sale's cost lands: the item's own COGS account, then the company default
+    (decision 2). A stock item that resolves to neither cannot be sold, and saying so here is
+    better than an entry that quietly charges the wrong account."""
+    account_id = item.cogs_account_id or getattr(gl_settings, "cogs_account_id", None)
+    if account_id is None:
+        raise LedgerStateError(
+            f"{item.code} has no COGS account and no company default is set",
+            code="gl_setting_missing",
+            field_errors={"cogs_account_id": ["required"]},
+        )
+    return int(account_id)

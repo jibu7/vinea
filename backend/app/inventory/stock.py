@@ -66,7 +66,13 @@ from app.kernel.money import ZERO, base_currency
 from app.kernel.periods import lock_period_for_posting
 from app.kernel.posting import gl_settings_for
 from app.kernel.sequences import DocType
-from app.models.gl import ControlType, GLAccount, GLSettings, GLTransactionType
+from app.models.gl import (
+    ITEM_REQUIRED_CONTROL_TYPES,
+    ControlType,
+    GLAccount,
+    GLSettings,
+    GLTransactionType,
+)
 from app.models.inventory import (
     INVENTORY_MODULE,
     STOCK_SEQUENCE,
@@ -478,6 +484,18 @@ class _Context:
         """Where a negative-stock cost residue lands (see `costing.residue_move`)."""
         return self._required_setting("inventory_adjustment_account_id")
 
+    def contra_requires_item(self, account_id: int | None) -> bool:
+        """Whether a line on this account must carry an item.
+
+        `inventory` has required it since P5 and `grn_accrual` joins it in P6. Both are
+        enforced by the VN008 branch of `kernel_check_subledger_line`, and this reads the same
+        constant that branch mirrors, so the engine and the database cannot come to disagree
+        about which accounts they are.
+        """
+        if account_id is None:
+            return False
+        return self.account(account_id).control_type in ITEM_REQUIRED_CONTROL_TYPES
+
     def contra_account_for(self, line: StockLine, type_id: int | None) -> int:
         if line.contra_account_id is not None:
             account_id = line.contra_account_id
@@ -596,6 +614,11 @@ class _Planned:
     cost_provisional: bool = False
     is_residue: bool = False
     journal_line_index: int | None = None
+    #: True when the contra account is itself item-required — P6's GRN accrual. Such a contra
+    #: cannot be aggregated across items: the guard that protects it (VN008) demands an item
+    #: on every line touching it, and the accrual proof is stated per GRN line. Set during
+    #: planning, where the account is in hand; read by `_line_specs`, which has only the plan.
+    contra_requires_item: bool = False
 
 
 def _plan(
@@ -676,6 +699,7 @@ def _plan(
                 value=valued.value,
                 unit_cost=valued.unit_cost,
                 cost_provisional=provisional,
+                contra_requires_item=ctx.contra_requires_item(contra_id),
             )
         )
         previous_value = valued.value
@@ -744,13 +768,24 @@ def _line_specs(document: StockDocument, planned: Sequence[_Planned]) -> list[Li
                 source_line_id=plan.line.source_line_id,
             )
         )
-    contras: dict[tuple[int, int, int | None], Decimal] = {}
+    # **An item-required contra is grouped by item as well, and carries it.** P6's GRN accrual
+    # is the first contra account that is itself a control account: VN008 demands an item on
+    # every line touching it, and the accrual proof is stated per GRN line, so an aggregate
+    # contra across two items would be refused by the database and unprovable if it were not.
+    # It costs one extra journal line on a multi-item receipt and changes nothing for any P5
+    # contra, none of which is item-required.
+    contras: dict[tuple[int, int, int | None, int | None], Decimal] = {}
     for plan in planned:
         if plan.contra_account_id is None or plan.value == ZERO:
             continue
-        key = (plan.contra_account_id, plan.warehouse.branch_id, plan.line.project_id)
+        key = (
+            plan.contra_account_id,
+            plan.warehouse.branch_id,
+            plan.line.project_id,
+            plan.item.id if plan.contra_requires_item else None,
+        )
         contras[key] = contras.get(key, ZERO) + plan.value
-    for (account_id, branch_id, project_id), total in contras.items():
+    for (account_id, branch_id, project_id, item_id), total in contras.items():
         if total == ZERO:
             continue
         specs.append(
@@ -759,6 +794,7 @@ def _line_specs(document: StockDocument, planned: Sequence[_Planned]) -> list[Li
                 gl_account_id=account_id,
                 branch_id=branch_id,
                 project_id=project_id,
+                item_id=item_id,
                 description=document.description,
                 source_doc_type=document.source_doc_type,
                 source_doc_id=document.source_doc_id,

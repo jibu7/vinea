@@ -1,0 +1,227 @@
+"""The P6 phase invariants — what must be true of order entry after every posting.
+
+The load-bearing one is the **accrual proof**: at any date, per branch, the GRN accrual
+account's balance equals the sum over GRN lines of what was received less what has been
+relieved. It is stated per branch as well as in total because a branch that received goods
+and a branch that billed for them must not net each other out into an accrual that looks
+right and is wrong in both places.
+
+`relieved` is read from `partner_document_lines.accrual_relieved` — **what was posted** — and
+never recomputed from today's quantities. A pro-rata share cannot be re-derived once one of
+its siblings is reversed: value 1 000 received over quantity 3 and matched 1 + 1 + 1 relieves
+333 + 333 + 334, and reversing the first leaves the ledger having relieved 667 where a
+recomputation over the survivors gives 666. An invariant that recomputed would disagree with
+the ledger by a franc and would blame the ledger.
+"""
+
+from collections import defaultdict
+from decimal import Decimal
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.kernel.posting import gl_settings_for
+from app.models.inventory import GoodsReceivedNote, GoodsReceivedNoteLine, GrnStatus
+from app.models.journal import JournalEntry, JournalLine, JournalStatus
+from app.models.subledger import DocumentStatus, PartnerDocument, PartnerDocumentLine
+from app.order_entry import grn as grn_service
+
+ZERO = Decimal(0)
+
+
+def _accrual_balances_by_date_and_branch(
+    db: Session, company_id: int, account_id: int
+) -> dict[tuple[object, int], Decimal]:
+    """Running accrual balance per branch, at every date anything was posted to it."""
+    rows = db.execute(
+        select(JournalEntry.entry_date, JournalLine.branch_id, JournalLine.base_amount)
+        .join(JournalEntry, JournalEntry.id == JournalLine.entry_id)
+        .where(
+            JournalLine.company_id == company_id,
+            JournalLine.gl_account_id == account_id,
+            JournalEntry.status == JournalStatus.POSTED,
+        )
+        .order_by(JournalEntry.entry_date)
+    ).all()
+    running: dict[int, Decimal] = defaultdict(lambda: ZERO)
+    out: dict[tuple[object, int], Decimal] = {}
+    for entry_date, branch_id, base_amount in rows:
+        running[branch_id] += base_amount
+        for branch, total in running.items():
+            out[(entry_date, branch)] = total
+    return out
+
+
+def _received_less_relieved(
+    db: Session, company_id: int
+) -> dict[tuple[object, int], Decimal]:
+    """Σ (received − relieved) per branch, at every date a receipt or a match happened.
+
+    Signed the way the ledger signs it: a receipt credits the accrual, so an outstanding
+    receipt is a negative balance on the account.
+    """
+    events: list[tuple[object, int, Decimal]] = []
+    # Both sides bucket by **the branch of the warehouse the goods moved through**, never by
+    # a document header's branch. The header's is derived from the warehouse and the two
+    # cannot disagree, but the *invoice* that relieves an accrual may be keyed anywhere, and
+    # bucketing its relief by its own branch is exactly the drift this clause exists to catch.
+    from app.models.inventory import Warehouse
+
+    grn_rows = db.execute(
+        select(
+            GoodsReceivedNote.grn_date,
+            Warehouse.branch_id,
+            GoodsReceivedNoteLine.value,
+            GoodsReceivedNote.status,
+            GoodsReceivedNote.reversed_on,
+        )
+        .join(GoodsReceivedNoteLine, GoodsReceivedNoteLine.grn_id == GoodsReceivedNote.id)
+        .join(Warehouse, Warehouse.id == GoodsReceivedNoteLine.warehouse_id)
+        .where(GoodsReceivedNote.company_id == company_id)
+    ).all()
+    for grn_date, branch_id, value, status, reversed_on in grn_rows:
+        events.append((grn_date, branch_id, -value))
+        if status == GrnStatus.REVERSED and reversed_on is not None:
+            events.append((reversed_on, branch_id, value))
+
+    match_rows = db.execute(
+        select(
+            PartnerDocument.document_date,
+            Warehouse.branch_id,
+            PartnerDocumentLine.accrual_relieved,
+        )
+        .join(PartnerDocument, PartnerDocument.id == PartnerDocumentLine.document_id)
+        .join(
+            GoodsReceivedNoteLine,
+            GoodsReceivedNoteLine.id == PartnerDocumentLine.grn_line_id,
+        )
+        .join(Warehouse, Warehouse.id == GoodsReceivedNoteLine.warehouse_id)
+        .where(
+            PartnerDocumentLine.company_id == company_id,
+            PartnerDocumentLine.accrual_relieved.is_not(None),
+            PartnerDocument.status == DocumentStatus.POSTED,
+        )
+    ).all()
+    for document_date, branch_id, relieved in match_rows:
+        events.append((document_date, branch_id, relieved))
+
+    events.sort(key=lambda event: event[0])
+    running: dict[int, Decimal] = defaultdict(lambda: ZERO)
+    out: dict[tuple[object, int], Decimal] = {}
+    for event_date, branch_id, amount in events:
+        running[branch_id] += amount
+        for branch, total in running.items():
+            out[(event_date, branch)] = total
+    return out
+
+
+def assert_order_invariants(db: Session, company_id: int) -> None:
+    """1. The GRN accrual account's balance equals Σ (received − relieved), per branch, at
+          every date on which either moved.
+       2. `matched <= received` on every GRN line.
+       3. Every stock-bearing partner document has exactly one companion whose keyed moves
+          correspond one-for-one with its stock lines — or none, when no stock line carried
+          value.
+       4. A matched line carries a relieved amount and no stock move; an unmatched stock line
+          carries a move and no relieved amount.
+       5. `verify_order_statuses()` reports no drift between the stored GRN status and the
+          state its lines actually imply.
+    """
+    settings = gl_settings_for(db, company_id)
+    accrual_account_id = settings.grn_accrual_account_id
+
+    # 1. The accrual proof.
+    if accrual_account_id is not None:
+        ledger = _accrual_balances_by_date_and_branch(db, company_id, accrual_account_id)
+        derived = _received_less_relieved(db, company_id)
+        for key, expected in derived.items():
+            actual = ledger.get(key, ZERO)
+            assert actual == expected, (
+                f"accrual drift at {key[0]} branch {key[1]}: the account says {actual}, "
+                f"receipts less reliefs say {expected}"
+            )
+
+    # 2. Nothing is matched beyond what arrived.
+    grn_lines = list(
+        db.scalars(
+            select(GoodsReceivedNoteLine).where(
+                GoodsReceivedNoteLine.company_id == company_id
+            )
+        )
+    )
+    matched = grn_service.matched_quantities(
+        db, company_id, [line.id for line in grn_lines]
+    )
+    for line in grn_lines:
+        done = matched.get(line.id, ZERO)
+        assert done <= line.base_quantity, (
+            f"GRN line {line.id} received {line.base_quantity} and matched {done}"
+        )
+
+    # 3 and 4. The companion, and what a matched line is allowed to be.
+    from app.models.inventory import StockMove
+
+    documents = list(
+        db.scalars(
+            select(PartnerDocument).where(
+                PartnerDocument.company_id == company_id,
+                PartnerDocument.status == DocumentStatus.POSTED,
+            )
+        )
+    )
+    for document in documents:
+        stock_lines = [
+            line
+            for line in document.lines
+            if line.item_id is not None and line.grn_line_id is None and line.warehouse_id
+        ]
+        moves = (
+            list(
+                db.scalars(
+                    select(StockMove).where(
+                        StockMove.company_id == company_id,
+                        StockMove.journal_entry_id == document.stock_entry_id,
+                    )
+                )
+            )
+            if document.stock_entry_id is not None
+            else []
+        )
+        keyed = [move for move in moves if move.source_line_id is not None]
+        if document.stock_entry_id is not None:
+            assert len(keyed) == len(stock_lines), (
+                f"{document.number}: {len(stock_lines)} stock lines but {len(keyed)} keyed "
+                "moves on its companion"
+            )
+            assert {move.source_line_id for move in keyed} == {
+                line.id for line in stock_lines
+            }, f"{document.number}: companion moves do not correspond to its stock lines"
+        for line in document.lines:
+            if line.grn_line_id is not None:
+                assert line.accrual_relieved is not None, (
+                    f"{document.number} line {line.line_no} matched a GRN and relieved nothing"
+                )
+
+    # 5. The stored workflow column against the state the lines imply.
+    drift = verify_order_statuses(db, company_id)
+    assert not drift, f"order status drift: {drift[:3]}"
+
+
+def verify_order_statuses(db: Session, company_id: int) -> list[str]:
+    """Every GRN whose stored status disagrees with what its lines imply.
+
+    The `open_amount` pattern P4 set: the column is a convenience for filtering and the query
+    is the truth, and this is the check that keeps them honest. Returns descriptions rather
+    than raising, so a report can show the drift instead of only failing on it.
+    """
+    drift: list[str] = []
+    for grn in db.scalars(
+        select(GoodsReceivedNote).where(GoodsReceivedNote.company_id == company_id)
+    ):
+        matched = grn_service.matched_quantities(
+            db, company_id, [line.id for line in grn.lines]
+        )
+        expected = grn_service.derived_status(grn, matched)
+        if grn.status != expected:
+            drift.append(f"{grn.number}: stored {grn.status}, derived {expected}")
+    return drift

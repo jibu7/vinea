@@ -60,14 +60,18 @@ class DocType(enum.StrEnum):
     # because the two entries are two postings and an auditor following either run must not
     # find a hole where the other one was.
     #
-    # `SO`, `PO`, `GRN` and `LCA` are **not** here yet, deliberately. A doc type with no
+    # `SO`, `PO` and `LCA` are **not** here yet, deliberately. A doc type with no
     # claimant fails `test_every_doc_type_registers_a_claimant`, and a claimant naming a table
     # that does not exist fails `test_every_claimant_names_a_real_table_and_column` — so a run
     # enters this enum in the same commit as the table that holds its numbers, which is the
-    # step that creates `sales_orders`, `purchase_orders`, `goods_received_notes` and
-    # `landed_cost_documents`. `STK` can be here now only because its claimant is
-    # `journal_entries`, which has existed since P2.
+    # step that creates `sales_orders`, `purchase_orders` and `landed_cost_documents`.
+    # `STK` could be here at step 1 because its claimant is `journal_entries`, which has
+    # existed since P2; `GRN` arrives here with the table that holds its numbers.
     STOCK_COMPANION = "STK"
+    #: A goods receipt. The GRN *is* the stock document, so its entry takes this number —
+    #: and a receipt whose every line cost nothing posts no entry at all and holds the
+    #: number itself, which is why this run registers two claimants (decision 6).
+    GOODS_RECEIVED = "GRN"
 
 
 DEFAULT_PREFIXES: dict[str, str] = {
@@ -91,6 +95,7 @@ DEFAULT_PREFIXES: dict[str, str] = {
     DocType.INV_COUNT: "CNT-",
     DocType.INV_COUNT_SESSION: "CNS-",
     DocType.STOCK_COMPANION: "STK-",
+    DocType.GOODS_RECEIVED: "GRN-",
 }
 
 
@@ -135,6 +140,12 @@ _VALUELESS_TRANSFER = SequenceClaimant(
 #: A count sheet is nameable from the moment it is opened and may never post at all, so it
 #: has a run of its own rather than consuming a posting number (P5 decision 7).
 _COUNT_SHEET = SequenceClaimant(table="stock_count_sessions")
+#: A goods receipt whose every line was received at zero cost: quantity moved, the ledger had
+#: nothing to record, and the number is the GRN's own. The same case as a valueless stock
+#: document, one table along.
+_VALUELESS_GRN = SequenceClaimant(
+    table="goods_received_notes", where="journal_entry_id IS NULL"
+)
 #: An allocation is numbered whether or not it posts anything: the realized FX and settlement
 #: discount it may produce are a *different* run (`ALJ-`), so `ALC-` belongs to this table
 #: alone (P4).
@@ -170,6 +181,7 @@ SEQUENCE_CLAIMANTS: dict[str, tuple[SequenceClaimant, ...]] = {
     # The companion entry is always an entry — a stock line with no value posts no companion
     # at all and claims no number — so `_ENTRY` is its only claimant (decision 2).
     DocType.STOCK_COMPANION: (_ENTRY,),
+    DocType.GOODS_RECEIVED: (_ENTRY, _VALUELESS_GRN),
 }
 
 
