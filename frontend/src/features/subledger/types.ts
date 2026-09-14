@@ -298,6 +298,51 @@ export interface PartnerDocument {
   status: string;
 }
 
+/** One line of a posted document, as the detail screen shows it. */
+export interface PartnerDocumentLine {
+  id: number;
+  line_no: number;
+  description: string | null;
+  quantity: string;
+  unit_price: string;
+  discount_percent: string;
+  gl_account_id: number;
+  tax_code_id: number | null;
+  branch_id: number;
+  project_id: number | null;
+  net_amount: string;
+  tax_amount: string;
+  gross_amount: string;
+}
+
+/**
+ * What `GET /subledger/{role}/documents/{id}` returns — the header, its lines and both ends
+ * of the reversal link. `PartnerDocument` above is the thinner body a *post* replies with;
+ * this is the shape the document detail screen reads.
+ */
+export interface PartnerDocumentDetail extends PartnerDocument {
+  transaction_type: string;
+  doc_type: string;
+  branch_id: number;
+  project_id: number | null;
+  payment_terms_id: number | null;
+  sales_rep_id: number | null;
+  tax_mode: string;
+  control_account_id: number;
+  reference: string | null;
+  description: string;
+  net_amount: string;
+  tax_amount: string;
+  base_total_amount: string;
+  instrument_type: string | null;
+  maturity_date: string | null;
+  cash_account_id: number | null;
+  matured_entry_id: number | null;
+  reversal_entry_id: number | null;
+  reversed_on: string | null;
+  lines: PartnerDocumentLine[];
+}
+
 // --- Allocation -----------------------------------------------------------------------------
 
 export interface OpenItem {
@@ -531,6 +576,10 @@ export interface AllocationRecord {
   amount: string;
   discount_amount: string;
   fx_base_amount: string;
+  /** Set when this row *is* the mirror of an earlier allocation — not itself unallocatable. */
+  reverses_allocation_id: number | null;
+  /** Set when an unallocation already mirrors this one. */
+  is_reversed: boolean;
 }
 
 export interface DocumentSummary {

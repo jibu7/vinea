@@ -572,6 +572,11 @@ class PartnerAllocationRead(BaseModel):
     amount: Decimal
     discount_amount: Decimal
     fx_base_amount: Decimal
+    #: Set when this row *is* the mirror of an earlier allocation. Such a row is not itself
+    #: unallocatable — `cannot_reverse_a_reversal` — and the screen greys the action.
+    reverses_allocation_id: int | None = None
+    #: Set when an unallocation already mirrors this one (`allocation_already_reversed`).
+    is_reversed: bool = False
 
 
 class PendingInstrumentRead(ApiModel):

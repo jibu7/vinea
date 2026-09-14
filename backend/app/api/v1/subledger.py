@@ -17,7 +17,7 @@ from app.kernel.posting import gl_settings_for
 from app.models.audit import AuditLog
 from app.models.job import JobStatus
 from app.models.partner import PartnerRole
-from app.models.subledger import Allocation, DocumentKind, PartnerDocument
+from app.models.subledger import Allocation, DocumentKind, DocumentStatus, PartnerDocument
 from app.schemas.common import Page
 from app.schemas.subledger import (
     AgeingBucketAmount,
@@ -720,6 +720,7 @@ def list_documents(
     role: PartnerRole = RolePath,
     partner_id: int | None = None,
     kind: DocumentKind | None = None,
+    status: DocumentStatus | None = None,
     date_from: date | None = None,
     date_to: date | None = None,
     open_only: bool = False,
@@ -735,6 +736,7 @@ def list_documents(
         role=role,
         partner_id=partner_id,
         kind=kind,
+        status=status,
         date_from=date_from,
         date_to=date_to,
         open_only=open_only,
@@ -1015,6 +1017,7 @@ def _allocation_read(db: Session, allocation: Allocation) -> AllocationRead:
 def list_allocations(
     role: PartnerRole = RolePath,
     partner_id: int | None = None,
+    document_id: int | None = None,
     date_from: date | None = None,
     date_to: date | None = None,
     auth: AuthContext = Depends(get_tenant_context),
@@ -1026,6 +1029,7 @@ def list_allocations(
         auth.company_id,
         role,
         partner_id=partner_id,
+        document_id=document_id,
         date_from=date_from,
         date_to=date_to,
     )
@@ -1044,6 +1048,8 @@ def list_allocations(
             amount=entry.line.amount,
             discount_amount=entry.line.discount_amount,
             fx_base_amount=entry.line.fx_base_amount,
+            reverses_allocation_id=entry.allocation.reverses_allocation_id,
+            is_reversed=entry.is_reversed,
         )
         for entry in entries
     ]

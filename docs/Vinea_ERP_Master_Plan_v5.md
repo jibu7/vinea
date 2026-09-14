@@ -367,8 +367,8 @@ The owner's original menu ordering (software_interface docx) is **adopted as the
 | Maintenance → Inventory | Items, Warehouses, Trans types, Variable barcodes, UoM categories, Defaults, Rename Item Code | P5 |
 | Maintenance → Order entry / BOM / POS | Order defaults / BOM items+defaults / Tills+types+defaults | P6 / P12 / P11 |
 | Transactions → GL | Cashbook batches, Journal batches | P2 (banking depth P8) |
-| Transactions → AR | Credit note, Invoice, Receipt (C.1.5), AR batches; Sales order | P4; SO in P6 |
-| Transactions → AP *(mislabeled "Account Receivable" in spec — see C.1)* | GRV, Purchase order (both P6 — see C.1.5), Supplier invoice, Return to supplier, Payment, AP batches | P4 · P6 |
+| Transactions → AR | Credit note, Invoice, Receipt (C.1.5), AR batches, Documents (C.1.7); Sales order | P4; SO in P6 |
+| Transactions → AP *(mislabeled "Account Receivable" in spec — see C.1)* | GRV, Purchase order (both P6 — see C.1.5), Supplier invoice, Return to supplier, Payment, AP batches, Documents (C.1.7) | P4 · P6 |
 | Transactions → Inventory | Journal batches, Transfers, Adjustments, Counts, Documents (C.1.7) (+ CN/GRV/Invoice/RTS stock impacts) | P5 (impacts via P4/P6 events) |
 | Transactions → OE | Purchase order, **Breakup** | P6 (breakup = kit explosion) |
 | Transactions → BOM / POS | Manufacture process, Breakup / Sales, Returns, Transaction | P12 / P11 |
@@ -397,7 +397,9 @@ The owner's original menu ordering (software_interface docx) is **adopted as the
 
    Same shape of hole as C.1.6's post-dated instruments, and the same answer: the tree gains the screen that closes it.
 
-   **The same hole is open in AR and AP, one phase older and twice over**, and closing it is the first work after P5 rather than a backlog line. `POST /subledger/{role}/documents/{id}/reverse` and `POST /subledger/{role}/allocations/{id}/unallocate` both exist and neither has a caller anywhere in the frontend, and there is no `/ar/documents/{id}` route to put one on — P4 shipped capture screens, an enquiry and the reports, and no document detail. An invoice posted in error, or an allocation made against the wrong invoice, is uncorrectable by anybody using the product. The remedy is `/ar/documents` and `/ap/documents` with a detail screen carrying Reverse, and Unallocate on the allocation screen, on the pattern `/inventory/documents` now sets.
+   **The same hole was open in AR and AP, one phase older and twice over**, and closing it was the first work after P5 rather than a backlog line. `POST /subledger/{role}/documents/{id}/reverse` and `POST /subledger/{role}/allocations/{id}/unallocate` both existed and neither had a caller anywhere in the frontend, and there was no `/ar/documents/{id}` route to put one on — P4 shipped capture screens, an enquiry and the reports, and no document detail. An invoice posted in error, or an allocation made against the wrong invoice, was uncorrectable by anybody using the product.
+
+   **Closed before P6 step 1.** The nav adds **"Documents"** under Transactions → AR and → AP, last in each module's block, in the position its inventory counterpart holds. `/ar/documents` and `/ap/documents` list every posted partner document — type, account, total, open amount and status, with type and status filters — and `/{role}/documents/{id}` carries the header, the lines, the allocations against the document and both corrections: **Reverse** under `ar:transactions_post` / `ap:transactions_post`, and **Unallocate** on each allocation row. The allocations section is where Unallocate landed rather than the capture screen at `/{role}/allocations/new`: that screen builds a *new* allocation and has no posted one in front of it, whereas the question "this receipt went against the wrong invoice" is asked while looking at the document. Each row reports whether it has already been unallocated or is itself an unallocation, because the service refuses both and a button whose only outcome is an error is the dead end rule 13 is about. The GL entry page's module link, which had been hardcoded to `/inventory/documents`, now resolves per module and lands AR and AP entries on their own detail. Both `NO_UI` exemptions are gone, so `test_api_has_a_caller.py` is what holds these callers in place.
 
 ### C.2 Additions layered onto the owner's tree (post-spec decisions)
 

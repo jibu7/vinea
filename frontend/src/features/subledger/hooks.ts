@@ -19,6 +19,7 @@ import type {
   BatchResult,
   DocumentCreatePayload,
   PartnerDocument,
+  PartnerDocumentDetail,
   PartnerEnquiry,
   AgeingBucketSetCreatePayload,
   AgeingBucketSetUpdatePayload,
@@ -368,11 +369,15 @@ export function useAgeing(
   });
 }
 
-export function useAllocations(role: PartnerRole, params: { partnerId?: number } = {}) {
+export function useAllocations(
+  role: PartnerRole,
+  params: { partnerId?: number; documentId?: number } = {},
+) {
   const search = new URLSearchParams();
   if (params.partnerId) search.set("partner_id", String(params.partnerId));
+  if (params.documentId) search.set("document_id", String(params.documentId));
   return useQuery({
-    queryKey: [ROOT, role, "allocations", params.partnerId ?? null],
+    queryKey: [ROOT, role, "allocations", params.partnerId ?? null, params.documentId ?? null],
     queryFn: () => api.get<AllocationRecord[]>(`/subledger/${role}/allocations?${search}`),
   });
 }
@@ -380,16 +385,90 @@ export function useAllocations(role: PartnerRole, params: { partnerId?: number }
 /** Server pagination: the cursor is the last id of the previous page, never an offset. */
 export function useDocumentPage(
   role: PartnerRole,
-  params: { cursor?: number | null; dateFrom?: string; dateTo?: string; partnerId?: number },
+  params: {
+    cursor?: number | null;
+    dateFrom?: string;
+    dateTo?: string;
+    partnerId?: number;
+    kind?: string;
+    status?: string;
+  },
 ) {
   const search = new URLSearchParams();
   if (params.cursor) search.set("cursor", String(params.cursor));
   if (params.dateFrom) search.set("date_from", params.dateFrom);
   if (params.dateTo) search.set("date_to", params.dateTo);
   if (params.partnerId) search.set("partner_id", String(params.partnerId));
+  if (params.kind) search.set("kind", params.kind);
+  if (params.status) search.set("status", params.status);
   return useQuery({
     queryKey: [ROOT, role, "documents", params],
     queryFn: () => api.get<Page<DocumentSummary>>(`/subledger/${role}/documents?${search}`),
+  });
+}
+
+/** One posted document with its lines — the document detail screen's query. */
+export function useDocument(role: PartnerRole, documentId: number | null) {
+  return useQuery({
+    queryKey: [ROOT, role, "document", documentId],
+    queryFn: () => api.get<PartnerDocumentDetail>(`/subledger/${role}/documents/${documentId}`),
+    enabled: documentId !== null,
+  });
+}
+
+/**
+ * Reverse a posted AR/AP document.
+ *
+ * **The correction path, and the only one.** A partner document's reversal is the kernel
+ * reversal *plus* the open item it raised being withdrawn, and only this service does both —
+ * the general ledger's own Reverse is refused for a module-owned entry
+ * (`reverse_via_module_document`) precisely because it would do the first half alone and
+ * leave `SUM(open items) == control balance` quietly broken. P4 shipped this endpoint with no
+ * caller anywhere in the frontend, so an invoice posted in error was uncorrectable by anybody
+ * using the product; this hook is what closes that.
+ */
+export function useReverseDocument(role: PartnerRole) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      documentId,
+      payload,
+    }: {
+      documentId: number;
+      payload: { on_date: string; reason: string };
+    }) =>
+      api.post<PartnerDocumentDetail>(
+        `/subledger/${role}/documents/${documentId}/reverse`,
+        payload,
+      ),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: [ROOT] }),
+  });
+}
+
+/**
+ * Undo an allocation: a mirror allocation with negated lines, which puts the open amounts
+ * back on both documents. Idempotent on a draft UUID like every other posting in the product,
+ * so a retried click replays instead of unallocating twice — and the service refuses a second
+ * one anyway (`allocation_already_reversed`).
+ */
+export function useUnallocate(role: PartnerRole) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      allocationId,
+      payload,
+      idempotencyKey,
+    }: {
+      allocationId: number;
+      payload: { on_date: string; reason: string };
+      idempotencyKey: string;
+    }) =>
+      api.post<Allocation>(
+        `/subledger/${role}/allocations/${allocationId}/unallocate`,
+        payload,
+        { "Idempotency-Key": idempotencyKey },
+      ),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: [ROOT] }),
   });
 }
 
