@@ -126,8 +126,22 @@ def post_companion(
             # face COGS, so the contra is the item's COGS account either way.
             contra = cogs_account_id_for(line.item)
             unit_cost = None
-            if kind == DocumentKind.CREDIT_NOTE and line.source.returns_line_id is not None:
-                unit_cost = _issued_unit_cost(db, company_id, line.source.returns_line_id)
+            if kind == DocumentKind.CREDIT_NOTE:
+                # Decision 2: a return comes back at the cost the line it returns was issued
+                # at, **or at the current average** when it names no such line. The second
+                # half is not a fallback for tidiness — `receive_stock` refuses a receipt with
+                # no unit cost, so a credit note raised without `returns_line_id` (a goodwill
+                # credit, a return nobody could tie to an invoice) would simply not post. The
+                # property suite found exactly that, on its first pass.
+                unit_cost = (
+                    _issued_unit_cost(db, company_id, line.source.returns_line_id)
+                    if line.source.returns_line_id is not None
+                    else None
+                )
+                if unit_cost is None:
+                    unit_cost = stock_service.item_state(
+                        db, company_id, line.item.id
+                    ).average
         else:
             # Both AP cases face the accrual: an unmatched purchase credits it as the goods
             # arrive, a return to supplier debits it as they go back.

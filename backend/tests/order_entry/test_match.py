@@ -152,3 +152,46 @@ def test_a_matched_receipt_refuses_reversal(db: Session, order_entry: OrderEntry
         )
 
     assert error.value.code == "grn_matched"
+
+
+def test_a_return_to_supplier_debits_the_accrual_at_the_issued_cost(
+    db: Session, order_entry: OrderEntry
+) -> None:
+    """The fourth row of decision 2's posting map.
+
+    Goods go back: the stock side issues them at the **average**, because that is what they
+    cost us, and the accrual is debited for exactly that. The supplier is credited with what
+    we are *claiming* — the price we are asking back — and the difference between the two is
+    purchase price variance, the same account a price movement on the way in lands in.
+    """
+    _receive(db, order_entry, "10", "1000")
+
+    debit_note, _ = documents_service.post_document(
+        db,
+        order_entry.company_id,
+        PartnerRole.AP,
+        documents_service.DocumentInput(
+            kind=DocumentKind.CREDIT_NOTE,
+            partner_id=order_entry.supplier.id,
+            document_date=MARCH,
+            description="Five returned as cracked",
+            lines=(
+                documents_service.LineInput(
+                    item_id=order_entry.stock_item.id,
+                    quantity=Decimal(5),
+                    unit_price=Decimal(1_020),
+                    warehouse_id=order_entry.main.id,
+                ),
+            ),
+        ),
+        actor=order_entry.owner,
+    )
+
+    # Companion: the goods leave at the 1,000 average, against the accrual.
+    companion = _amounts(db, order_entry, debit_note.stock_entry_id)
+    assert companion["1300"] == Decimal(-5_000), "stock leaves at what it cost"
+    assert companion["2350"] == Decimal(5_000), "the accrual takes it back"
+
+    # Partner side: the supplier is credited with the 5,100 claimed.
+    partner = _amounts(db, order_entry, debit_note.journal_entry_id)
+    assert partner["2100"] == Decimal(5_100)

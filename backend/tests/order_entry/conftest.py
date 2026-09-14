@@ -16,7 +16,7 @@ from app.models.partner import Partner
 from app.models.user import User
 from app.subledger import masters as partner_masters
 from tests.inventory.conftest import Inventory, build_inventory
-from tests.kernel.conftest import YEAR, Ledger
+from tests.kernel.conftest import YEAR, Ledger, build_ledger
 from tests.kernel.conftest import ledger as ledger  # noqa: PLC0414 - re-exported fixture
 
 MARCH = date(YEAR, 3, 10)
@@ -59,7 +59,26 @@ class OrderEntry:
 
 @pytest.fixture
 def order_entry(db: Session, ledger: Ledger) -> OrderEntry:
-    inventory = build_inventory(db, ledger)
+    return _build(db, build_inventory(db, ledger))
+
+
+def build_order_entry(db: Session, tag: str) -> OrderEntry:
+    """A tenant of its own, for the property tests.
+
+    Hypothesis reuses a function-scoped fixture across every example it draws, so a suite
+    asserted after every step would re-examine an ever-growing history and cost O(examples²).
+    A tenant per example bounds each one to its own steps — the reasoning P5's `fresh_stock`
+    wrote down, and the same shape.
+    """
+    ledger = build_ledger(
+        db,
+        company_name=f"Rugari Wines Ltd {tag}",
+        email=f"owner+{tag}@rugari.example",
+    )
+    return _build(db, build_inventory(db, ledger))
+
+
+def _build(db: Session, inventory: Inventory) -> OrderEntry:
     company_id = inventory.company_id
     accounts = {
         row.code: row

@@ -1,0 +1,329 @@
+"""The compounding-error property for order entry (P6 step 2).
+
+One Hypothesis machine drives a *random sequence* of goods receipts, partial matches, direct
+item invoices, customer returns, supplier returns and reversals, and asserts the whole of the
+ledger, subledger, stock **and** order invariant suites after every single step.
+
+Checking only the end state hides an error that one operation introduces and the next one
+masks — and the accrual is exactly the sort of account where that happens, because a receipt
+and a match move it in opposite directions and a wrong share in one can be cancelled by a
+wrong share in the other.
+
+It runs twice, against a base currency with **no** minor unit (RWF) and one with **two**
+(USD), because the pro-rata relief rounds differently at each and the "last match takes the
+remainder" rule is precisely what absorbs the difference.
+
+**The 1000-over-3 case is generated deliberately**, not left to chance. A receipt of three
+units worth 1 000 matched one unit at a time relieves 333 + 333 + 334, and reversing the first
+leaves the ledger having relieved 667 where a recomputation over the survivors gives 666. A
+generator drawing quantities independently would essentially never produce a receipt whose
+value does not divide by its quantity *and* three separate single-unit matches against it, so
+the shape that forced `accrual_relieved` to be a stored column is written out as its own
+example rather than hoped for.
+
+Illegal steps are skipped rather than failed — matching more than was received, reversing what
+is already reversed, issuing what is not there under `block`. The property under test is the
+invariant suite, not the plumbing.
+
+Both machines carry `@pytest.mark.slow`, which is how the nightly deep workflow selects them.
+"""
+
+import itertools
+from decimal import Decimal
+
+import pytest
+from hypothesis import given
+from hypothesis import strategies as st
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.kernel.errors import LedgerStateError, PostingError
+from app.models.currency import Currency
+from app.models.inventory import GrnStatus
+from app.models.partner import PartnerRole
+from app.models.subledger import DocumentKind, DocumentStatus, PartnerDocument
+from app.order_entry import grn as grn_service
+from app.subledger import documents as documents_service
+from tests.inventory.invariants import assert_stock_invariants
+from tests.kernel.invariants import assert_ledger_invariants
+from tests.order_entry.conftest import MARCH, OrderEntry, build_order_entry
+from tests.order_entry.invariants import assert_order_invariants
+from tests.subledger.invariants import assert_subledger_invariants
+
+_EXAMPLE = itertools.count()
+ZERO = Decimal(0)
+
+OPERATIONS = ("receive", "match", "sell", "return_in", "return_out", "reverse")
+
+QUANTITIES = st.integers(min_value=1, max_value=40).map(Decimal)
+COSTS = st.decimals(min_value=Decimal("1"), max_value=Decimal("2000"), places=2)
+
+PLAN = st.lists(
+    st.tuples(
+        st.sampled_from(OPERATIONS),
+        QUANTITIES,
+        COSTS,
+        st.integers(min_value=0, max_value=20),  # which GRN line / document to act on
+    ),
+    min_size=1,
+    max_size=10,
+)
+
+
+def _assert_everything(db: Session, company_id: int) -> None:
+    assert_ledger_invariants(db, company_id)
+    assert_subledger_invariants(db, company_id)
+    assert_stock_invariants(db, company_id)
+    assert_order_invariants(db, company_id)
+
+
+def _grn_lines(db: Session, fixture: OrderEntry) -> list:
+    out = []
+    for grn in db.scalars(
+        select(grn_service.GoodsReceivedNote).where(
+            grn_service.GoodsReceivedNote.company_id == fixture.company_id
+        )
+    ):
+        if grn.status != GrnStatus.REVERSED:
+            out.extend(grn.lines)
+    return out
+
+
+def _documents(db: Session, fixture: OrderEntry) -> list[PartnerDocument]:
+    return list(
+        db.scalars(
+            select(PartnerDocument).where(
+                PartnerDocument.company_id == fixture.company_id,
+                PartnerDocument.status == DocumentStatus.POSTED,
+            )
+        )
+    )
+
+
+def _step(db: Session, fixture: OrderEntry, operation: str, quantity, cost, pick: int) -> None:
+    """One operation, or nothing when the draw does not describe a legal one."""
+    if operation == "receive":
+        grn_service.post_grn(
+            db,
+            fixture.company_id,
+            grn_service.GrnInput(
+                partner_id=fixture.supplier.id,
+                grn_date=MARCH,
+                description="Receipt",
+                warehouse_id=fixture.main.id,
+                lines=(
+                    grn_service.GrnLineInput(
+                        item_id=fixture.stock_item.id, quantity=quantity, unit_cost=cost
+                    ),
+                ),
+            ),
+            actor=fixture.owner,
+        )
+        return
+
+    if operation == "match":
+        lines = _grn_lines(db, fixture)
+        if not lines:
+            return
+        line = lines[pick % len(lines)]
+        already = grn_service.matched_quantities(db, fixture.company_id, [line.id]).get(
+            line.id, ZERO
+        )
+        remaining = line.base_quantity - already
+        if remaining <= ZERO:
+            return
+        documents_service.post_document(
+            db,
+            fixture.company_id,
+            PartnerRole.AP,
+            documents_service.DocumentInput(
+                kind=DocumentKind.INVOICE,
+                partner_id=fixture.supplier.id,
+                document_date=MARCH,
+                description="Supplier invoice",
+                lines=(
+                    documents_service.LineInput(
+                        item_id=fixture.stock_item.id,
+                        quantity=min(quantity, remaining),
+                        unit_price=cost,
+                        grn_line_id=line.id,
+                    ),
+                ),
+            ),
+            actor=fixture.owner,
+        )
+        return
+
+    if operation in ("sell", "return_in"):
+        documents_service.post_document(
+            db,
+            fixture.company_id,
+            PartnerRole.AR,
+            documents_service.DocumentInput(
+                kind=DocumentKind.INVOICE if operation == "sell" else DocumentKind.CREDIT_NOTE,
+                partner_id=fixture.customer.id,
+                document_date=MARCH,
+                description="Sale" if operation == "sell" else "Return",
+                lines=(
+                    documents_service.LineInput(
+                        item_id=fixture.stock_item.id,
+                        quantity=quantity,
+                        unit_price=cost,
+                        warehouse_id=fixture.main.id,
+                    ),
+                ),
+            ),
+            actor=fixture.owner,
+        )
+        return
+
+    if operation == "return_out":
+        documents_service.post_document(
+            db,
+            fixture.company_id,
+            PartnerRole.AP,
+            documents_service.DocumentInput(
+                kind=DocumentKind.CREDIT_NOTE,
+                partner_id=fixture.supplier.id,
+                document_date=MARCH,
+                description="Return to supplier",
+                lines=(
+                    documents_service.LineInput(
+                        item_id=fixture.stock_item.id,
+                        quantity=quantity,
+                        unit_price=cost,
+                        warehouse_id=fixture.main.id,
+                    ),
+                ),
+            ),
+            actor=fixture.owner,
+        )
+        return
+
+    if operation == "reverse":
+        documents = _documents(db, fixture)
+        if not documents:
+            return
+        document = documents[pick % len(documents)]
+        documents_service.reverse_document(
+            db, document, on_date=MARCH, reason="Property reversal", actor=fixture.owner
+        )
+
+
+def _drive(db: Session, fixture: OrderEntry, plan: list[tuple]) -> None:
+    _assert_everything(db, fixture.company_id)
+    for operation, quantity, cost, pick in plan:
+        try:
+            _step(db, fixture, operation, quantity, Decimal(cost), pick)
+        except (LedgerStateError, PostingError):
+            # An illegal step for the state we are in: matched beyond the receipt, issued
+            # what is not there, reversed what is already reversed. Skipped, not failed.
+            #
+            # **No rollback**, deliberately — every one of these services refuses before it
+            # writes, so there is nothing to undo, and rolling back here would discard the
+            # tenant itself: the company, its partners and its items were created in this same
+            # transaction, and the next step would fail looking for a supplier that no longer
+            # existed. That is what it did before this comment was written.
+            continue
+        for grn in db.scalars(
+            select(grn_service.GoodsReceivedNote).where(
+                grn_service.GoodsReceivedNote.company_id == fixture.company_id
+            )
+        ):
+            grn_service.refresh_status(db, grn)
+        db.flush()
+        _assert_everything(db, fixture.company_id)
+
+
+@pytest.mark.slow
+@given(plan=PLAN)
+def test_the_invariants_hold_after_every_step_at_zero_decimals(
+    db: Session, plan: list[tuple]
+) -> None:
+    """RWF: no minor unit, so every pro-rata relief rounds by up to half a franc and the
+    "last match takes the remainder" rule is doing the most work it ever does."""
+    _drive(db, build_order_entry(db, f"oe-rwf-{next(_EXAMPLE)}"), plan)
+
+
+@pytest.mark.slow
+@given(plan=PLAN)
+def test_the_invariants_hold_after_every_step_at_two_decimals(
+    db: Session, plan: list[tuple]
+) -> None:
+    """The same machine against a base currency with a minor unit."""
+    fixture = build_order_entry(db, f"oe-usd-{next(_EXAMPLE)}")
+    _use_a_two_decimal_base(db, fixture)
+    _drive(db, fixture, plan)
+
+
+def _use_a_two_decimal_base(db: Session, fixture: OrderEntry) -> None:
+    base = db.scalar(
+        select(Currency).where(
+            Currency.company_id == fixture.company_id, Currency.is_base.is_(True)
+        )
+    )
+    base.decimal_places = 2
+    db.flush()
+
+
+def test_the_1000_over_3_reversal_ties_out(db: Session, order_entry: OrderEntry) -> None:
+    """The shape a generator would never draw, written out.
+
+    Three units worth 1 000 relieve 333 + 333 + 334. Reverse the first and the ledger has
+    relieved 667 where a recomputation over the survivors gives 666 — the franc that makes
+    `accrual_relieved` a stored column rather than a derived one.
+    """
+    grn, _ = grn_service.post_grn(
+        db,
+        order_entry.company_id,
+        grn_service.GrnInput(
+            partner_id=order_entry.supplier.id,
+            grn_date=MARCH,
+            description="Three units worth a thousand",
+            warehouse_id=order_entry.main.id,
+            lines=(
+                grn_service.GrnLineInput(
+                    item_id=order_entry.stock_item.id,
+                    quantity=Decimal(3),
+                    unit_cost=Decimal("333.333333"),
+                ),
+            ),
+        ),
+        actor=order_entry.owner,
+    )
+    assert grn.lines[0].value == Decimal(1_000)
+
+    posted = []
+    for _ in range(3):
+        document, _ = documents_service.post_document(
+            db,
+            order_entry.company_id,
+            PartnerRole.AP,
+            documents_service.DocumentInput(
+                kind=DocumentKind.INVOICE,
+                partner_id=order_entry.supplier.id,
+                document_date=MARCH,
+                description="One unit",
+                lines=(
+                    documents_service.LineInput(
+                        item_id=order_entry.stock_item.id,
+                        quantity=Decimal(1),
+                        unit_price=Decimal("333.333333"),
+                        grn_line_id=grn.lines[0].id,
+                    ),
+                ),
+            ),
+            actor=order_entry.owner,
+        )
+        posted.append(document)
+    shares = [document.lines[0].accrual_relieved for document in posted]
+    assert sorted(shares) == [Decimal(333), Decimal(333), Decimal(334)], shares
+
+    grn_service.refresh_status(db, grn)
+    _assert_everything(db, order_entry.company_id)
+
+    documents_service.reverse_document(
+        db, posted[0], on_date=MARCH, reason="Billed twice", actor=order_entry.owner
+    )
+    grn_service.refresh_status(db, grn)
+    _assert_everything(db, order_entry.company_id)

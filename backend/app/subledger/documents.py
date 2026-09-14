@@ -17,6 +17,7 @@ from starlette.requests import Request
 from app.core.errors import ConflictError, NotFoundError
 from app.core.permissions import AP_CREDIT_LIMIT_OVERRIDE, AR_CREDIT_LIMIT_OVERRIDE
 from app.inventory import masters as inventory_masters
+from app.inventory import stock as stock_service
 from app.kernel import posting
 from app.kernel.errors import LedgerStateError, PostingError
 from app.kernel.events import InstrumentMatured, LineSpec, PartnerDocumentPosted
@@ -468,6 +469,72 @@ def post_document(
         )
     else:
         for line in computed:
+            if (
+                role == PartnerRole.AP
+                and data.kind == DocumentKind.CREDIT_NOTE
+                and line.stock_value is not None
+            ):
+                # Goods going back. The companion already debited the accrual with what they
+                # actually cost us; this credits it with the same amount, so the accrual nets
+                # to **zero inside the document**. What the supplier is credited with is what
+                # we are claiming back, and the difference between claim and cost is purchase
+                # price variance — the same account a price movement on the way in lands in.
+                issued = abs(line.stock_value)
+                claim_base = round_amount(line.net * booking_rate, base.decimal_places)
+                variance = claim_base - issued
+                net_positions.append(len(specs))
+                specs.append(
+                    LineSpec(
+                        amount=-spec.direction * issued,
+                        gl_account_id=line.gl_account_id,
+                        transaction_type=line.transaction_type or spec.transaction_type,
+                        project_id=line.project_id,
+                        item_id=line.item.id if line.item is not None else None,
+                        description=line.source.description or data.description,
+                        currency_id=base.id,
+                        exchange_rate=ONE,
+                        branch_id=line.branch_id,
+                        **partner_dimension,
+                    )
+                )
+                if variance != ZERO:
+                    specs.append(
+                        LineSpec(
+                            amount=-spec.direction * variance,
+                            gl_account_id=_variance_account_id(gl_settings),
+                            project_id=line.project_id,
+                            item_id=line.item.id if line.item is not None else None,
+                            description=line.source.description or data.description,
+                            currency_id=base.id,
+                            exchange_rate=ONE,
+                            branch_id=line.branch_id,
+                            **partner_dimension,
+                        )
+                    )
+                if line.tax != ZERO:
+                    tax_code = resolve_tax_code(
+                        db, company_id, line.tax_code_id, data.document_date
+                    )
+                    if tax_code.gl_account_id is None:
+                        raise PostingError(
+                            f"Tax code {tax_code.code} has no GL account",
+                            code="tax_code_without_account",
+                            field_errors={"tax_code_id": ["no GL account"]},
+                        )
+                    specs.append(
+                        LineSpec(
+                            amount=-spec.direction * line.tax,
+                            gl_account_id=tax_code.gl_account_id,
+                            project_id=line.project_id,
+                            tax_code_id=line.tax_code_id,
+                            description=line.source.description or data.description,
+                            currency_id=currency.id,
+                            exchange_rate=data.exchange_rate,
+                            branch_id=line.branch_id,
+                            **partner_dimension,
+                        )
+                    )
+                continue
             if line.accrual_relieved is not None:
                 # A matched line posts **two** legs instead of one: the accrual comes off for
                 # exactly what the receipt put there, and whatever the invoice disagrees by
@@ -538,6 +605,10 @@ def post_document(
                     gl_account_id=line.gl_account_id,
                     transaction_type=line.transaction_type or spec.transaction_type,
                     project_id=line.project_id,
+                    # Decision 1: the revenue or expense line of an item line carries the
+                    # item, which is what P10's sales analysis reads — and what the VN008
+                    # guard demands the moment that account is the accrual.
+                    item_id=line.item.id if line.item is not None else None,
                     tax_code_id=line.tax_code_id,
                     tax_amount=-spec.direction * line.tax,
                     description=line.source.description or data.description,
@@ -1038,9 +1109,23 @@ def reverse_document(
     idempotency_hash: str | None = None,
     request: Request | None = None,
 ) -> PartnerDocument:
-    """The kernel reversal plus the open-item unwind. A document that has been allocated
-    must be unallocated first — otherwise the reversal would leave the counterparty's open
-    item pointing at a document that no longer exists in the ledger."""
+    """The kernel reversal, the open-item unwind, **and the companion stock entry**.
+
+    A document that has been allocated must be unallocated first — otherwise the reversal
+    would leave the counterparty's open item pointing at a document that no longer exists in
+    the ledger.
+
+    **Both entries come back or neither does** (decision 2). A stock-bearing document posted
+    two entries; reversing only the partner side leaves the stock where it is and the accrual
+    or the inventory account holding a leg whose counterpart is gone. The property suite found
+    exactly that on a three-step sequence — receive one, return it to the supplier, reverse the
+    return — where the accrual read zero while the unreversed receipt still said one.
+
+    The companion is reversed **through the inventory service**, which opens its own
+    `module_reversal` window: this function never opens the `inv` window itself, because the
+    stock half of that reversal is the inventory module's to do and reversing the ledger alone
+    is the defect `reverse_via_module_document` exists to prevent.
+    """
     if document.status != DocumentStatus.POSTED:
         raise LedgerStateError(
             f"{document.number} was already reversed", code="document_already_reversed"
@@ -1067,6 +1152,18 @@ def reverse_document(
             actor=actor,
             idempotency_key=idempotency_key,
             idempotency_hash=idempotency_hash,
+        )
+    if document.stock_entry_id is not None:
+        # Its own window, opened by the inventory service — and the reversing moves are at the
+        # original values, so the two sides cancel exactly rather than re-costing at today's
+        # average and leaving a difference behind.
+        stock_service.reverse_stock_posting(
+            db,
+            document.company_id,
+            entry_id=document.stock_entry_id,
+            on_date=on_date,
+            reason=reason,
+            actor=actor,
         )
     document.status = DocumentStatus.REVERSED
     document.reversal_entry_id = reversal.id
