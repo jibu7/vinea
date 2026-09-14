@@ -46,7 +46,11 @@ from app.models.subledger import (
 )
 from app.models.user import User
 from app.order_entry import companion as order_companion
+from app.order_entry import kits as order_kits
 from app.order_entry import matching as order_matching
+from app.order_entry import orders as order_service
+from app.order_entry import pricing as order_pricing
+from app.order_entry import quantities as order_quantities
 from app.subledger import masters
 from app.subledger.common import (
     PARTNER_TYPE_FOR_ROLE,
@@ -141,10 +145,22 @@ class LineInput:
     #: The invoice line a credit-note line returns, so the return is valued at the cost that
     #: was actually issued rather than at today's average.
     returns_line_id: int | None = None
-    #: Set on a component line; the index (1-based) of the kit line it was exploded from.
-    kit_parent_line_no: int | None = None
-    #: The SO line (AR) or PO line (AP) this line fulfils. Unused until step 3.
-    order_line_id: int | None = None
+    #: The sales order line this AR invoice line fulfils (decision 7). The quantity may be
+    #: lowered from what the order has left and never raised above it (`invoice_exceeds_order`).
+    sales_order_line_id: int | None = None
+    #: The purchase order line this AP line fulfils — a service line, which an invoice is the
+    #: only way to receive, or a direct purchase whose goods arrived on the invoice itself.
+    purchase_order_line_id: int | None = None
+    #: On a **kit** line only: the explosion to use instead of the catalogue definition, each
+    #: component keyed in its own base unit and carrying its own order link.
+    #:
+    #: `None` means "explode from the definition", which is what a kit keyed straight onto an
+    #: invoice does (decision 8). An invoice raised **from a sales order** passes the components
+    #: the order stored, because that order recorded what was promised — Breakup may have edited
+    #: it, and the definition may have moved since. Re-exploding there would ship a different
+    #: bundle from the one that was sold, and the order's component lines would never be
+    #: invoiced at all.
+    kit_components: tuple["LineInput", ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -200,6 +216,9 @@ class _ComputedLine:
     line_id: int | None = None
     #: The GRN line this one matched, once resolved.
     matched_grn_line: object | None = None
+    #: Index into `computed` of the kit line this component was exploded from — a position
+    #: rather than an id, because the ids are reserved after the explosion has happened.
+    kit_parent_index: int | None = None
     #: The branch of the warehouse the goods actually moved through.
     #:
     #: **Every GRN-accrual line carries this, not the document's branch.** The accrual is
@@ -223,12 +242,29 @@ class _ComputedLine:
     @property
     def moves_stock(self) -> bool:
         """Only a stock item moves stock, and a matched purchase line moves none: the goods
-        arrived on the GRN, and the invoice only says what they cost."""
+        arrived on the GRN, and the invoice only says what they cost.
+
+        A **kit** parent line moves nothing either — a kit is a bundle and there is no such
+        thing on a shelf — which falls out of the item-type test rather than needing a clause:
+        it is the component lines beside it that are stock items and that ship.
+        """
         return (
             self.item is not None
             and self.item.item_type == ItemType.STOCK
             and self.source.grn_line_id is None
         )
+
+    @property
+    def is_kit_component(self) -> bool:
+        return self.kit_parent_index is not None
+
+    @property
+    def posts_a_ledger_line(self) -> bool:
+        """A kit component carries no money: the kit's revenue and tax are entirely on the
+        parent line, so the component has a stock move and no journal line at all. Posting a
+        zero-amount line instead would be a line an auditor cannot read and a row every report
+        has to filter out."""
+        return not (self.is_kit_component and self.net == ZERO and self.tax == ZERO)
 
 
 # --- Reads ----------------------------------------------------------------------------------
@@ -364,6 +400,7 @@ def post_document(
             default_warehouse_id=gl_settings.default_warehouse_id,
             accrual_account_id=gl_settings.grn_accrual_account_id,
         )
+        _assert_order_links(db, company_id, role, data.kind, computed, partner_id=partner.id)
         net_total = sum((line.net for line in computed), ZERO)
         tax_total = sum((line.tax for line in computed), ZERO)
         total = net_total + tax_total
@@ -471,8 +508,10 @@ def post_document(
         )
     ]
     # Position of each document line's net spec, so the account the engine resolved can be
-    # read back onto the stored line instead of being derived a second time.
-    net_positions: list[int] = []
+    # read back onto the stored line instead of being derived a second time. One entry per
+    # computed line, `None` where the line posts no journal line at all — a kit component — so
+    # the list stays index-aligned with `computed` however many lines are skipped.
+    net_positions: list[int | None] = []
     if data.kind == DocumentKind.SETTLEMENT:
         specs.append(
             LineSpec(
@@ -487,6 +526,10 @@ def post_document(
         )
     else:
         for line in computed:
+            if not line.posts_a_ledger_line:
+                # A kit component: quantity on the stock side, nothing on the ledger side.
+                net_positions.append(None)
+                continue
             if (
                 role == PartnerRole.AP
                 and data.kind == DocumentKind.CREDIT_NOTE
@@ -739,7 +782,13 @@ def post_document(
                 # at rather than the blank the operator left.
                 unit_price=line.unit_price,
                 discount_percent=line.source.discount_percent,
-                gl_account_id=_line_account_id(entry, net_positions[index - 1]),
+                gl_account_id=_line_account_id(
+                    entry, net_positions[index - 1], line.gl_account_id
+                ),
+                # Denormalised from the document above it, and held equal to it by a composite
+                # foreign key — which is what lets the AR/AP order-link rule be a CHECK rather
+                # than a trigger (decision 1).
+                role=role,
                 tax_code_id=line.tax_code_id,
                 branch_id=line.branch_id or entry.lines[0].branch_id,
                 project_id=line.project_id,
@@ -750,9 +799,15 @@ def post_document(
                 uom_id=line.uom_id,
                 base_quantity=line.base_quantity,
                 warehouse_id=line.warehouse_id,
-                order_line_id=line.source.order_line_id,
+                sales_order_line_id=line.source.sales_order_line_id,
+                purchase_order_line_id=line.source.purchase_order_line_id,
                 grn_line_id=line.source.grn_line_id,
                 returns_line_id=line.source.returns_line_id,
+                kit_parent_line_id=(
+                    line_ids[line.kit_parent_index]
+                    if line.kit_parent_index is not None
+                    else None
+                ),
                 accrual_relieved=line.accrual_relieved,
             )
             for index, line in enumerate(computed, 1)
@@ -760,6 +815,7 @@ def post_document(
     )
     db.flush()
     _refresh_matched_receipts(db, computed)
+    _refresh_fulfilled_orders(db, company_id, computed)
     audit(
         db,
         company_id,
@@ -779,9 +835,78 @@ def post_document(
     return document, False
 
 
-def _line_account_id(entry: JournalEntry, position: int) -> int:
+def _assert_order_links(
+    db: Session,
+    company_id: int,
+    role: PartnerRole,
+    kind: DocumentKind,
+    computed: list[_ComputedLine],
+    *,
+    partner_id: int,
+) -> None:
+    """A line that fulfils an order may not take it past what was ordered (decision 7).
+
+    Checked **before the companion posts** and therefore before anything is written, which is
+    what lets a caller treat a refusal as a no-op. The order rules themselves live in
+    `order_entry.orders`: "you cannot invoice more than was ordered" is a fact about the order,
+    and this service should no more re-derive it than it re-derives a tax rate.
+
+    The role check is the declarative one from the schema, stated early so the failure names the
+    line rather than arriving as a constraint violation with no field on it.
+    """
+    for index, line in enumerate(computed):
+        source = line.source
+        if source.sales_order_line_id is not None:
+            if role != PartnerRole.AR or kind != DocumentKind.INVOICE:
+                raise LedgerStateError(
+                    "Only a customer invoice line can fulfil a sales order",
+                    code="order_link_not_allowed",
+                    field_errors={
+                        f"lines.{index}.sales_order_line_id": ["not a customer invoice"]
+                    },
+                )
+            order_service.assert_sales_line_within_order(
+                db,
+                company_id,
+                index=index,
+                line_id=source.sales_order_line_id,
+                base_quantity=line.base_quantity or ZERO,
+                partner_id=partner_id,
+            )
+        if source.purchase_order_line_id is not None:
+            if role != PartnerRole.AP or kind != DocumentKind.INVOICE:
+                raise LedgerStateError(
+                    "Only a supplier invoice line can fulfil a purchase order",
+                    code="order_link_not_allowed",
+                    field_errors={
+                        f"lines.{index}.purchase_order_line_id": ["not a supplier invoice"]
+                    },
+                )
+            if source.grn_line_id is not None:
+                # A matched line receives nothing: the goods arrived on the GRN, which has
+                # already counted against the order. The link is kept for the drill-down.
+                continue
+            order_service.assert_purchase_line_within_order(
+                db,
+                company_id,
+                index=index,
+                line_id=source.purchase_order_line_id,
+                base_quantity=line.base_quantity or ZERO,
+                partner_id=partner_id,
+                field=f"lines.{index}.purchase_order_line_id",
+            )
+
+
+def _line_account_id(entry: JournalEntry, position: int | None, fallback: int | None) -> int:
     """The engine resolved the account (line override, partner default, transaction type);
-    read it back rather than re-deriving it, so the document and the ledger agree."""
+    read it back rather than re-deriving it, so the document and the ledger agree.
+
+    A kit component posts no journal line, so it has no position to read back and keeps the
+    account the explosion gave it — the parent's, which is where the kit's revenue went.
+    """
+    if position is None:
+        assert fallback is not None, "a line with no journal line must carry its own account"
+        return fallback
     return entry.lines[position].gl_account_id
 
 
@@ -878,12 +1003,13 @@ def _resolve_item_line(
     tax_mode: TaxMode,
     default_warehouse_id: int | None,
     accrual_account_id: int | None,
-) -> tuple[Item, int, Decimal, int | None, Decimal, int | None, int | None]:
+    document_date: date,
+) -> tuple[Item, int, Decimal, int | None, int | None, Decimal, int | None, int | None]:
     """Everything an item line takes from the catalogue (decision 1).
 
-    Returns `(item, uom_id, base_quantity, warehouse_id, unit_price, tax_code_id,
-    gl_account_id)`. Each default is the 3rd link of the ADR-05 chain: a value keyed on the
-    line always wins, and only where the line is silent does the item speak.
+    Returns `(item, uom_id, base_quantity, warehouse_id, warehouse_branch_id, unit_price,
+    tax_code_id, gl_account_id)`. Each default is the 3rd link of the ADR-05 chain: a value
+    keyed on the line always wins, and only where the line is silent does the item speak.
 
     **The account depends on the side and on the kind of item**, and the asymmetry is the
     whole GRV design. An AR line credits revenue. An AP line for a *stock* item debits the
@@ -929,19 +1055,34 @@ def _resolve_item_line(
             )
         warehouse_branch_id = warehouse.branch_id
 
-    # Price: the line's, or the item's selling price turned to suit the document's tax mode.
-    # `price_includes_tax` is a fact about the *catalogue* price; `tax_mode` is a fact about
-    # the document. When they disagree the price has to be converted, or an inclusive
-    # catalogue sold on an exclusive document silently charges tax twice.
-    unit_price = line.unit_price
-    if unit_price is None:
-        unit_price = item.selling_price if role == PartnerRole.AR else ZERO
     tax_code_id = line.tax_code_id
     if tax_code_id is None:
         tax_code_id = (
             item.default_sales_tax_code_id
             if role == PartnerRole.AR
             else item.default_purchase_tax_code_id
+        )
+
+    # Price: the line's, or the item's selling price turned to suit the document's tax mode.
+    # `price_includes_tax` is a fact about the *catalogue* price; `tax_mode` is a fact about
+    # the document. When they disagree the price has to be converted, or an inclusive catalogue
+    # sold on an exclusive document silently charges tax twice. The conversion lives in
+    # `order_entry.pricing` and is shared with the order service, so an invoice raised from a
+    # sales order reproduces the order's figures rather than approximating them. The tax code
+    # is resolved first because the conversion needs its rate.
+    unit_price = line.unit_price
+    if unit_price is None:
+        unit_price = (
+            order_pricing.catalogue_unit_price(
+                db,
+                company_id,
+                item,
+                tax_mode=tax_mode,
+                tax_code_id=tax_code_id,
+                on_date=document_date,
+            )
+            if role == PartnerRole.AR
+            else ZERO
         )
 
     gl_account_id = line.gl_account_id
@@ -984,6 +1125,11 @@ def _compute_lines(
     An **item line** resolves its defaults from the catalogue first (`_resolve_item_line`) and
     is then priced exactly like a GL line — one code path, as decision 2 asks, rather than a
     second service that would have to agree with this one about tax forever.
+
+    A **kit** line explodes here, at line entry (decision 8): the parent carries the kit item,
+    its quantity, its price and its tax, and the component lines that follow it carry quantity
+    and nothing else. That is why commitment and cost come from the components and revenue from
+    the parent, and why editing the catalogue afterwards restates no invoice that has posted.
     """
     places = currency.decimal_places
     default_tax_code_id = getattr(settings, "default_tax_code_id", None)
@@ -1016,6 +1162,7 @@ def _compute_lines(
                 tax_mode=tax_mode,
                 default_warehouse_id=default_warehouse_id,
                 accrual_account_id=accrual_account_id,
+                document_date=data.document_date,
             )
         if unit_price is None:
             raise PostingError(
@@ -1027,6 +1174,9 @@ def _compute_lines(
         gross_or_net = round_amount(
             line.quantity * unit_price * (ONE - line.discount_percent / HUNDRED), places
         )
+        # A line the *caller* keyed must be worth something; a kit's component lines are worth
+        # nothing by construction and are appended below rather than keyed, so they never reach
+        # this check. A kit whose parent is priced at zero still fails here, which is right.
         if gross_or_net <= ZERO:
             raise PostingError(
                 f"Line {index + 1} must be worth more than zero",
@@ -1063,7 +1213,134 @@ def _compute_lines(
                 accrual_branch_id=warehouse_branch_id,
             )
         )
+        if item is not None and item.item_type == ItemType.KIT:
+            computed.extend(
+                _kit_component_lines(
+                    db,
+                    company_id,
+                    parent=computed[-1],
+                    parent_index=len(computed) - 1,
+                    index=index,
+                    base_quantity=base_quantity or ZERO,
+                    default_warehouse_id=default_warehouse_id,
+                    branch_id=branch_id,
+                    project_id=project_id,
+                )
+            )
     return computed
+
+
+def _kit_component_lines(
+    db: Session,
+    company_id: int,
+    *,
+    parent: _ComputedLine,
+    parent_index: int,
+    index: int,
+    base_quantity: Decimal,
+    default_warehouse_id: int | None,
+    branch_id: int | None,
+    project_id: int | None,
+) -> list[_ComputedLine]:
+    """The kit's components, turned into lines that move stock and no money.
+
+    Two sources, one shape. A kit keyed straight onto an invoice explodes from the catalogue
+    definition (decision 8). A kit line raised **from a sales order** arrives with the components
+    that order stored, because they are what was promised — Breakup may have edited them and the
+    definition may have moved since — and each of them carries its own order link, without which
+    the order's component lines would never register as invoiced.
+
+    Each component's `gl_account_id` is the **parent's** account. The component posts no journal
+    line at all — `posts_a_ledger_line` is false for it — so the column is only what the stored
+    document line records, and recording the account the kit's revenue actually went to is the
+    honest answer: an item's own sales account would name a revenue line that does not exist.
+    """
+    assert parent.item is not None
+    supplied = parent.source.kit_components
+    if supplied is None:
+        components = order_kits.explode(
+            db, company_id, parent.item, base_quantity, field_prefix=f"lines.{index}"
+        )
+        sources: list[LineInput | None] = [None] * len(components)
+    else:
+        components = order_kits.resolve_breakup(
+            db,
+            company_id,
+            parent.item,
+            tuple(
+                order_kits.ComponentInput(item_id=one.item_id, base_quantity=one.quantity)
+                for one in supplied
+            ),
+            field_prefix=f"lines.{index}.kit_components",
+        )
+        sources = list(supplied)
+
+    lines: list[_ComputedLine] = []
+    for component, source in zip(components, sources, strict=True):
+        keyed_warehouse_id = (
+            source.warehouse_id if source is not None and source.warehouse_id else None
+        )
+        warehouse_id = keyed_warehouse_id or parent.source.warehouse_id or default_warehouse_id
+        component_warehouse_id: int | None = None
+        component_branch_id: int | None = None
+        if component.item.item_type == ItemType.STOCK:
+            warehouse = inventory_masters.get_warehouse(
+                db,
+                company_id,
+                _require_component_warehouse(warehouse_id, index, component.item),
+            )
+            if warehouse.is_in_transit:
+                raise LedgerStateError(
+                    "The in-transit warehouse is not selectable on a document",
+                    code="in_transit_warehouse_locked",
+                    field_errors={f"lines.{index}.warehouse_id": ["not selectable"]},
+                )
+            component_warehouse_id = warehouse.id
+            component_branch_id = warehouse.branch_id
+        lines.append(
+            _ComputedLine(
+                source=replace(
+                    source
+                    if source is not None
+                    else LineInput(item_id=component.item.id, quantity=component.base_quantity),
+                    item_id=component.item.id,
+                    quantity=component.base_quantity,
+                    unit_price=ZERO,
+                    warehouse_id=component_warehouse_id,
+                    description=(
+                        source.description
+                        if source is not None and source.description
+                        else component.item.name
+                    ),
+                    kit_components=None,
+                ),
+                gl_account_id=parent.gl_account_id,
+                transaction_type=parent.transaction_type,
+                tax_code_id=None,
+                branch_id=parent.branch_id or branch_id,
+                project_id=parent.project_id or project_id,
+                net=ZERO,
+                tax=ZERO,
+                item=component.item,
+                uom_id=component.item.base_uom_id,
+                base_quantity=component.base_quantity,
+                warehouse_id=component_warehouse_id,
+                unit_price=ZERO,
+                accrual_branch_id=component_branch_id,
+                kit_parent_index=parent_index,
+            )
+        )
+    return lines
+
+
+def _require_component_warehouse(warehouse_id: int | None, index: int, item: Item) -> int:
+    if warehouse_id is None:
+        raise LedgerStateError(
+            f"{item.code} is a stock component and needs a warehouse",
+            code="warehouse_required",
+            field_errors={f"lines.{index}.warehouse_id": ["required"]},
+        )
+    return warehouse_id
 
 
 # --- Credit limit (decision 8) ---------------------------------------------------------------
@@ -1213,9 +1490,11 @@ def reverse_document(
     document.reversed_on = on_date
     document.open_amount = ZERO
     db.flush()
-    # `matched` is a query over posted, unreversed lines, so reversing this document has
-    # already changed it. The stored status on every receipt it touched has to follow.
+    # `matched`, `invoiced` and `received` are queries over posted, unreversed lines, so
+    # reversing this document has already changed all three. The stored status on every receipt
+    # and every order it touched has to follow.
     _refresh_reversed_receipts(db, document)
+    _refresh_reversed_orders(db, document)
     audit(
         db,
         document.company_id,
@@ -1531,6 +1810,51 @@ def _refresh_matched_receipts(db: Session, computed: list) -> None:
         grn = db.get(GoodsReceivedNote, grn_line.grn_id)
         if grn is not None:
             grn_service.refresh_status(db, grn)
+
+
+def _refresh_fulfilled_orders(db: Session, company_id: int, computed: list) -> None:
+    """Bring every order this document fulfilled back in line with what its lines now imply.
+
+    The same rule as `_refresh_matched_receipts`, one table along: the order status is a stored
+    workflow column **written only by the order service** (decision 4), so the service that
+    changes what has been fulfilled is the service that must write it. Leaving it to callers
+    means every endpoint and every test has to remember, and `verify_order_statuses()` reports
+    drift for a posting that was otherwise perfectly correct.
+    """
+    order_quantities.refresh_sales_orders_for_lines(
+        db,
+        company_id,
+        [
+            line.source.sales_order_line_id
+            for line in computed
+            if line.source.sales_order_line_id is not None
+        ],
+    )
+    order_quantities.refresh_purchase_orders_for_lines(
+        db,
+        company_id,
+        [
+            line.source.purchase_order_line_id
+            for line in computed
+            if line.source.purchase_order_line_id is not None
+        ],
+    )
+
+
+def _refresh_reversed_orders(db: Session, document: PartnerDocument) -> None:
+    """The reversal half of `_refresh_fulfilled_orders`. `invoiced` and `received` are queries
+    over posted, unreversed lines, so reversing this document has already changed both; the
+    stored status on every order it touched has to follow."""
+    order_quantities.refresh_sales_orders_for_lines(
+        db,
+        document.company_id,
+        [line.sales_order_line_id for line in document.lines if line.sales_order_line_id],
+    )
+    order_quantities.refresh_purchase_orders_for_lines(
+        db,
+        document.company_id,
+        [line.purchase_order_line_id for line in document.lines if line.purchase_order_line_id],
+    )
 
 
 def _refresh_reversed_receipts(db: Session, document: PartnerDocument) -> None:
