@@ -73,6 +73,15 @@ import { navIntents, type IntentLabel } from "@/design/nav-tree";
  * stock behind. The kernel now refuses that (`reverse_via_module_document`), which would have
  * left a document the product could post and never undo. Same shape of hole as C.1.6's
  * post-dated instruments, and the same answer: the tree gains the screen that closes it.
+ *
+ * Amended before P6 step 1 with **"Documents"** under Transactions → AR and → AP, the other
+ * half of that same C.1.7 entry. The appendix already recorded it: "the same hole is open in
+ * AR and AP, one phase older and twice over". `POST /{role}/documents/{id}/reverse` and
+ * `POST /{role}/allocations/{id}/unallocate` both shipped in P4 with no caller anywhere in
+ * the frontend, and there was no `/ar/documents/{id}` route to put one on — so an invoice
+ * posted in error, or an allocation made against the wrong invoice, was uncorrectable by
+ * anybody using the product. Two rows, in the same position their inventory counterpart
+ * holds: last in each module's Transactions block.
  */
 const APPENDIX_C: Record<IntentLabel, Array<[string, string, string | null]>> = {
   "Maintenance": [
@@ -120,6 +129,7 @@ const APPENDIX_C: Record<IntentLabel, Array<[string, string, string | null]>> = 
     ["Accounts Receivable", "Allocate", null],
     ["Accounts Receivable", "Post-dated receipts", null],
     ["Accounts Receivable", "Account receivable batches", null],
+    ["Accounts Receivable", "Documents", null],
     ["Accounts Payable", "GRV", "P6"],
     ["Accounts Payable", "Purchase order", "P6"],
     ["Accounts Payable", "Supplier invoice", null],
@@ -128,6 +138,7 @@ const APPENDIX_C: Record<IntentLabel, Array<[string, string, string | null]>> = 
     ["Accounts Payable", "Allocate", null],
     ["Accounts Payable", "Post-dated payments", null],
     ["Accounts Payable", "Account payable batches", null],
+    ["Accounts Payable", "Documents", null],
     ["Order Entry", "Sales order", "P6"],
     ["Inventory", "Journal batches", null],
     ["Inventory", "Transfers", null],

@@ -20,6 +20,19 @@ import { useToast } from "@/design/components/toast";
 import { newDraftId } from "@/lib/drafts";
 import { DOT, dotted, formatDate } from "@/lib/format";
 
+/**
+ * Where each module's documents live. A module-owned entry is reversed from its own document
+ * — the kernel refuses a GL reversal of one — so this is the link that has to land on the
+ * right screen. It was hardcoded to inventory when `/inventory/documents` was the only such
+ * screen in the product, which sent every AR and AP entry to an inventory route that could
+ * not load them; `ar` and `ap` have had a document detail since Appendix C.1.7 closed.
+ */
+const MODULE_DOCUMENT_ROUTE: Record<string, string> = {
+  inv: "/inventory/documents",
+  ar: "/ar/documents",
+  ap: "/ap/documents",
+};
+
 export default function EntryViewPage() {
   const params = useParams<{ id: string }>();
   const entryId = Number(params.id);
@@ -218,7 +231,7 @@ export default function EntryViewPage() {
               existed still has one. */}
           {isModuleOwned && entry.module_document_id !== null ? (
             <Link
-              href={`/inventory/documents/${entry.module_document_id}`}
+              href={`${MODULE_DOCUMENT_ROUTE[entry.module] ?? "/inventory/documents"}/${entry.module_document_id}`}
               data-testid="reverse-via-module"
               className="inline-flex items-center gap-1 text-sm font-medium text-[var(--vinea-brand)] underline"
             >

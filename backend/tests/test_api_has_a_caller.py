@@ -79,17 +79,6 @@ NO_UI: dict[str, str] = {
         "GAP (P1) — an invitation sent to the wrong address cannot be revoked from the "
         "memberships screen."
     ),
-    # --- GAP: P4, AR/AP corrections -----------------------------------------------------------
-    "POST /api/v1/subledger/{role}/documents/{document_id}/reverse": (
-        "GAP (P4) — an AR/AP document cannot be corrected from any screen. There is no "
-        "/ar/documents/{id} route to carry a Reverse action; P4 shipped capture screens, an "
-        "enquiry and reports, and no document detail. First work after P5 — see Appendix C.1.7 "
-        "and docs/p5-final-report.md."
-    ),
-    "POST /api/v1/subledger/{role}/allocations/{allocation_id}/unallocate": (
-        "GAP (P4) — an allocation made against the wrong invoice cannot be undone from any "
-        "screen. Belongs on the allocation screen, alongside the AR/AP document reversal above."
-    ),
     # --- GAP: the operator console, planned but unscheduled ------------------------------------
     "POST /api/v1/operator/tenants/{company_id}/activate": (
         "GAP (SaaS admin, Appendix C.2) — the operator console has no screens in any phase yet. "

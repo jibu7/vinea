@@ -5,7 +5,7 @@ from dataclasses import dataclass, replace
 from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.models.currency import Currency
@@ -138,6 +138,12 @@ class AllocationEntry:
     line: AllocationLine
     debit_number: str
     credit_number: str
+    #: Whether an unallocation already mirrors this one. Read here rather than left to the
+    #: caller because the screen that offers **Unallocate** has to know before it draws the
+    #: button: `allocations.unallocate` refuses a second one with `allocation_already_reversed`,
+    #: and a button that exists only to raise that error is the kind of dead end rule 13 is
+    #: about. `reverses_allocation_id` is the other half — a mirror is not itself unallocatable.
+    is_reversed: bool = False
 
 
 def partner_allocations(
@@ -146,9 +152,16 @@ def partner_allocations(
     role: PartnerRole,
     *,
     partner_id: int | None = None,
+    document_id: int | None = None,
     date_from: date | None = None,
     date_to: date | None = None,
 ) -> list[AllocationEntry]:
+    """Allocation lines for a role, optionally narrowed to one partner or one document.
+
+    `document_id` matches a line on **either** side: an invoice is the debit of the allocation
+    that settles it and a receipt is the credit of the same line, and the document detail wants
+    the allocations that touch it whichever side it sat on.
+    """
     statement = (
         select(AllocationLine, Allocation)
         .join(Allocation, Allocation.id == AllocationLine.allocation_id)
@@ -156,6 +169,13 @@ def partner_allocations(
     )
     if partner_id is not None:
         statement = statement.where(Allocation.partner_id == partner_id)
+    if document_id is not None:
+        statement = statement.where(
+            or_(
+                AllocationLine.debit_document_id == document_id,
+                AllocationLine.credit_document_id == document_id,
+            )
+        )
     if date_from is not None:
         statement = statement.where(Allocation.allocation_date >= date_from)
     if date_to is not None:
@@ -166,16 +186,31 @@ def partner_allocations(
 
     numbers: dict[int, str] = {}
     for line, _allocation in rows:
-        for document_id in (line.debit_document_id, line.credit_document_id):
-            if document_id not in numbers:
-                document = db.get(PartnerDocument, document_id)
-                numbers[document_id] = document.number if document is not None else "?"
+        for target_id in (line.debit_document_id, line.credit_document_id):
+            if target_id not in numbers:
+                document = db.get(PartnerDocument, target_id)
+                numbers[target_id] = document.number if document is not None else "?"
+    #: One query for the whole page rather than one per row.
+    allocation_ids = {allocation.id for _line, allocation in rows}
+    reversed_ids = (
+        set(
+            db.scalars(
+                select(Allocation.reverses_allocation_id).where(
+                    Allocation.company_id == company_id,
+                    Allocation.reverses_allocation_id.in_(allocation_ids),
+                )
+            )
+        )
+        if allocation_ids
+        else set()
+    )
     return [
         AllocationEntry(
             allocation=allocation,
             line=line,
             debit_number=numbers[line.debit_document_id],
             credit_number=numbers[line.credit_document_id],
+            is_reversed=allocation.id in reversed_ids,
         )
         for line, allocation in rows
     ]

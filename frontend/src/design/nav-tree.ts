@@ -118,6 +118,13 @@ export const navIntents: NavIntent[] = [
       // made the instrument un-maturable by anyone using the product.
       { label: "Post-dated receipts", module: "Accounts Receivable", permission: "ar:reports_view", href: "/ar/post-dated" },
       { label: "Account receivable batches", module: "Accounts Receivable", permission: "ar:transactions_post", href: "/ar/batches/new" },
+      // Not in the owner's tree. P4 gave every partner document a reversal and every
+      // allocation an undo, and shipped both as endpoints with no caller: there was no
+      // /ar/documents/{id} route to carry the action, so an invoice posted in error was
+      // uncorrectable by anybody using the product. The GL's own Reverse is not the way out —
+      // it posts the reversing entry and leaves the open item standing — and the kernel now
+      // refuses it. Appendix C.1.7, the same remedy as Inventory's Documents row below.
+      { label: "Documents", module: "Accounts Receivable", permission: "ar:reports_view", href: "/ar/documents" },
       // GRV and Purchase order are P6: goods receipt and the three-way match are the
       // purchasing cycle, not the AP subledger P4 builds. Supplier invoice, Receipt and
       // Payment are additions to the owner's list — master plan C.1.5.
@@ -129,6 +136,7 @@ export const navIntents: NavIntent[] = [
       { label: "Allocate", module: "Accounts Payable", permission: "ap:transactions_post", href: "/ap/allocations/new" },
       { label: "Post-dated payments", module: "Accounts Payable", permission: "ap:reports_view", href: "/ap/post-dated" },
       { label: "Account payable batches", module: "Accounts Payable", permission: "ap:transactions_post", href: "/ap/batches/new" },
+      { label: "Documents", module: "Accounts Payable", permission: "ap:reports_view", href: "/ap/documents" },
       { label: "Sales order", module: "Order Entry", phase: "P6" },
       // Appendix C's Inventory block, in the owner's order: Journal batches, Transfers,
       // Adjustments, Counts. The tree carried three of the four, out of order, under a P5

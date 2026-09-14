@@ -1407,3 +1407,166 @@ def test_the_gl_reversal_endpoint_refuses_a_partner_document_entry(api: Api) -> 
         json={"on_date": MARCH.isoformat(), "reason": "keyed twice"},
     )
     assert undone.status_code == 201, undone.text
+
+
+def _post_invoice_receipt_and_allocate(api: Api) -> dict[str, int]:
+    """An invoice, a receipt that settles part of it, and the allocation joining them."""
+    partner = api.client.post(
+        "/api/v1/subledger/ar/partners",
+        json={"name": "Nyanza Stores", "customer_code": "CUST900"},
+    ).json()
+    accounts = {row["code"]: row["id"] for row in api.client.get("/api/v1/gl/accounts").json()}
+
+    invoice = api.client.post(
+        "/api/v1/subledger/ar/documents",
+        headers={"Idempotency-Key": "gap-inv-1"},
+        json={
+            "kind": "invoice",
+            "partner_id": partner["id"],
+            "document_date": MARCH.isoformat(),
+            "description": "Cases of wine",
+            "lines": [{"unit_price": "50000", "gl_account_id": accounts["4100"]}],
+        },
+    )
+    assert invoice.status_code == 201, invoice.text
+
+    receipt = api.client.post(
+        "/api/v1/subledger/ar/documents",
+        headers={"Idempotency-Key": "gap-rct-1"},
+        json={
+            "kind": "settlement",
+            "partner_id": partner["id"],
+            "document_date": MARCH.isoformat(),
+            "description": "Part payment",
+            "amount": "20000",
+            "cash_account_id": accounts["1120"],
+            "instrument_type": "bank",
+        },
+    )
+    assert receipt.status_code == 201, receipt.text
+
+    allocation = api.client.post(
+        "/api/v1/subledger/ar/allocations",
+        headers={"Idempotency-Key": "gap-alc-1"},
+        json={
+            "partner_id": partner["id"],
+            "allocation_date": MARCH.isoformat(),
+            "pairs": [
+                {
+                    "debit_document_id": invoice.json()["id"],
+                    "credit_document_id": receipt.json()["id"],
+                    "amount": "20000",
+                }
+            ],
+        },
+    )
+    assert allocation.status_code == 201, allocation.text
+    return {
+        "partner_id": partner["id"],
+        "invoice_id": invoice.json()["id"],
+        "receipt_id": receipt.json()["id"],
+        "allocation_id": allocation.json()["id"],
+    }
+
+
+def test_the_document_listing_filters_on_status(api: Api) -> None:
+    """The listing screen's status filter. Without it `/ar/documents` cannot separate a
+    live invoice from one that was reversed, which is the single distinction the screen
+    exists to act on."""
+    ids = _post_invoice_receipt_and_allocate(api)
+
+    # An unallocated document first: a reversal is refused while the invoice is settled.
+    unallocated = api.client.post(
+        f"/api/v1/subledger/ar/allocations/{ids['allocation_id']}/unallocate",
+        headers={"Idempotency-Key": "gap-unalc-1"},
+        json={"on_date": MARCH.isoformat(), "reason": "Allocated to the wrong invoice"},
+    )
+    assert unallocated.status_code == 201, unallocated.text
+
+    reversed_doc = api.client.post(
+        f"/api/v1/subledger/ar/documents/{ids['invoice_id']}/reverse",
+        json={"on_date": MARCH.isoformat(), "reason": "Keyed against the wrong customer"},
+    )
+    assert reversed_doc.status_code == 201, reversed_doc.text
+
+    posted = api.client.get("/api/v1/subledger/ar/documents", params={"status": "posted"}).json()
+    reversed_only = api.client.get(
+        "/api/v1/subledger/ar/documents", params={"status": "reversed"}
+    ).json()
+
+    posted_ids = {row["id"] for row in posted["items"]}
+    reversed_ids = {row["id"] for row in reversed_only["items"]}
+    assert ids["invoice_id"] in reversed_ids
+    assert ids["invoice_id"] not in posted_ids
+    # The receipt was never reversed, so it stays on the posted side of the filter.
+    assert ids["receipt_id"] in posted_ids
+    assert ids["receipt_id"] not in reversed_ids
+    # Unfiltered still returns both, so the filter narrows rather than the listing shrinking.
+    everything = api.client.get("/api/v1/subledger/ar/documents").json()
+    assert {row["id"] for row in everything["items"]} >= {ids["invoice_id"], ids["receipt_id"]}
+
+
+def test_allocations_filter_by_document_and_report_their_reversal_state(api: Api) -> None:
+    """The allocations section of the document detail, and the state its Unallocate button
+    reads. A row that is already unallocated, or that *is* an unallocation, must say so —
+    the service refuses both, and a button whose only outcome is an error is a dead end."""
+    ids = _post_invoice_receipt_and_allocate(api)
+
+    # Either side of the line finds it: the invoice is the debit, the receipt the credit.
+    by_invoice = api.client.get(
+        "/api/v1/subledger/ar/allocations", params={"document_id": ids["invoice_id"]}
+    ).json()
+    by_receipt = api.client.get(
+        "/api/v1/subledger/ar/allocations", params={"document_id": ids["receipt_id"]}
+    ).json()
+    assert len(by_invoice) == 1 and len(by_receipt) == 1
+    assert by_invoice[0]["allocation_id"] == ids["allocation_id"]
+    assert by_receipt[0]["allocation_id"] == ids["allocation_id"]
+    assert by_invoice[0]["is_reversed"] is False
+    assert by_invoice[0]["reverses_allocation_id"] is None
+
+    # A document that took part in no allocation returns nothing rather than everything.
+    other = api.client.post(
+        "/api/v1/subledger/ar/documents",
+        headers={"Idempotency-Key": "gap-inv-2"},
+        json={
+            "kind": "invoice",
+            "partner_id": ids["partner_id"],
+            "document_date": MARCH.isoformat(),
+            "description": "Unallocated invoice",
+            "lines": [
+                {
+                    "unit_price": "1000",
+                    "gl_account_id": {
+                        row["code"]: row["id"]
+                        for row in api.client.get("/api/v1/gl/accounts").json()
+                    }["4100"],
+                }
+            ],
+        },
+    ).json()
+    assert api.client.get(
+        "/api/v1/subledger/ar/allocations", params={"document_id": other["id"]}
+    ).json() == []
+
+    unallocated = api.client.post(
+        f"/api/v1/subledger/ar/allocations/{ids['allocation_id']}/unallocate",
+        headers={"Idempotency-Key": "gap-unalc-2"},
+        json={"on_date": MARCH.isoformat(), "reason": "Allocated to the wrong invoice"},
+    )
+    assert unallocated.status_code == 201, unallocated.text
+
+    rows = api.client.get(
+        "/api/v1/subledger/ar/allocations", params={"document_id": ids["invoice_id"]}
+    ).json()
+    by_id = {row["allocation_id"]: row for row in rows}
+    original = by_id[ids["allocation_id"]]
+    mirror = by_id[unallocated.json()["id"]]
+    assert original["is_reversed"] is True, "the original must report that it was undone"
+    assert original["reverses_allocation_id"] is None
+    assert mirror["reverses_allocation_id"] == ids["allocation_id"]
+    assert mirror["is_reversed"] is False
+
+    # And the open item is back, which is what the whole action is for.
+    invoice = api.client.get(f"/api/v1/subledger/ar/documents/{ids['invoice_id']}").json()
+    assert Decimal(invoice["open_amount"]) == Decimal(50000)

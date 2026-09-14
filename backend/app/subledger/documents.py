@@ -173,6 +173,7 @@ def list_documents(
     role: PartnerRole,
     partner_id: int | None = None,
     kind: DocumentKind | None = None,
+    status: DocumentStatus | None = None,
     date_from: date | None = None,
     date_to: date | None = None,
     open_only: bool = False,
@@ -186,6 +187,8 @@ def list_documents(
         statement = statement.where(PartnerDocument.partner_id == partner_id)
     if kind is not None:
         statement = statement.where(PartnerDocument.kind == kind)
+    if status is not None:
+        statement = statement.where(PartnerDocument.status == status)
     if date_from is not None:
         statement = statement.where(PartnerDocument.document_date >= date_from)
     if date_to is not None:
