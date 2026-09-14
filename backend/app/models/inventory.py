@@ -32,7 +32,7 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
 from app.models.mixins import AuditedMixin, CompanyScopedMixin, pg_enum
@@ -46,6 +46,8 @@ FACTOR = Numeric(20, 10)
 COST = Numeric(20, 10)
 #: The weighted average, to the six decimals decision 4 fixes it at.
 AVERAGE = Numeric(20, 6)
+#: An exchange rate, ten decimals like every other rate in the codebase (ADR-06).
+RATE = Numeric(20, 10)
 
 #: `journal_entries.module` / `gl_transaction_types.module` for everything inventory posts.
 #: It is the module half of the `('inventory', 'inv')` row P4 seeded into
@@ -1233,3 +1235,209 @@ class StockCountLine(AuditedMixin, CompanyScopedMixin, Base):
     note: Mapped[str | None] = mapped_column(Text)
     #: The move this line's variance became, set by Process. Null on a line with no variance.
     stock_move_id: Mapped[int | None] = mapped_column(BigInteger)
+
+
+class GrnStatus(enum.StrEnum):
+    """Where a goods receipt stands against the supplier invoice that will pay for it
+    (P6 decision 6) — the Evolution two-step, named the way Evolution names it.
+
+    `RECEIVED` is Unprocessed: the stock is on the shelf and the accrual carries its whole
+    value. `PARTIALLY_MATCHED` is Confirmed, `MATCHED` is Processed. The three are a **stored
+    workflow column** written only by the order service and checked against the derived state
+    by `verify_order_statuses()` — the `open_amount` pattern P4 set, where the column is a
+    convenience and the query is the truth.
+
+    `REVERSED` is the way out for a receipt that never should have happened. It is only
+    reachable while nothing has matched: a GRN with any matched quantity refuses reversal with
+    `grn_matched`, because the invoice that matched it is the document that has to come back
+    first.
+    """
+
+    RECEIVED = "received"
+    PARTIALLY_MATCHED = "partially_matched"
+    MATCHED = "matched"
+    REVERSED = "reversed"
+
+
+grn_status_enum = pg_enum(GrnStatus, "grn_status")
+
+
+class GoodsReceivedNote(AuditedMixin, CompanyScopedMixin, Base):
+    """A receipt of goods from a supplier — the *goods* half of the Sage GRV two-step (§B.1).
+
+    **Receiving is not being billed.** The stock arrives, the inventory account rises, and the
+    other leg is the GRN accrual: we owe for these goods, we just do not have the invoice yet.
+    The invoice arrives later, relieves the accrual for what it actually covers, and sends the
+    difference to purchase price variance. Between the two the accrual carries exactly the
+    value of everything received and not yet billed — which is the phase invariant, and the
+    reason this table exists rather than the receipt being folded into the supplier invoice.
+
+    **Numbering.** The GRN is the stock document, so its entry takes the GRN's number, exactly
+    as `partner_documents` and `inventory_documents` do. A zero-cost receipt posts no entry at
+    all and claims a number itself, which is why `GRN` registers two claimants.
+
+    `purchase_order_id` is nullable here and stays unconstrained until step 3 creates
+    `purchase_orders`: a receipt against no order is a direct receipt with its cost keyed on
+    the line, and it is a first-class case rather than a degenerate one.
+    """
+
+    __tablename__ = "goods_received_notes"
+    __table_args__ = (
+        UniqueConstraint("company_id", "id", name="uq_goods_received_notes_company_id_id"),
+        UniqueConstraint("company_id", "number", name="uq_goods_received_notes_company_number"),
+        ForeignKeyConstraint(
+            ["company_id", "partner_id"],
+            ["partners.company_id", "partners.id"],
+            name="fk_goods_received_notes_partner",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "warehouse_id"],
+            ["warehouses.company_id", "warehouses.id"],
+            name="fk_goods_received_notes_warehouse",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "currency_id"],
+            ["currencies.company_id", "currencies.id"],
+            name="fk_goods_received_notes_currency",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "journal_entry_id"],
+            ["journal_entries.company_id", "journal_entries.id"],
+            name="fk_goods_received_notes_journal_entry",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "reversal_entry_id"],
+            ["journal_entries.company_id", "journal_entries.id"],
+            name="fk_goods_received_notes_reversal_entry",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "branch_id"],
+            ["branches.company_id", "branches.id"],
+            name="fk_goods_received_notes_branch",
+            ondelete="RESTRICT",
+        ),
+        Index(
+            "uq_goods_received_notes_company_idempotency_key",
+            "company_id",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=text("idempotency_key IS NOT NULL"),
+        ),
+        Index("ix_goods_received_notes_company_partner", "company_id", "partner_id"),
+        Index("ix_goods_received_notes_company_date", "company_id", "grn_date"),
+        CheckConstraint("exchange_rate > 0", name="positive_exchange_rate"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    number: Mapped[str] = mapped_column(String(30), nullable=False)
+    partner_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    #: No foreign key until step 3 creates `purchase_orders`.
+    purchase_order_id: Mapped[int | None] = mapped_column(BigInteger)
+    warehouse_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    branch_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    grn_date: Mapped[date] = mapped_column(Date, nullable=False)
+    #: The supplier's own delivery-note number, as written on the paper that came with the
+    #: goods. Not ours, not unique, and the thing a storeman actually quotes.
+    supplier_reference: Mapped[str | None] = mapped_column(String(50))
+    description: Mapped[str] = mapped_column(String(500), nullable=False)
+    currency_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    exchange_rate: Mapped[Decimal] = mapped_column(RATE, nullable=False)
+    status: Mapped[GrnStatus] = mapped_column(
+        grn_status_enum, nullable=False, default=GrnStatus.RECEIVED
+    )
+    #: None when every line was received at zero cost — the receipt moved quantity and the
+    #: ledger had nothing to record, so there is no entry and the number is this row's own.
+    journal_entry_id: Mapped[int | None] = mapped_column(BigInteger)
+    reversal_entry_id: Mapped[int | None] = mapped_column(BigInteger)
+    reversed_on: Mapped[date | None] = mapped_column(Date)
+    idempotency_key: Mapped[str | None] = mapped_column(String(120))
+    idempotency_hash: Mapped[str | None] = mapped_column(String(64))
+
+    lines: Mapped[list["GoodsReceivedNoteLine"]] = relationship(
+        back_populates="grn", order_by="GoodsReceivedNoteLine.line_no", cascade="all, delete-orphan"
+    )
+
+
+class GoodsReceivedNoteLine(AuditedMixin, CompanyScopedMixin, Base):
+    """One item received, and the value the accrual carries for it.
+
+    **`value` is frozen at receipt and never recomputed.** It is
+    `round(base_quantity x unit_cost x rate at grn_date)` to the base currency's places, and
+    it is what the match relieves — pro rata, with the last match taking whatever is left, so
+    a fully matched line relieves exactly what it accrued and the accrual returns to zero to
+    the franc. Recomputing it later from a rate or a price that has since moved is precisely
+    how an accrual stops tying out.
+
+    There is no `quantity_matched` column here and there never will be: matched quantity is
+    the sum of the posted, unreversed supplier-invoice lines carrying this line's id, and a
+    reversal changes it by construction (decision 4). The v4 design this rebuild exists to
+    delete kept a running column here.
+    """
+
+    __tablename__ = "goods_received_note_lines"
+    __table_args__ = (
+        UniqueConstraint("company_id", "id", name="uq_goods_received_note_lines_company_id_id"),
+        UniqueConstraint("grn_id", "line_no", name="uq_goods_received_note_lines_line_no"),
+        ForeignKeyConstraint(
+            ["company_id", "grn_id"],
+            ["goods_received_notes.company_id", "goods_received_notes.id"],
+            name="fk_goods_received_note_lines_grn",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "item_id"],
+            ["items.company_id", "items.id"],
+            name="fk_goods_received_note_lines_item",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "uom_id"],
+            ["uoms.company_id", "uoms.id"],
+            name="fk_goods_received_note_lines_uom",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "warehouse_id"],
+            ["warehouses.company_id", "warehouses.id"],
+            name="fk_goods_received_note_lines_warehouse",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "stock_move_id"],
+            ["stock_moves.company_id", "stock_moves.id"],
+            name="fk_goods_received_note_lines_stock_move",
+            ondelete="RESTRICT",
+        ),
+        Index("ix_goods_received_note_lines_grn", "company_id", "grn_id"),
+        Index("ix_goods_received_note_lines_item", "company_id", "item_id"),
+        CheckConstraint("base_quantity > 0", name="base_quantity_positive"),
+        CheckConstraint("unit_cost >= 0", name="unit_cost_not_negative"),
+        CheckConstraint("value >= 0", name="value_not_negative"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    grn_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    line_no: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    #: No foreign key until step 3 creates `purchase_order_lines`.
+    purchase_order_line_id: Mapped[int | None] = mapped_column(BigInteger)
+    item_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    uom_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    warehouse_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    description: Mapped[str | None] = mapped_column(String(500))
+    #: As keyed, in `uom_id`.
+    quantity: Mapped[Decimal] = mapped_column(QUANTITY, nullable=False)
+    #: The same amount in the item's base unit — what every derived figure counts.
+    base_quantity: Mapped[Decimal] = mapped_column(QUANTITY, nullable=False)
+    #: Per base unit, in the GRN's currency.
+    unit_cost: Mapped[Decimal] = mapped_column(COST, nullable=False)
+    #: Frozen base-currency value; what the accrual carries and the match relieves.
+    value: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
+    project_id: Mapped[int | None] = mapped_column(BigInteger)
+    stock_move_id: Mapped[int | None] = mapped_column(BigInteger)
+
+    grn: Mapped[GoodsReceivedNote] = relationship(back_populates="lines")

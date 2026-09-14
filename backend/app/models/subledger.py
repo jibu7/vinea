@@ -308,6 +308,12 @@ class PartnerDocumentLine(AuditedMixin, CompanyScopedMixin, Base):
             ondelete="RESTRICT",
         ),
         ForeignKeyConstraint(
+            ["company_id", "grn_line_id"],
+            ["goods_received_note_lines.company_id", "goods_received_note_lines.id"],
+            name="fk_partner_document_lines_grn_line",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
             ["company_id", "returns_line_id"],
             ["partner_document_lines.company_id", "partner_document_lines.id"],
             name="fk_partner_document_lines_returns_line",
@@ -371,13 +377,24 @@ class PartnerDocumentLine(AuditedMixin, CompanyScopedMixin, Base):
     #: The SO line (AR) or PO line (AP) this line fulfils. No foreign key yet — the order
     #: tables arrive with the order service, and the constraint arrives with them.
     order_line_id: Mapped[int | None] = mapped_column(BigInteger)
-    #: The GRN line this supplier-invoice line matches. Same: constrained once GRNs exist.
+    #: The GRN line this supplier-invoice line matches — the join the relieved value and
+    #: the matched quantity are both computed over.
     grn_line_id: Mapped[int | None] = mapped_column(BigInteger)
     #: The invoice line this credit-note line returns, so the return is valued at the cost
     #: that was issued rather than at today's average.
     returns_line_id: Mapped[int | None] = mapped_column(BigInteger)
     #: Set on a component line, pointing at the kit line it was exploded from.
     kit_parent_line_id: Mapped[int | None] = mapped_column(BigInteger)
+    #: What a matched line took off the GRN accrual, in base currency. Set only when
+    #: `grn_line_id` is, and immutable once posted — an arithmetic fact of this posting in the
+    #: same sense `net_amount` is, not a total anybody maintains.
+    #:
+    #: **Stored rather than derived, deliberately.** A pro-rata share cannot be recomputed
+    #: once a sibling has been reversed: value 1000 received over quantity 3 and matched
+    #: 1 + 1 + 1 relieves 333 + 333 + 334, and reversing the first leaves the ledger having
+    #: relieved 667 where a recomputation over the survivors says 666. The accrual proof would
+    #: be off by a franc and would stay off.
+    accrual_relieved: Mapped[Decimal | None] = mapped_column(MONEY)
 
     document: Mapped[PartnerDocument] = relationship(back_populates="lines")
 

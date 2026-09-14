@@ -16,6 +16,7 @@ from starlette.requests import Request
 
 from app.core.errors import ConflictError, NotFoundError
 from app.core.permissions import AP_CREDIT_LIMIT_OVERRIDE, AR_CREDIT_LIMIT_OVERRIDE
+from app.inventory import masters as inventory_masters
 from app.kernel import posting
 from app.kernel.errors import LedgerStateError, PostingError
 from app.kernel.events import InstrumentMatured, LineSpec, PartnerDocumentPosted
@@ -31,6 +32,7 @@ from app.kernel.money import (
 from app.kernel.sequences import DocType
 from app.models.currency import Currency
 from app.models.gl import CASHBOOK_CONTROL_TYPES, GLAccount
+from app.models.inventory import Item, ItemType
 from app.models.journal import JournalEntry
 from app.models.partner import Partner, PartnerRole, PaymentTerms, TaxMode
 from app.models.subledger import (
@@ -103,7 +105,19 @@ CREDIT_LIMIT_OVERRIDE = {
 
 @dataclass(frozen=True)
 class LineInput:
-    unit_price: Decimal
+    """A GL line, or an **item line** when `item_id` is set (P6 decision 1).
+
+    One shape, one service. What an item adds is a catalogue to default from — the price, the
+    tax code and the account all fall back to the item's — and, for a *stock* item, a
+    companion stock move. Service and non-stock items are ordinary lines that happen to carry
+    an item dimension, which is what lets P10 report on them.
+
+    `unit_price` stays required for a GL line and becomes optional for an item line, where
+    `None` means "take the item's selling price", converted between inclusive and exclusive to
+    suit the document's tax mode.
+    """
+
+    unit_price: Decimal | None = None
     quantity: Decimal = ONE
     discount_percent: Decimal = ZERO
     description: str | None = None
@@ -112,6 +126,21 @@ class LineInput:
     tax_code_id: int | None = None
     branch_id: int | None = None
     project_id: int | None = None
+    # --- P6 item line ------------------------------------------------------------------
+    item_id: int | None = None
+    #: The unit `quantity` is keyed in; defaults to the item's base unit.
+    uom_id: int | None = None
+    #: Where the stock moves from or to. Only a stock item uses it.
+    warehouse_id: int | None = None
+    #: The GRN line this supplier-invoice line matches (decision 6).
+    grn_line_id: int | None = None
+    #: The invoice line a credit-note line returns, so the return is valued at the cost that
+    #: was actually issued rather than at today's average.
+    returns_line_id: int | None = None
+    #: Set on a component line; the index (1-based) of the kit line it was exploded from.
+    kit_parent_line_no: int | None = None
+    #: The SO line (AR) or PO line (AP) this line fulfils. Unused until step 3.
+    order_line_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -150,10 +179,36 @@ class _ComputedLine:
     project_id: int | None
     net: Decimal
     tax: Decimal
+    # --- P6 item line ------------------------------------------------------------------
+    item: Item | None = None
+    uom_id: int | None = None
+    base_quantity: Decimal | None = None
+    warehouse_id: int | None = None
+    unit_price: Decimal = ZERO
+    #: Base-currency value the companion stock posting moved for this line: the cost issued
+    #: on a sale, the cost received on a return or an unmatched purchase. Filled in after the
+    #: companion posts, which is why the companion posts first.
+    stock_value: Decimal | None = None
+    #: What this line took off the GRN accrual, when it matched one.
+    accrual_relieved: Decimal | None = None
 
     @property
     def gross(self) -> Decimal:
         return self.net + self.tax
+
+    @property
+    def is_item_line(self) -> bool:
+        return self.item is not None
+
+    @property
+    def moves_stock(self) -> bool:
+        """Only a stock item moves stock, and a matched purchase line moves none: the goods
+        arrived on the GRN, and the invoice only says what they cost."""
+        return (
+            self.item is not None
+            and self.item.item_type == ItemType.STOCK
+            and self.source.grn_line_id is None
+        )
 
 
 # --- Reads ----------------------------------------------------------------------------------
@@ -261,6 +316,7 @@ def post_document(
         raise LedgerStateError(f"{partner.name} is on hold", code="partner_on_hold")
 
     accounts = role_accounts(db, company_id, role)
+    gl_settings = posting.gl_settings_for(db, company_id)
     control_account_id = control_account_for(db, company_id, role, settings.control_account_id)
     currency = _resolve_currency(db, company_id, data.currency_id or partner.currency_id)
     tax_mode = data.tax_mode or settings.tax_mode
@@ -279,11 +335,14 @@ def post_document(
             db,
             company_id,
             data,
+            role=role,
             currency=currency,
             tax_mode=tax_mode,
             settings=settings,
             branch_id=branch_id,
             project_id=project_id,
+            default_warehouse_id=gl_settings.default_warehouse_id,
+            accrual_account_id=gl_settings.grn_accrual_account_id,
         )
         net_total = sum((line.net for line in computed), ZERO)
         tax_total = sum((line.tax for line in computed), ZERO)
@@ -448,7 +507,10 @@ def post_document(
                 line_no=index,
                 description=line.source.description,
                 quantity=line.source.quantity,
-                unit_price=line.source.unit_price,
+                # The **resolved** price, not the keyed one: an item line may have taken it
+                # from the catalogue, and the line has to record what it was actually priced
+                # at rather than the blank the operator left.
+                unit_price=line.unit_price,
                 discount_percent=line.source.discount_percent,
                 gl_account_id=_line_account_id(entry, net_positions[index - 1]),
                 tax_code_id=line.tax_code_id,
@@ -457,6 +519,14 @@ def post_document(
                 net_amount=line.net,
                 tax_amount=line.tax,
                 gross_amount=line.gross,
+                item_id=line.item.id if line.item is not None else None,
+                uom_id=line.uom_id,
+                base_quantity=line.base_quantity,
+                warehouse_id=line.warehouse_id,
+                order_line_id=line.source.order_line_id,
+                grn_line_id=line.source.grn_line_id,
+                returns_line_id=line.source.returns_line_id,
+                accrual_relieved=line.accrual_relieved,
             )
             for index, line in enumerate(computed, 1)
         ]
@@ -570,25 +640,151 @@ def _settlement_account(
     return account.id
 
 
+def _resolve_item_line(
+    db: Session,
+    company_id: int,
+    role: PartnerRole,
+    index: int,
+    line: LineInput,
+    *,
+    tax_mode: TaxMode,
+    default_warehouse_id: int | None,
+    accrual_account_id: int | None,
+) -> tuple[Item, int, Decimal, int | None, Decimal, int | None, int | None]:
+    """Everything an item line takes from the catalogue (decision 1).
+
+    Returns `(item, uom_id, base_quantity, warehouse_id, unit_price, tax_code_id,
+    gl_account_id)`. Each default is the 3rd link of the ADR-05 chain: a value keyed on the
+    line always wins, and only where the line is silent does the item speak.
+
+    **The account depends on the side and on the kind of item**, and the asymmetry is the
+    whole GRV design. An AR line credits revenue. An AP line for a *stock* item debits the
+    **GRN accrual**, not an expense: the cost is already in inventory — it arrived with the
+    goods — and the invoice only relieves what was accrued for them. An AP line for a service
+    or non-stock item has no goods behind it and expenses to the item's purchase account.
+    """
+    item = inventory_masters.get_item(db, company_id, line.item_id)  # type: ignore[arg-type]
+    if not item.is_active:
+        raise LedgerStateError(
+            f"{item.code} is not active",
+            code="item_not_active",
+            field_errors={f"lines.{index}.item_id": ["not active"]},
+        )
+    if item.item_type == ItemType.KIT and role == PartnerRole.AP:
+        # A kit is a virtual bundle that exists to be sold, never bought (decision 8).
+        raise LedgerStateError(
+            f"{item.code} is a kit and cannot be purchased",
+            code="kit_not_purchasable",
+            field_errors={f"lines.{index}.item_id": ["a kit cannot be purchased"]},
+        )
+
+    uom_id = line.uom_id or item.base_uom_id
+    uom = inventory_masters.get_uom(db, company_id, uom_id)
+    base_quantity = inventory_masters.to_base_quantity(line.quantity, uom, item)
+
+    warehouse_id: int | None = None
+    if item.item_type == ItemType.STOCK:
+        warehouse_id = line.warehouse_id or default_warehouse_id
+        if warehouse_id is None:
+            raise LedgerStateError(
+                "No warehouse on the line or in the defaults",
+                code="warehouse_required",
+                field_errors={f"lines.{index}.warehouse_id": ["required"]},
+            )
+        warehouse = inventory_masters.get_warehouse(db, company_id, warehouse_id)
+        if warehouse.is_in_transit:
+            raise LedgerStateError(
+                "The in-transit warehouse is not selectable on a document",
+                code="in_transit_warehouse_locked",
+                field_errors={f"lines.{index}.warehouse_id": ["not selectable"]},
+            )
+
+    # Price: the line's, or the item's selling price turned to suit the document's tax mode.
+    # `price_includes_tax` is a fact about the *catalogue* price; `tax_mode` is a fact about
+    # the document. When they disagree the price has to be converted, or an inclusive
+    # catalogue sold on an exclusive document silently charges tax twice.
+    unit_price = line.unit_price
+    if unit_price is None:
+        unit_price = item.selling_price if role == PartnerRole.AR else ZERO
+    tax_code_id = line.tax_code_id
+    if tax_code_id is None:
+        tax_code_id = (
+            item.default_sales_tax_code_id
+            if role == PartnerRole.AR
+            else item.default_purchase_tax_code_id
+        )
+
+    gl_account_id = line.gl_account_id
+    if gl_account_id is None:
+        if role == PartnerRole.AR:
+            gl_account_id = item.sales_account_id
+        elif item.item_type == ItemType.STOCK:
+            gl_account_id = accrual_account_id
+        else:
+            gl_account_id = item.purchase_account_id
+    return item, uom.id, base_quantity, warehouse_id, unit_price, tax_code_id, gl_account_id
+
+
 def _compute_lines(
     db: Session,
     company_id: int,
     data: DocumentInput,
     *,
+    role: PartnerRole,
     currency: Currency,
     tax_mode: TaxMode,
     settings: object,
     branch_id: int | None,
     project_id: int | None,
+    default_warehouse_id: int | None = None,
+    accrual_account_id: int | None = None,
 ) -> list[_ComputedLine]:
     """Per-line tax, half-up to the document currency's decimals (decision 11). Exclusive:
-    the entered amount is net. Inclusive: it is gross and the tax is carved out of it."""
+    the entered amount is net. Inclusive: it is gross and the tax is carved out of it.
+
+    An **item line** resolves its defaults from the catalogue first (`_resolve_item_line`) and
+    is then priced exactly like a GL line — one code path, as decision 2 asks, rather than a
+    second service that would have to agree with this one about tax forever.
+    """
     places = currency.decimal_places
     default_tax_code_id = getattr(settings, "default_tax_code_id", None)
     computed: list[_ComputedLine] = []
     for index, line in enumerate(data.lines):
+        item: Item | None = None
+        uom_id: int | None = None
+        base_quantity: Decimal | None = None
+        warehouse_id: int | None = None
+        unit_price = line.unit_price
+        tax_code_id = line.tax_code_id
+        gl_account_id = line.gl_account_id
+        if line.item_id is not None:
+            (
+                item,
+                uom_id,
+                base_quantity,
+                warehouse_id,
+                unit_price,
+                tax_code_id,
+                gl_account_id,
+            ) = _resolve_item_line(
+                db,
+                company_id,
+                role,
+                index,
+                line,
+                tax_mode=tax_mode,
+                default_warehouse_id=default_warehouse_id,
+                accrual_account_id=accrual_account_id,
+            )
+        if unit_price is None:
+            raise PostingError(
+                f"Line {index + 1} has no price",
+                code="invalid_amount",
+                field_errors={f"lines.{index}.unit_price": ["required"]},
+            )
+
         gross_or_net = round_amount(
-            line.quantity * line.unit_price * (ONE - line.discount_percent / HUNDRED), places
+            line.quantity * unit_price * (ONE - line.discount_percent / HUNDRED), places
         )
         if gross_or_net <= ZERO:
             raise PostingError(
@@ -596,7 +792,8 @@ def _compute_lines(
                 code="invalid_amount",
                 field_errors={f"lines.{index}.unit_price": ["must be positive"]},
             )
-        tax_code_id = line.tax_code_id if line.tax_code_id is not None else default_tax_code_id
+        if tax_code_id is None:
+            tax_code_id = default_tax_code_id
         net, tax = gross_or_net, ZERO
         if tax_code_id is not None:
             tax_code = resolve_tax_code(db, company_id, tax_code_id, data.document_date)
@@ -610,13 +807,18 @@ def _compute_lines(
         computed.append(
             _ComputedLine(
                 source=line,
-                gl_account_id=line.gl_account_id,
+                gl_account_id=gl_account_id,
                 transaction_type=line.transaction_type,
                 tax_code_id=tax_code_id,
                 branch_id=line.branch_id or branch_id,
                 project_id=line.project_id or project_id,
                 net=net,
                 tax=tax,
+                item=item,
+                uom_id=uom_id,
+                base_quantity=base_quantity,
+                warehouse_id=warehouse_id,
+                unit_price=unit_price,
             )
         )
     return computed
