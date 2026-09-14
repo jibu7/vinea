@@ -51,9 +51,32 @@ from tests.order_entry.invariants import assert_order_invariants
 from tests.subledger.invariants import assert_subledger_invariants
 
 _EXAMPLE = itertools.count()
+#: Which refusals the generator actually provoked. **Measured, not assumed**: the machine
+#: used to clamp every match to the remaining quantity, which meant `match_exceeds_receipt`
+#: could not be drawn at all and the suite looked as though it covered a boundary it never
+#: reached. Counting them is how that stays honest.
+_REFUSALS: dict[str, int] = {}
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _report_refusals():  # noqa: ANN202
+    yield
+    if _REFUSALS:
+        print("\n[property] refusals provoked:", dict(sorted(_REFUSALS.items())))
 ZERO = Decimal(0)
 
-OPERATIONS = ("receive", "match", "sell", "return_in", "return_out", "reverse")
+OPERATIONS = (
+    "receive",
+    "match",
+    "sell",
+    "return_in",
+    "return_out",
+    "reverse",
+    # Reversing the *receipt* rather than a document. Legal only while nothing has matched
+    # against it, so this is what exercises `grn_matched` — and, when it is legal, the path
+    # where an unmatched receipt's accrual credit has to come back off the account.
+    "reverse_grn",
+)
 
 QUANTITIES = st.integers(min_value=1, max_value=40).map(Decimal)
 COSTS = st.decimals(min_value=Decimal("1"), max_value=Decimal("2000"), places=2)
@@ -126,12 +149,11 @@ def _step(db: Session, fixture: OrderEntry, operation: str, quantity, cost, pick
         if not lines:
             return
         line = lines[pick % len(lines)]
-        already = grn_service.matched_quantities(db, fixture.company_id, [line.id]).get(
-            line.id, ZERO
-        )
-        remaining = line.base_quantity - already
-        if remaining <= ZERO:
-            return
+        # **Not clamped to the remaining quantity, deliberately.** Clamping made the machine
+        # unable to draw an over-match at all, so `match_exceeds_receipt` was never exercised
+        # by the property suite — only by a unit test that asks for it directly. The refusal
+        # is caught and skipped like any other illegal step, and the quantity is drawn as it
+        # fell, so the boundary gets hit from both sides.
         documents_service.post_document(
             db,
             fixture.company_id,
@@ -144,7 +166,7 @@ def _step(db: Session, fixture: OrderEntry, operation: str, quantity, cost, pick
                 lines=(
                     documents_service.LineInput(
                         item_id=fixture.stock_item.id,
-                        quantity=min(quantity, remaining),
+                        quantity=quantity,
                         unit_price=cost,
                         grn_line_id=line.id,
                     ),
@@ -200,6 +222,27 @@ def _step(db: Session, fixture: OrderEntry, operation: str, quantity, cost, pick
         )
         return
 
+    if operation == "reverse_grn":
+        grns = [
+            grn
+            for grn in db.scalars(
+                select(grn_service.GoodsReceivedNote).where(
+                    grn_service.GoodsReceivedNote.company_id == fixture.company_id
+                )
+            )
+            if grn.status != GrnStatus.REVERSED
+        ]
+        if not grns:
+            return
+        grn_service.reverse_grn(
+            db,
+            grns[pick % len(grns)],
+            on_date=MARCH,
+            reason="Property reversal",
+            actor=fixture.owner,
+        )
+        return
+
     if operation == "reverse":
         documents = _documents(db, fixture)
         if not documents:
@@ -215,7 +258,10 @@ def _drive(db: Session, fixture: OrderEntry, plan: list[tuple]) -> None:
     for operation, quantity, cost, pick in plan:
         try:
             _step(db, fixture, operation, quantity, Decimal(cost), pick)
-        except (LedgerStateError, PostingError):
+        except (LedgerStateError, PostingError) as refused:
+            _REFUSALS[getattr(refused, "code", "?")] = (
+                _REFUSALS.get(getattr(refused, "code", "?"), 0) + 1
+            )
             # An illegal step for the state we are in: matched beyond the receipt, issued
             # what is not there, reversed what is already reversed. Skipped, not failed.
             #

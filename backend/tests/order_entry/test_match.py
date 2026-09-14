@@ -195,3 +195,41 @@ def test_a_return_to_supplier_debits_the_accrual_at_the_issued_cost(
     # Partner side: the supplier is credited with the 5,100 claimed.
     partner = _amounts(db, order_entry, debit_note.journal_entry_id)
     assert partner["2100"] == Decimal(5_100)
+
+
+def test_reversing_a_matched_invoice_reopens_the_grn_line(
+    db: Session, order_entry: OrderEntry
+) -> None:
+    """Decision 6's last clause: a matched invoice reverses like any other P4 document, and
+    the GRN line's matched quantity falls **by construction** — nothing recalculates it and
+    nothing has to remember to.
+
+    `matched` is a query over posted, unreversed invoice lines, so the reversal that changes
+    the document's status is the same act that changes the receipt's. The accrual goes back up
+    by exactly what that invoice relieved, and the GRN becomes matchable again.
+    """
+    grn = _receive(db, order_entry, "10", "1000")
+    line_id = grn.lines[0].id
+
+    invoice = _invoice(db, order_entry, line_id, "10", "1000")
+    db.refresh(grn)
+    assert grn_service.refresh_status(db, grn) == GrnStatus.MATCHED
+    assert grn_service.matched_quantities(db, order_entry.company_id, [line_id])[
+        line_id
+    ] == Decimal(10)
+
+    documents_service.reverse_document(
+        db, invoice, on_date=MARCH, reason="Billed against the wrong receipt",
+        actor=order_entry.owner,
+    )
+
+    # The line is open again, with nothing having been recomputed.
+    assert grn_service.matched_quantities(db, order_entry.company_id, [line_id]).get(
+        line_id, ZERO
+    ) == ZERO
+    assert grn_service.refresh_status(db, grn) == GrnStatus.RECEIVED
+
+    # And it can be matched afresh — the whole point of reopening it.
+    again = _invoice(db, order_entry, line_id, "10", "1000")
+    assert again.lines[0].accrual_relieved == Decimal(10_000)
+    assert grn_service.refresh_status(db, grn) == GrnStatus.MATCHED
