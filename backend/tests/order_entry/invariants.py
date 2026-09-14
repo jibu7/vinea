@@ -12,6 +12,13 @@ its siblings is reversed: value 1 000 received over quantity 3 and matched 1 + 1
 333 + 333 + 334, and reversing the first leaves the ledger having relieved 667 where a
 recomputation over the survivors gives 666. An invariant that recomputed would disagree with
 the ledger by a franc and would blame the ledger.
+
+The second is the **landed-cost clearing proof**: the clearing account's balance equals what
+was booked to it less what has been allocated off it. Freight, duty and insurance arrive on
+documents this module knows nothing about — a forwarder's invoice, a cashbook payment — and
+landed-cost documents take them off again. Reading "allocated" from `landed_cost_lines.share`
+rather than from the ledger is what makes this a cross-check: the documents say one number and
+the account says another only if the posting and the split have come apart.
 """
 
 from collections import defaultdict
@@ -23,7 +30,12 @@ from sqlalchemy.orm import Session
 from app.kernel.posting import gl_settings_for
 from app.models.inventory import GoodsReceivedNote, GoodsReceivedNoteLine, GrnStatus
 from app.models.journal import JournalEntry, JournalLine, JournalStatus
-from app.models.order_entry import PurchaseOrder, SalesOrder
+from app.models.order_entry import (
+    LandedCostDocument,
+    LandedCostStatus,
+    PurchaseOrder,
+    SalesOrder,
+)
 from app.models.subledger import DocumentStatus, PartnerDocument, PartnerDocumentLine
 from app.order_entry import grn as grn_service
 from app.order_entry import quantities as order_quantities
@@ -133,6 +145,14 @@ def assert_order_invariants(db: Session, company_id: int) -> None:
           this is the assertion that none of them has a gap. An over-fulfilled line makes
           `committed` negative on that line and leaves the status derivation with nothing
           sensible to say.
+       7. The landed-cost clearing account's balance equals what was booked to it less what
+          unreversed landed-cost documents have allocated off it — so a fully allocated
+          clearing account is zero. Read from `landed_cost_lines.share`, never from the
+          ledger, so the two have to agree rather than being the same number twice.
+       8. Every unreversed landed-cost document's shares sum to its amount, exactly. That is
+          the residue rule, and it is what makes clause 7 reachable: a document whose shares
+          summed to a franc less than its amount would leave the clearing account holding that
+          franc forever, and no later allocation could take it off.
     """
     settings = gl_settings_for(db, company_id)
     accrual_account_id = settings.grn_accrual_account_id
@@ -223,6 +243,72 @@ def assert_order_invariants(db: Session, company_id: int) -> None:
             f"{kind} order line {over[0].line_id} ordered {over[0].ordered} and has "
             f"{over[0].fulfilled} fulfilled"
         )
+
+    # 7 and 8. The landed-cost clearing proof, and the residue rule underneath it.
+    _assert_clearing_clears(db, company_id, settings.landed_cost_clearing_account_id)
+
+
+def _assert_clearing_clears(db: Session, company_id: int, clearing_account_id: int | None) -> None:
+    """The clearing account holds `booked - allocated`, and every allocation allocates it all.
+
+    "Booked" is everything posted to the account by anything that is **not** a landed cost —
+    the forwarder's invoice, the duty payment — and "allocated" is the sum of the shares the
+    landed-cost documents wrote. Taking the second from the document tables rather than from
+    the entry is the whole point: if a posting ever put a different number on the account from
+    the one the shares recorded, this is what says so.
+    """
+    if clearing_account_id is None:
+        return
+    documents = list(
+        db.scalars(
+            select(LandedCostDocument).where(LandedCostDocument.company_id == company_id)
+        )
+    )
+
+    # 8 first, because 7 is only meaningful once it holds.
+    for document in documents:
+        if document.status != LandedCostStatus.POSTED:
+            continue
+        total = sum((line.share for line in document.lines), ZERO)
+        assert total == document.amount, (
+            f"{document.number} allocates {document.amount} and its shares sum to {total}"
+        )
+
+    allocation_entry_ids = {
+        document.journal_entry_id
+        for document in documents
+        if document.journal_entry_id is not None
+    } | {
+        document.reversal_entry_id
+        for document in documents
+        if document.reversal_entry_id is not None
+    }
+    rows = db.execute(
+        select(JournalLine.entry_id, JournalLine.base_amount)
+        .join(JournalEntry, JournalEntry.id == JournalLine.entry_id)
+        .where(
+            JournalLine.company_id == company_id,
+            JournalLine.gl_account_id == clearing_account_id,
+            JournalEntry.status == JournalStatus.POSTED,
+        )
+    ).all()
+    balance = sum((amount for _entry_id, amount in rows), ZERO)
+    booked = sum(
+        (amount for entry_id, amount in rows if entry_id not in allocation_entry_ids), ZERO
+    )
+    allocated = sum(
+        (
+            line.share
+            for document in documents
+            if document.status == LandedCostStatus.POSTED
+            for line in document.lines
+        ),
+        ZERO,
+    )
+    assert balance == booked - allocated, (
+        f"landed-cost clearing drift: the account says {balance}, booked less allocated says "
+        f"{booked - allocated} ({booked} booked, {allocated} allocated)"
+    )
 
 
 def verify_order_statuses(db: Session, company_id: int) -> list[str]:

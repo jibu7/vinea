@@ -135,6 +135,25 @@ class StockLine:
     project_id: int | None = None
     description: str | None = None
     source_line_id: int | None = None
+    #: **Where a revaluation goes when the location holds none of the item** (P6 decision 9).
+    #:
+    #: A revaluation of an empty location is refused — `nothing_to_revalue` — because value
+    #: sitting at a location that holds nothing is neither reportable nor true. That is still
+    #: the default, and every P5 caller gets it unchanged.
+    #:
+    #: Landed cost is the one case where the value has somewhere else to go. An import charge
+    #: is incurred for goods that may since have been sold, and its share then belongs in cost
+    #: of sales rather than in a carrying value that no longer exists — but it has to land on
+    #: the **same entry** as the shares that did revalue stock, or the clearing account would
+    #: be cleared by two postings and the document would not be one document. Setting this
+    #: names the account to use in that case: the line posts its value there, writes **no
+    #: move**, and leaves the caches alone.
+    #:
+    #: The test is made here rather than by the caller because "does this location hold any"
+    #: is only answerable under the costing lock, which is taken inside this service. A caller
+    #: that read the balance first could have it emptied underneath it between the read and
+    #: the posting, and would then quietly put freight into the cost of goods that are gone.
+    stockless_account_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -185,7 +204,12 @@ class StockPosting:
     #: a negative-stock crossing — and interleaves them with the keyed ones. A caller that
     #: needs to say "this line became that move" (a document writing its lines) must use this
     #: list, because counting positions in `moves` silently shifts the moment a residue lands.
-    keyed_moves: list[StockMove] = dc_field(default_factory=list)
+    #:
+    #: An entry is `None` only for a line that carried `stockless_account_id` and found its
+    #: location empty: it posted value and wrote no move. The alignment is what matters, so
+    #: the place is held rather than dropped. No P5 caller passes that field, so for all of
+    #: them every entry is a move, and `strict=True` zips against their own lines as before.
+    keyed_moves: list[StockMove | None] = dc_field(default_factory=list)
     #: True when an `Idempotency-Key` resolved to a posting that already existed. The moves
     #: are the ones written the first time; nothing was posted again.
     replayed: bool = False
@@ -613,6 +637,11 @@ class _Planned:
     unit_cost: Decimal | None
     cost_provisional: bool = False
     is_residue: bool = False
+    #: A landed-cost share against a location that holds none of the item (P6 decision 9).
+    #: It is a journal line and nothing else: `account_id` is the caller's stockless account
+    #: rather than the inventory account, no move is written, and the caches do not move —
+    #: there is no carrying value for it to be part of.
+    is_stockless: bool = False
     journal_line_index: int | None = None
     #: True when the contra account is itself item-required — P6's GRN accrual. Such a contra
     #: cannot be aggregated across items: the guard that protects it (VN008) demands an item
@@ -643,6 +672,33 @@ def _plan(
         item_state_now = ctx.item_states[item.id]
         location_now = ctx.location_states[location]
         if signed.quantity == ZERO and location_now.quantity == ZERO and not signed.is_correction:
+            if line.stockless_account_id is not None:
+                # **The stockless target** (P6 decision 9). The cost was incurred for goods
+                # that have since left this location, so it goes to the account the caller
+                # named — cost of sales — on this same entry, and the location is left exactly
+                # as it was. No move: a move with no quantity and no effect on carrying value
+                # would claim the stock ledger did something, and it did not.
+                #
+                # Deliberately *not* restated onto whatever is on the shelf now. The average
+                # rises from a revaluation onward and earlier issues are never restated (P5
+                # decision 4); charging this share to stock that arrived later would put the
+                # cost of one consignment into the cost of the next.
+                planned.append(
+                    _Planned(
+                        line=line,
+                        item=item,
+                        warehouse=warehouse,
+                        account_id=line.stockless_account_id,
+                        contra_account_id=contra_id,
+                        transaction_type_id=type_id,
+                        quantity=ZERO,
+                        value=line.value if line.value is not None else ZERO,
+                        unit_cost=None,
+                        is_stockless=True,
+                        contra_requires_item=ctx.contra_requires_item(contra_id),
+                    )
+                )
+                continue
             # A revaluation restates what stock is carried at. With no stock at the location
             # there is nothing to carry, and the value would simply sit there — a location
             # worth something while holding nothing, which is neither reportable nor true.
@@ -878,7 +934,9 @@ def post_stock_moves(
     _apply_caches(db, ctx)
     return StockPosting(
         entry=entry,
-        moves=written,
+        # `moves` is what was actually written, so a stockless share is not in it — it moved
+        # no stock. `keyed_moves` keeps the caller's positions and holds its place with `None`.
+        moves=[move for move in written if move is not None],
         keyed_moves=[
             move for move, plan in zip(written, planned, strict=True) if not plan.is_residue
         ],
@@ -893,12 +951,21 @@ def _write_moves(
     *,
     entry: JournalEntry | None,
     period_id: int,
-) -> list[StockMove]:
+) -> list[StockMove | None]:
+    """One move per plan, **aligned with `planned`** — `None` where a plan wrote none.
+
+    The only plan that writes no move is the stockless landed-cost share (decision 9), which is
+    a journal line and nothing else. The place is held rather than dropped so the caller can
+    still zip its own lines against the result.
+    """
     lines = list(entry.lines) if entry is not None else []
-    moves: list[StockMove] = []
+    moves: list[StockMove | None] = []
     _stock_service(db, on=True)
     try:
         for plan in planned:
+            if plan.is_stockless:
+                moves.append(None)
+                continue
             line = (
                 lines[plan.journal_line_index]
                 if plan.journal_line_index is not None and entry is not None
@@ -1022,12 +1089,19 @@ def revalue_stock(
     lines: Sequence[StockLine],
     actor: User,
 ) -> StockPosting:
-    """Value with no quantity (decision 4): a write-down or write-up of what is already there.
+    """Value with no quantity (P5 decision 4): a write-down or write-up of what is already there.
 
-    Not one of the two primitives decision 13 names, because P6 has no use for it — but a
-    revaluation *is* a move, it has to be valued and cached by the same code as every other
+    A revaluation *is* a move — it has to be valued and cached by the same code as every other
     move, and giving it its own entry point is what keeps a zero-quantity move from being a
     special case inside `receive_stock`.
+
+    **The one thing P6 added** (decision 9, landed cost). A line may carry
+    `stockless_account_id`, and then a location holding none of the item is no longer refused:
+    the value posts to that account on this same entry and writes no move. A line without it
+    behaves exactly as it did — `nothing_to_revalue`, unchanged, and every P5 caller is one of
+    those. Decision 9 asked for the extension rather than a second entry, because the shares
+    that revalue stock and the shares that do not are one document and have to clear the
+    landed-cost clearing account together.
     """
     for line in lines:
         if line.value is None or line.value == ZERO:

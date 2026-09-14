@@ -164,6 +164,19 @@ export const GrnStatus = {
 } as const;
 export type GrnStatus = (typeof GrnStatus)[keyof typeof GrnStatus];
 
+export const LandedCostBasis = {
+  VALUE: "value",
+  QUANTITY: "quantity",
+  WEIGHT: "weight",
+} as const;
+export type LandedCostBasis = (typeof LandedCostBasis)[keyof typeof LandedCostBasis];
+
+export const LandedCostStatus = {
+  POSTED: "posted",
+  REVERSED: "reversed",
+} as const;
+export type LandedCostStatus = (typeof LandedCostStatus)[keyof typeof LandedCostStatus];
+
 export const ItemType = {
   STOCK: "stock",
   SERVICE: "service",

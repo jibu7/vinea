@@ -60,13 +60,13 @@ class DocType(enum.StrEnum):
     # because the two entries are two postings and an auditor following either run must not
     # find a hole where the other one was.
     #
-    # `LCA` is **not** here yet, deliberately. A doc type with no claimant fails
-    # `test_every_doc_type_registers_a_claimant`, and a claimant naming a table that does not
-    # exist fails `test_every_claimant_names_a_real_table_and_column` — so a run enters this
-    # enum in the same commit as the table that holds its numbers, which for `LCA` is the step
-    # that creates `landed_cost_documents`. `STK` could be here at step 1 because its claimant
-    # is `journal_entries`, which has existed since P2; `GRN` arrived with the table that holds
-    # its numbers, and `SO` and `PO` arrive here with theirs.
+    # A run enters this enum in the same commit as the table that holds its numbers: a doc
+    # type with no claimant fails `test_every_doc_type_registers_a_claimant`, and a claimant
+    # naming a table that does not exist fails
+    # `test_every_claimant_names_a_real_table_and_column`. `STK` could be here at step 1
+    # because its claimant is `journal_entries`, which has existed since P2; `GRN` arrived with
+    # the table that holds its numbers, `SO` and `PO` with theirs, and `LCA` with
+    # `landed_cost_documents` at step 4.
     STOCK_COMPANION = "STK"
     #: A goods receipt. The GRN *is* the stock document, so its entry takes this number —
     #: and a receipt whose every line cost nothing posts no entry at all and holds the
@@ -78,6 +78,11 @@ class DocType(enum.StrEnum):
     #: and an auditor following the `SO-` run must not find a hole where one was withdrawn.
     SALES_ORDER = "SO"
     PURCHASE_ORDER = "PO"
+    #: A landed-cost allocation (Importation Split, decision 9). Its entry takes this number,
+    #: the way a GRN's does — and unlike a GRN there is no valueless case to register beside
+    #: it: a landed cost **always** values something, because an allocation of zero is refused
+    #: before a document exists.
+    LANDED_COST = "LCA"
 
 
 DEFAULT_PREFIXES: dict[str, str] = {
@@ -104,6 +109,7 @@ DEFAULT_PREFIXES: dict[str, str] = {
     DocType.GOODS_RECEIVED: "GRN-",
     DocType.SALES_ORDER: "SO-",
     DocType.PURCHASE_ORDER: "PO-",
+    DocType.LANDED_COST: "LCA-",
 }
 
 
@@ -197,6 +203,9 @@ SEQUENCE_CLAIMANTS: dict[str, tuple[SequenceClaimant, ...]] = {
     DocType.GOODS_RECEIVED: (_ENTRY, _VALUELESS_GRN),
     DocType.SALES_ORDER: (_SALES_ORDER,),
     DocType.PURCHASE_ORDER: (_PURCHASE_ORDER,),
+    # One claimant, not two: an allocation of nothing never becomes a document, so there
+    # is no valueless landed cost to hold a number of its own.
+    DocType.LANDED_COST: (_ENTRY,),
 }
 
 

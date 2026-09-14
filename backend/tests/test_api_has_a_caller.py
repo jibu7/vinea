@@ -153,6 +153,20 @@ NO_UI: dict[str, str] = {
         "GAP (P6) — the Process invoice action on the step-7 GRV screen, which opens the "
         "supplier invoice in matching mode. Prepares a document; posts nothing."
     ),
+    # Step 4's landed cost. Its screen is **step 7** — Landed cost under Transactions → Order
+    # Entry, with the share preview and Reverse on the detail — and that step deletes these
+    # three lines.
+    "POST /api/v1/oe/landed-costs": (
+        "GAP (P6) — the Landed cost screen is step 7. Remove this entry with `/oe/landed-costs`."
+    ),
+    "POST /api/v1/oe/landed-costs/preview": (
+        "GAP (P6) — the share preview the step-7 Landed cost screen shows before Post. A POST "
+        "because the target list is a body and the answer depends on today's stock position; "
+        "it writes nothing."
+    ),
+    "POST /api/v1/oe/landed-costs/{document_id}/reverse": (
+        "GAP (P6) — the Reverse action on the step-7 Landed cost detail screen."
+    ),
     # --- GAP: the operator console, planned but unscheduled ------------------------------------
     "POST /api/v1/operator/tenants/{company_id}/activate": (
         "GAP (SaaS admin, Appendix C.2) — the operator console has no screens in any phase yet. "

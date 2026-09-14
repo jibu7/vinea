@@ -481,3 +481,235 @@ class PurchaseOrderLine(AuditedMixin, CompanyScopedMixin, Base):
     project_id: Mapped[int | None] = mapped_column(BigInteger)
 
     order: Mapped[PurchaseOrder] = relationship(back_populates="lines")
+
+
+# --- Landed cost (Importation Split, decision 9) ---------------------------------------------
+
+
+class LandedCostBasis(enum.StrEnum):
+    """How an amount is spread across the receipt lines it belongs to (§B.2).
+
+    `VALUE` apportions by each target line's received value, `QUANTITY` by its base quantity,
+    `WEIGHT` by base quantity x `items.weight_per_base_unit`. Freight usually goes by weight or
+    volume, duty by value, and a courier charge by the number of cartons; none of the three is a
+    default the others can be derived from, which is why the basis is a column and not a setting.
+
+    A `WEIGHT` allocation refuses a target whose item has no weight (`weight_missing`) rather
+    than treating it as nothing — a line with no weight would otherwise silently take a zero
+    share and push its cost onto the lines that did carry one.
+    """
+
+    VALUE = "value"
+    QUANTITY = "quantity"
+    WEIGHT = "weight"
+
+
+class LandedCostStatus(enum.StrEnum):
+    """**Two states, and there is deliberately no third.**
+
+    A landed-cost document posts in the same transaction it is created in — there is no draft,
+    because an allocation whose shares were computed against yesterday's receipts and posted
+    today would apportion against a position that has since moved. So it is `POSTED` from the
+    moment it exists, and `REVERSED` once undone.
+
+    In particular there is no `partially_allocated`: an allocation is all of its amount or none
+    of it. The residue rule (`shares sum to the amount exactly`) is what makes that true, and
+    the clearing-account invariant is what proves it.
+    """
+
+    POSTED = "posted"
+    REVERSED = "reversed"
+
+
+landed_cost_basis_enum = pg_enum(LandedCostBasis, "landed_cost_basis")
+landed_cost_status_enum = pg_enum(LandedCostStatus, "landed_cost_status")
+
+
+class LandedCostDocument(AuditedMixin, CompanyScopedMixin, Base):
+    """An import cost spread over the goods it belongs to — Evolution's Importation Split.
+
+    Freight, duty, insurance and clearing charges arrive on their own documents: a forwarder's
+    invoice, a cashbook payment to the revenue authority. Each lands on the **landed-cost
+    clearing account**, a plain account any of those documents can post to. This document is
+    what takes it off again and puts it into the cost of the stock it was incurred for.
+
+    **The amount is base currency, always.** A forwarder may invoice in dollars, but what the
+    clearing account holds is what was booked to it in base, and an allocation that worked in
+    document currency would clear a different number from the one sitting there.
+
+    **What it posts** (decision 9), all on one entry: for every target line whose warehouse
+    still holds the item, a `revalue_stock()` move — Dr Inventory / Cr Clearing, a zero-quantity
+    move that lifts the average from this posting onward and restates nothing earlier. For a
+    target whose location holds none of it any more, the share goes to **COGS** on that same
+    entry with no move at all, because the goods it was incurred for have already been sold and
+    there is no carrying value left to add it to. Either way the clearing account clears, which
+    is the property the whole design is arranged around.
+
+    `source_document_id` and `source_cashbook_line_id` are **informational**: they record where
+    the cost came from so a reader can get back to it, and nothing is derived from them. The
+    clearing account's balance is the arithmetic; these are the trail.
+
+    **No branch column, deliberately.** A journal entry carries no branch either — its *lines*
+    do — and a landed cost may spread one freight bill over receipts that landed in two
+    branches. Each share's journal line takes the branch of the warehouse its target sits in,
+    so the clearing account squares per branch by construction. A header branch would have had
+    to be either a restriction decision 9 does not ask for or a column naming one of several
+    places, and neither is true enough to store.
+    """
+
+    __tablename__ = "landed_cost_documents"
+    __table_args__ = (
+        UniqueConstraint("company_id", "id", name="uq_landed_cost_documents_company_id_id"),
+        UniqueConstraint("company_id", "number", name="uq_landed_cost_documents_company_number"),
+        ForeignKeyConstraint(
+            ["company_id", "journal_entry_id"],
+            ["journal_entries.company_id", "journal_entries.id"],
+            name="fk_landed_cost_documents_journal_entry",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "reversal_entry_id"],
+            ["journal_entries.company_id", "journal_entries.id"],
+            name="fk_landed_cost_documents_reversal_entry",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "source_document_id"],
+            ["partner_documents.company_id", "partner_documents.id"],
+            name="fk_landed_cost_documents_source_document",
+            ondelete="RESTRICT",
+        ),
+        Index(
+            "uq_landed_cost_documents_company_idempotency_key",
+            "company_id",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=text("idempotency_key IS NOT NULL"),
+        ),
+        Index("ix_landed_cost_documents_company_date", "company_id", "cost_date"),
+        CheckConstraint("amount > 0", name="amount_positive"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    number: Mapped[str] = mapped_column(String(30), nullable=False)
+    cost_date: Mapped[date] = mapped_column(Date, nullable=False)
+    description: Mapped[str] = mapped_column(String(500), nullable=False)
+    reference: Mapped[str | None] = mapped_column(String(50))
+    #: Base currency. See the class docstring: the clearing account holds base, so this does.
+    amount: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
+    basis: Mapped[LandedCostBasis] = mapped_column(landed_cost_basis_enum, nullable=False)
+    status: Mapped[LandedCostStatus] = mapped_column(
+        landed_cost_status_enum, nullable=False, default=LandedCostStatus.POSTED
+    )
+    #: Where the cost came from, for a reader following the trail. Nothing is derived from
+    #: either; see the class docstring.
+    source_document_id: Mapped[int | None] = mapped_column(BigInteger)
+    source_cashbook_line_id: Mapped[int | None] = mapped_column(BigInteger)
+    journal_entry_id: Mapped[int | None] = mapped_column(BigInteger)
+    reversal_entry_id: Mapped[int | None] = mapped_column(BigInteger)
+    reversed_on: Mapped[date | None] = mapped_column(Date)
+    idempotency_key: Mapped[str | None] = mapped_column(String(120))
+    idempotency_hash: Mapped[str | None] = mapped_column(String(64))
+
+    lines: Mapped[list["LandedCostLine"]] = relationship(
+        back_populates="document",
+        order_by="LandedCostLine.line_no",
+        cascade="all, delete-orphan",
+    )
+
+
+class LandedCostLine(AuditedMixin, CompanyScopedMixin, Base):
+    """One receipt line this cost was spread onto, and the share it took.
+
+    **`share` is stored, and that is not a running total.** It is what this posting actually
+    put into the cost of those goods — an arithmetic fact of the posting in the same sense
+    `journal_lines.base_amount` is, and the same reason `partner_document_lines.accrual_relieved`
+    is stored: a share cannot be recomputed later, because the weights it was struck against
+    (the received value, or today's stock position) move afterwards. Σ `share` over the lines
+    equals the document's `amount` exactly — the residue rule — and
+    `assert_order_invariants` proves the clearing account against that sum.
+
+    `stock_move_id` is NULL when the target was **stockless** at posting time — the location
+    held none of the item, so the share went to COGS on the entry and no move was written — and
+    `went_to_cogs` says so in the same row rather than leaving a reader to infer it from a NULL.
+    It is also NULL for a target whose share rounded to zero, which posts nothing at all; the
+    two are told apart by `went_to_cogs`, and the check constraints below hold all three shapes
+    apart.
+    """
+
+    __tablename__ = "landed_cost_lines"
+    __table_args__ = (
+        UniqueConstraint("company_id", "id", name="uq_landed_cost_lines_company_id_id"),
+        UniqueConstraint("document_id", "line_no", name="uq_landed_cost_lines_line_no"),
+        ForeignKeyConstraint(
+            ["company_id", "document_id"],
+            ["landed_cost_documents.company_id", "landed_cost_documents.id"],
+            name="fk_landed_cost_lines_document",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "grn_line_id"],
+            ["goods_received_note_lines.company_id", "goods_received_note_lines.id"],
+            name="fk_landed_cost_lines_grn_line",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "item_id"],
+            ["items.company_id", "items.id"],
+            name="fk_landed_cost_lines_item",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "warehouse_id"],
+            ["warehouses.company_id", "warehouses.id"],
+            name="fk_landed_cost_lines_warehouse",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "stock_move_id"],
+            ["stock_moves.company_id", "stock_moves.id"],
+            name="fk_landed_cost_lines_stock_move",
+            ondelete="RESTRICT",
+        ),
+        # A landed cost per GRN line is this join — the step-5 listing reads it, and so does
+        # anybody asking what a receipt actually ended up costing.
+        Index("ix_landed_cost_lines_grn_line", "company_id", "grn_line_id"),
+        Index("ix_landed_cost_lines_document", "company_id", "document_id"),
+        CheckConstraint("weight >= 0", name="weight_not_negative"),
+        CheckConstraint("share >= 0", name="share_not_negative"),
+        # The stockless rule, stated where it cannot drift: what went to cost of sales did not
+        # go into carrying value, so it has no move.
+        CheckConstraint(
+            "NOT went_to_cogs OR stock_move_id IS NULL", name="cogs_line_has_no_move"
+        ),
+        # And a share of nothing posts nothing. A target can take a zero share — a receipt
+        # booked at no cost under the `value` basis, or a weight small enough that its rounded
+        # share is zero and the residue went elsewhere — and it is still a target: the row
+        # records that it was considered and took nothing. What it must not do is look like
+        # either of the two things that *did* post.
+        CheckConstraint(
+            "(share = 0) = (stock_move_id IS NULL AND NOT went_to_cogs)",
+            name="zero_share_posts_nothing",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    document_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    line_no: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    grn_line_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    #: Copied from the GRN line so the listing and the share preview read one table. Held true
+    #: by nothing but this service, which is why neither is ever used to *find* the target.
+    item_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    warehouse_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    #: What this line contributed to the divisor — received value, base quantity, or
+    #: quantity x weight per base unit, depending on the document's basis. Stored because the
+    #: share cannot be re-derived once the receipts behind it have moved on.
+    weight: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
+    #: The share this line took, in base currency. Σ share == the document's amount, exactly.
+    share: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
+    #: True when the location held none of the item and the share went to COGS instead of into
+    #: carrying value. Checked against `stock_move_id` by a constraint above.
+    went_to_cogs: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    stock_move_id: Mapped[int | None] = mapped_column(BigInteger)
+
+    document: Mapped[LandedCostDocument] = relationship(back_populates="lines")
