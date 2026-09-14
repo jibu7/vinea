@@ -37,6 +37,8 @@ from app.models.inventory import GoodsReceivedNote, GoodsReceivedNoteLine, GrnSt
 from app.models.partner import PartnerRole
 from app.models.subledger import DocumentStatus, PartnerDocument, PartnerDocumentLine
 from app.models.user import User
+from app.order_entry import orders as order_service
+from app.order_entry import quantities as order_quantities
 from app.services.audit import record_audit
 from app.subledger import masters as partner_masters
 
@@ -55,7 +57,8 @@ class GrnLineInput:
     warehouse_id: int | None = None
     description: str | None = None
     project_id: int | None = None
-    #: Unconstrained until step 3; the remaining-quantity check arrives with it.
+    #: The purchase order line this receipt fulfils. A GRN line may not take a PO line past its
+    #: remaining quantity — `receipt_exceeds_order`, no tolerance in v1 (decision 6).
     purchase_order_line_id: int | None = None
 
 
@@ -205,7 +208,12 @@ def _resolve_lines(
     currency: Currency,
     rate: Decimal,
     default_warehouse_id: int | None,
+    supplier_id: int,
 ) -> list[_ResolvedLine]:
+    # Two receipts of the same order line inside one GRN would each pass a check made against
+    # what was received *before* this document, and together they could overrun the order. The
+    # running tally makes the check cumulative across the document as well as across documents.
+    claimed: dict[int, Decimal] = {}
     resolved: list[_ResolvedLine] = []
     for index, line in enumerate(data.lines):
         item = inventory_masters.get_item(db, company_id, line.item_id)
@@ -239,7 +247,38 @@ def _resolve_lines(
                 code="invalid_unit_cost",
                 field_errors={f"lines.{index}.unit_cost": ["cannot be negative"]},
             )
-        warehouse_id = line.warehouse_id or data.warehouse_id or default_warehouse_id
+        order_line = None
+        if line.purchase_order_line_id is not None:
+            order_line = order_service.assert_purchase_line_within_order(
+                db,
+                company_id,
+                index=index,
+                line_id=line.purchase_order_line_id,
+                base_quantity=base_quantity + claimed.get(line.purchase_order_line_id, ZERO),
+                partner_id=supplier_id,
+                field=f"lines.{index}.purchase_order_line_id",
+            )
+            if order_line.item_id != item.id:
+                raise LedgerStateError(
+                    f"{item.code} is not what that order line ordered",
+                    code="order_line_item_mismatch",
+                    field_errors={f"lines.{index}.item_id": ["does not match the order line"]},
+                )
+            claimed[line.purchase_order_line_id] = (
+                claimed.get(line.purchase_order_line_id, ZERO) + base_quantity
+            )
+
+        # **The order says where the goods are going.** A PO's delivery warehouse is the GRN's
+        # warehouse (the branch rule, carried forward): the accrual a receipt credits is proved
+        # in the branch the goods land in, so a receipt against an order defaults to the
+        # warehouse that order named rather than to whatever the company's default happens to
+        # be today.
+        warehouse_id = (
+            line.warehouse_id
+            or data.warehouse_id
+            or (order_line.warehouse_id if order_line is not None else None)
+            or default_warehouse_id
+        )
         if warehouse_id is None:
             raise LedgerStateError(
                 "No warehouse on the line, the document or the defaults",
@@ -319,6 +358,18 @@ def post_grn(
     settings = gl_settings_for(db, company_id)
     accrual_account_id = _accrual_account_id(db, company_id)
 
+    purchase_order = (
+        order_service.get_purchase_order(db, company_id, data.purchase_order_id)
+        if data.purchase_order_id is not None
+        else None
+    )
+    if purchase_order is not None and purchase_order.partner_id != partner.id:
+        raise LedgerStateError(
+            f"{purchase_order.number} belongs to another supplier",
+            code="order_partner_mismatch",
+            field_errors={"purchase_order_id": ["wrong supplier"]},
+        )
+
     currency = _resolve_currency(db, company_id, data.currency_id or partner.currency_id)
     rate = rate_on(db, currency, data.grn_date)
     resolved = _resolve_lines(
@@ -327,7 +378,14 @@ def post_grn(
         data,
         currency=currency,
         rate=rate,
-        default_warehouse_id=settings.default_warehouse_id,
+        # The order's delivery warehouse outranks the company default: a receipt against an
+        # order lands where the order said it would.
+        default_warehouse_id=(
+            purchase_order.warehouse_id
+            if purchase_order is not None
+            else settings.default_warehouse_id
+        ),
+        supplier_id=partner.id,
     )
     # **The branch is the warehouse's, always.** A receipt happens where the goods land, and
     # the accrual is proved per branch — so a header branch that disagreed with the warehouse
@@ -430,6 +488,10 @@ def post_grn(
         ]
     )
     db.flush()
+    # `received` is a query over unreversed GRN lines, so this receipt has already changed it.
+    # The purchase order's stored status is the order service's to write, and this is the
+    # service that changed what it caches (decision 4).
+    _refresh_orders(db, company_id, resolved)
     record_audit(
         db,
         company_id=company_id,
@@ -447,6 +509,18 @@ def post_grn(
         request=request,
     )
     return grn, False
+
+
+def _refresh_orders(db: Session, company_id: int, resolved: list[_ResolvedLine]) -> None:
+    order_quantities.refresh_purchase_orders_for_lines(
+        db,
+        company_id,
+        [
+            line.source.purchase_order_line_id
+            for line in resolved
+            if line.source.purchase_order_line_id is not None
+        ],
+    )
 
 
 def _resolve_currency(db: Session, company_id: int, currency_id: int | None) -> Currency:
@@ -529,6 +603,13 @@ def reverse_grn(
     grn.status = GrnStatus.REVERSED
     grn.reversed_on = on_date
     db.flush()
+    # A reversed receipt drops out of `received` by construction, so the order it was against
+    # goes back to open or partially received. The reversal half of the refresh above.
+    order_quantities.refresh_purchase_orders_for_lines(
+        db,
+        grn.company_id,
+        [line.purchase_order_line_id for line in grn.lines if line.purchase_order_line_id],
+    )
     record_audit(
         db,
         company_id=grn.company_id,

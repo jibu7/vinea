@@ -1453,6 +1453,9 @@ def item_enquiry(
                 is_in_transit=location.is_in_transit,
                 quantity=location.quantity,
                 value=location.value,
+                committed=location.committed,
+                on_order=location.on_order,
+                available=location.available,
             )
             for location in enquiry.locations
         ],

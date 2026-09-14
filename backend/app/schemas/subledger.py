@@ -254,15 +254,60 @@ class ArApDefaultsUpdate(BaseModel):
 
 
 class DocumentLineIn(BaseModel):
+    """A GL line, or an **item line** when `item_id` is set (P6 decision 1).
+
+    `unit_price` is optional for an item line and required for a GL line: an item line with no
+    price takes the catalogue's, converted between inclusive and exclusive to suit the
+    document's tax mode. A GL line has no catalogue to fall back on, so a missing price there is
+    a missing amount and is refused.
+    """
+
     description: str | None = Field(default=None, max_length=500)
     quantity: Quantity = Decimal(1)
-    unit_price: Money
+    unit_price: Money | None = None
     discount_percent: Percent = Decimal(0)
     gl_account_id: int | None = None
     transaction_type: str | None = Field(default=None, max_length=30)
     tax_code_id: int | None = None
     branch_id: int | None = None
     project_id: int | None = None
+    # --- P6 item line ---------------------------------------------------------------------
+    item_id: int | None = None
+    #: The unit `quantity` is keyed in; defaults to the item's base unit.
+    uom_id: int | None = None
+    #: Where the stock moves from or to. Only a stock item uses it.
+    warehouse_id: int | None = None
+    #: The GRN line this supplier-invoice line matches (decision 6).
+    grn_line_id: int | None = None
+    #: The invoice line a credit-note line returns, so the return is valued at the cost that
+    #: was actually issued rather than at today's average.
+    returns_line_id: int | None = None
+    #: The sales order line this AR invoice line fulfils (decision 7).
+    sales_order_line_id: int | None = None
+    #: The purchase order line this AP line fulfils.
+    purchase_order_line_id: int | None = None
+    #: On a kit line, the explosion to use instead of the catalogue definition. A screen sends
+    #: it when it is invoicing a sales order whose kit line was broken up; keyed straight onto
+    #: an invoice, a kit explodes from its definition and this stays empty.
+    kit_components: list["DocumentKitComponentIn"] | None = None
+
+    @model_validator(mode="after")
+    def _a_gl_line_needs_a_price(self) -> "DocumentLineIn":
+        if self.item_id is None and self.unit_price is None:
+            raise ValueError("a GL line needs a unit price")
+        return self
+
+
+class DocumentKitComponentIn(BaseModel):
+    """One component of one kit line. `quantity` is in the component item's **base** unit —
+    what ships, not a per-kit rate."""
+
+    item_id: int
+    quantity: Quantity
+    warehouse_id: int | None = None
+    project_id: int | None = None
+    description: str | None = Field(default=None, max_length=500)
+    sales_order_line_id: int | None = None
 
 
 class DocumentCreate(BaseModel):
@@ -315,6 +360,18 @@ class DocumentLineRead(ApiModel):
     net_amount: Decimal
     tax_amount: Decimal
     gross_amount: Decimal
+    # --- P6 item line. All null on a GL line, which is most lines on most documents. -------
+    item_id: int | None = None
+    uom_id: int | None = None
+    base_quantity: Decimal | None = None
+    warehouse_id: int | None = None
+    sales_order_line_id: int | None = None
+    purchase_order_line_id: int | None = None
+    grn_line_id: int | None = None
+    returns_line_id: int | None = None
+    kit_parent_line_id: int | None = None
+    #: What this line took off the GRN accrual, when it matched one.
+    accrual_relieved: Decimal | None = None
 
 
 class BatchLineIn(BaseModel):

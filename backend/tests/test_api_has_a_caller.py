@@ -99,6 +99,60 @@ NO_UI: dict[str, str] = {
         "at step 1 so a kit can be defined for the step-2 posting tests. Remove this entry with "
         "that section."
     ),
+    # Step 3's orders, receipts and flows. Their screens are **step 7** — Sales order, Purchase
+    # order and GRV, plus Breakup under Transactions → Order Entry — and that step deletes every
+    # line below. Each names the screen that owns it, so the register reads as a schedule rather
+    # than a pile.
+    "POST /api/v1/oe/sales-orders": (
+        "GAP (P6) — the Sales order screen is step 7. Remove this entry with `/oe/sales-orders`."
+    ),
+    "PUT /api/v1/oe/sales-orders/{order_id}": (
+        "GAP (P6) — editing an open order, on the same step-7 Sales order screen."
+    ),
+    "POST /api/v1/oe/sales-orders/{order_id}/close": (
+        "GAP (P6) — the Close remaining action on the step-7 Sales order screen."
+    ),
+    "POST /api/v1/oe/sales-orders/{order_id}/cancel": (
+        "GAP (P6) — the Cancel action on the step-7 Sales order screen."
+    ),
+    "POST /api/v1/oe/sales-orders/{order_id}/invoice": (
+        "GAP (P6) — the Invoice action on the step-7 Sales order screen, which opens the AR "
+        "invoice pre-filled. It posts nothing; it prepares a document."
+    ),
+    "PUT /api/v1/oe/sales-orders/{order_id}/lines/{line_id}/breakup": (
+        "GAP (P6) — the Breakup screen (Transactions → Order Entry) is step 7, and the same "
+        "action opens from the line on the order workspace."
+    ),
+    "POST /api/v1/oe/purchase-orders": (
+        "GAP (P6) — the Purchase order screen is step 7."
+    ),
+    "PUT /api/v1/oe/purchase-orders/{order_id}": (
+        "GAP (P6) — editing an open order, on the same step-7 Purchase order screen."
+    ),
+    "POST /api/v1/oe/purchase-orders/{order_id}/close": (
+        "GAP (P6) — the Close remaining action on the step-7 Purchase order screen."
+    ),
+    "POST /api/v1/oe/purchase-orders/{order_id}/cancel": (
+        "GAP (P6) — the Cancel action on the step-7 Purchase order screen."
+    ),
+    "POST /api/v1/oe/purchase-orders/{order_id}/receive": (
+        "GAP (P6) — the Receive action on the step-7 Purchase order screen, which opens the GRV "
+        "pre-filled. Prepares a receipt; posts nothing."
+    ),
+    "POST /api/v1/oe/purchase-orders/{order_id}/process-invoice": (
+        "GAP (P6) — the Process invoice action for a purchase order's service lines, step 7."
+    ),
+    "POST /api/v1/oe/goods-received-notes": (
+        "GAP (P6) — the GRV screen is step 7. The service landed at step 2 and had no endpoint "
+        "at all until step 3 needed the Receive flow to lead somewhere."
+    ),
+    "POST /api/v1/oe/goods-received-notes/{grn_id}/reverse": (
+        "GAP (P6) — the Reverse action on the step-7 GRV screen."
+    ),
+    "POST /api/v1/oe/goods-received-notes/{grn_id}/process-invoice": (
+        "GAP (P6) — the Process invoice action on the step-7 GRV screen, which opens the "
+        "supplier invoice in matching mode. Prepares a document; posts nothing."
+    ),
     # --- GAP: the operator console, planned but unscheduled ------------------------------------
     "POST /api/v1/operator/tenants/{company_id}/activate": (
         "GAP (SaaS admin, Appendix C.2) — the operator console has no screens in any phase yet. "

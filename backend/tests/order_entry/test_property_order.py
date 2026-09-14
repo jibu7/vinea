@@ -1,8 +1,14 @@
-"""The compounding-error property for order entry (P6 step 2).
+"""The compounding-error property for order entry (P6 steps 2 and 3).
 
 One Hypothesis machine drives a *random sequence* of goods receipts, partial matches, direct
-item invoices, customer returns, supplier returns and reversals, and asserts the whole of the
-ledger, subledger, stock **and** order invariant suites after every single step.
+item invoices, customer returns, supplier returns, reversals and — from step 3 — sales and
+purchase orders, partial fulfilments against them, edits, closes and cancels. It asserts the
+whole of the ledger, subledger, stock **and** order invariant suites after every single step,
+plus two things only this file can say:
+
+* every derived quantity equals a **brute-force recomputation** done in Python over the ORM
+  rows, so the two SQL views cannot be quietly wrong in the same way the service is;
+* no order line is ever fulfilled beyond what it ordered, however the sequence fell.
 
 Checking only the end state hides an error that one operation introduces and the next one
 masks — and the accrual is exactly the sort of account where that happens, because a receipt
@@ -29,6 +35,7 @@ Both machines carry `@pytest.mark.slow`, which is how the nightly deep workflow 
 """
 
 import itertools
+from dataclasses import replace
 from decimal import Decimal
 
 import pytest
@@ -39,10 +46,22 @@ from sqlalchemy.orm import Session
 
 from app.kernel.errors import LedgerStateError, PostingError
 from app.models.currency import Currency
-from app.models.inventory import GrnStatus
+from app.models.gl import BackorderPolicy
+from app.models.inventory import GrnStatus, Item, ItemType
+from app.models.order_entry import (
+    OPEN_PURCHASE_STATUSES,
+    OPEN_SALES_STATUSES,
+    PurchaseOrder,
+    PurchaseOrderLine,
+    SalesOrder,
+    SalesOrderLine,
+)
 from app.models.partner import PartnerRole
 from app.models.subledger import DocumentKind, DocumentStatus, PartnerDocument
+from app.order_entry import flows as order_flows
 from app.order_entry import grn as grn_service
+from app.order_entry import orders as orders_service
+from app.order_entry import quantities as order_quantities
 from app.subledger import documents as documents_service
 from tests.inventory.invariants import assert_stock_invariants
 from tests.kernel.invariants import assert_ledger_invariants
@@ -56,6 +75,16 @@ _EXAMPLE = itertools.count()
 #: could not be drawn at all and the suite looked as though it covered a boundary it never
 #: reached. Counting them is how that stays honest.
 _REFUSALS: dict[str, int] = {}
+#: How far the machine actually got, for the operations whose interesting cases are a
+#: *conjunction* rather than a single draw. `grn_matched` needs a receipt that has been matched
+#: and then chosen for reversal; a census that only counted the refusal could not distinguish
+#: "the guard held" from "the machine never got near it", which is what happened when step 3
+#: doubled the operation pool.
+_REACH: dict[str, int] = {}
+
+
+def _count(counter: dict[str, int], key: str) -> None:
+    counter[key] = counter.get(key, 0) + 1
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -63,6 +92,8 @@ def _report_refusals():  # noqa: ANN202
     yield
     if _REFUSALS:
         print("\n[property] refusals provoked:", dict(sorted(_REFUSALS.items())))
+    if _REACH:
+        print("[property] reach:", dict(sorted(_REACH.items())))
 ZERO = Decimal(0)
 
 OPERATIONS = (
@@ -76,14 +107,40 @@ OPERATIONS = (
     # against it, so this is what exercises `grn_matched` — and, when it is legal, the path
     # where an unmatched receipt's accrual credit has to come back off the account.
     "reverse_grn",
+    # --- Step 3: the orders, and every way one can change after it is taken ----------------
+    "create_so",
+    "create_po",
+    #: Deliberately **partial**: the quantity is drawn independently of what the order has
+    #: left, so `invoice_exceeds_order` and `receipt_exceeds_order` are reached from both
+    #: sides rather than only by a unit test that asks for them directly.
+    "invoice_from_so",
+    "receive_from_po",
+    "edit_line",
+    "close",
+    "cancel",
 )
+
+#: What the machine actually draws from, and it is **not** `OPERATIONS`.
+#:
+#: `st.sampled_from` is uniform, so adding step 3's seven operations to step 2's seven halved
+#: the density of every posting operation — and the refusals that need a *conjunction* stopped
+#: being reached at all. `grn_matched` needs a receipt, a match against that receipt, and then a
+#: `reverse_grn` that lands on it; at 1/14 per draw over a 10-step plan that is close to never,
+#: and the reach counter measured it as exactly never: 389 `reverse_grn` draws, 328 with no
+#: receipt at all to reverse and a matched one available on none of the remaining 61.
+#:
+#: So the posting operations — the ones that build the state everything else needs — are drawn
+#: twice as often as the order operations, and plans run longer. That is a statement about how
+#: hard each shape is to *reach*, not about how likely it is in a business, and the reach
+#: counter is what keeps it honest rather than a number somebody tuned once and forgot.
+DRAW_POOL = (*OPERATIONS[:7], *OPERATIONS[:7], *OPERATIONS[7:])
 
 QUANTITIES = st.integers(min_value=1, max_value=40).map(Decimal)
 COSTS = st.decimals(min_value=Decimal("1"), max_value=Decimal("2000"), places=2)
 
 PLAN = st.lists(
     st.tuples(
-        st.sampled_from(OPERATIONS),
+        st.sampled_from(DRAW_POOL),
         QUANTITIES,
         COSTS,
         st.integers(min_value=0, max_value=20),  # which GRN line / document to act on
@@ -95,7 +152,10 @@ PLAN = st.lists(
         st.booleans(),  # key the document on the other branch
     ),
     min_size=1,
-    max_size=10,
+    # Longer than step 2's ten. A three-step conjunction in a ten-step plan drawn from fourteen
+    # operations is the other half of why `grn_matched` stopped being reached; the deep pass
+    # costs a few more minutes and the per-commit profile draws two examples either way.
+    max_size=18,
 )
 
 
@@ -104,6 +164,146 @@ def _assert_everything(db: Session, company_id: int) -> None:
     assert_subledger_invariants(db, company_id)
     assert_stock_invariants(db, company_id)
     assert_order_invariants(db, company_id)
+    _assert_derived_quantities_match_a_recomputation(db, company_id)
+
+
+# --- The brute-force recomputation -----------------------------------------------------------
+#
+# `app.order_entry.quantities` reads two SQL views. These functions answer the same questions
+# by walking the ORM rows in Python, and the property is that the two agree after every step.
+#
+# The point is not that SQL is untrustworthy. It is that the view and the service share an
+# author and therefore share his misunderstandings: a view that forgot to exclude reversed
+# documents and a service that read it would be consistent with each other and wrong about the
+# business. A second implementation written from the *rule* rather than from the first one is
+# the only kind of check that can catch that.
+
+
+def _posted_invoice_lines(db: Session, company_id: int) -> list:
+    """Every line of every posted, unreversed invoice — the population both derived quantities
+    are summed out of."""
+    return [
+        line
+        for document in db.scalars(
+            select(PartnerDocument).where(
+                PartnerDocument.company_id == company_id,
+                PartnerDocument.status == DocumentStatus.POSTED,
+                PartnerDocument.kind == DocumentKind.INVOICE,
+            )
+        )
+        for line in document.lines
+    ]
+
+
+def _recompute_sales(db: Session, company_id: int) -> dict[int, Decimal]:
+    """Sales order line id → invoiced, from the rule: Σ base quantity of the posted, unreversed
+    AR invoice lines carrying that line's id (decision 4)."""
+    out: dict[int, Decimal] = {}
+    for line in db.scalars(
+        select(SalesOrderLine).where(SalesOrderLine.company_id == company_id)
+    ):
+        out[line.id] = ZERO
+    for line in _posted_invoice_lines(db, company_id):
+        if line.sales_order_line_id is not None:
+            out[line.sales_order_line_id] = (
+                out.get(line.sales_order_line_id, ZERO) + (line.base_quantity or ZERO)
+            )
+    return out
+
+
+def _recompute_purchase(db: Session, company_id: int) -> dict[int, Decimal]:
+    """Purchase order line id → received: unreversed GRN lines, **plus** the invoice lines that
+    carried the goods themselves (a direct purchase, and every service line — a service is
+    received by its invoice and never by a receipt)."""
+    out: dict[int, Decimal] = {}
+    for line in db.scalars(
+        select(PurchaseOrderLine).where(PurchaseOrderLine.company_id == company_id)
+    ):
+        out[line.id] = ZERO
+    for grn in db.scalars(
+        select(grn_service.GoodsReceivedNote).where(
+            grn_service.GoodsReceivedNote.company_id == company_id
+        )
+    ):
+        if grn.status == GrnStatus.REVERSED:
+            continue
+        for line in grn.lines:
+            if line.purchase_order_line_id is not None:
+                out[line.purchase_order_line_id] = (
+                    out.get(line.purchase_order_line_id, ZERO) + line.base_quantity
+                )
+    for line in _posted_invoice_lines(db, company_id):
+        if line.purchase_order_line_id is not None and line.grn_line_id is None:
+            out[line.purchase_order_line_id] = (
+                out.get(line.purchase_order_line_id, ZERO) + (line.base_quantity or ZERO)
+            )
+    return out
+
+
+def _recompute_positions(db: Session, company_id: int) -> dict[tuple[int, int], tuple]:
+    """(item, warehouse) → (committed, on order), from open orders and stock items only."""
+    invoiced = _recompute_sales(db, company_id)
+    received = _recompute_purchase(db, company_id)
+    out: dict[tuple[int, int], list[Decimal]] = {}
+
+    def _add(item_id: int, warehouse_id: int, slot: int, amount: Decimal) -> None:
+        item = db.get(Item, item_id)
+        if item.item_type != ItemType.STOCK:
+            # A kit is never on a shelf and a service has none; what a kit line promises is
+            # its component lines, which are counted on their own rows.
+            return
+        cell = out.setdefault((item_id, warehouse_id), [ZERO, ZERO])
+        cell[slot] += max(amount, ZERO)
+
+    for order in db.scalars(select(SalesOrder).where(SalesOrder.company_id == company_id)):
+        if order.status not in OPEN_SALES_STATUSES:
+            continue
+        for line in order.lines:
+            _add(
+                line.item_id,
+                line.warehouse_id,
+                0,
+                line.base_quantity - invoiced.get(line.id, ZERO),
+            )
+    for order in db.scalars(select(PurchaseOrder).where(PurchaseOrder.company_id == company_id)):
+        if order.status not in OPEN_PURCHASE_STATUSES:
+            continue
+        for line in order.lines:
+            _add(
+                line.item_id,
+                line.warehouse_id,
+                1,
+                line.base_quantity - received.get(line.id, ZERO),
+            )
+    return {key: tuple(value) for key, value in out.items()}
+
+
+def _assert_derived_quantities_match_a_recomputation(db: Session, company_id: int) -> None:
+    sales = order_quantities.sales_fulfilment(db, company_id)
+    expected_sales = _recompute_sales(db, company_id)
+    assert {key: row.fulfilled for key, row in sales.items()} == expected_sales, (
+        "the sales_order_line_quantities view disagrees with a recomputation"
+    )
+
+    purchase = order_quantities.purchase_fulfilment(db, company_id)
+    expected_purchase = _recompute_purchase(db, company_id)
+    assert {key: row.fulfilled for key, row in purchase.items()} == expected_purchase, (
+        "the purchase_order_line_quantities view disagrees with a recomputation"
+    )
+
+    expected_positions = _recompute_positions(db, company_id)
+    for (item_id, warehouse_id), (committed, on_order) in expected_positions.items():
+        position = order_quantities.position(db, company_id, item_id, warehouse_id)
+        assert position.committed == committed, (
+            f"committed for item {item_id} at warehouse {warehouse_id}: "
+            f"service {position.committed}, recomputation {committed}"
+        )
+        assert position.on_order == on_order, (
+            f"on order for item {item_id} at warehouse {warehouse_id}: "
+            f"service {position.on_order}, recomputation {on_order}"
+        )
+        # `available` is the definition, restated: a negative is a backorder, not an error.
+        assert position.available == position.on_hand - committed
 
 
 def _grn_lines(db: Session, fixture: OrderEntry) -> list:
@@ -259,10 +459,34 @@ def _step(  # noqa: PLR0913
             if grn.status != GrnStatus.REVERSED
         ]
         if not grns:
+            _count(_REACH, "reverse_grn: no receipt to reverse")
             return
+        # **Aim at a matched receipt whenever one exists**, which is what `grn_matched` needs.
+        #
+        # That refusal takes a conjunction — receive, match *that* receipt, then draw
+        # `reverse_grn` and land on it — and step 3 doubled the operation pool from 7 to 14 while
+        # the plan stayed at 10 steps, so the conjunction stopped happening. Measured over a
+        # 300-example pass on the unbiased machine: `reverse_grn` drawn 252 times, 209 of those
+        # with **no receipt at all** to reverse, and a matched one available on none of the rest.
+        #
+        # Biasing the *choice* costs nothing, because a matched receipt exists in a small
+        # minority of states — `_REACH` below counts the split on every run, so that claim stays
+        # measured rather than asserted, and the unmatched path (where an accrual credit has to
+        # come back off the account) keeps the overwhelming majority of the draws.
+        matched = grn_service.matched_quantities(
+            db, fixture.company_id, [line.id for grn in grns for line in grn.lines]
+        )
+        with_a_match = [
+            grn
+            for grn in grns
+            if any(matched.get(line.id, ZERO) > ZERO for line in grn.lines)
+        ]
+        _count(_REACH, "reverse_grn: a matched receipt existed" if with_a_match
+               else "reverse_grn: nothing matched yet")
+        candidates = with_a_match or grns
         grn_service.reverse_grn(
             db,
-            grns[pick % len(grns)],
+            candidates[pick % len(candidates)],
             on_date=MARCH,
             reason="Property reversal",
             actor=fixture.owner,
@@ -277,11 +501,208 @@ def _step(  # noqa: PLR0913
         documents_service.reverse_document(
             db, document, on_date=MARCH, reason="Property reversal", actor=fixture.owner
         )
+        return
+
+    # --- Step 3: the orders ---------------------------------------------------------------
+    #
+    # Every one of these refuses **before it writes**, which is what lets the driver treat a
+    # refusal as a no-op and carry on with the same tenant. A service that half-wrote an order
+    # before refusing would leave the next step reading a state nothing produced.
+
+    if operation == "create_so":
+        # Half the draws order a **kit**, so the explosion, the component commitment and the
+        # "components sum to kit quantity x per-kit" property are exercised by the machine and
+        # not only by the kit unit tests.
+        item = fixture.kit_item if cross_branch else fixture.stock_item
+        orders_service.create_sales_order(
+            db,
+            fixture.company_id,
+            orders_service.SalesOrderInput(
+                partner_id=fixture.customer.id,
+                order_date=MARCH,
+                description="Sales order",
+                warehouse_id=warehouse_id,
+                lines=(
+                    orders_service.OrderLineInput(
+                        item_id=item.id, quantity=quantity, unit_price=cost
+                    ),
+                ),
+            ),
+            actor=fixture.owner,
+        )
+        return
+
+    if operation == "create_po":
+        orders_service.create_purchase_order(
+            db,
+            fixture.company_id,
+            orders_service.PurchaseOrderInput(
+                partner_id=fixture.supplier.id,
+                order_date=MARCH,
+                description="Purchase order",
+                warehouse_id=warehouse_id,
+                lines=(
+                    orders_service.OrderLineInput(
+                        item_id=fixture.stock_item.id, quantity=quantity, unit_price=cost
+                    ),
+                ),
+            ),
+            actor=fixture.owner,
+        )
+        return
+
+    if operation == "invoice_from_so":
+        orders = _open_sales_orders(db, fixture)
+        if not orders:
+            return
+        order = orders[pick % len(orders)]
+        prepared = order_flows.prepare_invoice_from_sales_order(db, fixture.company_id, order)
+        documents_service.post_document(
+            db,
+            fixture.company_id,
+            prepared.role,
+            # **Not clamped to what remains.** The quantity is drawn as it fell, so
+            # `invoice_exceeds_order` is reached from above as well as from below. The refusal
+            # is caught and skipped like any other illegal step.
+            _with_quantity(prepared.document, quantity),
+            actor=fixture.owner,
+        )
+        return
+
+    if operation == "receive_from_po":
+        orders = _open_purchase_orders(db, fixture)
+        if not orders:
+            return
+        order = orders[pick % len(orders)]
+        prepared = order_flows.prepare_receipt_from_purchase_order(db, fixture.company_id, order)
+        grn_service.post_grn(
+            db,
+            fixture.company_id,
+            replace(
+                prepared.grn,
+                lines=(replace(prepared.grn.lines[0], quantity=quantity, unit_cost=cost),),
+            ),
+            actor=fixture.owner,
+        )
+        return
+
+    if operation == "edit_line":
+        orders = _open_purchase_orders(db, fixture)
+        if not orders:
+            return
+        order = orders[pick % len(orders)]
+        line = order.lines[0]
+        orders_service.update_purchase_order(
+            db,
+            fixture.company_id,
+            order,
+            orders_service.PurchaseOrderInput(
+                partner_id=order.partner_id,
+                order_date=MARCH,
+                description="Edited",
+                warehouse_id=order.warehouse_id,
+                lines=(
+                    orders_service.OrderLineInput(
+                        line_id=line.id,
+                        item_id=line.item_id,
+                        # Drawn, so an edit below what has already been received is attempted
+                        # and refused rather than never tried.
+                        quantity=quantity,
+                        unit_price=cost,
+                    ),
+                ),
+            ),
+            actor=fixture.owner,
+        )
+        return
+
+    if operation in ("close", "cancel"):
+        sales = _open_sales_orders(db, fixture)
+        purchases = _open_purchase_orders(db, fixture)
+        if use_depot and sales:
+            order = sales[pick % len(sales)]
+            action = (
+                orders_service.close_sales_order
+                if operation == "close"
+                else orders_service.cancel_sales_order
+            )
+        elif purchases:
+            order = purchases[pick % len(purchases)]
+            action = (
+                orders_service.close_purchase_order
+                if operation == "close"
+                else orders_service.cancel_purchase_order
+            )
+        else:
+            return
+        action(db, order, on_date=MARCH, actor=fixture.owner)
+
+
+def _with_quantity(document, quantity: Decimal):  # noqa: ANN001, ANN202
+    """The prepared document with its first line re-keyed. Kit components are scaled with it,
+    because a kit line that shipped its parent quantity and its components' original ones would
+    be a bundle nobody ordered."""
+    line = document.lines[0]
+    if line.quantity == ZERO:
+        return document
+    share = quantity / line.quantity
+    components = (
+        tuple(
+            replace(component, quantity=component.quantity * share)
+            for component in line.kit_components
+        )
+        if line.kit_components is not None
+        else None
+    )
+    return replace(
+        document,
+        lines=(replace(line, quantity=quantity, kit_components=components), *document.lines[1:]),
+    )
+
+
+def _open_sales_orders(db: Session, fixture: OrderEntry) -> list:
+    return [
+        order
+        for order in db.scalars(
+            select(SalesOrder).where(SalesOrder.company_id == fixture.company_id)
+        )
+        if order.status in OPEN_SALES_STATUSES
+    ]
+
+
+def _open_purchase_orders(db: Session, fixture: OrderEntry) -> list:
+    return [
+        order
+        for order in db.scalars(
+            select(PurchaseOrder).where(PurchaseOrder.company_id == fixture.company_id)
+        )
+        if order.status in OPEN_PURCHASE_STATUSES
+    ]
 
 
 def _drive(db: Session, fixture: OrderEntry, plan: list[tuple]) -> None:
     _assert_everything(db, fixture.company_id)
     for operation, quantity, cost, pick, use_depot, cross_branch in plan:
+        # **A savepoint per step**, so a refused step leaves nothing behind whatever the service
+        # did before refusing.
+        #
+        # This used to run without one, on the premise that every service in the phase refuses
+        # before it writes, and a plain rollback was rejected because it would discard the tenant
+        # itself: the company, its partners and its items are created in this same transaction.
+        #
+        # The premise was false, and the machine found where — `reverse_document` posted the
+        # partner-side reversal before asking the inventory service to reverse the companion,
+        # which under `block` raises `insufficient_stock` once the goods have been sold on. That
+        # left a posted reversal entry for a document still marked posted and still fully open:
+        # `AR control account is 16.00 but open items total 15.00`, on the plan
+        # receive 1 · receive 14 · return_in 1 · sell 16 · reverse · receive 1.
+        #
+        # The ordering is fixed at the source now — the companion goes first, because it is the
+        # only half that can fail — and `test_a_refused_reversal_leaves_nothing_behind` holds the
+        # service to it **without** a savepoint. This stays because the premise should be
+        # enforced here rather than assumed of every service a later step adds: it undoes the
+        # step and keeps the tenant, which is exactly what was wanted.
+        step = db.begin_nested()
         try:
             _step(
                 db,
@@ -294,24 +715,17 @@ def _drive(db: Session, fixture: OrderEntry, plan: list[tuple]) -> None:
                 cross_branch,
             )
         except (LedgerStateError, PostingError) as refused:
-            _REFUSALS[getattr(refused, "code", "?")] = (
-                _REFUSALS.get(getattr(refused, "code", "?"), 0) + 1
-            )
+            step.rollback()
+            _count(_REFUSALS, getattr(refused, "code", "?"))
             # An illegal step for the state we are in: matched beyond the receipt, issued
             # what is not there, reversed what is already reversed. Skipped, not failed.
-            #
-            # **No rollback**, deliberately — every one of these services refuses before it
-            # writes, so there is nothing to undo, and rolling back here would discard the
-            # tenant itself: the company, its partners and its items were created in this same
-            # transaction, and the next step would fail looking for a supplier that no longer
-            # existed. That is what it did before this comment was written.
             continue
-        for grn in db.scalars(
-            select(grn_service.GoodsReceivedNote).where(
-                grn_service.GoodsReceivedNote.company_id == fixture.company_id
-            )
-        ):
-            grn_service.refresh_status(db, grn)
+        step.commit()
+        # **No status refresh here, deliberately.** Every workflow column in this phase is
+        # written by the service that changed the fact underneath it (decision 4), and
+        # `verify_order_statuses()` inside `assert_order_invariants` is what proves it. A
+        # refresh loop in the driver would repair exactly the drift the assertion exists to
+        # find, and the suite would pass over a service that had stopped writing its column.
         db.flush()
         _assert_everything(db, fixture.company_id)
 
@@ -324,6 +738,25 @@ def test_the_invariants_hold_after_every_step_at_zero_decimals(
     """RWF: no minor unit, so every pro-rata relief rounds by up to half a franc and the
     "last match takes the remainder" rule is doing the most work it ever does."""
     _drive(db, build_order_entry(db, f"oe-rwf-{next(_EXAMPLE)}"), plan)
+
+
+@pytest.mark.slow
+@given(plan=PLAN)
+def test_the_invariants_hold_under_the_blocking_backorder_policy(
+    db: Session, plan: list[tuple]
+) -> None:
+    """The same machine with `backorder_policy = block`.
+
+    It exists for one refusal the other two machines can never provoke: `exceeds_available`
+    only fires under `block`, so a suite that ran only the default policy would report a census
+    with a zero in it and would be covering a boundary it never reached. It also puts the
+    *combination* under test — an order refused for lack of stock, then stock received, then the
+    same order taken successfully — which is the sequence a shop actually lives.
+    """
+    fixture = build_order_entry(db, f"oe-block-{next(_EXAMPLE)}")
+    fixture.settings.backorder_policy = BackorderPolicy.BLOCK
+    db.flush()
+    _drive(db, fixture, plan)
 
 
 @pytest.mark.slow
@@ -408,3 +841,46 @@ def test_the_1000_over_3_reversal_ties_out(db: Session, order_entry: OrderEntry)
     )
     grn_service.refresh_status(db, grn)
     _assert_everything(db, order_entry.company_id)
+
+
+def test_a_refused_reversal_leaves_nothing_behind(db: Session, order_entry: OrderEntry) -> None:
+    """The plan the machine shrank to, written out — because a Hypothesis example database is
+    not committed and the next contributor would find this only by drawing it again.
+
+    `reverse_document` used to post the partner-side reversal and only then ask the inventory
+    service to reverse the companion; under `block` that raises `insufficient_stock` once the
+    goods have been sold on, so the refusal arrived after the ledger had been written. The
+    caller was left holding a posted reversal entry for a document still marked posted and still
+    fully open: `AR control account is 16.00 but open items total 15.00`.
+
+    The companion goes first now, because it is the only half that can fail. This test drives
+    the plan with **no savepoint and no rollback**, so it passes only while that holds — an
+    endpoint would hide the difference, because closing its session rolls the whole request back
+    either way.
+    """
+    _use_a_two_decimal_base(db, order_entry)
+    plan = [
+        ("receive", Decimal(1), Decimal("1.00")),
+        ("receive", Decimal(14), Decimal("1.00")),
+        ("return_in", Decimal(1), Decimal("1.00")),
+        ("sell", Decimal(16), Decimal("1.00")),
+        ("reverse", Decimal(1), Decimal("1.00")),
+        ("receive", Decimal(1), Decimal("1.00")),
+    ]
+    # **Driven without savepoints, deliberately.** The claim here is about the *service*: that
+    # `reverse_document` refuses before it writes, so a caller inside a larger unit of work is
+    # left with nothing to unwind. An endpoint gets that for free — its session is closed, and
+    # closing rolls back — but the property driver does not, and neither will the landed-cost
+    # reversal or any other caller that reverses a document as one step of several.
+    refusals: list[str] = []
+    for operation, quantity, cost in plan:
+        try:
+            _step(db, order_entry, operation, quantity, cost, 0, False, False)
+        except (LedgerStateError, PostingError) as refused:
+            refusals.append(refused.code)
+        db.flush()
+        _assert_everything(db, order_entry.company_id)
+
+    # The reversal really was refused — an assertion that only proved the invariants would pass
+    # just as well on a sequence where nothing interesting happened.
+    assert refusals == ["insufficient_stock"], refusals

@@ -1276,9 +1276,9 @@ class GoodsReceivedNote(AuditedMixin, CompanyScopedMixin, Base):
     as `partner_documents` and `inventory_documents` do. A zero-cost receipt posts no entry at
     all and claims a number itself, which is why `GRN` registers two claimants.
 
-    `purchase_order_id` is nullable here and stays unconstrained until step 3 creates
-    `purchase_orders`: a receipt against no order is a direct receipt with its cost keyed on
-    the line, and it is a first-class case rather than a degenerate one.
+    `purchase_order_id` is nullable and got its foreign key with the order tables in step 3: a
+    receipt against no order is a direct receipt with its cost keyed on the line, and it is a
+    first-class case rather than a degenerate one.
     """
 
     __tablename__ = "goods_received_notes"
@@ -1295,6 +1295,12 @@ class GoodsReceivedNote(AuditedMixin, CompanyScopedMixin, Base):
             ["company_id", "warehouse_id"],
             ["warehouses.company_id", "warehouses.id"],
             name="fk_goods_received_notes_warehouse",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "purchase_order_id"],
+            ["purchase_orders.company_id", "purchase_orders.id"],
+            name="fk_goods_received_notes_purchase_order",
             ondelete="RESTRICT",
         ),
         ForeignKeyConstraint(
@@ -1336,7 +1342,9 @@ class GoodsReceivedNote(AuditedMixin, CompanyScopedMixin, Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     number: Mapped[str] = mapped_column(String(30), nullable=False)
     partner_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    #: No foreign key until step 3 creates `purchase_orders`.
+    #: The order these goods were ordered on, when there was one. NULL is a first-class case,
+    #: not a degenerate one: a receipt against no order is a direct receipt with its cost keyed
+    #: on the line.
     purchase_order_id: Mapped[int | None] = mapped_column(BigInteger)
     warehouse_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     branch_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
@@ -1413,7 +1421,21 @@ class GoodsReceivedNoteLine(AuditedMixin, CompanyScopedMixin, Base):
             name="fk_goods_received_note_lines_stock_move",
             ondelete="RESTRICT",
         ),
+        ForeignKeyConstraint(
+            ["company_id", "purchase_order_line_id"],
+            ["purchase_order_lines.company_id", "purchase_order_lines.id"],
+            name="fk_goods_received_note_lines_purchase_order_line",
+            ondelete="RESTRICT",
+        ),
         Index("ix_goods_received_note_lines_grn", "company_id", "grn_id"),
+        # `received` per PO line is this join; partial, because a receipt against an order is
+        # the minority case across a company's whole history of receipts.
+        Index(
+            "ix_goods_received_note_lines_purchase_order_line",
+            "company_id",
+            "purchase_order_line_id",
+            postgresql_where=text("purchase_order_line_id IS NOT NULL"),
+        ),
         Index("ix_goods_received_note_lines_item", "company_id", "item_id"),
         CheckConstraint("base_quantity > 0", name="base_quantity_positive"),
         CheckConstraint("unit_cost >= 0", name="unit_cost_not_negative"),
@@ -1423,7 +1445,8 @@ class GoodsReceivedNoteLine(AuditedMixin, CompanyScopedMixin, Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     grn_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     line_no: Mapped[int] = mapped_column(SmallInteger, nullable=False)
-    #: No foreign key until step 3 creates `purchase_order_lines`.
+    #: The order line this receipt fulfils, when there was an order. A GRN line may not take a
+    #: PO line past its remaining quantity (`receipt_exceeds_order`, no tolerance in v1).
     purchase_order_line_id: Mapped[int | None] = mapped_column(BigInteger)
     item_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     uom_id: Mapped[int] = mapped_column(BigInteger, nullable=False)

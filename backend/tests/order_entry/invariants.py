@@ -23,8 +23,10 @@ from sqlalchemy.orm import Session
 from app.kernel.posting import gl_settings_for
 from app.models.inventory import GoodsReceivedNote, GoodsReceivedNoteLine, GrnStatus
 from app.models.journal import JournalEntry, JournalLine, JournalStatus
+from app.models.order_entry import PurchaseOrder, SalesOrder
 from app.models.subledger import DocumentStatus, PartnerDocument, PartnerDocumentLine
 from app.order_entry import grn as grn_service
+from app.order_entry import quantities as order_quantities
 
 ZERO = Decimal(0)
 
@@ -124,8 +126,13 @@ def assert_order_invariants(db: Session, company_id: int) -> None:
           value.
        4. A matched line carries a relieved amount and no stock move; an unmatched stock line
           carries a move and no relieved amount.
-       5. `verify_order_statuses()` reports no drift between the stored GRN status and the
-          state its lines actually imply.
+       5. `verify_order_statuses()` reports no drift between the stored GRN, sales-order and
+          purchase-order statuses and the state their lines actually imply.
+       6. No order line is fulfilled beyond what it ordered. `invoice_exceeds_order`,
+          `receipt_exceeds_order` and the edit floor each refuse one way of reaching that state;
+          this is the assertion that none of them has a gap. An over-fulfilled line makes
+          `committed` negative on that line and leaves the status derivation with nothing
+          sensible to say.
     """
     settings = gl_settings_for(db, company_id)
     accrual_account_id = settings.grn_accrual_account_id
@@ -202,17 +209,32 @@ def assert_order_invariants(db: Session, company_id: int) -> None:
                     f"{document.number} line {line.line_no} matched a GRN and relieved nothing"
                 )
 
-    # 5. The stored workflow column against the state the lines imply.
+    # 5. The stored workflow columns against the state the lines imply.
     drift = verify_order_statuses(db, company_id)
     assert not drift, f"order status drift: {drift[:3]}"
 
+    # 6. Nothing is fulfilled beyond what was ordered.
+    for kind, fulfilment in (
+        ("sales", order_quantities.sales_fulfilment(db, company_id)),
+        ("purchase", order_quantities.purchase_fulfilment(db, company_id)),
+    ):
+        over = [row for row in fulfilment.values() if row.is_over_fulfilled]
+        assert not over, (
+            f"{kind} order line {over[0].line_id} ordered {over[0].ordered} and has "
+            f"{over[0].fulfilled} fulfilled"
+        )
+
 
 def verify_order_statuses(db: Session, company_id: int) -> list[str]:
-    """Every GRN whose stored status disagrees with what its lines imply.
+    """Every receipt and every order whose stored status disagrees with what its lines imply.
 
     The `open_amount` pattern P4 set: the column is a convenience for filtering and the query
     is the truth, and this is the check that keeps them honest. Returns descriptions rather
     than raising, so a report can show the drift instead of only failing on it.
+
+    All three workflow columns are checked here rather than in three places, because all three
+    fail the same way: a service changes what has been matched, invoiced or received and forgets
+    to write the column, and every screen then filters on a status that is a phase behind.
     """
     drift: list[str] = []
     for grn in db.scalars(
@@ -224,4 +246,18 @@ def verify_order_statuses(db: Session, company_id: int) -> list[str]:
         expected = grn_service.derived_status(grn, matched)
         if grn.status != expected:
             drift.append(f"{grn.number}: stored {grn.status}, derived {expected}")
+
+    for order in db.scalars(select(SalesOrder).where(SalesOrder.company_id == company_id)):
+        expected_sales = order_quantities.derived_sales_status(
+            order, order_quantities.sales_fulfilment(db, company_id, order_id=order.id)
+        )
+        if order.status != expected_sales:
+            drift.append(f"{order.number}: stored {order.status}, derived {expected_sales}")
+
+    for order in db.scalars(select(PurchaseOrder).where(PurchaseOrder.company_id == company_id)):
+        expected_purchase = order_quantities.derived_purchase_status(
+            order, order_quantities.purchase_fulfilment(db, company_id, order_id=order.id)
+        )
+        if order.status != expected_purchase:
+            drift.append(f"{order.number}: stored {order.status}, derived {expected_purchase}")
     return drift

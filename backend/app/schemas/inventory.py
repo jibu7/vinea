@@ -597,6 +597,14 @@ class EnquiryLocationRead(BaseModel):
     is_in_transit: bool
     quantity: Decimal
     value: Decimal
+    # --- P6 (decision 4). Queries over open order lines, never columns. ---------------------
+    #: Σ (ordered − invoiced) over open sales order lines at this warehouse.
+    committed: Decimal = Decimal(0)
+    #: Σ (ordered − received) over open purchase order lines at this warehouse.
+    on_order: Decimal = Decimal(0)
+    #: `quantity − committed`. **Negative is a backorder**, and the screen shows the sign: the
+    #: company has promised more than it holds, which the default policy permits.
+    available: Decimal = Decimal(0)
 
 
 class EnquiryMoveRead(BaseModel):

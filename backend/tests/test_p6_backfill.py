@@ -280,3 +280,345 @@ def test_the_new_enum_labels_survive_the_upgrade(pre_p6_engine: Engine) -> None:
             )
         ).scalar_one()
         assert default == "'stock'::item_type", f"the item_type default was lost: {default}"
+
+
+# --- The step-3 back-fill: `partner_document_lines.role` ------------------------------------
+#
+# Rule 10's real requirement, and the one `make migrate-check` can never meet: a migration that
+# UPDATEs is tested **against the rows it is meant to touch**. An empty scratch database proves
+# the DDL and nothing else — the P5 step-9 back-fill passed it cleanly and could never have run
+# on a real tenant.
+#
+# This one is an ordinary UPDATE on `partner_document_lines`, which carries no immutability
+# trigger (posted *entries* and *moves* do, and this is neither). What has to be proved is that
+# it reaches every row and puts the right role on each, because the column then goes NOT NULL
+# and acquires a foreign key into `partner_documents (company_id, id, role)`: a row the update
+# missed fails the ALTER, and a row it got wrong fails the constraint. Both fail the upgrade
+# rather than the data, which is the design — but only if the upgrade is ever run over rows.
+
+PRE_ORDERS_REVISION = "0019_p6_posting"
+
+
+@pytest.fixture
+def pre_orders_engine() -> Iterator[Engine]:
+    admin = create_engine(ADMIN_URL.set(database="postgres"), isolation_level="AUTOCOMMIT")
+    with admin.connect() as conn:
+        conn.execute(text(f'DROP DATABASE IF EXISTS "{BACKFILL_DB}"'))
+        conn.execute(text(f'CREATE DATABASE "{BACKFILL_DB}"'))
+    admin.dispose()
+
+    url = ADMIN_URL.set(database=BACKFILL_DB)
+    _alembic(url.render_as_string(hide_password=False), PRE_ORDERS_REVISION)
+    engine = create_engine(url, isolation_level="AUTOCOMMIT")
+    try:
+        yield engine
+    finally:
+        engine.dispose()
+        admin = create_engine(ADMIN_URL.set(database="postgres"), isolation_level="AUTOCOMMIT")
+        with admin.connect() as conn:
+            conn.execute(
+                text(
+                    "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                    "WHERE datname = :name AND pid <> pg_backend_pid()"
+                ),
+                {"name": BACKFILL_DB},
+            )
+            conn.execute(text(f'DROP DATABASE IF EXISTS "{BACKFILL_DB}"'))
+        admin.dispose()
+
+
+def _post_a_document(  # noqa: PLR0913
+    conn,  # noqa: ANN001
+    *,
+    company_id: int,
+    period_id: int,
+    branch_id: int,
+    currency_id: int,
+    partner_id: int,
+    partner_type: str,
+    control_account_id: int,
+    contra_account_id: int,
+    role: str,
+    number: str,
+    doc_type: str,
+    direction: int,
+) -> int:
+    """One posted partner document with one line, written straight into the tables.
+
+    Straight SQL because the ORM is at head and this database is at 0019 — a historical
+    fixture, not a data fix. The entry is balanced and carries the partner dimension the
+    control-account guard demands, so it goes in through the same triggers a real posting does
+    rather than around them: `app.posting_engine` is set the way the engine sets it, and every
+    other guard — the period check, the postable-account check, the balance assertion, the
+    control-account registry — is left to fire if this fixture gets anything wrong.
+    """
+    conn.execute(text("SELECT set_config('app.posting_engine', 'on', false)"))
+    entry_id = conn.execute(
+        text(
+            """
+            INSERT INTO journal_entries (company_id, number, doc_type, event_type, entry_date,
+                                         period_id, description, status, module)
+            VALUES (:cid, :number, :doc_type, 'PartnerDocumentPosted', CURRENT_DATE, :period,
+                    :description, 'draft', :role)
+            RETURNING id
+            """
+        ),
+        {
+            "cid": company_id,
+            "number": number,
+            "doc_type": doc_type,
+            "period": period_id,
+            "description": f"{role} document",
+            "role": role,
+        },
+    ).scalar_one()
+    legs = (
+        (control_account_id, direction * 1000, True),
+        (contra_account_id, -direction * 1000, False),
+    )
+    for line_no, (account_id, amount, with_partner) in enumerate(legs, 1):
+        conn.execute(
+            text(
+                """
+                INSERT INTO journal_lines (company_id, entry_id, line_no, gl_account_id,
+                                           branch_id, currency_id, exchange_rate, amount,
+                                           base_amount, tax_amount, partner_type, partner_id)
+                VALUES (:cid, :entry, :line_no, :account, :branch, :currency, 1, :amount,
+                        :amount, 0, :partner_type, :partner_id)
+                """
+            ),
+            {
+                "cid": company_id,
+                "entry": entry_id,
+                "line_no": line_no,
+                "account": account_id,
+                "branch": branch_id,
+                "currency": currency_id,
+                "amount": amount,
+                "partner_type": partner_type if with_partner else None,
+                "partner_id": partner_id if with_partner else None,
+            },
+        )
+    # Draft first, lines, then posted — the order the engine itself writes in, because
+    # `kernel_block_posted_line_mutation` refuses a line against an entry that is already
+    # posted. A fixture that inserted a posted header and then its legs would be taking a route
+    # the product cannot take.
+    conn.execute(
+        text("UPDATE journal_entries SET status = 'posted' WHERE id = :entry"),
+        {"entry": entry_id},
+    )
+    document_id = conn.execute(
+        text(
+            """
+            INSERT INTO partner_documents (company_id, role, kind, number, doc_type,
+                                           transaction_type, partner_id, journal_entry_id,
+                                           document_date, currency_id, exchange_rate, branch_id,
+                                           tax_mode, control_account_id, description, net_amount,
+                                           tax_amount, total_amount, base_total_amount,
+                                           open_amount, direction, status)
+            VALUES (:cid, CAST(:role AS partner_role), 'invoice', :number, :doc_type, 'INV',
+                    :partner, :entry, CURRENT_DATE, :currency, 1, :branch, 'exclusive',
+                    :control, 'Back-fill fixture', 1000, 0, 1000, 1000, 1000, :direction,
+                    'posted')
+            RETURNING id
+            """
+        ),
+        {
+            "cid": company_id,
+            "role": role,
+            "number": number,
+            "doc_type": doc_type,
+            "partner": partner_id,
+            "entry": entry_id,
+            "currency": currency_id,
+            "branch": branch_id,
+            "control": control_account_id,
+            "direction": direction,
+        },
+    ).scalar_one()
+    conn.execute(
+        text(
+            """
+            INSERT INTO partner_document_lines (company_id, document_id, line_no, quantity,
+                                                unit_price, gl_account_id, branch_id,
+                                                net_amount, tax_amount, gross_amount)
+            VALUES (:cid, :doc, 1, 1, 1000, :account, :branch, 1000, 0, 1000)
+            """
+        ),
+        {
+            "cid": company_id,
+            "doc": document_id,
+            "account": contra_account_id,
+            "branch": branch_id,
+        },
+    )
+    return document_id
+
+
+def _provision_pre_orders_tenant(engine: Engine) -> dict[str, int]:
+    company_id = _provision_pre_p6_tenant(engine, company_name="Pre-orders Ltd")
+    with engine.connect() as conn:
+        branch_id = conn.execute(
+            text("SELECT id FROM branches WHERE company_id = :cid"), {"cid": company_id}
+        ).scalar_one()
+        currency_id = conn.execute(
+            text("SELECT id FROM currencies WHERE company_id = :cid"), {"cid": company_id}
+        ).scalar_one()
+        accounts = {
+            row.code: row.id
+            for row in conn.execute(
+                text("SELECT code, id FROM gl_accounts WHERE company_id = :cid"),
+                {"cid": company_id},
+            )
+        }
+        year_id = conn.execute(
+            text(
+                "INSERT INTO fiscal_years (company_id, name, start_date, end_date, status) "
+                "VALUES (:cid, 'FY', date_trunc('year', CURRENT_DATE)::date, "
+                "(date_trunc('year', CURRENT_DATE) + interval '1 year - 1 day')::date, 'open') "
+                "RETURNING id"
+            ),
+            {"cid": company_id},
+        ).scalar_one()
+        period_id = conn.execute(
+            text(
+                "INSERT INTO accounting_periods (company_id, fiscal_year_id, period_no, name, "
+                "start_date, end_date, status) VALUES (:cid, :year, 1, 'P1', "
+                "date_trunc('year', CURRENT_DATE)::date, "
+                "(date_trunc('year', CURRENT_DATE) + interval '1 year - 1 day')::date, 'open') "
+                "RETURNING id"
+            ),
+            {"cid": company_id, "year": year_id},
+        ).scalar_one()
+        customer_id = conn.execute(
+            text(
+                "INSERT INTO partners (company_id, name, customer_code, is_customer) "
+                "VALUES (:cid, 'A customer', 'CUST001', true) RETURNING id"
+            ),
+            {"cid": company_id},
+        ).scalar_one()
+        supplier_id = conn.execute(
+            text(
+                "INSERT INTO partners (company_id, name, supplier_code, is_supplier) "
+                "VALUES (:cid, 'A supplier', 'SUPP001', true) RETURNING id"
+            ),
+            {"cid": company_id},
+        ).scalar_one()
+
+    # A real transaction, not the fixture's AUTOCOMMIT connection: `trg_journal_lines_balanced`
+    # is a DEFERRABLE INITIALLY DEFERRED constraint trigger, so under autocommit it would fire
+    # after the first leg — with the entry one-sided — and refuse a posting that is perfectly
+    # balanced by the time both legs are in.
+    txn_engine = create_engine(ADMIN_URL.set(database=BACKFILL_DB))
+    with txn_engine.begin() as conn:
+        ar_document = _post_a_document(
+            conn,
+            company_id=company_id,
+            period_id=period_id,
+            branch_id=branch_id,
+            currency_id=currency_id,
+            partner_id=customer_id,
+            partner_type="customer",
+            control_account_id=accounts["1200"],
+            contra_account_id=accounts["5100"],
+            role="ar",
+            number="INV-000001",
+            doc_type="ARIN",
+            direction=1,
+        )
+        ap_document = _post_a_document(
+            conn,
+            company_id=company_id,
+            period_id=period_id,
+            branch_id=branch_id,
+            currency_id=currency_id,
+            partner_id=supplier_id,
+            partner_type="supplier",
+            control_account_id=accounts["2100"],
+            contra_account_id=accounts["5100"],
+            role="ap",
+            number="SIN-000001",
+            doc_type="APIN",
+            direction=-1,
+        )
+    txn_engine.dispose()
+    return {"company_id": company_id, "ar": ar_document, "ap": ap_document}
+
+
+def test_the_role_backfill_runs_on_posted_document_lines(pre_orders_engine: Engine) -> None:
+    """A tenant with posted AR and AP documents comes out of the upgrade with every line
+    carrying its own document's role — and with the constraint that keeps it that way."""
+    ids = _provision_pre_orders_tenant(pre_orders_engine)
+    url = ADMIN_URL.set(database=BACKFILL_DB).render_as_string(hide_password=False)
+
+    _alembic(url, "head")
+
+    with pre_orders_engine.connect() as conn:
+        roles = {
+            row.document_id: row.role
+            for row in conn.execute(
+                text(
+                    "SELECT document_id, role FROM partner_document_lines "
+                    "WHERE company_id = :cid"
+                ),
+                {"cid": ids["company_id"]},
+            )
+        }
+        assert roles == {ids["ar"]: "ar", ids["ap"]: "ap"}
+
+        # NOT NULL, so a row the update missed would have failed the upgrade rather than
+        # arriving here as a silent null.
+        nullable = conn.execute(
+            text(
+                "SELECT is_nullable FROM information_schema.columns "
+                "WHERE table_name = 'partner_document_lines' AND column_name = 'role'"
+            )
+        ).scalar_one()
+        assert nullable == "NO"
+
+        # And the copy cannot drift: the role is a foreign key into the document's own
+        # (company_id, id, role), so a line claiming the other role has no row to reference.
+        with pytest.raises(Exception) as refused:  # noqa: B017 - the DB error is the point
+            conn.execute(
+                text(
+                    "UPDATE partner_document_lines SET role = 'ap' WHERE document_id = :doc"
+                ),
+                {"doc": ids["ar"]},
+            )
+        assert "fk_partner_document_lines_document_role" in str(refused.value)
+
+
+def test_the_order_link_check_holds_after_the_upgrade(pre_orders_engine: Engine) -> None:
+    """The other half of decision 1's declarative rule: with `role` in place, an AR line naming
+    a purchase order is refused by a plain CHECK, no trigger involved."""
+    ids = _provision_pre_orders_tenant(pre_orders_engine)
+    url = ADMIN_URL.set(database=BACKFILL_DB).render_as_string(hide_password=False)
+
+    _alembic(url, "head")
+
+    with pre_orders_engine.connect() as conn:
+        constraints = {
+            row.conname
+            for row in conn.execute(
+                text(
+                    "SELECT conname FROM pg_constraint "
+                    "WHERE conrelid = 'partner_document_lines'::regclass"
+                )
+            )
+        }
+        assert "ck_partner_document_lines_order_link_matches_role" in constraints
+        assert "fk_partner_document_lines_sales_order_line" in constraints
+        assert "fk_partner_document_lines_purchase_order_line" in constraints
+        # `order_line_id` is gone: one column with two meanings and no foreign key it could
+        # carry, replaced by two that each have one.
+        assert (
+            conn.execute(
+                text(
+                    "SELECT count(*) FROM information_schema.columns "
+                    "WHERE table_name = 'partner_document_lines' "
+                    "AND column_name = 'order_line_id'"
+                )
+            ).scalar_one()
+            == 0
+        )
+        assert ids["ar"]
