@@ -17,6 +17,16 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
     cors_origins: list[str] = ["http://localhost:3000"]
     frontend_base_url: str = "http://localhost:3000"
+    #: Where the non-production mail stub also writes each message, one JSON object per line.
+    #: Unset in normal running, and refused outright in production by the validator below.
+    #:
+    #: It exists for **end-to-end tests**, which are the only reader that cannot use the
+    #: in-memory `outbox`: that lives in the uvicorn worker's own memory, and Playwright is a
+    #: different process on a different machine. The alternative was an endpoint that returns
+    #: a one-time token, which would make the token an API affordance — the thing the whole
+    #: mailed-token design exists to avoid. A file the mail stub drops messages into is the
+    #: same idea as a local mail catcher, and adds no surface to the product.
+    email_outbox_file: str | None = None
 
     # Auth — ADR-03
     jwt_secret: str = DEV_JWT_SECRET
@@ -42,6 +52,11 @@ class Settings(BaseSettings):
         if self.is_production:
             if self.jwt_secret == DEV_JWT_SECRET:
                 raise ValueError("JWT_SECRET must be set outside development")
+            if self.email_outbox_file:
+                # Writing one-time tokens to a file is a test affordance. Production refuses to
+                # start rather than doing it quietly, which is the same shape as the JWT check
+                # above: the mistake is plausible, so it is made impossible.
+                raise ValueError("EMAIL_OUTBOX_FILE must not be set in production")
             self.cookie_secure = True
         return self
 

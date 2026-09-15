@@ -17,6 +17,7 @@ import { ThemeToggle } from "@/design/components/theme-toggle";
 import { Button } from "@/design/components/button";
 import { CommandPalette, type CommandPaletteItem } from "@/design/components/command-palette";
 import { useToast } from "@/design/components/toast";
+import { VerifyEmailBanner } from "@/features/auth/verify-email-banner";
 import { useLogout, useSwitchCompany } from "@/features/auth/hooks";
 import { useApiErrorToast } from "@/lib/use-api-error-toast";
 import type { MeResponse } from "@/features/auth/types";
@@ -173,6 +174,7 @@ export function AppShell({ me, children }: { me: MeResponse; children: React.Rea
           </div>
         </header>
 
+        <VerifyEmailBanner />
         <main>{children}</main>
       </div>
     </div>

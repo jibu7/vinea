@@ -517,6 +517,19 @@ export function useInviteMember() {
   });
 }
 
+/** Withdraw an invitation that has not been accepted.
+ *
+ * Only a pending membership can be revoked — an accepted one is deactivated instead, which is
+ * a different button and a different endpoint, because the two mean different things: one
+ * un-sends a letter, the other takes access away from somebody who has been working. */
+export function useRevokeInvitation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (membershipId: number) => api.delete(`/invitations/${membershipId}`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["memberships"] }),
+  });
+}
+
 export function useUpdateMemberRoles() {
   const queryClient = useQueryClient();
   return useMutation({
