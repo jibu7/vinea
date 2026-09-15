@@ -86,10 +86,16 @@ export interface Item {
   inventory_account_id: number | null;
   cogs_account_id: number | null;
   sales_account_id: number | null;
+  /** Where an AP line for a **service or non-stock** item lands; a stock item's AP line goes
+   * to the GRN accrual instead (P6 decision 1). */
+  purchase_account_id: number | null;
   default_sales_tax_code_id: number | null;
   default_purchase_tax_code_id: number | null;
   selling_price: string;
   price_includes_tax: boolean;
+  /** Read only by a landed cost split on the `weight` basis, which refuses a target item
+   * that has none (`weight_missing`, P6 decision 9). */
+  weight_per_base_unit: string | null;
   is_active: boolean;
 }
 
@@ -103,10 +109,12 @@ export interface ItemCreatePayload {
   inventory_account_id?: number | null;
   cogs_account_id?: number | null;
   sales_account_id?: number | null;
+  purchase_account_id?: number | null;
   default_sales_tax_code_id?: number | null;
   default_purchase_tax_code_id?: number | null;
   selling_price?: string;
   price_includes_tax?: boolean;
+  weight_per_base_unit?: string | null;
 }
 
 /**
@@ -127,10 +135,14 @@ export interface ItemUpdatePayload {
   clear_cogs_account?: boolean;
   sales_account_id?: number | null;
   clear_sales_account?: boolean;
+  purchase_account_id?: number | null;
+  clear_purchase_account?: boolean;
   default_sales_tax_code_id?: number | null;
   clear_sales_tax_code?: boolean;
   default_purchase_tax_code_id?: number | null;
   clear_purchase_tax_code?: boolean;
+  weight_per_base_unit?: string | null;
+  clear_weight_per_base_unit?: boolean;
   selling_price?: string;
   price_includes_tax?: boolean;
   is_active?: boolean;
@@ -207,6 +219,27 @@ export interface WarehouseUpdatePayload {
   branch_id?: number;
   is_default?: boolean;
   is_active?: boolean;
+}
+
+// --- Kit components (P6 decision 8) -------------------------------------------------------
+
+export interface KitComponent {
+  id: number;
+  kit_item_id: number;
+  component_item_id: number;
+  /** In the component's own base unit, so the explosion is a multiplication. */
+  quantity_per_kit: string;
+  line_no: number;
+}
+
+/**
+ * The kit's **whole** definition. A PUT, because a kit is only meaningful as a set: "2 ×
+ * bottle + 1 × box" is one fact, and a screen saving it a row at a time would leave the
+ * definition briefly wrong between two requests and permanently wrong if the second failed.
+ * An empty list clears it.
+ */
+export interface KitComponentsPayload {
+  components: Array<{ component_item_id: number; quantity_per_kit: string }>;
 }
 
 // --- Defaults ---------------------------------------------------------------------------

@@ -22,6 +22,8 @@ import type {
   ItemCreatePayload,
   ItemEnquiry,
   ItemUpdatePayload,
+  KitComponent,
+  KitComponentsPayload,
   MovementReport,
   OnHandRow,
   Page,
@@ -158,6 +160,27 @@ export function useItemHistory(itemId: number | null) {
     queryKey: [ROOT, "items", itemId, "history"],
     queryFn: () => api.get<ItemAuditRecord[]>(`/inventory/items/${itemId}/history`),
     enabled: itemId !== null,
+  });
+}
+
+// --- Kit components (P6 decision 8) -------------------------------------------------------
+
+export function useKitComponents(itemId: number | null) {
+  return useQuery({
+    queryKey: [ROOT, "items", itemId, "kit-components"],
+    queryFn: () => api.get<KitComponent[]>(`/inventory/items/${itemId}/kit-components`),
+    enabled: itemId !== null,
+  });
+}
+
+/** A **PUT** of the whole definition — see {@link KitComponentsPayload}. The service replaces
+ * what was there and audits the before and the after as one record. */
+export function useSaveKitComponents() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ itemId, payload }: { itemId: number; payload: KitComponentsPayload }) =>
+      api.put<KitComponent[]>(`/inventory/items/${itemId}/kit-components`, payload),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: [ROOT] }),
   });
 }
 

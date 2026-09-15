@@ -74,6 +74,12 @@ import { navIntents, type IntentLabel } from "@/design/nav-tree";
  * left a document the product could post and never undo. Same shape of hole as C.1.6's
  * post-dated instruments, and the same answer: the tree gains the screen that closes it.
  *
+ * Amended at P6 step 6: **"Order defaults"** lost its `P6` tag. The ordinary kind of edit —
+ * the screen landed, at `/maintenance/order-defaults`, and nothing else in the Maintenance
+ * block moved. It is the first P6 row to go live; GRV, Purchase order and Sales order are
+ * step 7's, and the Breakup and Landed cost rows the appendix wants under Transactions →
+ * Order Entry arrive with them.
+ *
  * Amended before P6 step 1 with **"Documents"** under Transactions → AR and → AP, the other
  * half of that same C.1.7 entry. The appendix already recorded it: "the same hole is open in
  * AR and AP, one phase older and twice over". `POST /{role}/documents/{id}/reverse` and
@@ -115,7 +121,7 @@ const APPENDIX_C: Record<IntentLabel, Array<[string, string, string | null]>> = 
     ["Inventory", "Units of measure", null],
     ["Inventory", "Defaults", null],
     ["Inventory", "Rename item code", null],
-    ["Order Entry", "Order defaults", "P6"],
+    ["Order Entry", "Order defaults", null],
     ["Bill of Materials", "BOM items & defaults", "P12"],
     ["Point of Sale", "Tills & types", "P11"],
     ["Fixed Assets", "Asset categories", "P9"],
