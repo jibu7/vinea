@@ -152,6 +152,14 @@ export function useOrderLineSupport(opts: { role?: "sales" | "purchase" } = {}) 
     return itemById.get(Number(itemId))?.item_type === ItemType.KIT;
   }
 
+  /** Whether this item can arrive on a goods receipt: **stock only**, which is what
+   * `not_a_stock_item` enforces. A service is received by its invoice (decision 4), a
+   * non-stock item never touches `stock_moves`, and a kit is not purchased at all — so a
+   * purchase order has two ways out, and each is offered only when it has something to do. */
+  function isReceivable(itemId: number | string | null | undefined): boolean {
+    return itemById.get(Number(itemId))?.item_type === ItemType.STOCK;
+  }
+
   /** The selling price the item carries, trimmed for an editable cell. */
   function sellingPrice(itemId: number | string | null | undefined): string {
     const item = itemById.get(Number(itemId));
@@ -183,6 +191,7 @@ export function useOrderLineSupport(opts: { role?: "sales" | "purchase" } = {}) 
     quantityDecimals,
     itemLabel,
     isKit,
+    isReceivable,
     sellingPrice,
     defaultTaxCode,
   };

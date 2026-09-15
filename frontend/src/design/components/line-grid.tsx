@@ -187,6 +187,12 @@ export interface LineGridProps {
    * asked for. Null while no type is chosen. */
   lineKindFor?: (row: LineGridRow) => InventoryTransactionKind | null;
   inventoryColumns?: InventoryColumns;
+  /** Document mode: give the grid the item cells as well (P6 decision 1). A partner document
+   * may carry item lines and GL lines side by side — an invoice for three cases of wine and a
+   * delivery charge is one document — so this adds the item, warehouse, unit and tax-code
+   * cells *beside* the account column rather than in place of it. A row with an item resolves
+   * its account from the item; a row without one still needs the account picked. */
+  itemLines?: boolean;
   /** Caps the grid at this many rows: the add-line control goes and Enter on the last row
    * stays put. An inventory adjustment is one line by definition (the service refuses
    * more), so its grid must not offer a second. */
@@ -223,6 +229,7 @@ export function LineGrid({
   conversionFor,
   lineKindFor,
   inventoryColumns,
+  itemLines = false,
   maxRows,
   baseCurrencyId,
   rateForCurrency,
@@ -243,6 +250,9 @@ export function LineGrid({
    * and a second implementation of them is a second thing to get wrong.
    */
   const isOrder = mode === "order";
+  /** The item cells — item, warehouse, unit, tax code — which an order always has and a
+   * partner document has when its screen asks for them. */
+  const hasItemCells = isOrder || (mode === "document" && itemLines);
   // Document mode is P4 and fully externalised; the journal/cashbook literals below predate
   // it and are part of the P3 i18n backfill (docs/i18n-backfill-p3.md, issue #6).
   const t = useTranslations("lineGrid");
@@ -373,7 +383,7 @@ export function LineGrid({
                   {inv.value && <th className="px-3 py-2 text-right">{t("value")}</th>}
                 </>
               )}
-              {isOrder && (
+              {hasItemCells && (
                 <>
                   <th className="px-3 py-2 text-left">{t("item")}</th>
                   <th className="px-3 py-2 text-left">{t("warehouse")}</th>
@@ -386,14 +396,14 @@ export function LineGrid({
                 <th className="px-3 py-2 text-left">{t("contraAccount")}</th>
               )}
               <th className="px-3 py-2 text-left">{t("description")}</th>
-              {isOrder && <th className="px-3 py-2 text-left">{t("uom")}</th>}
-              {isOrder && <th className="px-3 py-2 text-left">{t("taxCode")}</th>}
+              {hasItemCells && <th className="px-3 py-2 text-left">{t("uom")}</th>}
+              {hasItemCells && <th className="px-3 py-2 text-left">{t("taxCode")}</th>}
               {showExtra && !isInventory && <th className="px-3 py-2 text-left">{t("branch")}</th>}
               {showExtra && <th className="px-3 py-2 text-left">{t("project")}</th>}
               {showExtra && !isInventory && !isOrder && (
                 <th className="px-3 py-2 text-left">{t("currencyRate")}</th>
               )}
-              {showExtra && !isInventory && !isOrder && (
+              {showExtra && !isInventory && !hasItemCells && (
                 <th className="px-3 py-2 text-left">{t("taxCode")}</th>
               )}
               {mode === "journal" && (
@@ -446,7 +456,14 @@ export function LineGrid({
               const valueErr = rowErr?.value;
               const contraErr = rowErr?.contra_account_id;
               const kind = isInventory ? (lineKindFor?.(row) ?? null) : null;
-              const takesUnitCost = kind !== null && INCREASE_KINDS.has(kind);
+              // With a kind resolver, the transaction type decides: only an increase is
+              // priced by what it cost, and a decrease is costed at the average on Post. With
+              // no resolver the screen has already said every line on this document is an
+              // arrival — a goods receipt is nothing else — so the column it asked for is
+              // editable on every row rather than permanently reading "n/a".
+              const takesUnitCost = lineKindFor
+                ? kind !== null && INCREASE_KINDS.has(kind)
+                : inv.unitCost;
               const takesValue = kind === InventoryTransactionKind.REVALUATION;
 
               return (
@@ -633,7 +650,7 @@ export function LineGrid({
                       )}
                     </>
                   )}
-                  {isOrder && (
+                  {hasItemCells && (
                     <>
                       <td data-row={r} data-col={COL.item} className="min-w-56 p-1 align-top">
                         <Combobox
@@ -708,7 +725,7 @@ export function LineGrid({
                     />
                     {descErr && <p className="mt-0.5 px-1 text-xs text-[var(--vinea-danger)]">{descErr}</p>}
                   </td>
-                  {isOrder && (
+                  {hasItemCells && (
                     <>
                       <td data-row={r} data-col={COL.uom} className="min-w-32 p-1 align-top">
                         <Combobox

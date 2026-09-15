@@ -1,5 +1,5 @@
-import { SalesOrderNewScreen } from "@/features/order-entry/sales-order-new-screen";
+import { OrderWorkspace } from "@/features/order-entry/order-workspace";
 
 export default function NewSalesOrderPage() {
-  return <SalesOrderNewScreen />;
+  return <OrderWorkspace role="sales" />;
 }

@@ -11,44 +11,40 @@ import { StatusChip } from "@/design/components/status-chip";
 import { TBody, TD, TH, THead, TR, Table } from "@/design/components/table";
 import { useHasPermission } from "@/features/auth/hooks";
 import { usePartners } from "@/features/subledger/hooks";
-import { SalesOrderStatus } from "@/lib/api-enums";
+import { PurchaseOrderStatus } from "@/lib/api-enums";
 import { formatDate, formatMoney } from "@/lib/format";
-import { useSalesOrders } from "./hooks";
-import { formatOrderQuantity, useOrderLineSupport } from "./order-support";
+import { usePurchaseOrders } from "./hooks";
+import { useOrderLineSupport } from "./order-support";
 
-export const SALES_ORDER_STATUS_TONE: Record<
+export const PURCHASE_ORDER_STATUS_TONE: Record<
   string,
   "neutral" | "success" | "warning" | "danger" | "info"
 > = {
-  [SalesOrderStatus.OPEN]: "info",
-  [SalesOrderStatus.PARTIALLY_INVOICED]: "warning",
-  [SalesOrderStatus.INVOICED]: "success",
-  [SalesOrderStatus.CLOSED]: "neutral",
-  [SalesOrderStatus.CANCELLED]: "neutral",
+  [PurchaseOrderStatus.OPEN]: "info",
+  [PurchaseOrderStatus.PARTIALLY_RECEIVED]: "warning",
+  [PurchaseOrderStatus.RECEIVED]: "success",
+  [PurchaseOrderStatus.CLOSED]: "neutral",
+  [PurchaseOrderStatus.CANCELLED]: "neutral",
 };
 
 /**
- * Sales orders (P6 decision 3): the listing, with what each order still owes the customer.
+ * Purchase orders: what has been ordered from suppliers and how much of it has arrived.
  *
- * **The backorder column is the listing's half of decision 7** — the plan asks for it on the
- * order, the enquiry *and* the listing, and the endpoint computes it by the same rule the
- * enquiry uses per line so the two screens cannot disagree. It is a quantity, rendered to the
- * item's unit decimals like every other quantity in the product; the sign lives on
- * `available`, where the backend puts it, and this column is the shortfall the endpoint sums.
- *
- * An order posts nothing (decision 3), so there is no journal entry to drill to from here —
- * the documents raised against an order hang off the order itself.
+ * No backorder column, and its absence is the point rather than an omission: a backorder is
+ * what a *customer* was promised that the shelf cannot cover. What a purchase order is short
+ * of is simply what has not been delivered yet, which the status and the per-line remaining
+ * already say.
  */
-export function SalesOrdersScreen() {
-  const t = useTranslations("orderEntry.salesOrders");
+export function PurchaseOrdersScreen() {
+  const t = useTranslations("orderEntry.purchaseOrders");
   const tc = useTranslations("orderEntry.common");
-  const ts = useTranslations("orderEntry.salesOrderStatus");
-  const canManage = useHasPermission()("oe:sales_orders_manage");
+  const ts = useTranslations("orderEntry.purchaseOrderStatus");
+  const canManage = useHasPermission()("oe:purchase_orders_manage");
 
   const [status, setStatus] = useState<string>("");
-  const orders = useSalesOrders({ status: status || undefined });
-  const partners = usePartners("ar", {});
-  const support = useOrderLineSupport();
+  const orders = usePurchaseOrders({ status: status || undefined });
+  const partners = usePartners("ap", {});
+  const support = useOrderLineSupport({ role: "purchase" });
 
   const partnerName = (id: number) =>
     partners.data?.find((partner) => partner.id === id)?.name ?? tc("emptyValue");
@@ -73,10 +69,7 @@ export function SalesOrdersScreen() {
           <Select
             options={[
               { value: "", label: t("allStatuses") },
-              ...Object.values(SalesOrderStatus).map((value) => ({
-                value,
-                label: ts(value),
-              })),
+              ...Object.values(PurchaseOrderStatus).map((value) => ({ value, label: ts(value) })),
             ]}
             value={status}
             onValueChange={setStatus}
@@ -84,7 +77,7 @@ export function SalesOrdersScreen() {
             className="w-56"
           />
           {canManage ? (
-            <Link href="/oe/sales-orders/new" className={buttonVariants({ variant: "primary" })}>
+            <Link href="/oe/purchase-orders/new" className={buttonVariants({ variant: "primary" })}>
               <Plus className="size-3.5" /> {t("new")}
             </Link>
           ) : (
@@ -104,12 +97,11 @@ export function SalesOrdersScreen() {
           <THead>
             <TR>
               <TH className="w-32">{t("number")}</TH>
-              <TH>{tc("customer")}</TH>
+              <TH>{tc("supplier")}</TH>
               <TH className="w-28">{t("orderDate")}</TH>
               <TH className="w-28">{t("expectedDate")}</TH>
-              <TH className="w-28 text-right">{t("backordered")}</TH>
               <TH className="w-36 text-right">{tc("total")}</TH>
-              <TH className="w-40 text-right">{tc("status")}</TH>
+              <TH className="w-44 text-right">{tc("status")}</TH>
             </TR>
           </THead>
           <TBody>
@@ -117,7 +109,7 @@ export function SalesOrdersScreen() {
               <TR key={order.id}>
                 <TD>
                   <Link
-                    href={`/oe/sales-orders/${order.id}`}
+                    href={`/oe/purchase-orders/${order.id}`}
                     className="font-mono text-xs font-semibold text-[var(--vinea-brand)] hover:underline"
                     data-testid="order-number"
                   >
@@ -135,18 +127,12 @@ export function SalesOrdersScreen() {
                 </TD>
                 <TD
                   className="text-right font-mono tabular-nums text-xs text-[var(--vinea-ink)]"
-                  data-testid="order-backordered"
-                >
-                  {formatOrderQuantity(order.backordered)}
-                </TD>
-                <TD
-                  className="text-right font-mono tabular-nums text-xs text-[var(--vinea-ink)]"
                   data-testid="order-total"
                 >
                   {formatMoney(Number(order.total_amount), currencyOf(order.currency_id))}
                 </TD>
                 <TD className="text-right">
-                  <StatusChip tone={SALES_ORDER_STATUS_TONE[order.status] ?? "neutral"}>
+                  <StatusChip tone={PURCHASE_ORDER_STATUS_TONE[order.status] ?? "neutral"}>
                     {ts(order.status)}
                   </StatusChip>
                 </TD>
@@ -155,7 +141,7 @@ export function SalesOrdersScreen() {
           </TBody>
         </Table>
       )}
-      <p className="pt-3 text-xs text-[var(--vinea-ink-subtle)]">{t("backorderNote")}</p>
+      <p className="pt-3 text-xs text-[var(--vinea-ink-subtle)]">{t("noBackorderNote")}</p>
     </MaintenancePage>
   );
 }

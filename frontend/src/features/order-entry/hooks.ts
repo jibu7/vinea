@@ -287,12 +287,25 @@ export function useCreateGrn() {
 }
 
 /** A receipt with any matched quantity refuses reversal (`grn_matched`) — reverse the invoice
- * first. An unmatched one reverses under the negative-stock policy. */
+ * first. An unmatched one reverses under the negative-stock policy.
+ *
+ * A reversal **posts**, so it carries an `Idempotency-Key` like every other posting endpoint:
+ * a retried reversal replays rather than taking the goods out twice. */
 export function useReverseGrn() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ grnId, payload }: { grnId: number; payload: GrnReversePayload }) =>
-      api.post<Grn>(`/oe/goods-received-notes/${grnId}/reverse`, payload),
+    mutationFn: ({
+      grnId,
+      payload,
+      idempotencyKey,
+    }: {
+      grnId: number;
+      payload: GrnReversePayload;
+      idempotencyKey: string;
+    }) =>
+      api.post<Grn>(`/oe/goods-received-notes/${grnId}/reverse`, payload, {
+        "Idempotency-Key": idempotencyKey,
+      }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: [ROOT] }),
   });
 }
@@ -357,10 +370,15 @@ export function useReverseLandedCost() {
     mutationFn: ({
       documentId,
       payload,
+      idempotencyKey,
     }: {
       documentId: number;
       payload: LandedCostReversePayload;
-    }) => api.post<LandedCost>(`/oe/landed-costs/${documentId}/reverse`, payload),
+      idempotencyKey: string;
+    }) =>
+      api.post<LandedCost>(`/oe/landed-costs/${documentId}/reverse`, payload, {
+        "Idempotency-Key": idempotencyKey,
+      }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: [ROOT] }),
   });
 }
