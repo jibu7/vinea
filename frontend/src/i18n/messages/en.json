@@ -1788,7 +1788,11 @@
       "committed": "Committed",
       "onOrder": "On order",
       "available": "Available",
-      "availableNote": "Committed is what open sales orders have promised from this location and On order what open purchase orders still owe it. Available is quantity less committed and is shown signed: a negative means more has been promised than is held, which the default backorder policy permits and which the sales order listing shows as a positive shortfall."
+      "availableNote": "Committed is what open sales orders have promised from this location and On order what open purchase orders still owe it. Available is quantity less committed and is shown signed: a negative means more has been promised than is held, which the default backorder policy permits and which the sales order listing shows as a positive shortfall.",
+      "kitHasNoPosition": "A kit is a virtual bundle, never held and never committed: what a kit line promises is its component items, and it is those that show a position here. Open a component to see what the warehouse actually has to find.",
+      "totalAllLocations": "Total, every location",
+      "totalForWarehouse": "Total, this warehouse",
+      "totalsNote": "The totals row adds up the locations listed above, which a warehouse filter narrows. The three figures at the top of the page are item-wide as at the as-of date and do not move with the filter, so the two can legitimately differ."
     },
     "reports": {
       "movementTitle": "Inventory movement",

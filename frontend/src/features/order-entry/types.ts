@@ -447,3 +447,171 @@ export interface GrnListing {
   next_cursor: number | null;
   unmatched_total: string;
 }
+
+// --- The order enquiry (P6 step 5's endpoint, step 8's screens) --------------------------------
+
+export interface EnquiryLine {
+  line_id: number;
+  line_no: number;
+  item_id: number;
+  item_code: string;
+  item_name: string;
+  description: string;
+  uom_id: number;
+  warehouse_id: number | null;
+  /** As keyed, in `uom_id`. */
+  quantity: string;
+  /** Promised, done and left — all in the **item's base unit**, which is what every derived
+   * figure in decision 4 is counted in. */
+  ordered: string;
+  fulfilled: string;
+  remaining: string;
+  /** The part of `remaining` the warehouse cannot currently cover. Zero on a service line and
+   * on any line whose location holds enough. */
+  backordered: string;
+  unit_price: string;
+  net_amount: string;
+  tax_amount: string;
+  gross_amount: string;
+  kit_parent_line_id: number | null;
+}
+
+/** A document raised against the order, and the entries it posted.
+ *
+ * `stock_entry_id` is the companion (decision 2) — one document posted both entries, which is
+ * why it is a second link on one row rather than a second row. Listing them separately would
+ * invite somebody to reverse one of them.
+ *
+ * A **reversed** document stays in this list, carrying its own status: "what happened to this
+ * order" includes the invoice that was raised and taken back. Its `quantity` is therefore what
+ * that document keyed, not a net contribution — the netting lives in the line's `fulfilled`.
+ */
+export interface LinkedDocument {
+  kind: string;
+  document_id: number;
+  number: string;
+  document_date: string;
+  status: string;
+  quantity: string;
+  journal_entry_id: number | null;
+  journal_entry_number: string | null;
+  stock_entry_id: number | null;
+  stock_entry_number: string | null;
+}
+
+export interface OrderEnquiry {
+  order_id: number;
+  number: string;
+  partner_id: number;
+  partner_name: string;
+  order_date: string;
+  expected_date: string | null;
+  reference: string | null;
+  description: string;
+  currency_id: number;
+  exchange_rate: string;
+  branch_id: number;
+  warehouse_id: number | null;
+  status: string;
+  net_amount: string;
+  tax_amount: string;
+  total_amount: string;
+  closed_on: string | null;
+  cancelled_on: string | null;
+  lines: EnquiryLine[];
+  documents: LinkedDocument[];
+  total_backordered: string;
+}
+
+// --- The order reports, per line (P6 step 8) ---------------------------------------------------
+
+export interface OrderLineRow {
+  order_id: number;
+  number: string;
+  order_date: string;
+  expected_date: string | null;
+  partner_id: number;
+  partner_name: string;
+  status: string;
+  currency_id: number;
+  reference: string | null;
+  line_id: number;
+  line_no: number;
+  item_id: number;
+  item_code: string;
+  item_name: string;
+  /** The unit the line was keyed in. */
+  uom_id: number;
+  /** The unit `ordered`, `fulfilled` and `remaining` are counted in. */
+  base_uom_id: number;
+  warehouse_id: number | null;
+  description: string | null;
+  quantity: string;
+  ordered: string;
+  fulfilled: string;
+  remaining: string;
+  unit_price: string;
+  net_amount: string;
+  tax_amount: string;
+  gross_amount: string;
+  kit_parent_line_id: number | null;
+}
+
+export interface UnitSubtotal {
+  uom_id: number;
+  ordered: string;
+  remaining: string;
+}
+
+export interface CurrencySubtotal {
+  currency_id: number;
+  net_amount: string;
+  gross_amount: string;
+}
+
+/**
+ * The report's page, and the totals over everything the filters select.
+ *
+ * There is deliberately **no single quantity total and no single money total**. 3 kg plus 2
+ * crates is not a quantity, and an order's `exchange_rate` is display only (decision 3), so
+ * there is no rate that could put RWF and USD on one line either. Quantities are subtotalled
+ * by unit, money by currency, and `line_count` is the total that always means something.
+ */
+export interface OrderLineReport {
+  items: OrderLineRow[];
+  next_cursor: number | null;
+  line_count: number;
+  by_unit: UnitSubtotal[];
+  by_currency: CurrencySubtotal[];
+}
+
+// --- Landed cost, per receipt line (P6 step 5's endpoint) --------------------------------------
+
+export interface LandedCostAllocation {
+  landed_cost_id: number;
+  number: string;
+  cost_date: string;
+  description: string;
+  basis: LandedCostBasis;
+  status: LandedCostStatus;
+  document_amount: string;
+  line_id: number;
+  grn_line_id: number;
+  grn_id: number;
+  grn_number: string;
+  item_id: number;
+  warehouse_id: number;
+  weight: string;
+  share: string;
+  /** The share went to cost of sales because the location held none of the item. */
+  went_to_cogs: boolean;
+  quantity_at_posting: string;
+  stock_move_id: number | null;
+  journal_entry_id: number | null;
+}
+
+export interface LandedCostAllocationListing {
+  items: LandedCostAllocation[];
+  next_cursor: number | null;
+  total_allocated: string;
+}

@@ -181,6 +181,10 @@ export interface JournalEntry {
    * back-filled onto a posted entry. So an entry from any phase resolves. */
   module_document_id: number | null;
   module_document_number: string | null;
+  /** Which **kind** of page opens that document — `lib/document-route.ts` maps it. `module` is
+   * not enough and P6 is where that stopped being a detail: a goods receipt, a landed cost and
+   * an inventory adjustment are all `inv` and live on three different screens. */
+  module_document_target: string | null;
   posted_by: number | null;
   posted_at: string | null;
   reverses_entry_id: number | null;
