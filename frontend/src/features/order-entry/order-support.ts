@@ -17,6 +17,13 @@ import { dotted, formatQuantity, trimDecimalString } from "@/lib/format";
  * take decimals from, so it is rendered to the decimals the figure itself carries: 40 reads
  * `40`, 0.75 reads `0.75`. Inventing a scale either way would print a precision the number does
  * not have, or hide one it does.
+ *
+ * **Two things are wrong with this and both outlive the rule.** The trim is a formatting rule
+ * nothing else in the product uses — every other quantity takes its decimals from a unit — and
+ * underneath it, 3 kg plus 2 crates is not a quantity at all. The column is captioned to say
+ * so, and the honest fix is probably for the step-5 listing endpoint to **count the lines that
+ * are short** rather than sum them, which changes a wire contract and is step 9's call rather
+ * than step 7's. Recorded rather than quietly rendered as if it were fine.
  */
 export function formatOrderQuantity(value: string | number): string {
   const text = trimDecimalString(String(value));

@@ -1784,7 +1784,11 @@
       "oneLocationOnly": "Narrowed to one warehouse. The figures above stay item-wide.",
       "openDocument": "Open document {number}",
       "viewDocument": "Open",
-      "document": "Document"
+      "document": "Document",
+      "committed": "Committed",
+      "onOrder": "On order",
+      "available": "Available",
+      "availableNote": "Committed is what open sales orders have promised from this location and On order what open purchase orders still owe it. Available is quantity less committed and is shown signed: a negative means more has been promised than is held, which the default backorder policy permits and which the sales order listing shows as a positive shortfall."
     },
     "reports": {
       "movementTitle": "Inventory movement",
@@ -1945,7 +1949,7 @@
       "expectedDate": "Expected",
       "backordered": "Backordered",
       "allStatuses": "Every status",
-      "backorderNote": "Backordered is the part of what is still owed that the order's warehouses cannot currently cover, summed over its lines. It moves when stock arrives or another order takes it — nothing is reserved."
+      "backorderNote": "Backordered is the part of what is still owed that the order’s warehouses cannot currently cover. It moves when stock arrives or another order takes it — nothing is reserved. It is a sum across the order’s lines in their base units, so on an order that mixes units it spans them: 3 kg short and 2 crates short reads 5. Open the order for the shortfall per line, each in its own unit."
     },
     "salesOrderStatus": {
       "open": "Open",

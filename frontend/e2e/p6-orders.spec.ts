@@ -314,6 +314,21 @@ test.describe("P6 order entry", () => {
     await expect(row.getByTestId("order-backordered")).toHaveText("9");
     await expect(row.getByTestId("order-total")).toHaveText("FRw 70,000");
 
+    // The same fact from the other side, and the other sign. The listing shows the shortfall
+    // as a positive number because that is what a person is short *by*; the item enquiry shows
+    // `available` as the ledger computes it, quantity less committed, and it is **negative**
+    // when more has been promised than is held. Both are rendered here, in one pass, because a
+    // screen that quietly took the absolute value would look identical and mean something else.
+    //
+    // 25 bottles on the shelf, 34 promised (30 on the line and 4 inside the two kits): -9.
+    // And 15 still owed by the supplier, which is the part-received purchase order.
+    await page.goto("/inventory/enquiry");
+    await page.waitForSelector("h1:has-text('Item enquiry')");
+    await pickCombobox(page, "Item", WINE);
+    await expect(page.getByTestId("location-committed").first()).toHaveText("34 EA");
+    await expect(page.getByTestId("location-on-order").first()).toHaveText("15 EA");
+    await expect(page.getByTestId("location-available").first()).toHaveText("-9 EA");
+
     // --- the breakup: this customer wants three bottles in the pack, not two --------------
     await page.goto(orderUrl);
     await page.waitForSelector("[data-testid='order-total']");
