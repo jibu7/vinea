@@ -72,9 +72,24 @@ def _issued_unit_cost(db: Session, company_id: int, returns_line_id: int) -> Dec
         )
     if line.base_quantity is None or line.base_quantity == ZERO:
         return None
+    # **`source_line_id` is not namespaced, so the document type has to be part of the key.**
+    # Every kind of stock document writes its own line id into this one column: a GRN writes
+    # goods-received line ids, a landed cost writes the *GRN* line ids it allocated onto, an
+    # inventory document writes its own. Nothing keeps those id spaces apart, so matching on
+    # `source_line_id` alone returns whichever row the planner reaches first.
+    #
+    # Found by the acceptance tape, at row 13. A landed cost had revalued the same receipt, so
+    # its zero-quantity move — keyed on GRN line 1, carrying no `unit_cost`, because a
+    # revaluation has none — collided with sale line 1 and won. `unit_cost is None` then looked
+    # exactly like "this line was never issued", and the credit note fell through to the
+    # *current* average: 5 bottles came back at 1 111.1 instead of the 1 000 they left at,
+    # putting 556 of profit into stock that nobody earned. Silent, because the fallback is a
+    # legitimate path for a goodwill credit with no `returns_line_id`.
     move = db.scalar(
         select(StockMove).where(
-            StockMove.company_id == company_id, StockMove.source_line_id == line.id
+            StockMove.company_id == company_id,
+            StockMove.source_doc_type == "partner_document",
+            StockMove.source_line_id == line.id,
         )
     )
     if move is None or move.unit_cost is None:
