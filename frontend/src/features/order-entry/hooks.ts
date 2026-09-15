@@ -80,10 +80,14 @@ function orderQuery(opts: OrderListParams): string {
   return query ? `?${query}` : "";
 }
 
-export function useSalesOrders(opts: OrderListParams = {}) {
+/** `enabled` is for a screen that renders one side or the other: hooks cannot be called
+ * conditionally, so the one that is not wanted is switched off rather than left to fetch a
+ * page nothing will read. */
+export function useSalesOrders(opts: OrderListParams = {}, { enabled = true } = {}) {
   return useQuery({
     queryKey: [ROOT, "sales-orders", opts],
     queryFn: () => api.get<Page<SalesOrderSummary>>(`/oe/sales-orders${orderQuery(opts)}`),
+    enabled,
   });
 }
 
@@ -170,10 +174,11 @@ export function useInvoiceFromSalesOrder() {
 
 // --- Purchase orders -------------------------------------------------------------------------
 
-export function usePurchaseOrders(opts: OrderListParams = {}) {
+export function usePurchaseOrders(opts: OrderListParams = {}, { enabled = true } = {}) {
   return useQuery({
     queryKey: [ROOT, "purchase-orders", opts],
     queryFn: () => api.get<Page<PurchaseOrderSummary>>(`/oe/purchase-orders${orderQuery(opts)}`),
+    enabled,
   });
 }
 
@@ -452,17 +457,19 @@ function reportQuery(opts: OrderReportParams): string {
 
 /** `outstanding_only` is the report the plan calls "outstanding orders": a line with a
  * backorder is on it with its remaining quantity, and after Close remaining it is not. */
-export function useSalesOrderReport(opts: OrderReportParams = {}) {
+export function useSalesOrderReport(opts: OrderReportParams = {}, { enabled = true } = {}) {
   return useQuery({
     queryKey: [ROOT, "reports", "sales-orders", opts],
     queryFn: () => api.get<OrderLineReport>(`/oe/reports/sales-orders${reportQuery(opts)}`),
+    enabled,
   });
 }
 
-export function usePurchaseOrderReport(opts: OrderReportParams = {}) {
+export function usePurchaseOrderReport(opts: OrderReportParams = {}, { enabled = true } = {}) {
   return useQuery({
     queryKey: [ROOT, "reports", "purchase-orders", opts],
     queryFn: () => api.get<OrderLineReport>(`/oe/reports/purchase-orders${reportQuery(opts)}`),
+    enabled,
   });
 }
 

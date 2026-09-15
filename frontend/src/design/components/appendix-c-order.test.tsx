@@ -89,6 +89,22 @@ import { navIntents, type IntentLabel } from "@/design/nav-tree";
  * ever carried the first, so the tag stood for three screens and could only ever be cleared
  * by one. `navIntents` now carries no P6 tag at all, which the guard below pins.
  *
+ * Amended at P6 step 8 with an Order Entry block under **Enquiries** and another under
+ * **Reports**, recorded in the plan as **Appendix C.1.8**. Neither block is in the owner's
+ * tree, and the reason is in the plan rather than in a judgement call here: the appendix's
+ * Enquiries and Reports sections carry no Order Entry at all, while P6's own step list names
+ * six screens — "Sales order enquiry and Purchase order enquiry under Enquiries (module Order
+ * Entry)" and "Reports → Order Entry: Sales orders, Purchase orders, Goods received, Landed
+ * cost". Same footing as C.1.5's additions: a change to the contract belongs in the document
+ * the contract lives in.
+ *
+ * The Goods received row is the one worth naming twice. Its unmatched total is Σ (received −
+ * relieved) over every receipt the filters select, which is what decision 5 makes the GRN
+ * accrual account's balance — so it is where an operator watches the accrual prove itself
+ * against the trial balance, rather than taking the invariant suite's word for it.
+ *
+ * Nothing outside the two new blocks moved, and both sit last in their intent, after Inventory.
+ *
  * Amended before P6 step 1 with **"Documents"** under Transactions → AR and → AP, the other
  * half of that same C.1.7 entry. The appendix already recorded it: "the same hole is open in
  * AR and AP, one phase older and twice over". `POST /{role}/documents/{id}/reverse` and
@@ -172,6 +188,8 @@ const APPENDIX_C: Record<IntentLabel, Array<[string, string, string | null]>> = 
     ["Accounts Receivable", "Customer enquiry", null],
     ["Accounts Payable", "Supplier enquiry", null],
     ["Inventory", "Item enquiry", null],
+    ["Order Entry", "Sales order enquiry", null],
+    ["Order Entry", "Purchase order enquiry", null],
   ],
   "Reports": [
     ["General Ledger", "Account transactions", null],
@@ -197,6 +215,10 @@ const APPENDIX_C: Record<IntentLabel, Array<[string, string, string | null]>> = 
     ["Inventory", "Valuation", null],
     ["Inventory", "Sales analyses", "P10"],
     ["Inventory", "Slow movers", "P10"],
+    ["Order Entry", "Sales orders", null],
+    ["Order Entry", "Purchase orders", null],
+    ["Order Entry", "Goods received", null],
+    ["Order Entry", "Landed cost", null],
   ],
 };
 

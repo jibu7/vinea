@@ -42,6 +42,22 @@ export interface NavIntent {
 }
 
 /**
+ * What opens an order-entry **read**, matching exactly what `_require_view` in the API accepts.
+ *
+ * Every order-entry screen that only looks at things gates on the same five, and they were
+ * spelled out five times over before step 8 wanted four more rows. The sidebar offering a
+ * screen the API will refuse is the failure these lists exist to prevent, and nine copies of a
+ * list is how one of them ends up a permission short.
+ */
+const OE_VIEW_PERMISSIONS = [
+  "oe:setup_manage",
+  "oe:sales_orders_manage",
+  "oe:purchase_orders_manage",
+  "oe:grv_process",
+  "oe:reports_view",
+];
+
+/**
  * Intent-first sidebar tree per Master Plan Appendix C: Maintenance / Transactions /
  * Enquiries / Reports at the top, modules grouped underneath each. The command
  * palette (Ctrl+K) flattens the same data so search reaches every screen regardless
@@ -99,13 +115,7 @@ export const navIntents: NavIntent[] = [
       {
         label: "Order defaults",
         module: "Order Entry",
-        permission: [
-          "oe:setup_manage",
-          "oe:sales_orders_manage",
-          "oe:purchase_orders_manage",
-          "oe:grv_process",
-          "oe:reports_view",
-        ],
+        permission: OE_VIEW_PERMISSIONS,
         href: "/maintenance/order-defaults",
       },
       { label: "BOM items & defaults", module: "Bill of Materials", phase: "P12" },
@@ -152,25 +162,13 @@ export const navIntents: NavIntent[] = [
       {
         label: "GRV",
         module: "Accounts Payable",
-        permission: [
-          "oe:setup_manage",
-          "oe:sales_orders_manage",
-          "oe:purchase_orders_manage",
-          "oe:grv_process",
-          "oe:reports_view",
-        ],
+        permission: OE_VIEW_PERMISSIONS,
         href: "/oe/goods-received",
       },
       {
         label: "Purchase order",
         module: "Accounts Payable",
-        permission: [
-          "oe:setup_manage",
-          "oe:sales_orders_manage",
-          "oe:purchase_orders_manage",
-          "oe:grv_process",
-          "oe:reports_view",
-        ],
+        permission: OE_VIEW_PERMISSIONS,
         href: "/oe/purchase-orders",
       },
       { label: "Supplier invoice", module: "Accounts Payable", permission: "ap:transactions_post", href: "/ap/supplier-invoices/new" },
@@ -183,13 +181,7 @@ export const navIntents: NavIntent[] = [
       {
         label: "Sales order",
         module: "Order Entry",
-        permission: [
-          "oe:setup_manage",
-          "oe:sales_orders_manage",
-          "oe:purchase_orders_manage",
-          "oe:grv_process",
-          "oe:reports_view",
-        ],
+        permission: OE_VIEW_PERMISSIONS,
         href: "/oe/sales-orders",
       },
       // Breakup and Landed cost are Appendix C rows that had no row to be tagged: the tree
@@ -240,6 +232,24 @@ export const navIntents: NavIntent[] = [
       { label: "Customer enquiry", module: "Accounts Receivable", permission: "ar:reports_view", href: "/ar/enquiry" },
       { label: "Supplier enquiry", module: "Accounts Payable", permission: "ap:reports_view", href: "/ap/enquiry" },
       { label: "Item enquiry", module: "Inventory", permission: "inv:reports_view", href: "/inventory/enquiry" },
+      // Appendix C.1.8. The owner's tree has no Order Entry block under Enquiries, and the
+      // plan's step 8 names both of these: "Sales order enquiry and Purchase order enquiry
+      // under Enquiries (module Order Entry), with drill order → line → invoice / GRN →
+      // journal entry". They read on the same permissions the endpoint accepts, so a storeman
+      // with only `oe:grv_process` and a controller with only `oe:reports_view` both reach
+      // them.
+      {
+        label: "Sales order enquiry",
+        module: "Order Entry",
+        permission: OE_VIEW_PERMISSIONS,
+        href: "/oe/enquiries/sales-orders",
+      },
+      {
+        label: "Purchase order enquiry",
+        module: "Order Entry",
+        permission: OE_VIEW_PERMISSIONS,
+        href: "/oe/enquiries/purchase-orders",
+      },
     ],
   },
   {
@@ -280,6 +290,38 @@ export const navIntents: NavIntent[] = [
       { label: "Valuation", module: "Inventory", permission: ["inv:reports_view", "reporting:inventory_valuation_view"], href: "/inventory/reports/valuation" },
       { label: "Sales analyses", module: "Inventory", phase: "P10" },
       { label: "Slow movers", module: "Inventory", phase: "P10" },
+      // Appendix C.1.8 again, the other half. The owner's tree has no Reports → Order Entry
+      // block at all and the plan's P6 names four listings — sales orders, purchase orders,
+      // goods received and landed cost — so the rows arrive with the screens rather than the
+      // screens arriving with nowhere to be reached from.
+      //
+      // Goods received is the one that earns its place twice over: its unmatched total is the
+      // balance of 2350, so this is where an operator sees the accrual proved rather than
+      // taking a test's word for it.
+      {
+        label: "Sales orders",
+        module: "Order Entry",
+        permission: OE_VIEW_PERMISSIONS,
+        href: "/oe/reports/sales-orders",
+      },
+      {
+        label: "Purchase orders",
+        module: "Order Entry",
+        permission: OE_VIEW_PERMISSIONS,
+        href: "/oe/reports/purchase-orders",
+      },
+      {
+        label: "Goods received",
+        module: "Order Entry",
+        permission: OE_VIEW_PERMISSIONS,
+        href: "/oe/reports/goods-received",
+      },
+      {
+        label: "Landed cost",
+        module: "Order Entry",
+        permission: OE_VIEW_PERMISSIONS,
+        href: "/oe/reports/landed-cost",
+      },
     ],
   },
 ];
