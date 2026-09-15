@@ -118,18 +118,28 @@ def _recreate_test_database() -> None:
         )
         conn.execute(text(f'DROP DATABASE IF EXISTS "{TEST_DB_NAME}"'))
         conn.execute(text(f'CREATE DATABASE "{TEST_DB_NAME}"'))
-        role_exists = conn.scalar(
-            text("SELECT 1 FROM pg_roles WHERE rolname = :role"), {"role": APP_ROLE}
-        )
-        if not role_exists:
-            # Utility statements cannot take bind parameters; both values are literals
-            # defined in this file, never user input.
-            conn.execute(
-                text(
-                    f"CREATE ROLE \"{APP_ROLE}\" LOGIN PASSWORD '{APP_PASSWORD}' "
-                    "NOSUPERUSER NOCREATEDB NOBYPASSRLS"
-                )
+        # The app role is **cluster-global**, not per-database: every xdist worker needs the
+        # same one and they all reach this line at the same instant. `SELECT … then CREATE`
+        # is check-then-act — all of them see it missing, all of them create it, one wins and
+        # the rest take a unique violation on `pg_authid` that fails their session fixture and
+        # every test behind it. Postgres has no `CREATE ROLE IF NOT EXISTS`, so the check has
+        # to happen where the insert does: inside the statement, catching its own conflict.
+        #
+        # Both codes, because the loser gets either depending on where in the catalogue the
+        # race lands. Utility statements cannot take bind parameters; both values are literals
+        # defined in this file, never user input.
+        conn.execute(
+            text(
+                "DO $$\n"
+                "BEGIN\n"
+                f'    CREATE ROLE "{APP_ROLE}" LOGIN PASSWORD \'{APP_PASSWORD}\' '
+                "NOSUPERUSER NOCREATEDB NOBYPASSRLS;\n"
+                "EXCEPTION WHEN duplicate_object OR unique_violation THEN\n"
+                "    NULL;\n"
+                "END\n"
+                "$$"
             )
+        )
     maintenance.dispose()
 
 

@@ -72,9 +72,18 @@ function ageAnalysisRow(page: Page, customerName: string) {
 async function openAgeAnalysisFor(page: Page, role: "ar" | "ap") {
   await page.goto(`/${role}/reports/age-analysis`);
   await page.waitForSelector("h1:has-text('Age analysis')");
-  // The grand-total row is the last thing the table renders, so its presence means the
-  // report has loaded and an empty result is an empty result rather than a pending one.
-  await page.getByText("Grand total").first().waitFor({ state: "visible", timeout: 20_000 });
+  // Wait for **either** ending: the grand-total row the table finishes with, or the empty
+  // state. The comment here used to say the grand total meant "loaded, and an empty result is
+  // an empty result" — which is not what the screen does. With no rows there is no table at
+  // all, so the signal being waited for cannot arrive, and the wait ran to its timeout.
+  //
+  // It never showed because the suite ran as one file after another and some earlier *file*
+  // had always left a balance on this side of the ledger by the time this one asked. Sharding
+  // took that away, which is the reset-database rule doing its job: the dependency was always
+  // there, and the run order was hiding it.
+  await expect(
+    page.getByText("Grand total").first().or(page.getByText("Nothing to report").first()),
+  ).toBeVisible({ timeout: 20_000 });
 }
 
 const openAgeAnalysis = (page: Page) => openAgeAnalysisFor(page, "ar");
