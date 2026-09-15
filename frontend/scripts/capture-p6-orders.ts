@@ -302,7 +302,12 @@ async function main() {
     await shoot(page, "7-landed-cost", theme);
 
     // The preview, which is the screen's whole argument: the shares before anything posts.
+    // The drafts go first: this screen keeps one, so the second theme's pass would otherwise
+    // open on the first pass's half-filled form and find the receipt already added — correct
+    // behaviour, and not what this shot is of.
     await page.goto(`${BASE}/oe/landed-costs/new`);
+    await page.evaluate(() => localStorage.clear());
+    await page.reload();
     await page.waitForSelector("h1:has-text('New landed cost')");
     await page.getByLabel("Amount", { exact: true }).fill("60000");
     await page.getByLabel("Description", { exact: true }).fill("Freight, April container");
