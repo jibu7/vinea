@@ -93,7 +93,21 @@ export const navIntents: NavIntent[] = [
       { label: "Units of measure", module: "Inventory", permission: "inv:reports_view", href: "/maintenance/uom-categories" },
       { label: "Defaults", module: "Inventory", permission: "inv:reports_view", href: "/maintenance/inventory-defaults" },
       { label: "Rename item code", module: "Inventory", permission: "inv:item_rename", href: "/maintenance/rename-item-code" },
-      { label: "Order defaults", module: "Order Entry", phase: "P6" },
+      // Readable by anyone who may open an order-entry screen at all, writable only with
+      // `oe:setup_manage` — the same split the endpoint gates itself on, so the sidebar
+      // never offers a screen the API will refuse to load.
+      {
+        label: "Order defaults",
+        module: "Order Entry",
+        permission: [
+          "oe:setup_manage",
+          "oe:sales_orders_manage",
+          "oe:purchase_orders_manage",
+          "oe:grv_process",
+          "oe:reports_view",
+        ],
+        href: "/maintenance/order-defaults",
+      },
       { label: "BOM items & defaults", module: "Bill of Materials", phase: "P12" },
       { label: "Tills & types", module: "Point of Sale", phase: "P11" },
       { label: "Asset categories", module: "Fixed Assets", phase: "P9" },

@@ -1856,5 +1856,35 @@
       "no": "No",
       "signedOutNote": "Out is shown signed, so opening + in + out = closing."
     }
+  },
+  "orderEntry": {
+    "common": {
+      "save": "Save",
+      "saving": "Saving…",
+      "cancel": "Cancel",
+      "loading": "Loading…",
+      "emptyValue": "—"
+    },
+    "defaults": {
+      "title": "Order defaults",
+      "subtitle": "The accounts order entry posts to, and what happens when a customer orders more than there is.",
+      "accountsTitle": "Accounts",
+      "behaviourTitle": "Behaviour",
+      "accrualAccount": "Goods received not invoiced",
+      "varianceAccount": "Purchase price variance",
+      "clearingAccount": "Landed cost clearing",
+      "backorderPolicy": "Backorders",
+      "policyAllow": "Allow — take the order and show the shortfall",
+      "policyBlock": "Block — refuse a line that promises more than is available",
+      "defaultWarehouse": "Default warehouse",
+      "chooseAccount": "Not set",
+      "saved": "Order defaults saved",
+      "saveFailed": "Could not save the defaults",
+      "accrualNote": "Goods received not invoiced is a control account: only inventory and accounts payable may post to it and every line carries an item, which is what makes its balance provably the value of every receipt not yet invoiced.",
+      "clearingNote": "Landed cost clearing is deliberately an ordinary account. Freight arrives on a forwarder's supplier invoice and duty as a cashbook payment to the revenue authority, and a control account would refuse both. Purchase price variance carries the difference when an invoice disagrees with the receipt it matches, on price or on rate.",
+      "policyNote": "Under Allow a sales order may promise stock the warehouse does not hold, and the shortfall is shown as a backorder on the order, the enquiry and the line. Under Block the line is refused outright.",
+      "warehouseNote": "The default warehouse is the inventory default, shown here because sales and purchase orders take their lines from it. Change it on Maintenance → Inventory → Defaults.",
+      "loadFailed": "These settings could not be read. Seeing them needs one of the order-entry permissions; changing them needs the order-entry setup right."
+    }
   }
 }

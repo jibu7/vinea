@@ -39,10 +39,11 @@ describe("SidebarNav permission filtering", () => {
   it("always renders phase-tagged items, disabled, regardless of permissions", () => {
     render(<SidebarNav permissions={new Set()} />);
 
-    // Order Entry, still P6. This used to read "Items", which stopped being an example of a
-    // phase-tagged row at P5 step 6 when its screen landed — the assertion has to point at
-    // something actually still tagged or it stops testing the tagging at all.
-    const tagged = screen.getByText("Order defaults");
+    // Order Entry's GRV, still P6 — its screen is step 7. This assertion has now moved
+    // twice for the same reason: it read "Items" until P5 step 6 and "Order defaults" until
+    // P6 step 6, each time because the row it named went live. It has to point at something
+    // actually still tagged or it stops testing the tagging at all.
+    const tagged = screen.getByText("GRV");
     expect(tagged).toBeInTheDocument();
     expect(tagged.tagName).toBe("SPAN"); // disabled items render as inert text, not a link
     expect(screen.getAllByText("P6").length).toBeGreaterThan(0);
@@ -64,7 +65,10 @@ describe("SidebarNav permission filtering", () => {
     expect(screen.queryByText("Foreign currency")).not.toBeInTheDocument();
     expect(screen.queryByText("Customers")).not.toBeInTheDocument(); // live since P4, AR-gated
     expect(screen.queryByText("Items")).not.toBeInTheDocument(); // live since P5, INV-gated
-    expect(screen.getByText("Order defaults")).toBeInTheDocument(); // phase-tagged, always visible
+    // Live since P6 step 6 and gated on the order-entry permissions, so a GL-only role no
+    // longer sees it — the phase-tagged example in this section is now the P12 BOM row.
+    expect(screen.queryByText("Order defaults")).not.toBeInTheDocument();
+    expect(screen.getByText("BOM items & defaults")).toBeInTheDocument(); // phase-tagged, always visible
   });
 
   it("keeps navIntents' declared order and grouping stable for the palette to reuse", () => {
@@ -239,5 +243,41 @@ describe("P5 enquiry and report screens", () => {
         .map((item) => `${intent.label}/${item.module}/${item.label}`),
     );
     expect(tagged).toEqual([]);
+  });
+});
+
+describe("P6 maintenance screens", () => {
+  // Any one of the five order-entry permissions opens the screen, because `GET /oe/defaults`
+  // accepts any one of them: a buyer who may raise purchase orders can read which account
+  // their receipts will accrue into without also holding the right to change it.
+  it.each([
+    "oe:setup_manage",
+    "oe:sales_orders_manage",
+    "oe:purchase_orders_manage",
+    "oe:grv_process",
+    "oe:reports_view",
+  ])("opens Order defaults to a holder of %s alone", (permission) => {
+    render(<SidebarNav permissions={new Set([permission])} />);
+
+    const link = screen.getByText("Order defaults").closest("a");
+    expect(link).toHaveAttribute("href", "/maintenance/order-defaults");
+  });
+
+  it("leaves Order defaults untagged, and the other P6 rows tagged until step 7", () => {
+    const maintenance = navIntents.find((i) => i.label === "Maintenance")!;
+    const defaults = maintenance.items.find((item) => item.label === "Order defaults");
+    expect(defaults?.phase).toBeUndefined();
+    expect(defaults?.href).toBe("/maintenance/order-defaults");
+
+    const transactions = navIntents.find((i) => i.label === "Transactions")!;
+    expect(
+      transactions.items.filter((item) => item.phase === "P6").map((item) => item.label),
+    ).toEqual(["GRV", "Purchase order", "Sales order"]);
+  });
+
+  it("hides Order defaults from a role holding none of the order-entry permissions", () => {
+    render(<SidebarNav permissions={new Set(["gl:setup_manage", "inv:reports_view"])} />);
+
+    expect(screen.queryByText("Order defaults")).not.toBeInTheDocument();
   });
 });
