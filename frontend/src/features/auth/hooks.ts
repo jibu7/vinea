@@ -60,3 +60,58 @@ export function useHasPermission(): (permission: string) => boolean {
 export function isApiError(err: unknown): err is ApiError {
   return err instanceof ApiError;
 }
+
+// --- The P1 gap: the halves of auth that shipped without screens -----------------------------
+//
+// Every endpoint below has existed since P1 and had no caller, which is the failure rule 14
+// exists to catch: a capability the product does not have, passing every test and appearing in
+// the schema. These hooks and their screens delete six lines from the rule-14 register.
+//
+// None of them returns a token. The one-time tokens arrive by email and reach these hooks only
+// as a `?token=` the user's own mail client handed them — see `app/services/email.py`.
+
+/** Ask for a reset mail. **Always succeeds**, even for an address with no account: the server
+ * refuses to reveal which addresses exist, so the screen must show the same thing either way. */
+export function useRequestPasswordReset() {
+  return useMutation({
+    mutationFn: (email: string) => api.post<{ status: string }>("/auth/password-reset/request", { email }),
+  });
+}
+
+/** Set a new password with a mailed token. The server clears the session cookies and revokes
+ * every other session, so the user lands back at sign-in — which is the point of a reset. */
+export function useConfirmPasswordReset() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: { token: string; new_password: string }) =>
+      api.post<void>("/auth/password-reset/confirm", payload),
+    onSuccess: () => queryClient.clear(),
+  });
+}
+
+/** Send the verification mail again, for a signed-in user who never clicked the first one. */
+export function useRequestEmailVerification() {
+  return useMutation({
+    mutationFn: () => api.post<{ status: string }>("/auth/email-verification/request"),
+  });
+}
+
+/** The landing page for the link in that mail. */
+export function useConfirmEmailVerification() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (token: string) => api.post<void>("/auth/email-verification/confirm", { token }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: meQueryKey }),
+  });
+}
+
+/** Accept an invitation and sign in, in one step — the response is a session, so an invited
+ * user goes straight into the tenancy rather than to a login form they have no password for. */
+export function useAcceptInvitation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: { token: string; full_name: string; password: string }) =>
+      api.post<SessionResponse>("/invitations/accept", payload),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: meQueryKey }),
+  });
+}

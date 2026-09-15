@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import type { Locator, Page } from "@playwright/test";
 
 /** Must match backend/app/scripts/seed_e2e.py — run once before the suite. `.example` (RFC
@@ -44,7 +46,7 @@ export const CREDIT_ACCOUNT_CODE = "2300"; // Accrued Expenses
  * node with `__reactFiber$…`/`__reactProps$…` keys, so their presence on the form is the
  * signal. (This race was always here; it only became deterministic when P4 step 6 grew the
  * next-intl message payload and, with it, the time to hydrate.) */
-async function waitForHydration(page: Page, selector: string): Promise<void> {
+export async function waitForHydration(page: Page, selector: string): Promise<void> {
   await page.waitForFunction((sel) => {
     const node = document.querySelector(sel);
     return (
@@ -54,14 +56,18 @@ async function waitForHydration(page: Page, selector: string): Promise<void> {
   }, selector);
 }
 
-export async function login(page: Page, email: string = PRIMARY_EMAIL): Promise<void> {
+export async function login(
+  page: Page,
+  email: string = PRIMARY_EMAIL,
+  password: string = PASSWORD,
+): Promise<void> {
   // `next dev`'s HMR websocket never idles, so `waitUntil: "networkidle"` here hangs to the
   // navigation timeout — go straight to /login (no client-side redirect to race) and wait on
   // hydration explicitly instead.
   await page.goto("/login");
   await waitForHydration(page, "form");
   await page.fill('input[type="email"]', email);
-  await page.fill('input[type="password"]', PASSWORD);
+  await page.fill('input[type="password"]', password);
   await page.click('button[type="submit"]');
   await page.waitForURL("/");
   await page.waitForSelector("text=Good morning");
@@ -247,4 +253,90 @@ export async function assertNoSeriousViolations(page: Page): Promise<void> {
   const { expect } = await import("@playwright/test");
   const serious = await seriousViolations(page);
   expect(serious, JSON.stringify(serious, null, 2)).toEqual([]);
+}
+
+// --- The mail catcher -------------------------------------------------------------------
+//
+// One-time tokens — a password-reset link, an email verification, an invitation — exist in
+// exactly two places: the mail that was sent, and a **hash** in `user_tokens`. The database
+// cannot give the plaintext back, and no endpoint hands it out, which is the whole point of
+// mailing it. So the non-production mail stub also appends every message to a file
+// (`EMAIL_OUTBOX_FILE`, set only by `docker-compose.e2e.yml`) and the suite reads that.
+//
+// It is a local mail catcher. The alternative was an endpoint returning the token, which would
+// make a mailed secret an API affordance and undo the reason it is mailed.
+
+/** Where the catcher writes, on the host. `/app` in the container is this bind mount. */
+const OUTBOX_PATH = process.env.E2E_OUTBOX_FILE ?? "../backend/.e2e-outbox.jsonl";
+
+export interface CaughtEmail {
+  to: string;
+  subject: string;
+  body: string;
+  context: Record<string, unknown>;
+}
+
+function readOutbox(): CaughtEmail[] {
+  // Read through the bind mount when it is there, and fall back to the container when it is
+  // not — a stack brought up without the repo mounted, or a runner whose file ownership
+  // differs. Both read the same file; only the route to it changes.
+  let raw: string;
+  try {
+    raw = readFileSync(OUTBOX_PATH, "utf8");
+  } catch {
+    try {
+      raw = execFileSync(
+        "docker",
+        ["compose", "exec", "-T", "backend", "cat", "/app/.e2e-outbox.jsonl"],
+        { cwd: "..", encoding: "utf8" },
+      );
+    } catch {
+      return [];
+    }
+  }
+  return raw
+    .split("\n")
+    .filter((line) => line.trim().length > 0)
+    .map((line) => JSON.parse(line) as CaughtEmail);
+}
+
+/**
+ * The most recent message sent to `email`, waited for.
+ *
+ * The **last** one, not the first: a test that asks for a second reset link has to get the
+ * second, and a token that has been superseded would fail in a way that looks like the flow
+ * is broken rather than like the test read the wrong line.
+ */
+export async function waitForEmail(
+  email: string,
+  { since = 0, timeoutMs = 15_000 }: { since?: number; timeoutMs?: number } = {},
+): Promise<CaughtEmail> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const forAddress = readOutbox().filter((m) => m.to === email);
+    if (forAddress.length > since) return forAddress[forAddress.length - 1];
+    if (Date.now() > deadline) {
+      throw new Error(
+        `No email for ${email} in ${OUTBOX_PATH} within ${timeoutMs}ms. Is the stack up with ` +
+          "docker-compose.e2e.yml layered on? (COMPOSE_FILE=docker-compose.yml:docker-compose.e2e.yml)",
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+}
+
+/** How many messages this address has already had — the baseline a later `waitForEmail`
+ * counts from, so a test never reads a message its own step did not cause. */
+export function emailsSoFar(email: string): number {
+  return readOutbox().filter((m) => m.to === email).length;
+}
+
+/** The one-time token out of a caught message. It is in the context the stub recorded, which
+ * is the same field `backend/tests/test_auth.py` reads. */
+export function tokenFrom(message: CaughtEmail): string {
+  const token = message.context.token;
+  if (typeof token !== "string" || token.length === 0) {
+    throw new Error(`No token on the message to ${message.to}: ${JSON.stringify(message.context)}`);
+  }
+  return token;
 }

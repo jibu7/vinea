@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -58,6 +59,14 @@ export default function LoginPage() {
           <Button type="submit" variant="primary" className="w-full" disabled={isSubmitting}>
             {isSubmitting ? t("signingIn") : t("signIn")}
           </Button>
+          {/* The way in to the reset flow. Without it the screens exist and nobody finds
+              them — which is the same failure as not building them. */}
+          <Link
+            href="/forgot-password"
+            className="block text-center text-xs text-[var(--vinea-ink-muted)] underline"
+          >
+            {t("forgotPassword")}
+          </Link>
         </form>
       </div>
     </div>

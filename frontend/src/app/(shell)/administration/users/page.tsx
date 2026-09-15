@@ -17,6 +17,7 @@ import {
   useCompanyRoles,
   useDeactivateMember,
   useInviteMember,
+  useRevokeInvitation,
   useUpdateMemberRoles,
 } from "@/features/gl/hooks";
 import type { CompanyMember } from "@/features/gl/types";
@@ -32,9 +33,26 @@ export default function UsersAndMembershipsPage() {
   const membersQuery = useCompanyMembers();
   const rolesQuery = useCompanyRoles();
   const inviteMember = useInviteMember();
+  const revokeInvitation = useRevokeInvitation();
   const updateMemberRoles = useUpdateMemberRoles();
   const deactivateMember = useDeactivateMember();
   const activateMember = useActivateMember();
+
+  // Revoke confirmation. A pending invitation is un-sent rather than deactivated: the two
+  // read the same on a row and mean different things, so the one that destroys a link the
+  // recipient may already be looking at asks first.
+  const [revoking, setRevoking] = useState<CompanyMember | null>(null);
+
+  async function handleRevoke() {
+    if (!revoking) return;
+    try {
+      await revokeInvitation.mutateAsync(revoking.id);
+      toast.show({ title: t("invitationRevoked"), description: revoking.email, tone: "success" });
+      setRevoking(null);
+    } catch (err) {
+      showApiError(err, t("invitationRevokeFailed"));
+    }
+  }
 
   // Invite modal state
   const [inviteOpen, setInviteOpen] = useState(false);
@@ -201,13 +219,23 @@ export default function UsersAndMembershipsPage() {
                           >
                             {t("roles")}
                           </Button>
-                          <Button
-                            variant={m.status === "active" ? "ghost" : "secondary"}
-                            onClick={() => handleToggleStatus(m)}
-                            className="h-7 px-2 text-xs"
-                          >
-                            {m.status === "active" ? t("deactivate") : t("activate")}
-                          </Button>
+                          {m.status === "pending" ? (
+                            <Button
+                              variant="secondary"
+                              onClick={() => setRevoking(m)}
+                              className="h-7 px-2 text-xs"
+                            >
+                              {t("revoke")}
+                            </Button>
+                          ) : (
+                            <Button
+                              variant={m.status === "active" ? "ghost" : "secondary"}
+                              onClick={() => handleToggleStatus(m)}
+                              className="h-7 px-2 text-xs"
+                            >
+                              {m.status === "active" ? t("deactivate") : t("activate")}
+                            </Button>
+                          )}
                         </div>
                       )}
                     </TD>
@@ -218,6 +246,29 @@ export default function UsersAndMembershipsPage() {
           </div>
         </div>
       </main>
+
+      {/* Revoke confirmation */}
+      <Dialog open={revoking !== null} onOpenChange={(open) => !open && setRevoking(null)}>
+        <DialogContent title={t("revokeInvitationTitle")}>
+          <div className="space-y-4 pt-2">
+            <p className="text-sm text-[var(--vinea-ink-muted)]">
+              {t("revokeInvitationBody", { email: revoking?.email ?? "" })}
+            </p>
+            <div className="flex justify-end gap-2">
+              <Button variant="ghost" onClick={() => setRevoking(null)}>
+                {t("cancel")}
+              </Button>
+              <Button
+                variant="primary"
+                onClick={handleRevoke}
+                disabled={revokeInvitation.isPending}
+              >
+                {t("revokeInvitation")}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Invite Modal */}
       <Dialog open={inviteOpen} onOpenChange={setInviteOpen}>

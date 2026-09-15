@@ -55,30 +55,6 @@ NO_UI: dict[str, str] = {
         "deletes expired artifacts on a schedule; there is no moment at which a person wants "
         "to press it."
     ),
-    # --- GAP: P1, the parts of auth that shipped without screens -------------------------------
-    "POST /api/v1/auth/password-reset/request": (
-        "GAP (P1) — a user who forgets their password cannot reset it from the product. The "
-        "endpoint and the email template exist; the two screens do not."
-    ),
-    "POST /api/v1/auth/password-reset/confirm": (
-        "GAP (P1) — the other half of the reset flow above."
-    ),
-    "POST /api/v1/auth/email-verification/request": (
-        "GAP (P1) — nothing in the product asks a user to verify their address or lets them "
-        "ask for the mail again."
-    ),
-    "POST /api/v1/auth/email-verification/confirm": (
-        "GAP (P1) — the link's landing page. Without it a verification mail leads nowhere."
-    ),
-    "POST /api/v1/invitations/accept": (
-        "GAP (P1) — an invited user has no page to accept on, so the only way into a new "
-        "tenancy is the signup form. The e2e drives this endpoint directly, which is how it "
-        "went unnoticed: exercised, and unreachable."
-    ),
-    "DELETE /api/v1/invitations/{membership_id}": (
-        "GAP (P1) — an invitation sent to the wrong address cannot be revoked from the "
-        "memberships screen."
-    ),
     # --- GAP: P6, endpoints ahead of their screens ----------------------------------------------
     # These two are **scheduled debt, not a decision**, and the schedule is the point: P6 builds
     # its services in steps 1-5 and its screens in steps 6-8, so between those two points the
@@ -201,18 +177,44 @@ def _frontend_sources() -> list[str]:
     ]
 
 
+#: What a path parameter may look like at a call site: a template interpolation
+#: (`${membershipId}`) or a literal id. **Not an arbitrary run of characters** — see below.
+_PATH_PARAMETER = r"(?:\$\{[^}]*\}|\d+)"
+
+
 def _caller_pattern(path: str) -> re.Pattern[str]:
     """A regex matching the path as a frontend literal would spell it.
 
     `/inventory/documents/{document_id}/reverse` becomes
-    `/inventory/documents/ <anything but a quote> /reverse`, so a template literal
-    (`` `/inventory/documents/${id}/reverse` ``) matches and a *different* endpoint that merely
-    shares a prefix does not. Quotes and backticks are excluded from the wildcard so a match
-    cannot span two separate strings.
+    `/inventory/documents/ <an interpolation> /reverse`, so a template literal
+    (`` `/inventory/documents/${id}/reverse` ``) matches.
+
+    **A path parameter matches an interpolation, not any text**, and that distinction is the
+    whole of this function's usefulness. The first version matched anything-but-a-quote, which
+    meant a *sibling literal path* satisfied a parameterised one: `"/invitations/accept"`
+    covered `DELETE /invitations/{membership_id}`, so an endpoint could be reported as having a
+    caller on the strength of a call to a different endpoint. That is precisely the false
+    coverage this file exists to prevent.
+
+    Found by a sensitivity pass rather than by reading: gutting the revoke call site left this
+    test green. Tightening it changed no other verdict — every real call site interpolates.
     """
     without_prefix = path[len(API_PREFIX) :] if path.startswith(API_PREFIX) else path
     literal_parts = [re.escape(part) for part in re.split(r"\{[^}]+\}", without_prefix)]
-    return re.compile(r"[^\"'`\n]*".join(literal_parts))
+    return re.compile(_PATH_PARAMETER.join(literal_parts))
+
+
+def test_a_sibling_literal_path_does_not_cover_a_parameterised_one() -> None:
+    """Anti-vacuity for the rule above, written as the case that was wrong.
+
+    `POST /invitations/accept` and `DELETE /invitations/{membership_id}` are different
+    endpoints sharing a prefix. A matcher that cannot tell them apart reports the second as
+    covered whenever the first is called, and the register's claim collapses quietly.
+    """
+    revoke = _caller_pattern("/api/v1/invitations/{membership_id}")
+    assert revoke.search("api.delete(`/invitations/${membershipId}`)")
+    assert not revoke.search('api.post("/invitations/accept", payload)')
+    assert not revoke.search('api.post("/invitations", payload)')
 
 
 def test_the_scan_reads_the_frontend_it_claims_to() -> None:
