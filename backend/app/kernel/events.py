@@ -5,6 +5,10 @@ Amounts on line specs are **signed** in the transaction currency: positive = deb
 negative = credit. Events for modules that do not exist yet are declared here as stubs so
 the event vocabulary is fixed now; `post()` rejects them with `unsupported_event` until
 their phase lands.
+
+A phase that lands either turns its stub into a real class or deletes it and says which real
+event carries the vocabulary instead — never leaves it standing as a class nothing constructs.
+See the P6 block below `StockAdjusted` for the worked example.
 """
 
 import enum
@@ -227,6 +231,44 @@ class StockAdjusted(StockJournal):
     event_type: ClassVar[str] = "stock_adjusted"
 
 
+@dataclass(frozen=True, kw_only=True)
+class StockSold(StockJournal):
+    """The companion issue behind a sale: goods leaving on an AR invoice, at the average or
+    at the flush (P6 decision 2).
+
+    **This was a stub until P6 step 5** and is now the real class, which is what decision 13
+    asked for: a `StockJournal` on the `STK` companion document type. It exists as its own
+    class rather than as `StockIssued` with a different `doc_type` because the `event_type`
+    is written onto the journal entry, and "why did this stock leave" is the question that
+    column is there to answer — P10's sales analysis reads entries, not documents.
+
+    It covers the **sale** only. A return to supplier is also a companion issue on `STK`, and
+    it posts under `StockIssued`, because calling it `stock_sold` would put a false answer in
+    that column. Decision 13 reads as though one class covers every companion issue; that is
+    the one place this step departs from it, and the reason is written here.
+    """
+
+    event_type: ClassVar[str] = "stock_sold"
+    doc_type: str = DocType.STOCK_COMPANION
+
+
+# --- ADR-05's P6 vocabulary, and the classes that actually carry it --------------------
+#
+# `GoodsReceived`, `SupplierInvoiceMatched` and `StockSold` were declared here as stubs so the
+# vocabulary would be fixed before Order Entry existed. P6 built it, and decision 13 said what
+# to do with them: ADR-05's names are **vocabulary, not a promise of one class each**. Two of
+# the three had no posting of their own to name, so they are gone rather than left standing as
+# classes nothing constructs. The mapping, which is the part worth keeping:
+#
+#   * `GoodsReceived` → **`StockReceived`**, posted by `receive_stock()` on the `GRN` document
+#     type (`app/order_entry/grn.py`). A goods receipt is a stock receipt whose contra is the
+#     GRN accrual; it needed no event of its own, only a contra account and a document type.
+#   * `SupplierInvoiceMatched` → **`PartnerDocumentPosted`**, posted by the AP invoice whose
+#     line carries `grn_line_id` (`app/order_entry/matching.py`). The match is not a separate
+#     posting: it is what the ordinary supplier-invoice entry does when its line names a
+#     receipt — relieve the accrual at the frozen value and send the difference to PPV.
+#   * `StockSold` → **`StockSold` above**, now a real `StockJournal`.
+#
 # --- Stubs for later phases (documented vocabulary, not yet postable) ------------------
 
 
@@ -236,27 +278,6 @@ class _StubEvent(PostingEvent):
     P7 FX, P9 Fixed Assets, P11 POS, P12 BOM)."""
 
     lines: tuple[LineSpec, ...] = field(default_factory=tuple)
-
-
-@dataclass(frozen=True, kw_only=True)
-class GoodsReceived(_StubEvent):
-    event_type: ClassVar[str] = "goods_received"
-    doc_type: ClassVar[str] = "GRN"
-    module: ClassVar[str] = "oe"
-
-
-@dataclass(frozen=True, kw_only=True)
-class SupplierInvoiceMatched(_StubEvent):
-    event_type: ClassVar[str] = "supplier_invoice_matched"
-    doc_type: ClassVar[str] = "SINV"
-    module: ClassVar[str] = "ap"
-
-
-@dataclass(frozen=True, kw_only=True)
-class StockSold(_StubEvent):
-    event_type: ClassVar[str] = "stock_sold"
-    doc_type: ClassVar[str] = "COGS"
-    module: ClassVar[str] = "inv"
 
 
 @dataclass(frozen=True, kw_only=True)

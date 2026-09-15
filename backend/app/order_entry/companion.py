@@ -32,6 +32,7 @@ from sqlalchemy.orm import Session
 
 from app.inventory import stock as stock_service
 from app.kernel.errors import LedgerStateError
+from app.kernel.events import StockIssued, StockSold
 from app.kernel.sequences import DocType
 from app.models.inventory import StockMove
 from app.models.partner import PartnerRole
@@ -188,8 +189,23 @@ def post_companion(
             )
         )
 
-    primitive = stock_service.receive_stock if receiving else stock_service.issue_stock
-    posting = primitive(db, company_id, document=document, lines=lines, actor=actor)
+    if receiving:
+        posting = stock_service.receive_stock(
+            db, company_id, document=document, lines=lines, actor=actor
+        )
+    else:
+        # **Which issue this is** (decision 13). An AR invoice is a sale and posts under
+        # `StockSold`; a return to supplier is an issue like any other. The choice reaches
+        # `journal_entries.event_type` and nothing else — same accounts, same moves, same
+        # values — so it is a label on the posting, not a second path through it.
+        posting = stock_service.issue_stock(
+            db,
+            company_id,
+            document=document,
+            lines=lines,
+            actor=actor,
+            event_class=StockSold if role == PartnerRole.AR else StockIssued,
+        )
 
     values: dict[int, Decimal] = {}
     for (index, _line), move in zip(movers, posting.keyed_moves, strict=True):

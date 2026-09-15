@@ -1107,16 +1107,22 @@ def issue_stock(
     document: StockDocument,
     lines: Sequence[StockLine],
     actor: User,
+    event_class: type[StockJournal] = StockIssued,
 ) -> StockPosting:
     """Quantity out of locations, at the item's weighted average — or at what the location
-    had left, when the issue empties it. Subject to the negative-stock policy (decision 5)."""
+    had left, when the issue empties it. Subject to the negative-stock policy (decision 5).
+
+    `event_class` names *why* the stock left, and nothing else: it is written to
+    `journal_entries.event_type` and changes no account, no move and no value. P6's sale
+    companion passes `StockSold` (decision 13); every other issue is an issue.
+    """
     signed = [SignedLine(line=line, quantity=-_positive(line)) for line in lines]
     return post_stock_moves(
         db,
         company_id,
         document=document,
         moves=signed,
-        event_class=StockIssued,
+        event_class=event_class,
         actor=actor,
     )
 
