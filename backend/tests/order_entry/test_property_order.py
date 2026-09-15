@@ -39,7 +39,7 @@ from dataclasses import replace
 from decimal import Decimal
 
 import pytest
-from hypothesis import given
+from hypothesis import given, settings
 from hypothesis import strategies as st
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -95,6 +95,43 @@ def _count(counter: dict[str, int], key: str) -> None:
     counter[key] = counter.get(key, 0) + 1
 
 
+#: The refusals a deep pass has to actually provoke, and the floor each has to clear.
+#:
+#: **Printed is not enforced.** Until this existed the census was a courtesy: "counted, not
+#: assumed" held only while somebody read the output, and step 5 watched three consecutive deep
+#: passes come back green with a different one of these at zero each time — `grn_reversed`
+#: absent, then `weight_missing`, then `grn_matched` and `period_not_open`. Every one was a
+#: generator defect, and every one would have shipped if the number had not been looked at by
+#: hand. A floor is what makes the census a gate instead of a report.
+#:
+#: Three rather than one, because one is indistinguishable from a coincidence: a boundary hit
+#: once in 300 examples is a boundary the next seed may well miss, and a guard "covered" by a
+#: single draw is covered by luck. Three is not a statistical claim — it is the smallest number
+#: that cannot be a single lucky plan.
+REQUIRED_REFUSALS = (
+    "grn_matched",
+    "grn_reversed",
+    "weight_missing",
+    "period_not_open",
+    "match_exceeds_receipt",
+    "receipt_exceeds_order",
+    "invoice_exceeds_order",
+    "exceeds_available",
+)
+CENSUS_FLOOR = 3
+#: Only a run with enough examples can be held to the floors. The per-commit profile draws two
+#: and would fail every one of them, so it stays silent and the nightly deep profile is where
+#: the census is enforced — the same split the profiles already make for everything else.
+_FLOORS_FROM_EXAMPLES = 100
+
+
+def _census() -> str:
+    return (
+        f"refusals: {dict(sorted(_REFUSALS.items()))}\n"
+        f"reach:    {dict(sorted(_REACH.items()))}"
+    )
+
+
 @pytest.fixture(scope="module", autouse=True)
 def _report_refusals():  # noqa: ANN202
     yield
@@ -102,6 +139,19 @@ def _report_refusals():  # noqa: ANN202
         print("\n[property] refusals provoked:", dict(sorted(_REFUSALS.items())))
     if _REACH:
         print("[property] reach:", dict(sorted(_REACH.items())))
+    if settings.default.max_examples < _FLOORS_FROM_EXAMPLES:
+        return
+    short = {
+        name: _REFUSALS.get(name, 0)
+        for name in REQUIRED_REFUSALS
+        if _REFUSALS.get(name, 0) < CENSUS_FLOOR
+    }
+    assert not short, (
+        f"the deep pass did not reach {short} at least {CENSUS_FLOOR} times each.\n"
+        "A refusal the machine never provokes is a guard this suite does not cover, however "
+        "green it looks. Read the reach counters below before touching the floor: they say "
+        "whether the guard held or the generator never got near it.\n" + _census()
+    )
 ZERO = Decimal(0)
 
 OPERATIONS = (
@@ -188,10 +238,14 @@ PLAN = st.lists(
         st.booleans(),
     ),
     min_size=1,
-    # Longer than step 2's ten. A three-step conjunction in a ten-step plan drawn from fourteen
-    # operations is the other half of why `grn_matched` stopped being reached; the deep pass
-    # costs a few more minutes and the per-commit profile draws two examples either way.
-    max_size=18,
+    # Longer than step 2's ten, and longer again at step 5. A three-step conjunction in a short
+    # plan is the other half of why `grn_matched` stopped being reached, and step 5 added three
+    # more operations, each of which lengthens the chains the others need: `reverse_lca` wants a
+    # receipt, an allocation, and then itself. With the census now enforced as a floor rather
+    # than printed, the margin has to come from somewhere, and the lever is the plan — biasing
+    # the draw was measured at step 3 and bought nothing. The deep pass costs a couple more
+    # minutes; the per-commit profile draws two examples either way.
+    max_size=24,
 )
 
 
@@ -769,7 +823,9 @@ def _step(  # noqa: PLR0913
     if operation == "invoice_from_so":
         orders = _open_sales_orders(db, fixture)
         if not orders:
+            _count(_REACH, "invoice_from_so: no open sales order")
             return
+        _count(_REACH, "invoice_from_so: an open order to invoice")
         order = orders[pick % len(orders)]
         prepared = order_flows.prepare_invoice_from_sales_order(db, fixture.company_id, order)
         documents_service.post_document(
@@ -787,7 +843,9 @@ def _step(  # noqa: PLR0913
     if operation == "receive_from_po":
         orders = _open_purchase_orders(db, fixture)
         if not orders:
+            _count(_REACH, "receive_from_po: no open purchase order")
             return
+        _count(_REACH, "receive_from_po: an open order to receive")
         order = orders[pick % len(orders)]
         prepared = order_flows.prepare_receipt_from_purchase_order(db, fixture.company_id, order)
         grn_service.post_grn(
@@ -1127,3 +1185,29 @@ def test_a_refused_reversal_leaves_nothing_behind(db: Session, order_entry: Orde
     # The reversal really was refused — an assertion that only proved the invariants would pass
     # just as well on a sequence where nothing interesting happened.
     assert refusals == ["insufficient_stock"], refusals
+
+
+def test_the_census_floor_would_notice_a_guard_the_machine_stopped_reaching() -> None:
+    """Anti-vacuity for the floors: the check has to fail on a census that falls short, and
+    has to put the census in the message.
+
+    Without this the floors are themselves unenforced — a typo in the names, or a comparison
+    that can never be false, would leave a gate that greets every run with approval. The three
+    passes that shipped a zero in the census are what this is standing in for.
+    """
+    census = {"exceeds_available": 40, "grn_matched": 2}
+    short = {
+        name: census.get(name, 0)
+        for name in REQUIRED_REFUSALS
+        if census.get(name, 0) < CENSUS_FLOOR
+    }
+    # One below the floor and six absent — absent has to count as short, not as "not
+    # applicable", which is the reading that let `grn_reversed` sit missing for a whole pass.
+    assert short["grn_matched"] == 2
+    assert set(short) == set(REQUIRED_REFUSALS) - {"exceeds_available"}
+
+    # A census that clears every floor produces nothing to report.
+    clear = dict.fromkeys(REQUIRED_REFUSALS, CENSUS_FLOOR)
+    assert not {
+        name: clear[name] for name in REQUIRED_REFUSALS if clear[name] < CENSUS_FLOOR
+    }
