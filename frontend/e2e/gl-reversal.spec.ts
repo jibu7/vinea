@@ -63,10 +63,14 @@ test.describe("reversing a posted entry from the UI", () => {
     // `.first()` rather than a strict match.
     await expect(page.getByText(reason).first()).toBeVisible();
 
-    // A reversal cannot itself be reversed — the rule, on the screen.
+    // A reversal cannot itself be reversed — the rule, on the screen. **Read as visible text,
+    // not as a `title`**: P6 step 8 moved every refusal on this screen out of the tooltip and
+    // onto the page, because a `title` on a greyed-out button is invisible to a keyboard, to a
+    // screen reader, and to a mouse that does not hover and wait. An assertion on the
+    // attribute was passing over a rule nobody could read.
     const reverseOnReversal = page.getByRole("button", { name: "Reverse entry" });
     await expect(reverseOnReversal).toBeDisabled();
-    await expect(reverseOnReversal).toHaveAttribute("title", /reversal cannot be reversed/i);
+    await expect(page.getByTestId("reverse-blocked")).toHaveText(/reversal cannot be reversed/i);
 
     // --- and the original refuses a second reversal ------------------------------------
     await page.goto(originalUrl);
@@ -76,6 +80,6 @@ test.describe("reversing a posted entry from the UI", () => {
     await expect(page.getByText(/Reversed by /).first()).toBeVisible();
     const reverseAgain = page.getByRole("button", { name: "Reverse entry" });
     await expect(reverseAgain).toBeDisabled();
-    await expect(reverseAgain).toHaveAttribute("title", /already been reversed/i);
+    await expect(page.getByTestId("reverse-blocked")).toHaveText(/already been reversed/i);
   });
 });

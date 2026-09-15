@@ -205,7 +205,15 @@ export function OrderReport({ role }: { role: Role }) {
       }
     >
       <ReportPanel>
-        {rows.length === 0 ? (
+        {report.isError ? (
+          /* An error is not an empty report — see `order-enquiry-screen.tsx`. */
+          <p
+            className="py-8 text-center text-xs text-[var(--vinea-danger)]"
+            data-testid="report-error"
+          >
+            {(report.error as { message?: string })?.message ?? t("reportFailed")}
+          </p>
+        ) : rows.length === 0 ? (
           <p className="py-8 text-center text-xs text-[var(--vinea-ink-subtle)]">
             {report.isLoading ? tr("loading") : tr("noRows")}
           </p>

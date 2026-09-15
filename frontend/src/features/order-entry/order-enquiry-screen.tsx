@@ -164,6 +164,17 @@ export function OrderEnquiryScreen({ role }: { role: Role }) {
         <p className="py-10 text-center text-sm text-[var(--vinea-ink-subtle)]">
           {t("chooseFirst")}
         </p>
+      ) : enquiry.isError ? (
+        /* **An error is not an empty report.** Rendering "nothing to report" over a request
+           that failed is the P4 defect rule 13 is written against, and it is exactly what hid
+           this endpoint's 500 for three steps: the screen looked like an order nothing had
+           been raised against. Say what the service said, and say that it is a failure. */
+        <p
+          className="py-10 text-center text-sm text-[var(--vinea-danger)]"
+          data-testid="enquiry-error"
+        >
+          {(enquiry.error as { message?: string })?.message ?? t("enquiryFailed")}
+        </p>
       ) : !data ? (
         <p className="py-10 text-center text-sm text-[var(--vinea-ink-subtle)]">
           {enquiry.isLoading ? tc("loading") : tr("noRows")}

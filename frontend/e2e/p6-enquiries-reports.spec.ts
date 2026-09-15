@@ -637,9 +637,12 @@ test.describe("P6 enquiries and reports", () => {
       await expect(page.getByRole("link", { name: label, exact: true })).toHaveCount(0);
     }
 
-    // And typing the route in by hand does not get round it: the report comes back empty
-    // because the request was refused, not because there is nothing to report.
-    const refused = await pageFetch(page, "/oe/reports/goods-received");
+    // And typing the route in by hand does not get round it: the screen comes back with a
+    // refusal rather than an empty report. `/oe/goods-received` is the **endpoint** the
+    // Goods received report reads — `/oe/reports/goods-received` is the screen's own route and
+    // is not a path the API serves at all, which is how the first cut of this assertion
+    // managed to read 404 and look like a pass waiting to happen.
+    const refused = await pageFetch(page, "/oe/goods-received");
     expect(refused.status).toBe(403);
   });
 

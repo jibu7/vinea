@@ -172,7 +172,15 @@ export function LandedCostReport() {
       </ReportPanel>
 
       <ReportPanel>
-        {rows.length === 0 ? (
+        {listing.isError ? (
+          /* An error is not an empty report — see `order-enquiry-screen.tsx`. */
+          <p
+            className="py-8 text-center text-xs text-[var(--vinea-danger)]"
+            data-testid="report-error"
+          >
+            {(listing.error as { message?: string })?.message ?? t("reportFailed")}
+          </p>
+        ) : rows.length === 0 ? (
           <p className="py-8 text-center text-xs text-[var(--vinea-ink-subtle)]">
             {listing.isLoading ? tr("loading") : tr("noRows")}
           </p>
