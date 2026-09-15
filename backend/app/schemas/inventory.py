@@ -4,7 +4,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Annotated, Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.inventory import ItemType, NegativeStockPolicy
 from app.schemas.common import ApiModel
@@ -607,6 +607,23 @@ class EnquiryLocationRead(BaseModel):
     available: Decimal = Decimal(0)
 
 
+class SourceDocumentRead(BaseModel):
+    """The document a move came from, resolved (P6 step 5).
+
+    `target` is a routing key, not a URL: the screen owns its own routes and maps this to one
+    of them. Values are `inventory_document`, `ar_document`, `ap_document`,
+    `goods_received_note` and `landed_cost_document` — a partner document splits by its role
+    here so no screen has to look the partner up to know which subledger it belongs to.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    source_doc_type: str
+    source_doc_id: int
+    number: str
+    target: str
+
+
 class EnquiryMoveRead(BaseModel):
     """One move, with every key the screen needs to drill onwards from it."""
 
@@ -635,6 +652,7 @@ class EnquiryMoveRead(BaseModel):
     source_doc_id: int | None
     source_line_id: int | None
     reverses_move_id: int | None
+    source: SourceDocumentRead | None = None
 
 
 class ItemEnquiryRead(BaseModel):
@@ -713,6 +731,7 @@ class TransactionRowRead(BaseModel):
     source_doc_type: str | None
     source_doc_id: int | None
     source_line_id: int | None
+    source: SourceDocumentRead | None = None
 
 
 class TransactionReportRead(BaseModel):
