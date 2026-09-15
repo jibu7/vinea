@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useTranslations } from "next-intl";
-import { Boxes, Edit2, Plus, ScanBarcode } from "lucide-react";
+import { Boxes, Edit2, Package, Plus, ScanBarcode, Trash2 } from "lucide-react";
 import { Button } from "@/design/components/button";
 import { Combobox } from "@/design/components/combobox";
 import { Dialog, DialogContent } from "@/design/components/dialog";
@@ -14,23 +14,39 @@ import { StatusChip } from "@/design/components/status-chip";
 import { TBody, TD, TH, THead, TR, Table } from "@/design/components/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/design/components/tabs";
 import { useToast } from "@/design/components/toast";
-import { useHasPermission } from "@/features/auth/hooks";
+import { isApiError, useHasPermission } from "@/features/auth/hooks";
 import { useAccounts, useCurrencies, useTaxCodes } from "@/features/gl/hooks";
 import {
   useCreateBarcode,
   useCreateItem,
   useItemBarcodes,
   useItems,
+  useKitComponents,
+  useSaveKitComponents,
   useUomCategories,
   useUpdateBarcode,
   useUpdateItem,
 } from "@/features/inventory/hooks";
-import type { Barcode, Item } from "@/features/inventory/types";
+import type { Barcode, Item, UomCategoryWithUnits } from "@/features/inventory/types";
 import { ControlType, ItemType } from "@/lib/api-enums";
-import { dotted, formatMoney, trimDecimalString, type CurrencyLike } from "@/lib/format";
+import {
+  dotted,
+  formatMoney,
+  formatQuantity,
+  trimDecimalString,
+  type CurrencyLike,
+} from "@/lib/format";
 import { useApiErrorToast } from "@/lib/use-api-error-toast";
 
-const ITEM_TYPES: readonly ItemType[] = [ItemType.STOCK, ItemType.SERVICE, ItemType.NON_STOCK];
+/** Every type an item can be created as. `KIT` joins them at P6: a kit is a sellable
+ * assembly with a price of its own that never has a stock move — it explodes into its
+ * components at line entry, and those are what move (decision 8). */
+const ITEM_TYPES: readonly ItemType[] = [
+  ItemType.STOCK,
+  ItemType.SERVICE,
+  ItemType.NON_STOCK,
+  ItemType.KIT,
+];
 
 /**
  * The company's base currency, as `formatMoney` wants it.
@@ -68,6 +84,7 @@ export default function InventoryItemsPage() {
   const tb = useTranslations("inventory.barcodes");
   const tc = useTranslations("inventory.common");
   const tt = useTranslations("inventory.itemTypes");
+  const tk = useTranslations("inventory.kits");
   const toast = useToast();
   const showApiError = useApiErrorToast();
   const canEdit = useHasPermission()("inv:setup_manage");
@@ -97,6 +114,8 @@ export default function InventoryItemsPage() {
   const [inventoryAccountId, setInventoryAccountId] = useState("");
   const [salesAccountId, setSalesAccountId] = useState("");
   const [cogsAccountId, setCogsAccountId] = useState("");
+  const [purchaseAccountId, setPurchaseAccountId] = useState("");
+  const [weightPerBaseUnit, setWeightPerBaseUnit] = useState("");
   const [salesTaxCodeId, setSalesTaxCodeId] = useState("");
   const [purchaseTaxCodeId, setPurchaseTaxCodeId] = useState("");
 
@@ -144,6 +163,8 @@ export default function InventoryItemsPage() {
     setInventoryAccountId("");
     setSalesAccountId("");
     setCogsAccountId("");
+    setPurchaseAccountId("");
+    setWeightPerBaseUnit("");
     setSalesTaxCodeId("");
     setPurchaseTaxCodeId("");
     setOpen(true);
@@ -162,6 +183,10 @@ export default function InventoryItemsPage() {
     setInventoryAccountId(item.inventory_account_id ? String(item.inventory_account_id) : "");
     setSalesAccountId(item.sales_account_id ? String(item.sales_account_id) : "");
     setCogsAccountId(item.cogs_account_id ? String(item.cogs_account_id) : "");
+    setPurchaseAccountId(item.purchase_account_id ? String(item.purchase_account_id) : "");
+    setWeightPerBaseUnit(
+      item.weight_per_base_unit ? trimDecimalString(item.weight_per_base_unit) : "",
+    );
     setSalesTaxCodeId(
       item.default_sales_tax_code_id ? String(item.default_sales_tax_code_id) : "",
     );
@@ -193,6 +218,12 @@ export default function InventoryItemsPage() {
             ...(cogsAccountId
               ? { cogs_account_id: Number(cogsAccountId) }
               : { clear_cogs_account: true }),
+            ...(purchaseAccountId
+              ? { purchase_account_id: Number(purchaseAccountId) }
+              : { clear_purchase_account: true }),
+            ...(weightPerBaseUnit
+              ? { weight_per_base_unit: weightPerBaseUnit }
+              : { clear_weight_per_base_unit: true }),
             ...(salesTaxCodeId
               ? { default_sales_tax_code_id: Number(salesTaxCodeId) }
               : { clear_sales_tax_code: true }),
@@ -215,6 +246,8 @@ export default function InventoryItemsPage() {
           inventory_account_id: inventoryAccountId ? Number(inventoryAccountId) : null,
           sales_account_id: salesAccountId ? Number(salesAccountId) : null,
           cogs_account_id: cogsAccountId ? Number(cogsAccountId) : null,
+          purchase_account_id: purchaseAccountId ? Number(purchaseAccountId) : null,
+          weight_per_base_unit: weightPerBaseUnit || null,
           default_sales_tax_code_id: salesTaxCodeId ? Number(salesTaxCodeId) : null,
           default_purchase_tax_code_id: purchaseTaxCodeId ? Number(purchaseTaxCodeId) : null,
         });
@@ -361,6 +394,11 @@ export default function InventoryItemsPage() {
               <TabsList>
                 <TabsTrigger value="details">{t("tabDetails")}</TabsTrigger>
                 <TabsTrigger value="barcodes">{t("tabBarcodes")}</TabsTrigger>
+                {/* Only a kit has one. Every other item type would show an empty section
+                    and an endpoint that refuses the save with `not_a_kit`. */}
+                {selected.item_type === ItemType.KIT ? (
+                  <TabsTrigger value="kit">{tk("tabTitle")}</TabsTrigger>
+                ) : null}
               </TabsList>
               <TabsContent value="details">
                 <ItemDetails item={selected} uomName={uomName} />
@@ -368,6 +406,15 @@ export default function InventoryItemsPage() {
               <TabsContent value="barcodes">
                 <BarcodePanel item={selected} canEdit={canEdit} />
               </TabsContent>
+              {selected.item_type === ItemType.KIT ? (
+                <TabsContent value="kit">
+                  <KitComponentsPanel
+                    kit={selected}
+                    canEdit={canEdit}
+                    categories={categories.data ?? []}
+                  />
+                </TabsContent>
+              ) : null}
             </Tabs>
           </DrawerContent>
         )}
@@ -505,6 +552,33 @@ export default function InventoryItemsPage() {
                 />
               </Field>
             </div>
+            <div className="grid grid-cols-2 gap-3">
+              {/* Where an AP line for a service or non-stock item lands. A stock item's AP
+                  line goes to the GRN accrual instead, so this is left unset on one. */}
+              <Field label={t("purchaseAccount")}>
+                <Combobox
+                  options={[
+                    { value: "", label: t("chooseAccount") },
+                    ...ordinaryAccounts.map((a) => ({
+                      value: String(a.id),
+                      label: dotted(a.code, a.name),
+                    })),
+                  ]}
+                  value={purchaseAccountId}
+                  onValueChange={setPurchaseAccountId}
+                  placeholder={t("chooseAccount")}
+                />
+              </Field>
+              <Field label={t("weightPerBaseUnit")}>
+                <Input
+                  value={weightPerBaseUnit}
+                  onChange={(e) => setWeightPerBaseUnit(e.target.value)}
+                  inputMode="decimal"
+                  className="text-right font-mono"
+                />
+              </Field>
+            </div>
+            <p className="text-xs text-[var(--vinea-ink-subtle)]">{t("weightNote")}</p>
             <div className="grid grid-cols-2 gap-3">
               <Field label={t("salesTaxCode")}>
                 <Combobox
@@ -764,6 +838,262 @@ function BarcodePanel({ item, canEdit }: { item: Item; canEdit: boolean }) {
           </div>
         </DialogContent>
       </Dialog>
+    </div>
+  );
+}
+
+/**
+ * A kit's definition — the components one kit explodes into (P6 decision 8).
+ *
+ * **Saved whole, never row by row.** `PUT /inventory/items/{id}/kit-components` replaces the
+ * definition in one request because a kit is only meaningful as a set: "2 × bottle + 1 × box"
+ * is one fact, and a screen saving it a row at a time would leave the kit briefly wrong
+ * between two requests and permanently wrong if the second failed. So the table below is a
+ * *reading* of the saved definition and the editor is a separate mode over a local draft,
+ * rather than a grid that writes as it is typed.
+ *
+ * Editing changes what the **next** order line explodes into and restates nothing: orders
+ * already taken keep the component lines they were keyed with, which is what lets Breakup
+ * edit one order without the catalogue moving under it.
+ */
+function KitComponentsPanel({
+  kit,
+  canEdit,
+  categories,
+}: {
+  kit: Item;
+  canEdit: boolean;
+  categories: UomCategoryWithUnits[];
+}) {
+  const tk = useTranslations("inventory.kits");
+  const tc = useTranslations("inventory.common");
+  const toast = useToast();
+  const showApiError = useApiErrorToast();
+
+  const components = useKitComponents(kit.id);
+  const items = useItems({});
+  const saveComponents = useSaveKitComponents();
+
+  const [editing, setEditing] = useState(false);
+  const [rows, setRows] = useState<Array<{ itemId: string; quantity: string }>>([]);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string[]>>({});
+
+  /** `components.2.component_item_id` → row 2's item cell. The service names the row and the
+   * field it refused — a duplicate component, a nested kit, a quantity of zero — and the
+   * message belongs on that cell rather than in a toast that leaves the operator hunting
+   * through five rows for the one that is wrong. */
+  const rowErrors = useMemo(() => {
+    const out: Record<number, Record<string, string>> = {};
+    for (const [key, messages] of Object.entries(fieldErrors)) {
+      const match = /^components\.(\d+)\.(.+)$/.exec(key);
+      if (match) {
+        out[Number(match[1])] = { ...out[Number(match[1])], [match[2]]: messages[0] };
+      }
+    }
+    return out;
+  }, [fieldErrors]);
+
+  const byId = useMemo(
+    () => new Map((items.data ?? []).map((item) => [item.id, item])),
+    [items.data],
+  );
+
+  /** A component is any active item that is not itself a kit and not this kit — kits do not
+   * nest (`nested_kit`) and a kit cannot contain itself (`kit_is_its_own_component`). */
+  const choices = useMemo(
+    () =>
+      (items.data ?? []).filter(
+        (item) => item.is_active && item.item_type !== ItemType.KIT && item.id !== kit.id,
+      ),
+    [items.data, kit.id],
+  );
+
+  /** The unit a component's quantity is counted in, with the decimal places the *unit*
+   * declares — EA is 0, KG is 3. Never a hard-coded scale: the raw column holds
+   * "2.000000" and that is not what anyone should be shown. */
+  function uom(itemId: number): { code: string; decimalPlaces: number } {
+    const item = byId.get(itemId);
+    for (const category of categories) {
+      const found = category.uoms.find((u) => u.id === item?.base_uom_id);
+      if (found) return { code: found.code, decimalPlaces: found.decimal_places };
+    }
+    return { code: tc("emptyValue"), decimalPlaces: 0 };
+  }
+
+  function itemLabel(itemId: number): string {
+    const item = byId.get(itemId);
+    return item ? dotted(item.code, item.name) : String(itemId);
+  }
+
+  function startEditing() {
+    setFieldErrors({});
+    setRows(
+      (components.data ?? []).map((row) => ({
+        itemId: String(row.component_item_id),
+        quantity: trimDecimalString(row.quantity_per_kit),
+      })),
+    );
+    setEditing(true);
+  }
+
+  async function handleSave() {
+    setFieldErrors({});
+    try {
+      await saveComponents.mutateAsync({
+        itemId: kit.id,
+        payload: {
+          components: rows
+            .filter((row) => row.itemId && row.quantity)
+            .map((row) => ({
+              component_item_id: Number(row.itemId),
+              quantity_per_kit: row.quantity,
+            })),
+        },
+      });
+      toast.show({ title: tk("saved"), tone: "success" });
+      setEditing(false);
+    } catch (err) {
+      if (isApiError(err)) setFieldErrors(err.fieldErrors);
+      showApiError(err, tk("saveFailed"));
+    }
+  }
+
+  const saved = components.data ?? [];
+
+  return (
+    <div className="space-y-3 pt-3">
+      <div className="flex items-center justify-between">
+        <p className="flex items-center gap-1.5 text-xs text-[var(--vinea-ink-muted)]">
+          <Package className="size-4" />
+          {tk("sectionTitle")}
+        </p>
+        {editing ? (
+          <div className="flex items-center gap-2">
+            <Button variant="ghost" onClick={() => setEditing(false)} className="text-xs">
+              {tc("cancel")}
+            </Button>
+            <Button
+              variant="primary"
+              onClick={handleSave}
+              disabled={!canEdit || saveComponents.isPending}
+              className="text-xs"
+            >
+              {saveComponents.isPending ? tc("saving") : tc("save")}
+            </Button>
+          </div>
+        ) : (
+          <Button
+            variant="ghost"
+            onClick={startEditing}
+            disabled={!canEdit}
+            className="gap-1.5 text-xs"
+          >
+            <Edit2 className="size-3.5" /> {tk("editDefinition")}
+          </Button>
+        )}
+      </div>
+
+      {editing ? (
+        <div className="space-y-2">
+          {rows.map((row, index) => (
+            <div key={index} className="flex items-end gap-2">
+              <Field
+                label={tk("component")}
+                error={rowErrors[index]?.component_item_id}
+                className="flex-1"
+              >
+                <Combobox
+                  options={choices.map((item) => ({
+                    value: String(item.id),
+                    label: dotted(item.code, item.name),
+                  }))}
+                  value={row.itemId}
+                  onValueChange={(value) =>
+                    setRows((prev) =>
+                      prev.map((r, i) => (i === index ? { ...r, itemId: value } : r)),
+                    )
+                  }
+                  placeholder={tk("chooseComponent")}
+                />
+              </Field>
+              <Field
+                label={tk("quantityPerKit")}
+                error={rowErrors[index]?.quantity_per_kit}
+                className="w-28"
+              >
+                <Input
+                  value={row.quantity}
+                  onChange={(e) =>
+                    setRows((prev) =>
+                      prev.map((r, i) =>
+                        i === index ? { ...r, quantity: e.target.value } : r,
+                      ),
+                    )
+                  }
+                  inputMode="decimal"
+                  className="text-right font-mono"
+                />
+              </Field>
+              <button
+                type="button"
+                onClick={() => setRows((prev) => prev.filter((_, i) => i !== index))}
+                aria-label={tk("removeRow", {
+                  name: row.itemId ? itemLabel(Number(row.itemId)) : String(index + 1),
+                })}
+                className="mb-2 rounded p-1 text-[var(--vinea-ink-subtle)] hover:text-[var(--vinea-danger)]"
+              >
+                <Trash2 className="size-3.5" />
+              </button>
+            </div>
+          ))}
+          <Button
+            variant="ghost"
+            onClick={() => setRows((prev) => [...prev, { itemId: "", quantity: "1" }])}
+            className="gap-1.5 text-xs"
+          >
+            <Plus className="size-3.5" /> {tk("addRow")}
+          </Button>
+        </div>
+      ) : saved.length === 0 ? (
+        <p className="py-6 text-center text-xs text-[var(--vinea-ink-subtle)]">
+          {components.isLoading ? tc("loading") : tk("empty")}
+        </p>
+      ) : (
+        <Table>
+          <THead>
+            <TR>
+              <TH>{tk("component")}</TH>
+              <TH className="w-20">{tk("baseUom")}</TH>
+              <TH className="w-24 text-right">{tk("quantityPerKit")}</TH>
+            </TR>
+          </THead>
+          <TBody>
+            {saved.map((row) => (
+              <TR key={row.id}>
+                <TD className="text-xs font-medium text-[var(--vinea-ink)]">
+                  {itemLabel(row.component_item_id)}
+                </TD>
+                <TD className="font-mono text-xs text-[var(--vinea-ink-muted)]">
+                  {uom(row.component_item_id).code}
+                </TD>
+                <TD className="text-right font-mono tabular-nums text-xs text-[var(--vinea-ink)]">
+                  {formatQuantity(
+                    Number(row.quantity_per_kit),
+                    uom(row.component_item_id).decimalPlaces,
+                  )}
+                </TD>
+              </TR>
+            ))}
+          </TBody>
+        </Table>
+      )}
+
+      {!editing && saved.length > 0 ? (
+        <p className="text-xs text-[var(--vinea-ink-subtle)]">
+          {tk("explodesTo", { count: saved.length })}
+        </p>
+      ) : null}
+      <p className="text-xs text-[var(--vinea-ink-subtle)]">{tk("note")}</p>
     </div>
   );
 }

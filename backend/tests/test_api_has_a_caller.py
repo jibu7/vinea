@@ -62,17 +62,16 @@ NO_UI: dict[str, str] = {
     # screen calling it, and P6's definition of done requires this list to carry no P6 entry
     # at all.
     #
-    # **Step 6 has taken the first of its two.** `PUT /oe/defaults` stood here until the Order
-    # defaults screen landed; it is called from `features/order-entry/hooks.ts` now.
+    # **Step 6 has taken its two.** `PUT /oe/defaults` and
+    # `PUT /inventory/items/{item_id}/kit-components` stood here until the Order defaults
+    # screen and the Items screen's Kit components section landed; they are now called from
+    # `features/order-entry/hooks.ts` and `features/inventory/hooks.ts`, so the register is
+    # down to step 7's lines.
     #
     # A hook with no screen would satisfy this test and would be the worse answer: that is
     # exactly what `useReverseStockDocument` was (C.1.7), and what the AR/AP reversal was for a
     # whole phase. An honest line in the register beats a caller that nobody can reach.
-    "PUT /api/v1/inventory/items/{item_id}/kit-components": (
-        "GAP (P6) — the Kit components section of the Items screen is step 6. The service lands "
-        "at step 1 so a kit can be defined for the step-2 posting tests. Remove this entry with "
-        "that section."
-    ),
+    #
     # Step 3's orders, receipts and flows. Their screens are **step 7** — Sales order, Purchase
     # order and GRV, plus Breakup under Transactions → Order Entry — and that step deletes every
     # line below. Each names the screen that owns it, so the register reads as a schedule rather

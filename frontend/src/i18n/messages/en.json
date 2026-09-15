@@ -1367,7 +1367,8 @@
     "itemTypes": {
       "stock": "Stock",
       "service": "Service",
-      "non_stock": "Non-stock"
+      "non_stock": "Non-stock",
+      "kit": "Kit"
     },
     "items": {
       "title": "Inventory items",
@@ -1403,7 +1404,10 @@
       "updateFailed": "Could not update the item",
       "detailTitle": "{code} · {name}",
       "tabDetails": "Details",
-      "tabBarcodes": "Barcodes"
+      "tabBarcodes": "Barcodes",
+      "purchaseAccount": "Purchase account",
+      "weightPerBaseUnit": "Weight per base unit",
+      "weightNote": "Weight is only read by a landed cost split on the weight basis, which refuses a target item that has none."
     },
     "barcodes": {
       "title": "Barcodes",
@@ -1498,7 +1502,7 @@
       "saved": "Inventory defaults saved",
       "saveFailed": "Could not save the defaults",
       "controlNote": "Inventory control and Stock in transit are control accounts: only the inventory module may post to them, and every line carries an item. Opening stock therefore comes in through an inventory journal batch, never a GL journal.",
-      "cogsNote": "Cost of sales is carried for P6 and posts nothing yet.",
+      "cogsNote": "Cost of sales is posted by the companion stock entry of a sales invoice and by a landed cost whose target no longer holds the goods.",
       "policyNote": "Under Allow, an issue with no stock behind it is costed at the last positive average and flagged provisional. Nothing corrects it later — the flag is the review trail."
     },
     "rename": {
@@ -1855,6 +1859,22 @@
       "yes": "Yes",
       "no": "No",
       "signedOutNote": "Out is shown signed, so opening + in + out = closing."
+    },
+    "kits": {
+      "tabTitle": "Kit components",
+      "sectionTitle": "What this kit is made of",
+      "empty": "No components yet. A kit with none is refused on an order line.",
+      "component": "Component",
+      "quantityPerKit": "Per kit",
+      "baseUom": "Unit",
+      "addRow": "Add component",
+      "removeRow": "Remove {name}",
+      "chooseComponent": "Choose an item",
+      "saved": "Kit components saved",
+      "saveFailed": "Could not save the kit",
+      "note": "Saved as one definition, not row by row: a kit is only meaningful as a set. Editing it changes what the next order line explodes into and restates nothing already ordered.",
+      "explodesTo": "One kit explodes into {count} lines.",
+      "editDefinition": "Edit definition"
     }
   },
   "orderEntry": {
