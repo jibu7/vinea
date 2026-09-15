@@ -16,7 +16,7 @@ import { TBody, TD, TH, THead, TR, Table } from "@/design/components/table";
 import { useToast } from "@/design/components/toast";
 import { isApiError, useHasPermission } from "@/features/auth/hooks";
 import { StockCountStatus } from "@/lib/api-enums";
-import { formatDate } from "@/lib/format";
+import { formatDate, todayIso } from "@/lib/format";
 import { useApiErrorToast } from "@/lib/use-api-error-toast";
 import { useCountSessions, useOpenCountSession } from "./hooks";
 import { useInventoryLineSupport } from "./line-support";
@@ -32,10 +32,6 @@ export const COUNT_STATUS_KEY: Record<string, "statusCounting" | "statusComplete
   [StockCountStatus.COMPLETED]: "statusCompleted",
   [StockCountStatus.CANCELLED]: "statusCancelled",
 };
-
-function today(): string {
-  return new Date().toISOString().slice(0, 10);
-}
 
 /**
  * Inventory count sessions: the list, and the dialog that starts one. Starting a session
@@ -57,7 +53,7 @@ export function CountsScreen() {
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [warehouseId, setWarehouseId] = useState("");
-  const [countDate, setCountDate] = useState(today);
+  const [countDate, setCountDate] = useState(todayIso);
   const [description, setDescription] = useState("");
   const [reference, setReference] = useState("");
   const [includeZero, setIncludeZero] = useState(false);

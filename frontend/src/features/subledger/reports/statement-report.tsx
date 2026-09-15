@@ -15,12 +15,9 @@ import { useCompanyDetails } from "@/features/gl/hooks";
 import { useApiErrorToast } from "@/lib/use-api-error-toast";
 import { useJob, usePartners, useQueueStatement } from "../hooks";
 import { partnerCode, type PartnerRole } from "../types";
+import { todayIso } from "@/lib/format";
 
 const API_BASE = `${process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"}/api/v1`;
-
-function today(): string {
-  return new Date().toISOString().slice(0, 10);
-}
 
 /**
  * Statements: queue → poll → download. There is deliberately no synchronous PDF endpoint —
@@ -35,7 +32,7 @@ export function StatementReport({ role }: { role: PartnerRole }) {
   const toast = useToast();
   const showApiError = useApiErrorToast();
 
-  const [asOf, setAsOf] = useState(today);
+  const [asOf, setAsOf] = useState(todayIso);
   const [variant, setVariant] = useState("open_item");
   const [selected, setSelected] = useState<number[]>([]);
   const [jobId, setJobId] = useState<number | null>(null);

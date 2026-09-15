@@ -7,6 +7,7 @@ import {
   login,
   pageFetch,
 } from "./support/fixtures";
+import { todayIso } from "../src/lib/format";
 
 /**
  * The document workspace autosaves a draft with a generated UUID and posts using that UUID
@@ -28,7 +29,7 @@ test.describe("journal posting is idempotent on retry", () => {
     const creditAccountId = await accountIdByCode(page, CREDIT_ACCOUNT_CODE);
     const idempotencyKey = `e2e-idempotency-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const body = {
-      entry_date: new Date().toISOString().slice(0, 10),
+      entry_date: todayIso(),
       description: `E2E idempotency check ${idempotencyKey}`,
       lines: [
         { gl_account_id: debitAccountId, debit: "12345", credit: "0" },
@@ -77,7 +78,7 @@ test.describe("journal posting is idempotent on retry", () => {
     const first = await pageFetch(page, "/gl/journal-entries", {
       method: "POST",
       body: {
-        entry_date: new Date().toISOString().slice(0, 10),
+        entry_date: todayIso(),
         description: `E2E idempotency conflict A ${idempotencyKey}`,
         lines: [
           { gl_account_id: debitAccountId, debit: "500", credit: "0" },
@@ -91,7 +92,7 @@ test.describe("journal posting is idempotent on retry", () => {
     const second = await pageFetch(page, "/gl/journal-entries", {
       method: "POST",
       body: {
-        entry_date: new Date().toISOString().slice(0, 10),
+        entry_date: todayIso(),
         description: `E2E idempotency conflict B ${idempotencyKey}`,
         lines: [
           { gl_account_id: debitAccountId, debit: "999", credit: "0" },

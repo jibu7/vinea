@@ -41,7 +41,7 @@ import {
   useUpdateGLSettings,
 } from "@/features/gl/hooks";
 import { toOptions } from "@/features/gl/lookups";
-import { dotted, formatDate } from "@/lib/format";
+import { dotted, formatDate, toLocalIsoDate } from "@/lib/format";
 import { useApiErrorToast } from "@/lib/use-api-error-toast";
 
 export default function CompanyDetailsPage() {
@@ -144,8 +144,8 @@ export default function CompanyDetailsPage() {
     try {
       await createFiscalYear.mutateAsync({
         code: yearCode,
-        start_date: startDate.toISOString().slice(0, 10),
-        end_date: endDate.toISOString().slice(0, 10),
+        start_date: toLocalIsoDate(startDate),
+        end_date: toLocalIsoDate(endDate),
         period_count: Number(periodCount),
       });
       setNewYearOpen(false);

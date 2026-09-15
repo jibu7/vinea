@@ -26,7 +26,7 @@ import { useAccounts, useBranches, useCurrencies, useProjects, useTaxCodes } fro
 import { toOptions } from "@/features/gl/lookups";
 import { isApiError } from "@/features/auth/hooks";
 import { clearDraft, loadDraft, newDraftId, saveDraft } from "@/lib/drafts";
-import { formatMoney } from "@/lib/format";
+import { formatMoney, nowIso, todayIso } from "@/lib/format";
 import { useApiErrorToast } from "@/lib/use-api-error-toast";
 import { ControlType } from "@/lib/api-enums";
 import { dueDateFor } from "./due-date";
@@ -62,15 +62,11 @@ interface DocumentDraft {
   maturityDate: string;
 }
 
-function today(): string {
-  return new Date().toISOString().slice(0, 10);
-}
-
 function blankDraft(): DocumentDraft {
   return {
     partnerId: "",
-    documentDate: today(),
-    dueDate: today(),
+    documentDate: todayIso(),
+    dueDate: todayIso(),
     dueDateTouched: false,
     paymentTermsId: "",
     salesRepId: "",
@@ -147,7 +143,7 @@ export function DocumentScreen({ spec }: { spec: DocumentScreenSpec }) {
     if (!restored.current || !companyId || !userId) return;
     saveDraft(draftModule, companyId, userId, {
       draftId,
-      updatedAt: new Date().toISOString(),
+      updatedAt: nowIso(),
       data: form,
     });
   }, [form, draftId, companyId, userId, draftModule]);

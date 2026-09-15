@@ -11,7 +11,7 @@ import { useMe } from "@/features/auth/hooks";
 import { useAccounts } from "@/features/gl/hooks";
 import { controlTypeLabel, type GLAccount } from "@/features/gl/types";
 import { exportToCsv } from "@/lib/csv";
-import { formatDate } from "@/lib/format";
+import { formatDate, todayIso } from "@/lib/format";
 
 export default function ChartOfAccountsReportPage() {
   const t = useTranslations("gl");
@@ -57,7 +57,7 @@ export default function ChartOfAccountsReportPage() {
       controlTypeLabel(a.control_type, t),
       a.is_active ? "Active" : "Inactive",
     ]);
-    exportToCsv(`chart-of-accounts-${new Date().toISOString().slice(0, 10)}`, headers, rows);
+    exportToCsv(`chart-of-accounts-${todayIso()}`, headers, rows);
   }
 
   return (

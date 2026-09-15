@@ -16,7 +16,7 @@ import { useAccounts, useCompanyDetails, useCurrencies } from "@/features/gl/hoo
 import { byId } from "@/features/gl/lookups";
 import { isApiError } from "@/features/auth/hooks";
 import { exportToCsv } from "@/lib/csv";
-import { formatDate, formatMoney } from "@/lib/format";
+import { formatDate, formatMoney, todayIso } from "@/lib/format";
 import { useApiErrorToast } from "@/lib/use-api-error-toast";
 import { useMatureInstruments, usePartners, usePendingInstruments } from "./hooks";
 import { partnerCode, type PartnerRole } from "./types";
@@ -41,7 +41,7 @@ export function InstrumentsScreen({ role }: { role: PartnerRole }) {
   const hasPermission = useHasPermission();
   const canPost = hasPermission(`${role}:transactions_post`);
 
-  const [asOf, setAsOf] = useState(() => new Date().toISOString().slice(0, 10));
+  const [asOf, setAsOf] = useState(() => todayIso());
   const [banked, setBanked] = useState<number[]>([]);
 
   const instruments = usePendingInstruments(role, asOf);

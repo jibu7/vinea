@@ -90,20 +90,66 @@ export function dotted(...parts: Array<string | number | null | undefined>): str
 }
 
 /**
- * Today as `YYYY-MM-DD`, in the **viewer's own calendar**.
+ * A `Date` as `YYYY-MM-DD`, in the **viewer's own calendar**.
  *
- * `new Date().toISOString().slice(0, 10)` — the shape used throughout the app before this
- * existed — renders the date in UTC, so east of Greenwich it reads *yesterday* for the first
- * hours of every day: at 00:30 in Kigali (UTC+2) it is 22:30 UTC on the day before, and a
- * document defaults to the wrong date. Local calendar parts have no such seam. New screens
- * use this; the existing local copies are a sweep of their own.
+ * This is the one place in the app that turns an instant into a calendar date, and the reason
+ * it exists is that the obvious way is wrong. `date.toISOString().slice(0, 10)` renders in
+ * **UTC**: east of Greenwich that is the previous day for the first hours of every day — at
+ * 00:30 in Kigali (UTC+2) it is 22:30 UTC on the day before, so a document defaults into
+ * yesterday, which at a month boundary is a different accounting period and at a year boundary
+ * a different fiscal year. West of Greenwich the same seam runs the other way and offers
+ * tomorrow. Local calendar parts have no seam at all.
+ *
+ * `.toISOString(` is banned under `src` by an ESLint rule (`no-restricted-syntax`), and under
+ * `src` **and `e2e`** by the scan in `no-utc-dates.test.ts` — lint does not reach the specs, so
+ * for those the scan is the only guard. Two files are exempt — this one and its test: the
+ * module that decides the question, and the test that proves the decision by asserting the old
+ * expression still gives the wrong answer. A test that cannot name what it forbids can only
+ * assert the right answer, not that the wrong one is wrong.
  */
-export function todayIso(now: Date = new Date()): string {
+export function toLocalIsoDate(date: Date): string {
   return [
-    now.getFullYear(),
-    String(now.getMonth() + 1).padStart(2, "0"),
-    String(now.getDate()).padStart(2, "0"),
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, "0"),
+    String(date.getDate()).padStart(2, "0"),
   ].join("-");
+}
+
+/** Today as `YYYY-MM-DD`, in the viewer's own calendar. See {@link toLocalIsoDate}. */
+export function todayIso(now: Date = new Date()): string {
+  return toLocalIsoDate(now);
+}
+
+/**
+ * A `YYYY-MM-DD` back to a `Date` at **local** midnight.
+ *
+ * The mirror of {@link toLocalIsoDate}, and needed for the same reason: `new Date("2026-03-10")`
+ * parses a bare date as UTC midnight, so west of Greenwich it comes back as the 9th. A draft
+ * saved on the 10th would reopen on the 9th.
+ *
+ * Tolerates a full ISO instant so drafts written before this existed still load — they stored
+ * `toISOString()`, and the calendar day of such a string is not its first ten characters in
+ * every zone, so those are parsed as instants and then read locally.
+ */
+export function fromLocalIsoDate(value: string): Date {
+  const bare = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (bare) {
+    return new Date(Number(bare[1]), Number(bare[2]) - 1, Number(bare[3]));
+  }
+  const parsed = new Date(value);
+  return new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate());
+}
+
+/**
+ * The current instant as an ISO string — a **timestamp, not a date**.
+ *
+ * Drafts sort on `updatedAt` to decide what to evict, so it has to be a sortable instant and
+ * UTC is exactly right for it. It lives here so that banning `.toISOString(` under `src` does
+ * not leave callers with nowhere legitimate to go, and so the distinction between "an instant"
+ * and "a calendar date" is made once, by which helper you reach for.
+ */
+export function nowIso(now: Date = new Date()): string {
+  return now.toISOString();
 }
 
 /**
@@ -114,5 +160,8 @@ export function todayIso(now: Date = new Date()): string {
  * has ever posted before anyone has said what they wanted. Both ends are editable.
  */
 export function monthToDateIso(now: Date = new Date()): { from: string; to: string } {
-  return { from: todayIso(new Date(now.getFullYear(), now.getMonth(), 1)), to: todayIso(now) };
+  return {
+    from: toLocalIsoDate(new Date(now.getFullYear(), now.getMonth(), 1)),
+    to: toLocalIsoDate(now),
+  };
 }

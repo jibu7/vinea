@@ -17,7 +17,7 @@ import { useGLLookups, toOptions, byId } from "@/features/gl/lookups";
 import type { JournalEntryCreatePayload, JournalLineInput } from "@/features/gl/types";
 import { useApiErrorToast } from "@/lib/use-api-error-toast";
 import { loadDraft, saveDraft, clearDraft, newDraftId, type Draft } from "@/lib/drafts";
-import { dotted, formatDate, roundHalfUp } from "@/lib/format";
+import { dotted, formatDate, fromLocalIsoDate, nowIso, roundHalfUp, toLocalIsoDate } from "@/lib/format";
 
 interface JournalDraftData {
   entryDate: string;
@@ -66,7 +66,10 @@ export default function NewJournalBatchPage() {
     const mainBranch = branches.data?.find((b) => b.is_main);
     if (existing) {
       setDraftId(existing.draftId);
-      setEntryDate(new Date(existing.data.entryDate));
+      // Read back the way it was written — a local calendar date, not a UTC instant.
+      // `new Date("2026-03-10")` parses as UTC midnight, which west of Greenwich is
+      // the 9th, so a draft saved on the 10th would reopen on the 9th.
+      setEntryDate(fromLocalIsoDate(existing.data.entryDate));
       setDescription(existing.data.description);
       setReference(existing.data.reference ?? "");
       setBranchId(existing.data.branchId);
@@ -83,8 +86,8 @@ export default function NewJournalBatchPage() {
     if (!isHydrated || !draftId || !me?.company || !me.user_id) return;
     const draft: Draft<JournalDraftData> = {
       draftId,
-      updatedAt: new Date().toISOString(),
-      data: { entryDate: entryDate.toISOString(), description, reference, branchId, rows },
+      updatedAt: nowIso(),
+      data: { entryDate: toLocalIsoDate(entryDate), description, reference, branchId, rows },
     };
     saveDraft("journal", me.company.id, me.user_id, draft);
   }, [draftId, entryDate, description, reference, branchId, rows, me, isHydrated]);
@@ -113,7 +116,7 @@ export default function NewJournalBatchPage() {
         description: r.description || undefined,
       }));
     return {
-      entry_date: entryDate.toISOString().slice(0, 10),
+      entry_date: toLocalIsoDate(entryDate),
       description,
       reference: reference.trim() || undefined,
       branch_id: branchId ? Number(branchId) : undefined,

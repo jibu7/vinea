@@ -24,7 +24,7 @@ import { useAccounts, useCurrencies, useProjects } from "@/features/gl/hooks";
 import { toOptions } from "@/features/gl/lookups";
 import { InventoryTransactionKind } from "@/lib/api-enums";
 import { clearDraft, loadDraft, newDraftId, saveDraft } from "@/lib/drafts";
-import { formatMoney } from "@/lib/format";
+import { formatMoney, nowIso, todayIso } from "@/lib/format";
 import { useApiErrorToast } from "@/lib/use-api-error-toast";
 import { usePostAdjustment, usePostJournalBatch } from "./hooks";
 import { useInventoryLineSupport, useOnHandByWarehouse } from "./line-support";
@@ -42,13 +42,9 @@ interface StockDocumentDraft {
   rows: LineGridRow[];
 }
 
-function today(): string {
-  return new Date().toISOString().slice(0, 10);
-}
-
 function blankDraft(): StockDocumentDraft {
   return {
-    documentDate: today(),
+    documentDate: todayIso(),
     transactionTypeId: "",
     warehouseId: "",
     reference: "",
@@ -120,7 +116,7 @@ export function StockDocumentScreen({ variant }: { variant: StockDocumentVariant
     if (!restored.current || !companyId || !userId) return;
     saveDraft(draftModule, companyId, userId, {
       draftId,
-      updatedAt: new Date().toISOString(),
+      updatedAt: nowIso(),
       data: form,
     });
   }, [form, draftId, companyId, userId, draftModule]);

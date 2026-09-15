@@ -22,7 +22,7 @@ import {
 } from "@/features/gl/hooks";
 import { byId, toOptions } from "@/features/gl/lookups";
 import type { Currency } from "@/features/gl/types";
-import { dotted, formatDate } from "@/lib/format";
+import { dotted, formatDate, toLocalIsoDate } from "@/lib/format";
 import { useApiErrorToast } from "@/lib/use-api-error-toast";
 
 export default function CurrenciesPage() {
@@ -80,7 +80,7 @@ export default function CurrenciesPage() {
     try {
       await createRate.mutateAsync({
         currency_id: Number(rateCurrencyId),
-        valid_from: rateValidFrom.toISOString().slice(0, 10),
+        valid_from: toLocalIsoDate(rateValidFrom),
         rate: rateValue,
       });
       setRateOpen(false);

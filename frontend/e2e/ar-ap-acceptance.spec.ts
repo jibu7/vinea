@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { formatMoney, type CurrencyLike } from "../src/lib/format";
+import { formatMoney, toLocalIsoDate, type CurrencyLike } from "../src/lib/format";
 import {
   POSTER_EMAIL,
   PRIMARY_EMAIL,
@@ -184,7 +184,7 @@ function bareBase(amount: number): string {
 function isoDaysFromNow(days: number): string {
   const date = new Date();
   date.setDate(date.getDate() + days);
-  return date.toISOString().slice(0, 10);
+  return toLocalIsoDate(date);
 }
 
 function invoiceBase(tape: Tape): number {
