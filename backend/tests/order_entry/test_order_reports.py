@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 from app.inventory import masters as inventory_masters
 from app.models.currency import Currency
 from app.models.inventory import ItemType
-from app.models.order_entry import SalesOrderStatus
+from app.models.order_entry import PurchaseOrderStatus, SalesOrderStatus
 from app.models.partner import TaxMode
 from app.order_entry import enquiries as oe_enquiries
 from app.order_entry import grn as grn_service
@@ -121,10 +121,18 @@ def test_a_backordered_sales_line_is_outstanding_until_the_order_is_closed(
 def test_a_purchase_line_leaves_the_report_when_the_receipt_covers_it(
     db: Session, order_entry: OrderEntry
 ) -> None:
-    """The purchase side falls out by arithmetic rather than by decision.
+    """The purchase side falls out by **arithmetic**, and the order is deliberately still open.
 
-    Nobody closes the order: the GRN receives the full quantity, `received` catches `ordered`
-    in the view, and the line stops being outstanding. A partial receipt leaves the balance.
+    Two lines, and only the first is received in full. The order therefore stays
+    `partially_received` — which is an *open* status — so the status filter keeps selecting it
+    and the only thing that can drop the covered line is `ordered > received` on the line
+    itself.
+
+    That distinction is the reason this test has two lines rather than one. Written with a
+    single line it passed with the arithmetic clause deleted: a one-line order that is fully
+    received is no longer `open` either, so the status filter was doing all the work and the
+    test could not tell the two guards apart. Found by reverting the clause and watching
+    nothing fail.
     """
     order = _purchase_order(
         db,
@@ -132,10 +140,13 @@ def test_a_purchase_line_leaves_the_report_when_the_receipt_covers_it(
         orders_service.OrderLineInput(
             item_id=order_entry.stock_item.id, quantity=D(100), unit_price=D(1000)
         ),
+        orders_service.OrderLineInput(
+            item_id=order_entry.weighted_item.id, quantity=D(20), unit_price=D(5000)
+        ),
     )
-    line = order.lines[0]
+    bottles, cases = order.lines[0], order.lines[1]
 
-    def receive(quantity: str) -> None:
+    def receive(line, item_id: int, quantity: str) -> None:  # noqa: ANN001
         grn_service.post_grn(
             db,
             order_entry.company_id,
@@ -147,7 +158,7 @@ def test_a_purchase_line_leaves_the_report_when_the_receipt_covers_it(
                 purchase_order_id=order.id,
                 lines=(
                     grn_service.GrnLineInput(
-                        item_id=order_entry.stock_item.id,
+                        item_id=item_id,
                         quantity=D(quantity),
                         unit_cost=D(1000),
                         purchase_order_line_id=line.id,
@@ -158,13 +169,19 @@ def test_a_purchase_line_leaves_the_report_when_the_receipt_covers_it(
         )
         db.flush()
 
-    receive("60")
+    receive(bottles, order_entry.stock_item.id, "60")
     partial = _report(db, order_entry, "purchase", outstanding_only=True)
-    assert len(partial.rows) == 1
-    assert (partial.rows[0].fulfilled, partial.rows[0].remaining) == (D(60), D(40))
+    assert {row.line_id: row.remaining for row in partial.rows} == {
+        bottles.id: D(40),
+        cases.id: D(20),
+    }
 
-    receive("40")
-    assert _report(db, order_entry, "purchase", outstanding_only=True).rows == []
+    # The bottles arrive in full. Nobody closed anything, and the order is still open for its
+    # other line — but this one owes nothing now, so it is not outstanding.
+    receive(bottles, order_entry.stock_item.id, "40")
+    covered = _report(db, order_entry, "purchase", outstanding_only=True)
+    assert order.status == PurchaseOrderStatus.PARTIALLY_RECEIVED, "still open for the cases"
+    assert {row.line_id: row.remaining for row in covered.rows} == {cases.id: D(20)}
 
 
 def test_a_cancelled_order_owes_nothing(db: Session, order_entry: OrderEntry) -> None:

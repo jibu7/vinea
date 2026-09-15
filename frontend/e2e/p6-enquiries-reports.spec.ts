@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import {
   PRIMARY_EMAIL,
+  READONLY_EMAIL,
   assertNoSeriousViolations,
   login,
   pageFetch,
@@ -613,6 +614,33 @@ test.describe("P6 enquiries and reports", () => {
     await page.goto(`/gl/entries/${haulage.journal_entry_id}`);
     await page.getByTestId("reverse-via-module").click();
     await page.waitForURL(/\/ap\/documents\/\d+/);
+  });
+
+  // ---------------------------------------------------------------------------------------
+  // PATH: the sidebar, as a Clerk — who holds `*:reports_view` and no `oe:*` at all.
+  // CANNOT SEE: the other four roles; `test_permissions.py` owns the matrix.
+  // ---------------------------------------------------------------------------------------
+  test("a role with no order-entry right is offered none of these screens", async ({ page }) => {
+    await login(page, READONLY_EMAIL);
+
+    // The API refuses all six with 403, and the sidebar gates on the **same five permissions**
+    // the endpoint accepts — named once in `nav-tree.ts` rather than spelled out at each row,
+    // which is what stops the two drifting into a screen the nav offers and the API refuses.
+    for (const label of [
+      "Sales order enquiry",
+      "Purchase order enquiry",
+      "Sales orders",
+      "Purchase orders",
+      "Goods received",
+      "Landed cost",
+    ]) {
+      await expect(page.getByRole("link", { name: label, exact: true })).toHaveCount(0);
+    }
+
+    // And typing the route in by hand does not get round it: the report comes back empty
+    // because the request was refused, not because there is nothing to report.
+    const refused = await pageFetch(page, "/oe/reports/goods-received");
+    expect(refused.status).toBe(403);
   });
 
   test.describe("accessibility", () => {
