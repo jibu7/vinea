@@ -138,7 +138,9 @@ export function OrderWorkspace({ role, orderId }: { role: OrderRole; orderId?: n
   const [form, setForm] = useState<OrderDraft>(blankDraft);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string[]>>({});
   const [banner, setBanner] = useState<string | null>(null);
-  const [resetAsk, setResetAsk] = useState<string[] | null>(null);
+  /** The consent dialog: which lines would be re-exploded, and the service's own words in
+   * case this screen's reading of "which" comes back empty. */
+  const [resetAsk, setResetAsk] = useState<{ labels: string[]; message: string } | null>(null);
   const seeded = useRef<Record<string, string>>({});
   const restored = useRef(false);
   const loaded = useRef(false);
@@ -353,7 +355,10 @@ export function OrderWorkspace({ role, orderId }: { role: OrderRole; orderId?: n
         // The one refusal this screen can answer: the service is not saying no, it is asking
         // whether the hand-edited explosion may go.
         if (err.code === "kit_breakup_would_reset") {
-          setResetAsk(wouldReset.map((row) => support.itemLabel(row.itemId)));
+          setResetAsk({
+            labels: wouldReset.map((row) => support.itemLabel(row.itemId)),
+            message: err.message,
+          });
           return;
         }
         setFieldErrors(err.fieldErrors);
@@ -506,14 +511,24 @@ export function OrderWorkspace({ role, orderId }: { role: OrderRole; orderId?: n
       <Dialog open={resetAsk !== null} onOpenChange={(open) => !open && setResetAsk(null)}>
         <DialogContent title={t("resetTitle")} description={t("resetNote")}>
           <div className="space-y-3 pt-2">
-            <ul
-              className="list-disc space-y-1 pl-5 text-xs text-[var(--vinea-ink)]"
-              data-testid="reset-breakup-items"
-            >
-              {(resetAsk ?? []).map((label) => (
-                <li key={label}>{label}</li>
-              ))}
-            </ul>
+            {/* Naming the lines is the point of asking at all. If this screen's reading of
+                which ones moved comes back empty, the service's own message says which line
+                and from what quantity to what — an empty list would be a question with
+                nothing in it. */}
+            {resetAsk && resetAsk.labels.length > 0 ? (
+              <ul
+                className="list-disc space-y-1 pl-5 text-xs text-[var(--vinea-ink)]"
+                data-testid="reset-breakup-items"
+              >
+                {resetAsk.labels.map((label) => (
+                  <li key={label}>{label}</li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-xs text-[var(--vinea-ink)]" data-testid="reset-breakup-items">
+                {resetAsk?.message}
+              </p>
+            )}
             <div className="flex justify-end gap-2 pt-3">
               <Button variant="ghost" onClick={() => setResetAsk(null)}>
                 {t("resetKeep")}
