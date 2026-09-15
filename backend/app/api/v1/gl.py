@@ -5,7 +5,7 @@ enquiries, periods and year-end. Routers hold no business logic — everything p
 from datetime import date
 
 from fastapi import APIRouter, Depends, Query, Request, Response, status
-from sqlalchemy import and_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session, aliased, selectinload
 
 from app.api import idempotency
@@ -30,7 +30,9 @@ from app.models.fiscal import AccountingPeriod, FiscalYear, PeriodStatus
 from app.models.gl import GLSettings
 from app.models.inventory import INVENTORY_MODULE, InventoryDocument
 from app.models.journal import JournalEntry
+from app.models.order_entry import LandedCostDocument
 from app.models.subledger import PartnerDocument
+from app.order_entry import sources as order_sources
 from app.schemas.common import Page
 from app.schemas.gl import (
     AccountAuditRead,
@@ -105,22 +107,6 @@ def _entry_read(db: Session, entry: JournalEntry) -> JournalEntryRead:
         .options(selectinload(JournalEntry.lines))
         .where(JournalEntry.id == entry.id)
     ).first()
-    # **`LCA-` entries are the one kind this join cannot pair up, and P6 step 8 owes the fix.**
-    #
-    # Both halves above hang off `journal_entries.reverses_entry_id`, which the kernel writes
-    # only when a reversal *mirrors* the entry it reverses. A landed cost does not reverse that
-    # way: the value it posted leaves through cost of sales as the goods are sold, so its
-    # reversal takes each share back from wherever it now sits and is not a mirror of anything
-    # (see `app/order_entry/landed_cost.py::reverse_landed_cost`). Its link lives on the
-    # document instead — `landed_cost_documents.journal_entry_id` and `.reversal_entry_id` —
-    # and clause 9 of `assert_order_invariants` is what proves that link from both ends.
-    #
-    # So on an `LCA-` entry this pair currently comes back empty, and the enquiry shows a
-    # reversal with nothing said about what it reverses. **Step 8 resolves it through the
-    # document**: given an entry whose `source_doc_type` is `landed_cost_document`, read the
-    # document by `source_doc_id` and fill `reverses_entry_number` / `reversed_by_*` from its
-    # two columns, so the page shows the pair the kernel field would have carried. Nothing else
-    # about the page changes, and no other doc type is affected.
     if row is None:
         raise NotFoundError("Journal entry not found")
     loaded, rev_num, rvd_by_id, rvd_by_num = row
@@ -128,8 +114,67 @@ def _entry_read(db: Session, entry: JournalEntry) -> JournalEntryRead:
     data.reverses_entry_number = rev_num
     data.reversed_by_entry_id = rvd_by_id
     data.reversed_by_number = rvd_by_num
+    _resolve_landed_cost_pair(db, loaded, data)
     data.module_document_id, data.module_document_number = _module_document(db, loaded)
     return data
+
+
+def _resolve_landed_cost_pair(
+    db: Session, entry: JournalEntry, data: JournalEntryRead
+) -> None:
+    """Fill the reversal pair for an `LCA-` entry, which the kernel's own column cannot.
+
+    **Why this one doc type needs its own resolution.** Both halves of the join above hang off
+    `journal_entries.reverses_entry_id`, which the kernel writes only when a reversal *mirrors*
+    the entry it reverses. A landed cost does not reverse that way: the value it posted leaves
+    through cost of sales as the goods are sold, so its reversal takes each share back from
+    wherever it now sits, and is a split rather than a mirror (see
+    `app/order_entry/landed_cost.py::reverse_landed_cost`). The kernel therefore leaves the
+    column null, deliberately, and the link lives on the document —
+    `landed_cost_documents.journal_entry_id` and `.reversal_entry_id`. Clause 9 of
+    `assert_order_invariants` proves that link from both ends, which is what makes it safe to
+    read here.
+
+    Without this the entry page showed a reversal saying nothing about what it reversed, and an
+    allocation saying nothing about having been reversed — the P4 review's failure mode exactly
+    (rule 13): the row renders, the link is missing, and no test notices. Step 8 draws the
+    resulting pair; the endpoint returns it now so the screen has something to draw.
+
+    One document, two entries, so one query serves both directions: the document that names
+    this entry as its posting has the reversal, and the document that names it as its reversal
+    has the original.
+    """
+    if entry.source_doc_type != order_sources.LANDED_COST_DOCUMENT:
+        return
+    document = db.scalar(
+        select(LandedCostDocument).where(
+            LandedCostDocument.company_id == entry.company_id,
+            or_(
+                LandedCostDocument.journal_entry_id == entry.id,
+                LandedCostDocument.reversal_entry_id == entry.id,
+            ),
+        )
+    )
+    if document is None:
+        return
+    if document.journal_entry_id == entry.id and document.reversal_entry_id is not None:
+        # This is the allocation; the document names what took it back out.
+        data.reversed_by_entry_id = document.reversal_entry_id
+        data.reversed_by_number = _entry_number(db, entry.company_id, document.reversal_entry_id)
+    elif document.reversal_entry_id == entry.id and document.journal_entry_id is not None:
+        # This is the reversal; the document names what it reversed.
+        data.reverses_entry_id = document.journal_entry_id
+        data.reverses_entry_number = _entry_number(
+            db, entry.company_id, document.journal_entry_id
+        )
+
+
+def _entry_number(db: Session, company_id: int, entry_id: int) -> str | None:
+    return db.scalar(
+        select(JournalEntry.number).where(
+            JournalEntry.company_id == company_id, JournalEntry.id == entry_id
+        )
+    )
 
 
 #: Where each module keeps the documents it posts. Both tables have carried `journal_entry_id`
