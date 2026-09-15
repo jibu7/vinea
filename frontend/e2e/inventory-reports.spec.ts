@@ -7,6 +7,7 @@ import {
   pickCombobox,
   setTheme,
 } from "./support/fixtures";
+import { todayIso } from "../src/lib/format";
 
 /**
  * P5 step 8 — the Enquiries and Reports → Inventory screens: item enquiry, Movement, Count,
@@ -99,7 +100,7 @@ async function seed(page: Page): Promise<Fixture> {
 
   const types = (await pageFetch(page, "/gl/transaction-types?module=inv")).json as Named[];
   const adjin = types.find((t) => t.code === "ADJIN")!;
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayIso();
 
   await post(
     page,
@@ -368,7 +369,7 @@ test.describe("Inventory enquiries and reports", () => {
     await login(page, PRIMARY_EMAIL);
     const types = (await pageFetch(page, "/gl/transaction-types?module=inv")).json as Named[];
     const adjout = types.find((t) => t.code === "ADJOUT")!;
-    const today = new Date().toISOString().slice(0, 10);
+    const today = todayIso();
 
     try {
       const allowed = await pageFetch(page, "/inventory/defaults", {

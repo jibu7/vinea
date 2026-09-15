@@ -8,6 +8,7 @@ import {
   pickCombobox,
   setTheme,
 } from "./support/fixtures";
+import { todayIso } from "../src/lib/format";
 
 /**
  * P5 step 7 — the Transactions → Inventory screens: an adjustment, a journal batch, a
@@ -310,7 +311,7 @@ test.describe("Inventory transactions", () => {
       method: "POST",
       headers: { "Idempotency-Key": `e2e-stale-${SUFFIX}` },
       body: {
-        document_date: new Date().toISOString().slice(0, 10),
+        document_date: todayIso(),
         description: "Moves behind the count",
         transaction_type_id: fixture.adjinId,
         lines: [{ item_id: fixture.kgItemId, warehouse_id: fixture.mainId, quantity: "1", unit_cost: "4000" }],

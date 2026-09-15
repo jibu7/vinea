@@ -7,6 +7,7 @@ import {
   pickCombobox,
   pickDate,
 } from "./support/fixtures";
+import { toLocalIsoDate } from "../src/lib/format";
 
 /**
  * A document with no rate typed on it books at the rate the `exchange_rates` table holds for
@@ -65,7 +66,7 @@ const CASES = [
 function isoDaysAgo(days: number): string {
   const date = new Date();
   date.setDate(date.getDate() - days);
-  return date.toISOString().slice(0, 10);
+  return toLocalIsoDate(date);
 }
 
 async function seedRate(

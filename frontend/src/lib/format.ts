@@ -100,8 +100,9 @@ export function dotted(...parts: Array<string | number | null | undefined>): str
  * a different fiscal year. West of Greenwich the same seam runs the other way and offers
  * tomorrow. Local calendar parts have no seam at all.
  *
- * `.toISOString(` is banned under `src` by an ESLint rule (`no-restricted-syntax`) and by the
- * scan in `no-utc-dates.test.ts`. Two files are exempt and they are this one and its test: the
+ * `.toISOString(` is banned under `src` by an ESLint rule (`no-restricted-syntax`), and under
+ * `src` **and `e2e`** by the scan in `no-utc-dates.test.ts` — lint does not reach the specs, so
+ * for those the scan is the only guard. Two files are exempt — this one and its test: the
  * module that decides the question, and the test that proves the decision by asserting the old
  * expression still gives the wrong answer. A test that cannot name what it forbids can only
  * assert the right answer, not that the wrong one is wrong.
