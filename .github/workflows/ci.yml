@@ -23,6 +23,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
+        with:
+          # Keyed on the lockfile: a run that resolves the same dependencies restores them
+          # rather than downloading them again.
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
       # WeasyPrint renders the AR/AP statement PDFs (P4). Without these the import fails and
       # the statement job would only ever be recorded as failed — never skipped, but the
       # failure would look like a product bug rather than a missing library.
@@ -37,11 +42,21 @@ jobs:
       - name: prove WeasyPrint imports
         run: uv run python -c "import weasyprint; print('weasyprint', weasyprint.__version__)"
       - run: uv run ruff check .
-      - run: uv run pytest -q
+      # `-n auto` — one worker per core. The suite was already built for this: `conftest.py`
+      # names its database `vinea_test_<pid>` and every xdist worker is its own process, so
+      # each gets its own database, its own migration run and its own session fixture. What
+      # made the serial run long was that per-process migration, and it now happens on every
+      # core at once instead of on one.
+      #
+      # Nothing is skipped, deselected or marked: the item count is identical to the serial
+      # run's, which is the only thing that makes this a speed-up rather than a smaller suite.
+      - run: uv run pytest -n auto -q
       # Named explicitly so the log shows the PDF path executing. `-p no:randomly` keeps the
       # node ids stable and `--no-header -rA` prints PASSED lines rather than dots, so a
       # silently-deselected test is visible as a missing line.
       - name: prove the statement PDF tests ran
+        # Serial on purpose: three named node ids, where the point is reading PASSED lines in
+        # order, not speed. `-n auto` would scatter them across workers for no gain.
         run: |
           uv run pytest -p no:randomly --no-header -rA \
             tests/subledger/test_reports.py::test_statement_job_produces_a_pdf \
@@ -50,8 +65,64 @@ jobs:
       - run: uv run alembic upgrade head   # migration-from-zero gate
       - run: uv run alembic check          # models and migrations must not drift apart
 
-  frontend:
+  # The frontend's own checks, split out of the e2e job so that a lint error is reported in
+  # ninety seconds instead of behind a twenty-minute Playwright run, and so the e2e shards do
+  # not each repeat them.
+  frontend-checks:
     runs-on: ubuntu-latest
+    defaults: { run: { working-directory: frontend } }
+    env:
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm install --no-audit --no-fund
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run test
+      - run: npm run build
+
+  # e2e: the real stack (docker-compose.yml — db + backend + frontend, the same images and
+  # env dev uses) with Playwright against it, per P3 step 8 — now in **five parallel groups**.
+  #
+  # Each shard is a whole job on its own runner: its own compose stack, its own Postgres
+  # volume, its own seed. That is the reset-database rule enforced by the shape of the job
+  # rather than by discipline — a spec that only passes because another file wrote its rows
+  # fails here, and the fix is the spec, not the sharding.
+  #
+  # Files stay whole and `fullyParallel` stays false, so ordering *within* a file is unchanged
+  # and no spec had to be touched to make this work.
+  e2e:
+    name: e2e (${{ matrix.group }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The two files that dominate the suite, each on its own runner. `--shard` splits by
+          # **test count**, and these two are 8.9 of the 21.0 minutes in 11 of the 97 tests —
+          # adjacent alphabetically, so every count-balanced split of three put both in shard 1
+          # and left it at ~14 minutes. Measured on #41's run; the numbers are in the PR body.
+          - group: a11y
+            args: e2e/accessibility.spec.ts
+          - group: tape
+            args: e2e/ar-ap-acceptance.spec.ts
+          # Everything else, count-sharded three ways as intended — the two heavy files
+          # excluded by a path filter rather than by a list of the ones to include, so a new
+          # spec file joins a shard by existing. Nothing selects tests by title: the filter is
+          # on the path, and `--list` proves 5 + 6 + 29 + 31 + 26 = 97, the whole suite once.
+          - group: rest-1
+            args: --shard=1/3 "^(?!.*(?:accessibility|ar-ap-acceptance)\\.spec\\.ts).*$"
+          - group: rest-2
+            args: --shard=2/3 "^(?!.*(?:accessibility|ar-ap-acceptance)\\.spec\\.ts).*$"
+          # The extras ride here: `rest-3` is the lightest group, and they need a live stack.
+          - group: rest-3
+            args: --shard=3/3 "^(?!.*(?:accessibility|ar-ap-acceptance)\\.spec\\.ts).*$"
+            extras: "yes"
     defaults: { run: { working-directory: frontend } }
     env:
       NEXT_PUBLIC_API_URL: http://localhost:8000
@@ -63,12 +134,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: 22 }
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
       - run: npm install --no-audit --no-fund
-      - run: npm run lint
-      - run: npm run typecheck
-      - run: npm run test
-      - run: npm run build
 
       # The e2e fixture credential. Generated per run rather than written down anywhere: the
       # seed hashes it and the suite signs in with it, and neither has a literal to fall back
@@ -77,11 +147,14 @@ jobs:
       - name: generate the e2e fixture credential
         run: echo "E2E_PASSWORD=$(openssl rand -base64 24)" >> "$GITHUB_ENV"
 
-      # e2e: bring up the real stack (docker-compose.yml — db + backend + frontend, same
-      # images/env dev uses) and run Playwright against it, per P3 step 8.
       - name: start database
         run: docker compose up -d --wait db
         working-directory: .
+      # Not layer-cached. A `type=gha` cache needs the `docker-container` builder, and whether
+      # `docker compose build` then loads the image into the engine for `up` is exactly the
+      # kind of thing that has to be watched on a real runner — which this branch could not
+      # do. The build is 51s of a job this change brings to about eight minutes, so it is the
+      # next lever if the measured numbers need one, not a bet taken on the required check.
       - name: build backend and frontend images
         run: docker compose build backend frontend
         working-directory: .
@@ -102,9 +175,12 @@ jobs:
           # `nav-tree.ts` rather than typed out here: the hand-kept version had drifted to
           # about half the tree, which is the same drift issue #9 found in the axe coverage,
           # and the nav sweep visits all of it.
-          (cd frontend && npx tsx scripts/nav-routes.ts) | while read -r route; do
-            curl -sf -o /dev/null "http://localhost:3000${route}" || true
-          done
+          #
+          # Eight at a time rather than one after another: each shard pays this warm-up, and
+          # the routes are independent of each other. `next dev` compiles them concurrently;
+          # the loop was waiting on one compile at a time for no reason.
+          (cd frontend && npx tsx scripts/nav-routes.ts) \
+            | xargs -P 8 -I{} curl -sf -o /dev/null "http://localhost:3000{}" || true
         working-directory: .
       # `-e E2E_PASSWORD` rather than a compose entry: the value is this job's, and nothing in
       # the running app needs it — only the seed does.
@@ -117,11 +193,21 @@ jobs:
       # figure reached the document rather than that a file arrived.
       - name: install poppler-utils
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends poppler-utils
+      # Keyed on the lockfile, which is what pins the Playwright version the browser build
+      # has to match. A miss just downloads it as before.
+      - name: cache the Playwright browser
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('frontend/package-lock.json') }}
       - run: npx playwright install --with-deps chromium
+
       # Both halves of the P4 step 9 tape have to be *there* before the suite runs. A spec that
       # fails to compile, or whose describe block stops producing tests, is otherwise a silently
-      # shorter run that still reports green.
+      # shorter run that still reports green. `--list` sees the whole suite, not this shard,
+      # so one shard asking is enough.
       - name: prove the acceptance tape is collected
+        if: matrix.group == 'tape'
         run: |
           npx playwright test e2e/ar-ap-acceptance.spec.ts --list | tee /tmp/tape.txt
           grep -q "AR · USD" /tmp/tape.txt
@@ -133,7 +219,17 @@ jobs:
         env:
           PLAYWRIGHT_BASE_URL: http://localhost:3000
           PLAYWRIGHT_API_URL: http://localhost:8000
-      - run: npm run e2e
+      - name: playwright (${{ matrix.group }})
+        run: npx playwright test ${{ matrix.args }}
+        env:
+          PLAYWRIGHT_BASE_URL: http://localhost:3000
+          PLAYWRIGHT_API_URL: http://localhost:8000
+      # The two halves of `npm run e2e` that are not Playwright specs. They are not sharded —
+      # each is a single script — so they run once, on the first shard, rather than three
+      # times over.
+      - name: the amount-overwrite regression and the print previews
+        if: matrix.extras == 'yes'
+        run: npm run e2e:regression && npm run e2e:print-preview
         env:
           PLAYWRIGHT_BASE_URL: http://localhost:3000
           PLAYWRIGHT_API_URL: http://localhost:8000
@@ -141,11 +237,11 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-report
+          name: playwright-report-${{ matrix.group }}
           path: frontend/playwright-report/
           retention-days: 7
       - name: upload print-preview screenshots
-        if: always()
+        if: always() && matrix.extras == 'yes'
         uses: actions/upload-artifact@v4
         with:
           name: print-preview-screenshots
@@ -157,10 +253,13 @@ jobs:
       # RLS-enforced app role) fails CI instead of surfacing on someone's laptop. Re-running
       # e2e:regression afterward is the actual proof the reset DB is back to seed state: it
       # needs a real login and the seeded 6100 account, so it fails if either is missing.
+      # One shard proves it; the reset is a property of the repo, not of the shard.
       - name: reset dev DB (make db-reset)
+        if: matrix.extras == 'yes'
         run: make db-reset          # reseeds, so it needs E2E_PASSWORD from the job env
         working-directory: .
       - name: wait for backend and frontend after reset
+        if: matrix.extras == 'yes'
         run: |
           for i in $(seq 1 60); do curl -sf http://localhost:8000/health && break; sleep 2; done
           curl -sf http://localhost:8000/health
@@ -176,6 +275,7 @@ jobs:
           done
         working-directory: .
       - name: confirm reset DB is back to seed state
+        if: matrix.extras == 'yes'
         run: npm run e2e:regression
         env:
           PLAYWRIGHT_BASE_URL: http://localhost:3000
@@ -188,3 +288,21 @@ jobs:
         if: always()
         run: docker compose down -v
         working-directory: .
+
+  # The required check, and the only reason this job exists: branch protection names one
+  # frontend check, and there are now four jobs behind it. `if: always()` with an explicit
+  # look at each result, because a job that is *skipped* when one of its `needs` fails would
+  # report as neither failed nor passed — which is how a red suite becomes a green tick.
+  frontend:
+    runs-on: ubuntu-latest
+    needs: [frontend-checks, e2e]
+    if: always()
+    steps:
+      - name: every frontend job succeeded
+        run: |
+          checks='${{ needs.frontend-checks.result }}'
+          e2e='${{ needs.e2e.result }}'
+          echo "frontend-checks: $checks"
+          echo "e2e (all shards): $e2e"
+          test "$checks" = success || exit 1
+          test "$e2e" = success || exit 1
