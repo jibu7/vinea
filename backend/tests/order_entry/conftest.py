@@ -38,6 +38,12 @@ class OrderEntry:
     kit_item: Item | None = None
     #: Units of `stock_item` per kit.
     kit_per_unit: Decimal = Decimal(2)
+    #: A **second stock item, with a weight**, so the landed cost's `weight` basis has
+    #: something it can succeed on. `stock_item` deliberately keeps no weight — it is what
+    #: `weight_missing` is proved against — so a pool of one item could only ever exercise the
+    #: refusal, and a census would show the guard "reached" while the basis itself was never
+    #: once posted. Both items in the pool is what makes that distinction real.
+    weighted_item: Item | None = None
     #: A depot in a branch of its own. The accrual is proved **per branch**, so a company with
     #: one branch can never exercise that half of the proof: every posting lands in the same
     #: bucket and a rule that used the wrong branch would look perfectly correct.
@@ -162,6 +168,23 @@ def _build(db: Session, inventory: Inventory) -> OrderEntry:
         actor=inventory.owner,
     )
 
+    weighted_item = inventory_masters.create_item(
+        db,
+        company_id,
+        inventory_masters.ItemInput(
+            code="CASE-6",
+            name="Six-bottle case",
+            uom_category_id=inventory.count.id,
+            base_uom_id=inventory.each.id,
+            item_type=ItemType.STOCK,
+            selling_price=Decimal(11000),
+            sales_account_id=accounts["4100"].id,
+            cogs_account_id=accounts["5100"].id,
+            weight_per_base_unit=Decimal("7.5"),
+        ),
+        actor=inventory.owner,
+    )
+
     depot_branch = Branch(
         company_id=company_id, code="DEPOT", name="Musanze Depot", is_main=False
     )
@@ -178,6 +201,7 @@ def _build(db: Session, inventory: Inventory) -> OrderEntry:
     db.flush()
     return OrderEntry(
         kit_item=kit_item,
+        weighted_item=weighted_item,
         depot=depot,
         depot_branch_id=depot_branch.id,
         inventory=inventory,

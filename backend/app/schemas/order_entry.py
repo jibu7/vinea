@@ -211,6 +211,11 @@ class SalesOrderSummary(ApiModel):
     currency_id: int
     status: SalesOrderStatus
     total_amount: Decimal
+    #: Total quantity this order has promised that its warehouses cannot currently cover.
+    #: Decision 7 asks for the backorder on the order, the enquiry **and** the listing; this
+    #: is the listing's. It is the sum of the per-line figures the enquiry shows, computed by
+    #: the same rule so the two screens cannot disagree.
+    backordered: Decimal = Decimal(0)
 
 
 class PurchaseOrderSummary(ApiModel):
@@ -480,3 +485,131 @@ class LandedCostSummary(ApiModel):
     amount: Decimal
     basis: LandedCostBasis
     status: LandedCostStatus
+
+
+# --- Enquiries and listings (P6 step 5) ------------------------------------------------------
+
+
+class EnquiryLineRead(ApiModel):
+    """One order line as the enquiry shows it: promised, done, left, and short."""
+
+    line_id: int
+    line_no: int
+    item_id: int
+    item_code: str
+    item_name: str
+    description: str
+    uom_id: int
+    warehouse_id: int | None
+    quantity: Decimal
+    ordered: Decimal
+    fulfilled: Decimal
+    remaining: Decimal
+    #: The part of `remaining` the location cannot currently cover — the backorder the plan
+    #: asks the order, the enquiry and the grid all to show.
+    backordered: Decimal
+    unit_price: Decimal
+    net_amount: Decimal
+    tax_amount: Decimal
+    gross_amount: Decimal
+    kit_parent_line_id: int | None = None
+
+
+class LinkedDocumentRead(ApiModel):
+    """A document raised against the order, and the entries it posted.
+
+    `stock_entry_id` is the companion (decision 2). It is a second link rather than a second
+    row because one document posted both, and a screen that listed them separately would
+    invite somebody to reverse one of them.
+    """
+
+    kind: str
+    document_id: int
+    number: str
+    document_date: date
+    status: str
+    quantity: Decimal
+    journal_entry_id: int | None
+    journal_entry_number: str | None
+    stock_entry_id: int | None = None
+    stock_entry_number: str | None = None
+
+
+class OrderEnquiryRead(ApiModel):
+    order_id: int
+    number: str
+    partner_id: int
+    partner_name: str
+    order_date: date
+    expected_date: date | None
+    reference: str | None
+    description: str
+    currency_id: int
+    exchange_rate: Decimal
+    branch_id: int
+    warehouse_id: int | None
+    status: str
+    net_amount: Decimal
+    tax_amount: Decimal
+    total_amount: Decimal
+    closed_on: date | None
+    cancelled_on: date | None
+    lines: list[EnquiryLineRead]
+    documents: list[LinkedDocumentRead]
+    total_backordered: Decimal
+
+
+class GrnListRowRead(ApiModel):
+    id: int
+    number: str
+    grn_date: date
+    partner_id: int
+    partner_name: str
+    warehouse_id: int
+    branch_id: int
+    status: str
+    reference: str | None
+    journal_entry_id: int | None
+    received_value: Decimal
+    matched_value: Decimal
+    unmatched_value: Decimal
+
+
+class GrnListingRead(BaseModel):
+    """Receipts, with the accrual tie on the page.
+
+    `unmatched_total` is over the whole filtered set rather than this page, because it exists
+    to be compared with the GRN accrual account and a per-page total could not be.
+    """
+
+    items: list[GrnListRowRead]
+    next_cursor: int | None = None
+    unmatched_total: Decimal
+
+
+class LandedCostAllocationRead(ApiModel):
+    landed_cost_id: int
+    number: str
+    cost_date: date
+    description: str
+    basis: str
+    status: str
+    document_amount: Decimal
+    line_id: int
+    grn_line_id: int
+    grn_id: int
+    grn_number: str
+    item_id: int
+    warehouse_id: int
+    weight: Decimal
+    share: Decimal
+    went_to_cogs: bool
+    quantity_at_posting: Decimal
+    stock_move_id: int | None
+    journal_entry_id: int | None
+
+
+class LandedCostListingRead(BaseModel):
+    items: list[LandedCostAllocationRead]
+    next_cursor: int | None = None
+    total_allocated: Decimal

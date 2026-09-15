@@ -168,3 +168,66 @@ def test_a_customer_return_comes_back_at_the_cost_it_left_at(
     # 5 at the issued 1,000 — not at the 2,000-ish average the second receipt created.
     assert companion["1300"] == Decimal(5_000)
     assert companion["5100"] == Decimal(-5_000)
+
+
+def test_the_companion_names_why_the_stock_left(db: Session, order_entry: OrderEntry) -> None:
+    """Decision 13, on the entry rather than in a comment.
+
+    `journal_entries.event_type` is the column that answers "why did this stock move", and
+    before this step every companion issue answered `stock_issued` — a sale and a return to
+    supplier were indistinguishable in the ledger. `StockSold` is the real class now (the stub
+    that carried ADR-05's name is gone), and the return to supplier deliberately does **not**
+    use it: naming that one `stock_sold` would put a false answer in the column.
+    """
+    _stock_on_hand(db, order_entry, "100", "1000")
+
+    sale, _ = documents_service.post_document(
+        db,
+        order_entry.company_id,
+        PartnerRole.AR,
+        documents_service.DocumentInput(
+            kind=DocumentKind.INVOICE,
+            partner_id=order_entry.customer.id,
+            document_date=MARCH,
+            description="Sale",
+            lines=(
+                documents_service.LineInput(
+                    item_id=order_entry.stock_item.id,
+                    quantity=Decimal(10),
+                    unit_price=Decimal(2000),
+                    warehouse_id=order_entry.main.id,
+                ),
+            ),
+        ),
+        actor=order_entry.owner,
+    )
+    returned, _ = documents_service.post_document(
+        db,
+        order_entry.company_id,
+        PartnerRole.AP,
+        documents_service.DocumentInput(
+            kind=DocumentKind.CREDIT_NOTE,
+            partner_id=order_entry.supplier.id,
+            document_date=MARCH,
+            description="Return to supplier",
+            lines=(
+                documents_service.LineInput(
+                    item_id=order_entry.stock_item.id,
+                    quantity=Decimal(5),
+                    unit_price=Decimal(1000),
+                    warehouse_id=order_entry.main.id,
+                ),
+            ),
+        ),
+        actor=order_entry.owner,
+    )
+
+    def event_type_of(document) -> str:  # noqa: ANN001
+        entry = db.get(JournalEntry, document.stock_entry_id)
+        return entry.event_type
+
+    assert event_type_of(sale) == "stock_sold"
+    assert event_type_of(returned) == "stock_issued"
+    # Both are companions on the same document type: the label is the only difference.
+    assert db.get(JournalEntry, sale.stock_entry_id).doc_type == "STK"
+    assert db.get(JournalEntry, returned.stock_entry_id).doc_type == "STK"

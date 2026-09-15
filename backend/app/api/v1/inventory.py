@@ -62,6 +62,7 @@ from app.schemas.inventory import (
     MovementReportRead,
     MovementRowRead,
     OnHandRead,
+    SourceDocumentRead,
     StockDocumentCreate,
     StockDocumentLineRead,
     StockDocumentRead,
@@ -1487,6 +1488,11 @@ def item_enquiry(
                 source_doc_id=move.source_doc_id,
                 source_line_id=move.source_line_id,
                 reverses_move_id=move.reverses_move_id,
+                source=(
+                    None
+                    if move.source is None
+                    else SourceDocumentRead.model_validate(move.source)
+                ),
             )
             for move in enquiry.moves
         ],
@@ -1610,6 +1616,11 @@ def transaction_report(
                 source_doc_type=row.source_doc_type,
                 source_doc_id=row.source_doc_id,
                 source_line_id=row.source_line_id,
+                source=(
+                    None
+                    if row.source is None
+                    else SourceDocumentRead.model_validate(row.source)
+                ),
             )
             for row in report.rows
         ],

@@ -17,7 +17,7 @@ from app.kernel.events import (
     CashbookEntry,
     CashbookKind,
     CashbookLineSpec,
-    GoodsReceived,
+    DepreciationPosted,
     LineSpec,
     ManualJournal,
     PeriodClosed,
@@ -290,10 +290,18 @@ def test_tax_code_must_be_effective_on_the_entry_date(db: Session, ledger: Ledge
 
 
 def test_stub_events_are_not_postable_yet(db: Session, ledger: Ledger) -> None:
+    """A stub event is refused rather than posted as an empty entry.
+
+    This used to be asserted with `GoodsReceived`, which P6 step 5 retired — decision 13: the
+    goods receipt posts as `StockReceived` and the class nothing constructed is gone. The guard
+    is unchanged and still needs a stub to prove it, so it is now asserted with a stub that is
+    still a stub. P9 will move it again, which is the point: the last phase to retire a stub
+    inherits the job of keeping this test pointed at a real one.
+    """
     with pytest.raises(PostingError) as excinfo:
         posting.post(
             db,
-            GoodsReceived(entry_date=MARCH, description="P6"),
+            DepreciationPosted(entry_date=MARCH, description="P9"),
             company_id=ledger.company_id,
             actor=ledger.owner,
         )

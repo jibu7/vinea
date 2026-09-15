@@ -95,6 +95,7 @@ import pytest
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
+from app.api.v1 import gl as gl_api
 from app.inventory import masters as inventory_masters
 from app.inventory import stock as stock_service
 from app.kernel.errors import LedgerStateError, PostingError
@@ -1186,3 +1187,62 @@ def test_clause_9_catches_a_posted_document_that_claims_a_reversal(
     with pytest.raises(AssertionError, match="is not reversed but names reversal entry"):
         assert_landed_cost_entries_tie_back(db, order_entry.company_id)
     db.rollback()
+
+
+# --- The enquiry pair (P6 step 5, the carry from step 4) ----------------------------------------
+
+
+def test_the_entry_enquiry_pairs_a_landed_cost_with_its_reversal(
+    db: Session, order_entry: OrderEntry
+) -> None:
+    """The one thing step 4 left for step 5: `LCA-` entries resolve their pair through the
+    document, because the kernel column that every other doc type uses is empty here.
+
+    A landed cost does not reverse by mirroring its entry, so `reverses_entry_id` is null on
+    both halves and the entry page's join finds nothing. Step 4 wrote the reason down in
+    `_entry_read` and left the fix; this asserts the fix from both directions, which is the
+    part that matters — a resolution that worked only from the reversal would leave the
+    allocation page still saying nothing about having been reversed.
+    """
+    _book_to_clearing(db, order_entry, "7777")
+    line = _receive(db, order_entry, "100", "1000")
+    document = _allocate(db, order_entry, "7777", (line.id,))
+    allocation_entry = db.get(JournalEntry, document.journal_entry_id)
+
+    # Before the reversal there is no pair to show, and nothing invents one.
+    assert gl_api._entry_read(db, allocation_entry).reversed_by_entry_id is None
+
+    landed_cost_service.reverse_landed_cost(
+        db, document, on_date=APRIL, reason="Wrong consignment", actor=order_entry.owner
+    )
+    reversal_entry = db.get(JournalEntry, document.reversal_entry_id)
+
+    # The kernel column really is empty — this is what makes the resolution necessary rather
+    # than a second way of reading something already there.
+    assert reversal_entry.reverses_entry_id is None
+    assert allocation_entry.number.startswith("LCA-")
+
+    forward = gl_api._entry_read(db, allocation_entry)
+    assert forward.reversed_by_entry_id == reversal_entry.id
+    assert forward.reversed_by_number == reversal_entry.number
+
+    back = gl_api._entry_read(db, reversal_entry)
+    assert back.reverses_entry_id == allocation_entry.id
+    assert back.reverses_entry_number == allocation_entry.number
+
+
+def test_the_pair_resolution_leaves_every_other_doc_type_alone(
+    db: Session, order_entry: OrderEntry
+) -> None:
+    """A GRN entry has no landed-cost document behind it, and must come back with an empty
+    pair rather than with somebody else's."""
+    _book_to_clearing(db, order_entry, "1000")
+    line = _receive(db, order_entry, "10", "100")
+    document = _allocate(db, order_entry, "1000", (line.id,))
+    landed_cost_service.reverse_landed_cost(
+        db, document, on_date=APRIL, reason="Reassessed", actor=order_entry.owner
+    )
+
+    grn_entry = db.get(JournalEntry, line.grn.journal_entry_id)
+    read = gl_api._entry_read(db, grn_entry)
+    assert (read.reverses_entry_id, read.reversed_by_entry_id) == (None, None)

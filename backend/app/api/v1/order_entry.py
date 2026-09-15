@@ -32,6 +32,7 @@ from app.models.order_entry import (
     SalesOrder,
     SalesOrderStatus,
 )
+from app.order_entry import enquiries as oe_enquiries
 from app.order_entry import flows as order_flows
 from app.order_entry import grn as grn_service
 from app.order_entry import kits as order_kits
@@ -42,21 +43,28 @@ from app.order_entry import quantities as order_quantities
 from app.schemas.common import Page
 from app.schemas.order_entry import (
     BreakupWrite,
+    EnquiryLineRead,
     GrnCreate,
     GrnLineRead,
+    GrnListingRead,
+    GrnListRowRead,
     GrnRead,
     GrnReverse,
     GrnSummary,
+    LandedCostAllocationRead,
     LandedCostCreate,
     LandedCostLineRead,
+    LandedCostListingRead,
     LandedCostPreview,
     LandedCostPreviewRead,
     LandedCostRead,
     LandedCostReverse,
     LandedCostShareRead,
     LandedCostSummary,
+    LinkedDocumentRead,
     OrderDefaultsRead,
     OrderDefaultsUpdate,
+    OrderEnquiryRead,
     OrderTransition,
     PreparedDocumentRead,
     PreparedGrnLineRead,
@@ -226,8 +234,20 @@ def list_sales_orders(
         cursor=cursor,
         limit=limit,
     )
+    backordered = oe_enquiries.backordered_by_order(db, auth.company_id, rows)
     return Page(
-        items=[SalesOrderSummary.model_validate(row) for row in rows], next_cursor=next_cursor
+        items=[
+            SalesOrderSummary(
+                **{
+                    field: getattr(row, field)
+                    for field in SalesOrderSummary.model_fields
+                    if field != "backordered"
+                },
+                backordered=backordered.get(row.id, Decimal(0)),
+            )
+            for row in rows
+        ],
+        next_cursor=next_cursor,
     )
 
 
@@ -933,4 +953,129 @@ def _prepared_line(line, remaining: Decimal | None) -> PreparedLineRead:  # noqa
             else None
         ),
         remaining=remaining,
+    )
+
+
+# --- Enquiries and listings (P6 step 5) ------------------------------------------------------
+#
+# Every route below is a GET. Rule 14 counts mutating endpoints, so none of these needs a
+# caller or an exemption yet; their screens arrive at step 8.
+
+
+@router.get("/sales-orders/{order_id}/enquiry")
+def sales_order_enquiry(
+    order_id: int,
+    auth: AuthContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+) -> OrderEnquiryRead:
+    """Order → line → the documents raised against it → the entries those posted."""
+    _require_view(auth)
+    return _enquiry_read(oe_enquiries.sales_order_enquiry(db, auth.company_id, order_id))
+
+
+@router.get("/purchase-orders/{order_id}/enquiry")
+def purchase_order_enquiry(
+    order_id: int,
+    auth: AuthContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+) -> OrderEnquiryRead:
+    _require_view(auth)
+    return _enquiry_read(oe_enquiries.purchase_order_enquiry(db, auth.company_id, order_id))
+
+
+def _enquiry_read(enquiry: oe_enquiries.OrderEnquiry) -> OrderEnquiryRead:
+    return OrderEnquiryRead(
+        **{
+            field: getattr(enquiry, field)
+            for field in OrderEnquiryRead.model_fields
+            if field not in ("lines", "documents", "total_backordered")
+        },
+        lines=[EnquiryLineRead.model_validate(line) for line in enquiry.lines],
+        documents=[LinkedDocumentRead.model_validate(row) for row in enquiry.documents],
+        total_backordered=enquiry.total_backordered,
+    )
+
+
+@router.get("/goods-received")
+def goods_received_listing(  # noqa: PLR0913
+    partner_id: int | None = None,
+    status_filter: GrnStatus | None = Query(default=None, alias="status"),
+    warehouse_id: int | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    cursor: int | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
+    auth: AuthContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+) -> GrnListingRead:
+    """Receipts with matched and unmatched value, and the unmatched total.
+
+    That total is the whole point of the listing: it must equal the GRN accrual account's
+    balance, which is what makes the account provable from a screen rather than only from a
+    test (decision 5).
+    """
+    _require_view(auth)
+    listing = oe_enquiries.goods_received_listing(
+        db,
+        auth.company_id,
+        partner_id=partner_id,
+        status=status_filter,
+        warehouse_id=warehouse_id,
+        date_from=date_from,
+        date_to=date_to,
+        cursor=cursor,
+        limit=limit,
+    )
+    return GrnListingRead(
+        items=[
+            GrnListRowRead(
+                id=row.grn_id,
+                **{
+                    field: getattr(row, field)
+                    for field in GrnListRowRead.model_fields
+                    if field not in ("id", "unmatched_value")
+                },
+                unmatched_value=row.unmatched_value,
+            )
+            for row in listing.rows
+        ],
+        next_cursor=listing.next_cursor,
+        unmatched_total=listing.unmatched_total,
+    )
+
+
+@router.get("/landed-cost-allocations")
+def landed_cost_allocations(  # noqa: PLR0913
+    status_filter: LandedCostStatus | None = Query(default=None, alias="status"),
+    grn_id: int | None = None,
+    item_id: int | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    cursor: int | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
+    auth: AuthContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+) -> LandedCostListingRead:
+    """Landed cost **per GRN line** — the grain the plan asks for.
+
+    A per-document listing already exists at `/landed-costs`; it answers "what did we book".
+    This one answers "what did this consignment cost", which is the question the importer has
+    and which only the line grain can answer.
+    """
+    _require_view(auth)
+    listing = oe_enquiries.landed_cost_listing(
+        db,
+        auth.company_id,
+        status=status_filter,
+        grn_id=grn_id,
+        item_id=item_id,
+        date_from=date_from,
+        date_to=date_to,
+        cursor=cursor,
+        limit=limit,
+    )
+    return LandedCostListingRead(
+        items=[LandedCostAllocationRead.model_validate(row) for row in listing.rows],
+        next_cursor=listing.next_cursor,
+        total_allocated=listing.total_allocated,
     )

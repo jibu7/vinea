@@ -323,6 +323,50 @@ def positions(db: Session, company_id: int, item_id: int) -> dict[int, Position]
     }
 
 
+def committed_and_on_hand(
+    db: Session, company_id: int, item_ids: Sequence[int]
+) -> tuple[dict[tuple[int, int], Decimal], dict[tuple[int, int], Decimal]]:
+    """`(item, warehouse) →` committed, and `(item, warehouse) →` on hand, for several items
+    at once.
+
+    The per-item helpers above answer one item per call, which is right for an enquiry on one
+    item and wrong for a **listing**: a page of fifty orders would be a query per order per
+    item. Same view, same status filter, same stock-item rule — read in bulk. It lives here
+    rather than in the caller because the view is the single definition of this join, and the
+    module docstring says why a second reader of it in Python is a liability.
+    """
+    if not item_ids:
+        return {}, {}
+    view = sales_order_line_quantities
+    rows = db.execute(
+        select(view.c.item_id, view.c.warehouse_id, view.c.ordered, view.c.invoiced)
+        .join(SalesOrder, SalesOrder.id == view.c.sales_order_id)
+        .join(Item, Item.id == view.c.item_id)
+        .where(
+            view.c.company_id == company_id,
+            view.c.item_id.in_(item_ids),
+            Item.item_type == ItemType.STOCK,
+            SalesOrder.status.in_(OPEN_SALES_STATUSES),
+        )
+    ).all()
+    committed: dict[tuple[int, int], Decimal] = {}
+    for item_id, warehouse_id, ordered, invoiced in rows:
+        key = (int(item_id), int(warehouse_id))
+        committed[key] = committed.get(key, ZERO) + max(
+            Decimal(ordered) - Decimal(invoiced), ZERO
+        )
+    on_hand = {
+        (int(row.item_id), int(row.warehouse_id)): row.quantity
+        for row in db.scalars(
+            select(StockBalance).where(
+                StockBalance.company_id == company_id,
+                StockBalance.item_id.in_(item_ids),
+            )
+        )
+    }
+    return committed, on_hand
+
+
 # --- Statuses (the `open_amount` pattern) -------------------------------------------------------
 
 

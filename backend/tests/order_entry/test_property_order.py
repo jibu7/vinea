@@ -39,18 +39,25 @@ from dataclasses import replace
 from decimal import Decimal
 
 import pytest
-from hypothesis import given
+from hypothesis import given, settings
 from hypothesis import strategies as st
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.kernel import posting
 from app.kernel.errors import LedgerStateError, PostingError
+from app.kernel.events import CashbookEntry, CashbookKind, CashbookLineSpec
+from app.kernel.money import base_currency, round_amount
 from app.models.currency import Currency
+from app.models.fiscal import PeriodStatus
 from app.models.gl import BackorderPolicy
 from app.models.inventory import GrnStatus, Item, ItemType
 from app.models.order_entry import (
     OPEN_PURCHASE_STATUSES,
     OPEN_SALES_STATUSES,
+    LandedCostBasis,
+    LandedCostDocument,
+    LandedCostStatus,
     PurchaseOrder,
     PurchaseOrderLine,
     SalesOrder,
@@ -60,12 +67,13 @@ from app.models.partner import PartnerRole
 from app.models.subledger import DocumentKind, DocumentStatus, PartnerDocument
 from app.order_entry import flows as order_flows
 from app.order_entry import grn as grn_service
+from app.order_entry import landed_cost as landed_cost_service
 from app.order_entry import orders as orders_service
 from app.order_entry import quantities as order_quantities
 from app.subledger import documents as documents_service
 from tests.inventory.invariants import assert_stock_invariants
 from tests.kernel.invariants import assert_ledger_invariants
-from tests.order_entry.conftest import MARCH, OrderEntry, build_order_entry
+from tests.order_entry.conftest import APRIL, MARCH, OrderEntry, build_order_entry
 from tests.order_entry.invariants import assert_order_invariants
 from tests.subledger.invariants import assert_subledger_invariants
 
@@ -87,6 +95,43 @@ def _count(counter: dict[str, int], key: str) -> None:
     counter[key] = counter.get(key, 0) + 1
 
 
+#: The refusals a deep pass has to actually provoke, and the floor each has to clear.
+#:
+#: **Printed is not enforced.** Until this existed the census was a courtesy: "counted, not
+#: assumed" held only while somebody read the output, and step 5 watched three consecutive deep
+#: passes come back green with a different one of these at zero each time — `grn_reversed`
+#: absent, then `weight_missing`, then `grn_matched` and `period_not_open`. Every one was a
+#: generator defect, and every one would have shipped if the number had not been looked at by
+#: hand. A floor is what makes the census a gate instead of a report.
+#:
+#: Three rather than one, because one is indistinguishable from a coincidence: a boundary hit
+#: once in 300 examples is a boundary the next seed may well miss, and a guard "covered" by a
+#: single draw is covered by luck. Three is not a statistical claim — it is the smallest number
+#: that cannot be a single lucky plan.
+REQUIRED_REFUSALS = (
+    "grn_matched",
+    "grn_reversed",
+    "weight_missing",
+    "period_not_open",
+    "match_exceeds_receipt",
+    "receipt_exceeds_order",
+    "invoice_exceeds_order",
+    "exceeds_available",
+)
+CENSUS_FLOOR = 3
+#: Only a run with enough examples can be held to the floors. The per-commit profile draws two
+#: and would fail every one of them, so it stays silent and the nightly deep profile is where
+#: the census is enforced — the same split the profiles already make for everything else.
+_FLOORS_FROM_EXAMPLES = 100
+
+
+def _census() -> str:
+    return (
+        f"refusals: {dict(sorted(_REFUSALS.items()))}\n"
+        f"reach:    {dict(sorted(_REACH.items()))}"
+    )
+
+
 @pytest.fixture(scope="module", autouse=True)
 def _report_refusals():  # noqa: ANN202
     yield
@@ -94,6 +139,19 @@ def _report_refusals():  # noqa: ANN202
         print("\n[property] refusals provoked:", dict(sorted(_REFUSALS.items())))
     if _REACH:
         print("[property] reach:", dict(sorted(_REACH.items())))
+    if settings.default.max_examples < _FLOORS_FROM_EXAMPLES:
+        return
+    short = {
+        name: _REFUSALS.get(name, 0)
+        for name in REQUIRED_REFUSALS
+        if _REFUSALS.get(name, 0) < CENSUS_FLOOR
+    }
+    assert not short, (
+        f"the deep pass did not reach {short} at least {CENSUS_FLOOR} times each.\n"
+        "A refusal the machine never provokes is a guard this suite does not cover, however "
+        "green it looks. Read the reach counters below before touching the floor: they say "
+        "whether the guard held or the generator never got near it.\n" + _census()
+    )
 ZERO = Decimal(0)
 
 OPERATIONS = (
@@ -118,6 +176,19 @@ OPERATIONS = (
     "edit_line",
     "close",
     "cancel",
+    # --- Step 5: landed cost, so invariant clauses 7 and 8 run under the generator ---------
+    #: Books a cost to the clearing account — a duty payment through the P3 cashbook, which is
+    #: only possible because 1370 is a plain account. Without it the machine could only ever
+    #: drive the clearing balance negative, and "booked less allocated" would be tested with
+    #: `booked` pinned at zero.
+    "pay_duty",
+    #: 1-3 receipt lines, any basis. The weight basis reaches `weight_missing` whenever a
+    #: target is the weightless item, and posts when every target is the weighted one.
+    "allocate",
+    #: Takes an allocation back out. Its refusal is a **closed period** — a revaluation carries
+    #: no quantity, so `block` has nothing to refuse and a landed cost is otherwise always
+    #: reversible however the goods have moved since (step 4's negative finding).
+    "reverse_lca",
 )
 
 #: What the machine actually draws from, and it is **not** `OPERATIONS`.
@@ -133,7 +204,18 @@ OPERATIONS = (
 #: twice as often as the order operations, and plans run longer. That is a statement about how
 #: hard each shape is to *reach*, not about how likely it is in a business, and the reach
 #: counter is what keeps it honest rather than a number somebody tuned once and forgot.
-DRAW_POOL = (*OPERATIONS[:7], *OPERATIONS[:7], *OPERATIONS[7:])
+#: Step 5 adds three landed-cost operations at the end, and they are drawn **twice** like the
+#: posting operations rather than once like the order operations. `allocate` needs a receipt to
+#: land on and `reverse_lca` needs an allocation to take back out, so both are conjunctions of
+#: the same shape as `grn_matched`, and the same lever applies: draw them more often rather
+#: than hope. `_REACH` counts what each one actually found, so the claim stays measured.
+DRAW_POOL = (
+    *OPERATIONS[:7],
+    *OPERATIONS[:7],
+    *OPERATIONS[7:14],
+    *OPERATIONS[14:],
+    *OPERATIONS[14:],
+)
 
 QUANTITIES = st.integers(min_value=1, max_value=40).map(Decimal)
 COSTS = st.decimals(min_value=Decimal("1"), max_value=Decimal("2000"), places=2)
@@ -150,12 +232,20 @@ PLAN = st.lists(
         # warehouse's is invisible until the two differ.
         st.booleans(),  # depot, or main
         st.booleans(),  # key the document on the other branch
+        # **Which item** — the weightless `stock_item` or the weighted one. Drawn rather than
+        # fixed because the landed cost's `weight` basis needs both to be reachable: an item
+        # with a weight for it to succeed on, and one without for `weight_missing` to fire.
+        st.booleans(),
     ),
     min_size=1,
-    # Longer than step 2's ten. A three-step conjunction in a ten-step plan drawn from fourteen
-    # operations is the other half of why `grn_matched` stopped being reached; the deep pass
-    # costs a few more minutes and the per-commit profile draws two examples either way.
-    max_size=18,
+    # Longer than step 2's ten, and longer again at step 5. A three-step conjunction in a short
+    # plan is the other half of why `grn_matched` stopped being reached, and step 5 added three
+    # more operations, each of which lengthens the chains the others need: `reverse_lca` wants a
+    # receipt, an allocation, and then itself. With the census now enforced as a floor rather
+    # than printed, the margin has to come from somewhere, and the lever is the plan — biasing
+    # the draw was measured at step 3 and bought nothing. The deep pass costs a couple more
+    # minutes; the per-commit profile draws two examples either way.
+    max_size=24,
 )
 
 
@@ -318,6 +408,26 @@ def _grn_lines(db: Session, fixture: OrderEntry) -> list:
     return out
 
 
+def _all_grn_lines(db: Session, fixture: OrderEntry) -> list:
+    """Every receipt line, **including reversed receipts** — which `_grn_lines` drops.
+
+    `allocate` is the one operation that must see them. Adding cost to goods that were taken
+    back is refused with `grn_reversed`, and a machine drawing only from live receipts could
+    never provoke it: the first deep pass came back with that refusal absent from the census
+    while every other landed-cost guard was reached, which is exactly the "the guard held" /
+    "the machine never got near it" confusion `_REACH` exists to make visible.
+    """
+    return [
+        line
+        for grn in db.scalars(
+            select(grn_service.GoodsReceivedNote).where(
+                grn_service.GoodsReceivedNote.company_id == fixture.company_id
+            )
+        )
+        for line in grn.lines
+    ]
+
+
 def _documents(db: Session, fixture: OrderEntry) -> list[PartnerDocument]:
     return list(
         db.scalars(
@@ -338,9 +448,18 @@ def _step(  # noqa: PLR0913
     pick: int,
     use_depot: bool,
     cross_branch: bool,
+    weighted: bool = False,
 ) -> None:
     """One operation, or nothing when the draw does not describe a legal one."""
     warehouse_id = fixture.depot.id if use_depot else fixture.main.id
+    #: The item this step acts on. Only `receive` varies it — everything downstream follows the
+    #: receipt it lands on — so the two items stay distinguishable without the rest of the
+    #: machine having to thread an item through every operation.
+    item_id = (
+        fixture.weighted_item.id
+        if weighted and fixture.weighted_item is not None
+        else fixture.stock_item.id
+    )
     # The branch the *document* is keyed on, which may be neither the warehouse's nor the
     # default. `None` lets the document resolve its own.
     document_branch_id = (
@@ -349,6 +468,16 @@ def _step(  # noqa: PLR0913
         else None
     )
     if operation == "receive":
+        # **Which item the shelf actually gets.** The landed cost's weight basis can only be
+        # exercised on a weighed item, and `weight_missing` only on an unweighed one, so the
+        # mix of receipts is a precondition for two other counters below. A census that
+        # reported the weight draws without reporting this could not say whether a zero meant
+        # "the guard held" or "no receipt of that kind ever existed to draw on".
+        _count(
+            _REACH,
+            "receive: weighed item" if item_id != fixture.stock_item.id
+            else "receive: unweighed item",
+        )
         grn_service.post_grn(
             db,
             fixture.company_id,
@@ -359,7 +488,7 @@ def _step(  # noqa: PLR0913
                 warehouse_id=warehouse_id,
                 lines=(
                     grn_service.GrnLineInput(
-                        item_id=fixture.stock_item.id, quantity=quantity, unit_cost=cost
+                        item_id=item_id, quantity=quantity, unit_cost=cost
                     ),
                 ),
             ),
@@ -372,11 +501,25 @@ def _step(  # noqa: PLR0913
         if not lines:
             return
         line = lines[pick % len(lines)]
-        # **Not clamped to the remaining quantity, deliberately.** Clamping made the machine
-        # unable to draw an over-match at all, so `match_exceeds_receipt` was never exercised
-        # by the property suite — only by a unit test that asks for it directly. The refusal
-        # is caught and skipped like any other illegal step, and the quantity is drawn as it
-        # fell, so the boundary gets hit from both sides.
+        # **Clamped on half the draws, and only half.**
+        #
+        # Leaving the quantity entirely as it fell is what makes `match_exceeds_receipt`
+        # reachable, and step 2 introduced that deliberately. But it also meant most matches
+        # were refused, and `grn_matched` — which needs a receipt that has been matched *and*
+        # then chosen for reversal — came back zero in a 300-example pass while
+        # `match_exceeds_receipt` came back 62. The suite was exercising the boundary and
+        # never the ordinary case behind it.
+        #
+        # So the over-match is drawn on odd picks and a legal match on even ones. Both paths
+        # are counted below, because "the guard held" and "the machine never matched anything"
+        # have to stay distinguishable — that is the whole lesson of the step-3 census.
+        matched_already = grn_service.matched_quantities(db, fixture.company_id, [line.id])
+        remaining = line.base_quantity - matched_already.get(line.id, ZERO)
+        if pick % 2 == 0 and remaining > ZERO:
+            quantity = min(quantity, remaining)
+            _count(_REACH, "match: within the receipt")
+        else:
+            _count(_REACH, "match: as drawn, may exceed")
         documents_service.post_document(
             db,
             fixture.company_id,
@@ -389,7 +532,9 @@ def _step(  # noqa: PLR0913
                 description="Supplier invoice",
                 lines=(
                     documents_service.LineInput(
-                        item_id=fixture.stock_item.id,
+                        # The receipt's own item: receipts vary between the two stock items
+                        # now, and an invoice line naming the other one is not a match.
+                        item_id=line.item_id,
                         quantity=quantity,
                         unit_price=cost,
                         grn_line_id=line.id,
@@ -493,6 +638,130 @@ def _step(  # noqa: PLR0913
         )
         return
 
+    if operation == "pay_duty":
+        # **The booked side of clause 7.** Duty paid to the revenue authority lands on the
+        # landed-cost clearing account through the P3 cashbook — a plain account, which is
+        # exactly why decision 5 left 1370 plain while making 2350 a control account.
+        clearing_id = fixture.settings.landed_cost_clearing_account_id
+        if clearing_id is None:
+            return
+        posting.post(
+            db,
+            CashbookEntry(
+                entry_date=MARCH,
+                description="Duty",
+                cash_account_id=fixture.accounts["1120"].id,
+                kind=CashbookKind.PAYMENT,
+                lines=(CashbookLineSpec(gl_account_id=clearing_id, amount=cost),),
+            ),
+            company_id=fixture.company_id,
+            actor=fixture.owner,
+        )
+        return
+
+    if operation == "allocate":
+        lines = _all_grn_lines(db, fixture)
+        if not lines:
+            _count(_REACH, "allocate: no receipt to allocate onto")
+            return
+        # One to three targets, so the residue rule is exercised over a set that does not
+        # divide evenly as often as a single target would.
+        #
+        # **Derived from a different digit of `pick` than the basis is**, which the first
+        # version was not: `pick % 3` chose both, so the weight basis always had three targets,
+        # `value` always had one, and `quantity` always had two. Three of the nine
+        # (basis, width) combinations, and the residue rule — the thing three targets are here
+        # to stress — was never once exercised on the weight basis with a single target.
+        width = ((pick // 3) % 3) + 1
+        start = pick % len(lines)
+        targets = [lines[(start + offset) % len(lines)] for offset in range(width)]
+        # De-duplicated, because naming one line twice is `duplicate_target` — a refusal about
+        # the request rather than about the state, and not what this operation is for.
+        chosen: list = []
+        for line in targets:
+            if line.id not in {other.id for other in chosen}:
+                chosen.append(line)
+        basis = (LandedCostBasis.VALUE, LandedCostBasis.QUANTITY, LandedCostBasis.WEIGHT)[
+            pick % 3
+        ]
+        if basis == LandedCostBasis.WEIGHT:
+            # Counted rather than avoided: whether the weight basis can post at all depends on
+            # what the receipts in this example happened to be for, and a census that could not
+            # tell "refused" from "never attempted on a weighed item" is the thing `_REACH`
+            # exists to prevent.
+            weighed = all(
+                line.item_id == fixture.weighted_item.id
+                for line in chosen
+                if fixture.weighted_item is not None
+            )
+            _count(
+                _REACH,
+                "allocate: weight basis on weighed targets"
+                if weighed
+                else "allocate: weight basis with an unweighed target",
+            )
+        _count(
+            _REACH,
+            "allocate: a reversed receipt among the targets"
+            if any(line.grn.status == GrnStatus.REVERSED for line in chosen)
+            else "allocate: live receipts only",
+        )
+        # **Quantized to the base currency**, because `amount_precision` is a refusal about
+        # the *keystroke* rather than about the state. The costs are drawn at two decimal
+        # places and the RWF machine has none, so a quarter of every allocate draw was being
+        # thrown away on a formatting complaint before it could reach a rule worth testing:
+        # 250 `amount_precision` refusals in the first deep pass, against 15 weight draws.
+        amount = round_amount(cost, base_currency(db, fixture.company_id).decimal_places)
+        if amount <= ZERO:
+            return
+        landed_cost_service.post_landed_cost(
+            db,
+            fixture.company_id,
+            landed_cost_service.LandedCostInput(
+                cost_date=MARCH,
+                description="Freight",
+                amount=amount,
+                basis=basis,
+                grn_line_ids=tuple(line.id for line in chosen),
+            ),
+            actor=fixture.owner,
+        )
+        return
+
+    if operation == "reverse_lca":
+        documents = [
+            document
+            for document in db.scalars(
+                select(LandedCostDocument).where(
+                    LandedCostDocument.company_id == fixture.company_id
+                )
+            )
+            if document.status == LandedCostStatus.POSTED
+        ]
+        if not documents:
+            _count(_REACH, "reverse_lca: nothing allocated to reverse")
+            return
+        # **Half the reversals are dated into a closed period**, because that is the only thing
+        # that can refuse this one. A landed cost posts revaluation moves, which carry no
+        # quantity, so `block` has nothing to refuse and the goods having been sold since makes
+        # no difference — step 4 asserted that as a negative finding. The period is what is
+        # left, and without aiming at it `period_not_open` would sit at zero in the census.
+        into_a_closed_period = bool(pick % 2)
+        _count(
+            _REACH,
+            "reverse_lca: into a closed period"
+            if into_a_closed_period
+            else "reverse_lca: into an open one",
+        )
+        landed_cost_service.reverse_landed_cost(
+            db,
+            documents[pick % len(documents)],
+            on_date=APRIL if into_a_closed_period else MARCH,
+            reason="Property reversal",
+            actor=fixture.owner,
+        )
+        return
+
     if operation == "reverse":
         documents = _documents(db, fixture)
         if not documents:
@@ -554,7 +823,9 @@ def _step(  # noqa: PLR0913
     if operation == "invoice_from_so":
         orders = _open_sales_orders(db, fixture)
         if not orders:
+            _count(_REACH, "invoice_from_so: no open sales order")
             return
+        _count(_REACH, "invoice_from_so: an open order to invoice")
         order = orders[pick % len(orders)]
         prepared = order_flows.prepare_invoice_from_sales_order(db, fixture.company_id, order)
         documents_service.post_document(
@@ -572,7 +843,9 @@ def _step(  # noqa: PLR0913
     if operation == "receive_from_po":
         orders = _open_purchase_orders(db, fixture)
         if not orders:
+            _count(_REACH, "receive_from_po: no open purchase order")
             return
+        _count(_REACH, "receive_from_po: an open order to receive")
         order = orders[pick % len(orders)]
         prepared = order_flows.prepare_receipt_from_purchase_order(db, fixture.company_id, order)
         grn_service.post_grn(
@@ -682,7 +955,17 @@ def _open_purchase_orders(db: Session, fixture: OrderEntry) -> list:
 
 def _drive(db: Session, fixture: OrderEntry, plan: list[tuple]) -> None:
     _assert_everything(db, fixture.company_id)
-    for operation, quantity, cost, pick, use_depot, cross_branch in plan:
+    # **Costs are quantized to the base currency once, here.** They are drawn at two decimal
+    # places and the RWF machine has none, so every step keyed with a fraction of a franc was
+    # refused with `amount_precision` before it could reach a rule worth testing — 201 of them
+    # in a 300-example pass, a seventh of every step the machine took, spent on a complaint
+    # about a keystroke. The refusal is request validation and has its own unit test; the
+    # two-decimal machine still draws cents, so the precision path is not lost here either.
+    places = base_currency(db, fixture.company_id).decimal_places
+    for operation, quantity, cost, pick, use_depot, cross_branch, weighted in plan:
+        priced = round_amount(Decimal(cost), places)
+        if priced <= ZERO:
+            continue
         # **A savepoint per step**, so a refused step leaves nothing behind whatever the service
         # did before refusing.
         #
@@ -709,10 +992,11 @@ def _drive(db: Session, fixture: OrderEntry, plan: list[tuple]) -> None:
                 fixture,
                 operation,
                 quantity,
-                Decimal(cost),
+                priced,
                 pick,
                 use_depot,
                 cross_branch,
+                weighted,
             )
         except (LedgerStateError, PostingError) as refused:
             step.rollback()
@@ -730,6 +1014,23 @@ def _drive(db: Session, fixture: OrderEntry, plan: list[tuple]) -> None:
         _assert_everything(db, fixture.company_id)
 
 
+def _machine_fixture(db: Session, tag: str) -> OrderEntry:
+    """A tenant for one example, with **April closed**.
+
+    The closed period is the machine's only way to reach `period_not_open`, and it is reached
+    through `reverse_lca`: a landed cost carries no quantity, so the negative-stock policy can
+    never refuse one, and step 4 recorded that as a finding rather than leaving it as a gap.
+    Closing a period the tape never posts into costs the rest of the machine nothing — every
+    other operation is dated in March.
+    """
+    fixture = build_order_entry(db, tag)
+    for period in fixture.ledger.periods:
+        if period.start_date <= APRIL <= period.end_date:
+            period.status = PeriodStatus.CLOSED
+    db.flush()
+    return fixture
+
+
 @pytest.mark.slow
 @given(plan=PLAN)
 def test_the_invariants_hold_after_every_step_at_zero_decimals(
@@ -737,7 +1038,7 @@ def test_the_invariants_hold_after_every_step_at_zero_decimals(
 ) -> None:
     """RWF: no minor unit, so every pro-rata relief rounds by up to half a franc and the
     "last match takes the remainder" rule is doing the most work it ever does."""
-    _drive(db, build_order_entry(db, f"oe-rwf-{next(_EXAMPLE)}"), plan)
+    _drive(db, _machine_fixture(db, f"oe-rwf-{next(_EXAMPLE)}"), plan)
 
 
 @pytest.mark.slow
@@ -753,7 +1054,7 @@ def test_the_invariants_hold_under_the_blocking_backorder_policy(
     *combination* under test — an order refused for lack of stock, then stock received, then the
     same order taken successfully — which is the sequence a shop actually lives.
     """
-    fixture = build_order_entry(db, f"oe-block-{next(_EXAMPLE)}")
+    fixture = _machine_fixture(db, f"oe-block-{next(_EXAMPLE)}")
     fixture.settings.backorder_policy = BackorderPolicy.BLOCK
     db.flush()
     _drive(db, fixture, plan)
@@ -765,7 +1066,7 @@ def test_the_invariants_hold_after_every_step_at_two_decimals(
     db: Session, plan: list[tuple]
 ) -> None:
     """The same machine against a base currency with a minor unit."""
-    fixture = build_order_entry(db, f"oe-usd-{next(_EXAMPLE)}")
+    fixture = _machine_fixture(db, f"oe-usd-{next(_EXAMPLE)}")
     _use_a_two_decimal_base(db, fixture)
     _drive(db, fixture, plan)
 
@@ -884,3 +1185,29 @@ def test_a_refused_reversal_leaves_nothing_behind(db: Session, order_entry: Orde
     # The reversal really was refused — an assertion that only proved the invariants would pass
     # just as well on a sequence where nothing interesting happened.
     assert refusals == ["insufficient_stock"], refusals
+
+
+def test_the_census_floor_would_notice_a_guard_the_machine_stopped_reaching() -> None:
+    """Anti-vacuity for the floors: the check has to fail on a census that falls short, and
+    has to put the census in the message.
+
+    Without this the floors are themselves unenforced — a typo in the names, or a comparison
+    that can never be false, would leave a gate that greets every run with approval. The three
+    passes that shipped a zero in the census are what this is standing in for.
+    """
+    census = {"exceeds_available": 40, "grn_matched": 2}
+    short = {
+        name: census.get(name, 0)
+        for name in REQUIRED_REFUSALS
+        if census.get(name, 0) < CENSUS_FLOOR
+    }
+    # One below the floor and six absent — absent has to count as short, not as "not
+    # applicable", which is the reading that let `grn_reversed` sit missing for a whole pass.
+    assert short["grn_matched"] == 2
+    assert set(short) == set(REQUIRED_REFUSALS) - {"exceeds_available"}
+
+    # A census that clears every floor produces nothing to report.
+    clear = dict.fromkeys(REQUIRED_REFUSALS, CENSUS_FLOOR)
+    assert not {
+        name: clear[name] for name in REQUIRED_REFUSALS if clear[name] < CENSUS_FLOOR
+    }

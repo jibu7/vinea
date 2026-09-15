@@ -37,6 +37,8 @@ from app.models.gl import GLTransactionType
 from app.models.inventory import Item, StockMove, Warehouse
 from app.models.journal import JournalEntry
 from app.order_entry import quantities as order_quantities
+from app.order_entry import sources as order_sources
+from app.order_entry.sources import SourceDocument
 
 ZERO = Decimal(0)
 
@@ -104,6 +106,11 @@ class MoveRow:
     source_doc_id: int | None
     source_line_id: int | None
     reverses_move_id: int | None
+    #: The source document resolved to its number and a routing key, or `None` when the move
+    #: names no source or names one this phase cannot open (P6 step 5). The raw pair above
+    #: stays: it is what the move actually carries, and a screen that wants to show an
+    #: unresolvable source can still say what it was.
+    source: SourceDocument | None = None
 
 
 @dataclass(frozen=True)
@@ -351,6 +358,16 @@ def _moves(
 
     types = _transaction_types(db, company_id, page)
     entries = _entry_numbers(db, company_id, page)
+    # One query per source type present on the page, not one per row.
+    sources = order_sources.resolve(
+        db,
+        company_id,
+        (
+            (move.source_doc_type, move.source_doc_id)
+            for move in page
+            if move.source_doc_type is not None and move.source_doc_id is not None
+        ),
+    )
 
     rows: list[MoveRow] = []
     for move in page:
@@ -381,6 +398,7 @@ def _moves(
                 source_doc_id=move.source_doc_id,
                 source_line_id=move.source_line_id,
                 reverses_move_id=move.reverses_move_id,
+                source=sources.get((move.source_doc_type, move.source_doc_id)),
             )
         )
     # The cursor is the last move of the *page*, not of the filtered rows: paging has to

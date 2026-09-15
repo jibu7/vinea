@@ -44,6 +44,8 @@ from app.models.inventory import (
     Warehouse,
 )
 from app.models.journal import JournalEntry
+from app.order_entry import sources as order_sources
+from app.order_entry.sources import SourceDocument
 
 ZERO = Decimal(0)
 
@@ -359,6 +361,10 @@ class TransactionRow:
     source_doc_type: str | None
     source_doc_id: int | None
     source_line_id: int | None
+    #: The source resolved to a number and a routing key (P6 step 5). The Transaction report
+    #: is the drill-down report — a row whose source cannot be opened is a dead end, and after
+    #: P6 most rows have a P6 source.
+    source: SourceDocument | None = None
 
 
 @dataclass(frozen=True)
@@ -461,6 +467,16 @@ def transaction_report(
         ).all()
     }
 
+    sources = order_sources.resolve(
+        db,
+        company_id,
+        (
+            (move.source_doc_type, move.source_doc_id)
+            for move in page
+            if move.source_doc_type is not None and move.source_doc_id is not None
+        ),
+    )
+
     rows = [
         TransactionRow(
             move_id=move.id,
@@ -483,6 +499,7 @@ def transaction_report(
             source_doc_type=move.source_doc_type,
             source_doc_id=move.source_doc_id,
             source_line_id=move.source_line_id,
+            source=sources.get((move.source_doc_type, move.source_doc_id)),
         )
         for move in page
     ]
