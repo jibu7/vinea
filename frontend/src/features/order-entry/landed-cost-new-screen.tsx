@@ -141,6 +141,21 @@ export function LandedCostNewScreen() {
   );
 
   const selected = form.selected.filter((id) => targetLines.some(({ line }) => line.id === id));
+
+  /** `weight_missing` and `grn_reversed` are keyed by the target's **position in the list that
+   * was sent** (`grn_line_ids.0`), which is a number no operator can see. Resolved back to the
+   * receipt line it names, so the message lands on the row that caused it rather than only in
+   * the banner over a table of twenty. */
+  const rowErrors = useMemo(() => {
+    const out = new Map<number, string>();
+    for (const [key, messages] of Object.entries(fieldErrors)) {
+      const match = /^grn_line_ids\.(\d+)$/.exec(key);
+      const lineId = match ? selected[Number(match[1])] : undefined;
+      if (lineId !== undefined) out.set(lineId, messages[0]);
+    }
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `selected` is derived per render
+  }, [fieldErrors, form.selected, targetLines]);
   const canPreview = Boolean(form.amount) && selected.length > 0 && !preview.isPending;
   const canPost =
     canPreview && Boolean(form.description) && shares !== null && !createCost.isPending;
@@ -383,7 +398,14 @@ export function LandedCostNewScreen() {
                       {share ? formatQuantity(Number(share.weight), 4) : tc("emptyValue")}
                     </TD>
                     <TD className="text-right">
-                      {share ? (
+                      {rowErrors.has(line.id) ? (
+                        <span
+                          className="text-xs text-[var(--vinea-danger)]"
+                          data-testid="target-error"
+                        >
+                          {rowErrors.get(line.id)}
+                        </span>
+                      ) : share ? (
                         <span
                           className="font-mono tabular-nums text-xs text-[var(--vinea-ink)]"
                           data-testid="target-share"
