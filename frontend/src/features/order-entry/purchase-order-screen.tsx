@@ -111,7 +111,10 @@ export function PurchaseOrderScreen({ orderId }: { orderId: number }) {
     <DocumentWorkspaceShell
       backHref="/oe/purchase-orders"
       title={data.number}
-      subtitle={dotted(partnerCode(partner!, "ap") ?? "", partner?.name ?? "")}
+      // The two queries are independent, so the document can arrive before the partner
+      // list does. `partner!` crashed the whole screen when it did — an error boundary
+      // over a document that had loaded perfectly well.
+      subtitle={partner ? dotted(partnerCode(partner, "ap") ?? "", partner.name) : ""}
       statusChip={
         <StatusChip tone={PURCHASE_ORDER_STATUS_TONE[data.status] ?? "neutral"}>
           {ts(data.status)}

@@ -326,7 +326,7 @@ export function DocumentScreen({ spec }: { spec: DocumentScreenSpec }) {
         if (!row.itemId || before?.itemId === row.itemId) return row;
         return {
           ...row,
-          unitPrice: orderSupport.sellingPrice(row.itemId),
+          unitPrice: orderSupport.cataloguePrice(row.itemId),
           taxCodeId: orderSupport.defaultTaxCode(row.itemId),
         };
       }),

@@ -278,7 +278,7 @@ export function OrderWorkspace({ role, orderId }: { role: OrderRole; orderId?: n
         if (!row.itemId || before?.itemId === row.itemId) return row;
         return {
           ...row,
-          unitPrice: support.sellingPrice(row.itemId),
+          unitPrice: support.cataloguePrice(row.itemId),
           taxCodeId: support.defaultTaxCode(row.itemId),
           warehouseId: row.warehouseId || prev.warehouseId,
         };

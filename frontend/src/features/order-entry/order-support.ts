@@ -160,8 +160,14 @@ export function useOrderLineSupport(opts: { role?: "sales" | "purchase" } = {}) 
     return itemById.get(Number(itemId))?.item_type === ItemType.STOCK;
   }
 
-  /** The selling price the item carries, trimmed for an editable cell. */
-  function sellingPrice(itemId: number | string | null | undefined): string {
+  /** The catalogue price, trimmed for an editable cell — what the service would use if the
+   * line were sent with no price at all (`catalogue_unit_price`). The catalogue carries one
+   * price and both sides of the house read it, so a purchase order prefills from the same
+   * number a sales order does; the difference is that on the purchase side it is a starting
+   * point the supplier's quote usually overrides, and typing over it is expected. Showing the
+   * figure the service would otherwise pick beats showing an empty cell whose meaning is
+   * "some number you cannot see". */
+  function cataloguePrice(itemId: number | string | null | undefined): string {
     const item = itemById.get(Number(itemId));
     return item ? trimDecimalString(item.selling_price) : "";
   }
@@ -192,7 +198,7 @@ export function useOrderLineSupport(opts: { role?: "sales" | "purchase" } = {}) 
     itemLabel,
     isKit,
     isReceivable,
-    sellingPrice,
+    cataloguePrice,
     defaultTaxCode,
   };
 }
