@@ -21,7 +21,7 @@ import {
 } from "@/features/gl/hooks";
 import { byId, toOptions } from "@/features/gl/lookups";
 import type { TaxCode } from "@/features/gl/types";
-import { dotted, formatDate } from "@/lib/format";
+import { dotted, formatDate, toLocalIsoDate } from "@/lib/format";
 import { useApiErrorToast } from "@/lib/use-api-error-toast";
 
 export default function TaxTypesPage() {
@@ -86,7 +86,7 @@ export default function TaxTypesPage() {
             rate_pct: ratePct,
             gl_account_id: glAccountId ? Number(glAccountId) : null,
             clear_gl_account: !glAccountId,
-            valid_to: validTo ? validTo.toISOString().slice(0, 10) : null,
+            valid_to: validTo ? toLocalIsoDate(validTo) : null,
           },
         });
         toast.show({ title: t("taxCodeUpdated"), tone: "success" });
@@ -97,8 +97,8 @@ export default function TaxTypesPage() {
           nature,
           rate_pct: ratePct,
           gl_account_id: glAccountId ? Number(glAccountId) : null,
-          valid_from: validFrom.toISOString().slice(0, 10),
-          valid_to: validTo ? validTo.toISOString().slice(0, 10) : null,
+          valid_from: toLocalIsoDate(validFrom),
+          valid_to: validTo ? toLocalIsoDate(validTo) : null,
         });
         toast.show({ title: t("taxCodeCreated"), tone: "success" });
       }

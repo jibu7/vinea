@@ -18,7 +18,7 @@ import { byId, toOptions } from "@/features/gl/lookups";
 import type { AccountTransaction, AccountTransactionsResponse } from "@/features/gl/types";
 import { api } from "@/lib/api";
 import { exportToCsv } from "@/lib/csv";
-import { dotted, formatDate } from "@/lib/format";
+import { dotted, formatDate, toLocalIsoDate } from "@/lib/format";
 
 function AccountTransactionsReportView() {
   const t = useTranslations("gl");
@@ -71,8 +71,8 @@ function AccountTransactionsReportView() {
     setLoading(true);
 
     const search = new URLSearchParams({
-      date_from: dateFrom.toISOString().slice(0, 10),
-      date_to: dateTo.toISOString().slice(0, 10),
+      date_from: toLocalIsoDate(dateFrom),
+      date_to: toLocalIsoDate(dateTo),
       limit: "500",
     });
     if (branchId) search.set("branch_id", branchId);
@@ -165,7 +165,7 @@ function AccountTransactionsReportView() {
       closingBalance,
     ]);
 
-    const fileSuffix = `${selectedAccount.code}_${dateFrom.toISOString().slice(0, 10)}_to_${dateTo.toISOString().slice(0, 10)}`;
+    const fileSuffix = `${selectedAccount.code}_${toLocalIsoDate(dateFrom)}_to_${toLocalIsoDate(dateTo)}`;
     exportToCsv(`account-transactions-${fileSuffix}`, headers, rows);
   }
 

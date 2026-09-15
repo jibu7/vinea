@@ -15,13 +15,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/design/components/ta
 import { useAccounts, useCurrencies, useJournalEntry } from "@/features/gl/hooks";
 import { byId } from "@/features/gl/lookups";
 import { exportToCsv } from "@/lib/csv";
-import { formatDate, formatMoney } from "@/lib/format";
+import { formatDate, formatMoney, todayIso } from "@/lib/format";
 import { usePartnerEnquiry, usePartners } from "./hooks";
 import { partnerCode, type PartnerRole } from "./types";
-
-function today(): string {
-  return new Date().toISOString().slice(0, 10);
-}
 
 /**
  * Customer / supplier enquiry over `GET /{role}/enquiry/{partner_id}`.
@@ -34,7 +30,7 @@ export function EnquiryScreen({ role }: { role: PartnerRole }) {
   const t = useTranslations("arap.enquiry");
   const tr = useTranslations(`arap.role.${role}`);
   const [partnerId, setPartnerId] = useState("");
-  const [asOf, setAsOf] = useState(today);
+  const [asOf, setAsOf] = useState(todayIso);
   const [drillEntryId, setDrillEntryId] = useState<number | null>(null);
 
   const partners = usePartners(role, { includeInactive: true });

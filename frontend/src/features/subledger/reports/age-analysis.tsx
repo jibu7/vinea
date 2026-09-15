@@ -9,19 +9,15 @@ import { ReportPage, ReportPanel } from "@/design/components/report-page";
 import { TBody, TD, TH, THead, TR, Table } from "@/design/components/table";
 import { useCompanyDetails, useCurrencies } from "@/features/gl/hooks";
 import { exportToCsv } from "@/lib/csv";
-import { formatDate, formatMoney } from "@/lib/format";
+import { formatDate, formatMoney, todayIso } from "@/lib/format";
 import { useAgeing, useAgeingBucketSets } from "../hooks";
 import type { PartnerRole } from "../types";
-
-function today(): string {
-  return new Date().toISOString().slice(0, 10);
-}
 
 /** Age analysis over `GET /{role}/ageing` — the same figures the step 8 acceptance test
  * reconciles against the control account, so this screen adds presentation and nothing else. */
 export function AgeAnalysisReport({ role }: { role: PartnerRole }) {
   const t = useTranslations("reports");
-  const [asOf, setAsOf] = useState(today);
+  const [asOf, setAsOf] = useState(todayIso);
   const [bucketSetId, setBucketSetId] = useState("");
   // Off by default: a partner with nothing outstanding has nothing to age, and on a real
   // customer master those rows are most of the report. The filter is the server's, so the

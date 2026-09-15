@@ -24,7 +24,7 @@ import {
 import { byId, toOptions } from "@/features/gl/lookups";
 import type { AccountTransaction, AccountTransactionsResponse } from "@/features/gl/types";
 import { api } from "@/lib/api";
-import { dotted, formatDate } from "@/lib/format";
+import { dotted, formatDate, toLocalIsoDate } from "@/lib/format";
 
 function AccountEnquiryView() {
   const t = useTranslations("gl");
@@ -80,8 +80,8 @@ function AccountEnquiryView() {
     setLoading(true);
 
     const search = new URLSearchParams({
-      date_from: dateFrom.toISOString().slice(0, 10),
-      date_to: dateTo.toISOString().slice(0, 10),
+      date_from: toLocalIsoDate(dateFrom),
+      date_to: toLocalIsoDate(dateTo),
       limit: "100",
     });
     if (branchId) search.set("branch_id", branchId);
@@ -113,8 +113,8 @@ function AccountEnquiryView() {
     setLoadingMore(true);
 
     const search = new URLSearchParams({
-      date_from: dateFrom.toISOString().slice(0, 10),
-      date_to: dateTo.toISOString().slice(0, 10),
+      date_from: toLocalIsoDate(dateFrom),
+      date_to: toLocalIsoDate(dateTo),
       cursor: String(nextCursor),
       limit: "100",
     });

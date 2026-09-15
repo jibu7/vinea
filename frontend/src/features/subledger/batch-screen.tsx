@@ -22,7 +22,7 @@ import { isApiError, useMe } from "@/features/auth/hooks";
 import { useAccounts, useBranches, useCurrencies, useProjects, useTaxCodes } from "@/features/gl/hooks";
 import { toOptions } from "@/features/gl/lookups";
 import { clearDraft, loadDraft, newDraftId, saveDraft } from "@/lib/drafts";
-import { formatMoney } from "@/lib/format";
+import { formatMoney, nowIso, todayIso } from "@/lib/format";
 import { useApiErrorToast } from "@/lib/use-api-error-toast";
 import { usePartners, usePostBatch } from "./hooks";
 import { partnerCode, type BatchLinePayload, type BatchPayload, type PartnerRole } from "./types";
@@ -33,12 +33,8 @@ interface BatchDraft {
   rows: LineGridRow[];
 }
 
-function today(): string {
-  return new Date().toISOString().slice(0, 10);
-}
-
 function blankDraft(): BatchDraft {
-  return { batchDate: today(), reference: "", rows: [emptyLineGridRow()] };
+  return { batchDate: todayIso(), reference: "", rows: [emptyLineGridRow()] };
 }
 
 /**
@@ -91,7 +87,7 @@ export function BatchScreen({ role }: { role: PartnerRole }) {
     if (!restored.current || !companyId || !userId) return;
     saveDraft(draftModule, companyId, userId, {
       draftId,
-      updatedAt: new Date().toISOString(),
+      updatedAt: nowIso(),
       data: form,
     });
   }, [form, draftId, companyId, userId, draftModule]);

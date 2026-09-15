@@ -15,7 +15,7 @@ import { useToast } from "@/design/components/toast";
 import { useHasPermission } from "@/features/auth/hooks";
 import { StockTransferStatus } from "@/lib/api-enums";
 import { newDraftId } from "@/lib/drafts";
-import { dotted, formatDate, formatQuantity } from "@/lib/format";
+import { dotted, formatDate, formatQuantity, todayIso } from "@/lib/format";
 import { useApiErrorToast } from "@/lib/use-api-error-toast";
 import {
   useCancelTransfer,
@@ -26,10 +26,6 @@ import {
 } from "./hooks";
 import { useInventoryLineSupport } from "./line-support";
 import type { TransferSummary } from "./types";
-
-function today(): string {
-  return new Date().toISOString().slice(0, 10);
-}
 
 const STATUS_TONE: Record<string, "neutral" | "success" | "warning" | "danger" | "info"> = {
   [StockTransferStatus.IN_TRANSIT]: "info",
@@ -73,7 +69,7 @@ export function TransfersScreen() {
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const selected = useTransfer(selectedId);
   const [receiving, setReceiving] = useState<TransferSummary | null>(null);
-  const [receiveDate, setReceiveDate] = useState(today);
+  const [receiveDate, setReceiveDate] = useState(todayIso);
   const [cancelling, setCancelling] = useState<TransferSummary | null>(null);
   const [reversing, setReversing] = useState<TransferSummary | null>(null);
   const [reason, setReason] = useState("");
@@ -223,7 +219,7 @@ export function TransfersScreen() {
                       size="sm"
                       variant="secondary"
                       onClick={() => {
-                        setReceiveDate(today());
+                        setReceiveDate(todayIso());
                         setReceiving(row);
                       }}
                       aria-label={t("receiveLabel", { number: row.number })}

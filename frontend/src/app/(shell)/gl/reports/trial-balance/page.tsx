@@ -14,7 +14,7 @@ import { ThemeToggle } from "@/design/components/theme-toggle";
 import { useMe } from "@/features/auth/hooks";
 import { useBranches, useCurrencies, useProjects, useTrialBalance } from "@/features/gl/hooks";
 import { exportToCsv } from "@/lib/csv";
-import { dotted, formatDate } from "@/lib/format";
+import { dotted, formatDate, toLocalIsoDate } from "@/lib/format";
 
 export default function TrialBalanceReportPage() {
   const t = useTranslations("gl");
@@ -31,7 +31,7 @@ export default function TrialBalanceReportPage() {
   const currencies = useCurrencies();
   const baseCurrency = useMemo(() => currencies.data?.find((c) => c.is_base), [currencies.data]);
 
-  const asOfStr = asOfDate.toISOString().slice(0, 10);
+  const asOfStr = toLocalIsoDate(asOfDate);
   const { data: tb, isLoading } = useTrialBalance({
     as_of: asOfStr,
     branch_id: branchId ? Number(branchId) : null,

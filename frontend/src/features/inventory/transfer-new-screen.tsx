@@ -28,6 +28,7 @@ import { useApiErrorToast } from "@/lib/use-api-error-toast";
 import { usePostTransfer } from "./hooks";
 import { useInventoryLineSupport, useOnHandByWarehouse } from "./line-support";
 import type { TransferPayload } from "./types";
+import { nowIso, todayIso } from "@/lib/format";
 
 interface TransferDraft {
   transferDate: string;
@@ -39,13 +40,9 @@ interface TransferDraft {
   rows: LineGridRow[];
 }
 
-function today(): string {
-  return new Date().toISOString().slice(0, 10);
-}
-
 function blankDraft(): TransferDraft {
   return {
-    transferDate: today(),
+    transferDate: todayIso(),
     fromWarehouseId: "",
     toWarehouseId: "",
     reference: "",
@@ -103,7 +100,7 @@ export function TransferNewScreen() {
     if (!restored.current || !companyId || !userId) return;
     saveDraft(DRAFT_MODULE, companyId, userId, {
       draftId,
-      updatedAt: new Date().toISOString(),
+      updatedAt: nowIso(),
       data: form,
     });
   }, [form, draftId, companyId, userId]);

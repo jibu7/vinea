@@ -18,7 +18,7 @@ import { isApiError, useMe } from "@/features/auth/hooks";
 import { useAccounts, useCurrencies } from "@/features/gl/hooks";
 import { byId } from "@/features/gl/lookups";
 import { newDraftId } from "@/lib/drafts";
-import { formatDate, formatMoney } from "@/lib/format";
+import { formatDate, formatMoney, todayIso } from "@/lib/format";
 import { useApiErrorToast } from "@/lib/use-api-error-toast";
 import {
   useAllocationPreview,
@@ -43,10 +43,6 @@ interface PairEntry {
   discount: string;
 }
 
-function today(): string {
-  return new Date().toISOString().slice(0, 10);
-}
-
 /**
  * The allocation screen: open debits and open credits side by side, allocate or auto-allocate,
  * a discount column, and a preview of exactly what will post.
@@ -64,7 +60,7 @@ export function AllocationScreen({ role }: { role: PartnerRole }) {
   const { data: me } = useMe();
 
   const [partnerId, setPartnerId] = useState("");
-  const [allocationDate, setAllocationDate] = useState(today);
+  const [allocationDate, setAllocationDate] = useState(todayIso);
   const [description, setDescription] = useState("");
   const [creditId, setCreditId] = useState<number | null>(null);
   const [entries, setEntries] = useState<Record<number, PairEntry>>({});

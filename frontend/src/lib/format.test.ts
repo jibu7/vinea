@@ -1,5 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { RWF, USD, dotted, formatDate, formatMoney, formatQuantity, monthToDateIso, roundHalfUp, todayIso, trimDecimalString } from "./format";
+import {
+  RWF,
+  USD,
+  dotted,
+  formatDate,
+  formatMoney,
+  formatQuantity,
+  fromLocalIsoDate,
+  monthToDateIso,
+  nowIso,
+  roundHalfUp,
+  toLocalIsoDate,
+  todayIso,
+  trimDecimalString,
+} from "./format";
 
 describe("formatMoney", () => {
   it("shows RWF with no decimal places", () => {
@@ -111,6 +125,59 @@ describe("todayIso", () => {
 
   it("zero-pads month and day", () => {
     expect(todayIso(new Date(2026, 0, 9, 14, 0))).toBe("2026-01-09");
+  });
+});
+
+describe("toLocalIsoDate against the UTC bug", () => {
+  it("disagrees with the UTC rendering at the seam, and is the one that is right", () => {
+    // The suite runs under TZ=Africa/Kigali (see vitest.setup.ts), which is UTC+2 all year.
+    // 00:30 on the 5th of March, local. In UTC that instant is 22:30 on the **4th**, so the
+    // expression this helper replaced would offer the 4th to somebody keying a document on
+    // the 5th — a different accounting period at a month boundary, a different fiscal year
+    // at a year boundary.
+    //
+    // Asserted against the old expression rather than only against the right answer, so the
+    // test says what it is preventing. It fails on an implementation that returns the UTC
+    // slice: that is what makes it worth having.
+    const seam = new Date(2026, 2, 5, 0, 30);
+    expect(seam.toISOString().slice(0, 10)).toBe("2026-03-04");
+    expect(toLocalIsoDate(seam)).toBe("2026-03-05");
+    expect(toLocalIsoDate(seam)).not.toBe(seam.toISOString().slice(0, 10));
+  });
+
+  it("agrees with UTC away from the seam", () => {
+    // 23:30 local is 21:30 UTC — the same calendar day. Kigali is UTC+2, so local minus two
+    // hours can only ever land on today or yesterday, never tomorrow; the "tomorrow"
+    // direction of this defect belongs to zones west of Greenwich. Worth pinning, because a
+    // reader who only saw the case above could reasonably think the two always differ.
+    const evening = new Date(2026, 2, 5, 23, 30);
+    expect(evening.toISOString().slice(0, 10)).toBe("2026-03-05");
+    expect(toLocalIsoDate(evening)).toBe("2026-03-05");
+  });
+
+  it("round-trips a calendar date through fromLocalIsoDate", () => {
+    // `new Date("2026-03-10")` parses as UTC midnight; west of Greenwich that is the 9th, so a
+    // draft saved on the 10th would reopen on the 9th. The pair has to be each other's mirror.
+    expect(toLocalIsoDate(fromLocalIsoDate("2026-03-10"))).toBe("2026-03-10");
+    expect(fromLocalIsoDate("2026-03-10").getDate()).toBe(10);
+    expect(fromLocalIsoDate("2026-03-10").getHours()).toBe(0);
+  });
+
+  it("reads a draft written before the helpers existed", () => {
+    // Older drafts stored a full `toISOString()` instant. Its calendar day is not its first
+    // ten characters in every zone, so it is parsed as an instant and then read locally.
+    expect(toLocalIsoDate(fromLocalIsoDate("2026-03-09T22:00:00.000Z"))).toBe("2026-03-10");
+  });
+});
+
+describe("nowIso", () => {
+  it("is a sortable instant, not a calendar date", () => {
+    // Drafts evict in `updatedAt` order, so this one is UTC on purpose — the distinction the
+    // helper names exists so that banning toISOString does not push someone into using a date
+    // where an instant belongs.
+    const stamp = nowIso(new Date(2026, 2, 5, 0, 30));
+    expect(stamp).toBe("2026-03-04T22:30:00.000Z");
+    expect(stamp > nowIso(new Date(2026, 2, 5, 0, 29))).toBe(true);
   });
 });
 

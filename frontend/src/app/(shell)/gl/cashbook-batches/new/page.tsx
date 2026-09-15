@@ -18,6 +18,7 @@ import type { CashbookEntryCreatePayload, CashbookLineInput } from "@/features/g
 import { useApiErrorToast } from "@/lib/use-api-error-toast";
 import { ControlType } from "@/lib/api-enums";
 import { loadDraft, saveDraft, clearDraft, newDraftId, type Draft } from "@/lib/drafts";
+import { fromLocalIsoDate, nowIso, toLocalIsoDate } from "@/lib/format";
 
 interface CashbookDraftData {
   entryDate: string;
@@ -69,7 +70,10 @@ export default function NewCashbookBatchPage() {
     const mainBranch = branches.data?.find((b) => b.is_main);
     if (existing) {
       setDraftId(existing.draftId);
-      setEntryDate(new Date(existing.data.entryDate));
+      // Read back the way it was written — a local calendar date, not a UTC instant.
+      // `new Date("2026-03-10")` parses as UTC midnight, which west of Greenwich is
+      // the 9th, so a draft saved on the 10th would reopen on the 9th.
+      setEntryDate(fromLocalIsoDate(existing.data.entryDate));
       setDescription(existing.data.description);
       setReference(existing.data.reference);
       setBranchId(existing.data.branchId);
@@ -87,8 +91,8 @@ export default function NewCashbookBatchPage() {
     if (!hydrated.current || !draftId || !me?.company || !me.user_id) return;
     const draft: Draft<CashbookDraftData> = {
       draftId,
-      updatedAt: new Date().toISOString(),
-      data: { entryDate: entryDate.toISOString(), description, reference, branchId, cashAccountId, kind, rows },
+      updatedAt: nowIso(),
+      data: { entryDate: toLocalIsoDate(entryDate), description, reference, branchId, cashAccountId, kind, rows },
     };
     saveDraft("cashbook", me.company.id, me.user_id, draft);
   }, [draftId, entryDate, description, reference, branchId, cashAccountId, kind, rows, me]);
@@ -110,7 +114,7 @@ export default function NewCashbookBatchPage() {
         description: r.description || undefined,
       }));
     return {
-      entry_date: entryDate.toISOString().slice(0, 10),
+      entry_date: toLocalIsoDate(entryDate),
       description,
       cash_account_id: Number(cashAccountId),
       kind,

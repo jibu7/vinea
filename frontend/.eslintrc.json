@@ -17,14 +17,29 @@
       {
         "selector": "JSXAttribute[name.name=/^(placeholder|title|description|label|aria-label)$/] > JSXExpressionContainer > Literal[value=/\\S/]",
         "message": "User-visible attribute copy must come from next-intl: use placeholder={t(\"…\")}, not placeholder={\"…\"}."
+      },
+      {
+        "selector": "MemberExpression[property.name='toISOString']",
+        "message": "toISOString() renders in UTC, so it is the wrong way to get a calendar date: east of Greenwich it reads yesterday for the first hours of every day, west of it tomorrow for the last. Use todayIso(), toLocalIsoDate(date) or fromLocalIsoDate(s) from @/lib/format for dates, and nowIso() for a timestamp. See issue #30."
       }
     ]
   },
   "overrides": [
     {
-      "files": ["src/app/design/**/*.tsx"],
+      "files": [
+        "src/app/design/**/*.tsx"
+      ],
       "rules": {
         "react/jsx-no-literals": "off",
+        "no-restricted-syntax": "off"
+      }
+    },
+    {
+      "files": [
+        "src/lib/format.ts",
+        "src/lib/format.test.ts"
+      ],
+      "rules": {
         "no-restricted-syntax": "off"
       }
     }

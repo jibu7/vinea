@@ -18,7 +18,7 @@ import { useGLLookups, byId } from "@/features/gl/lookups";
 import { useApiErrorToast } from "@/lib/use-api-error-toast";
 import { useToast } from "@/design/components/toast";
 import { newDraftId } from "@/lib/drafts";
-import { DOT, dotted, formatDate } from "@/lib/format";
+import { DOT, dotted, formatDate, toLocalIsoDate } from "@/lib/format";
 
 /**
  * Where each module's documents live. A module-owned entry is reversed from its own document
@@ -90,7 +90,7 @@ export default function EntryViewPage() {
     try {
       const reversal = await reverseEntry.mutateAsync({
         entryId,
-        payload: { entry_date: reverseDate.toISOString().slice(0, 10), reason },
+        payload: { entry_date: toLocalIsoDate(reverseDate), reason },
         idempotencyKey: reverseKey,
       });
       setReverseOpen(false);
