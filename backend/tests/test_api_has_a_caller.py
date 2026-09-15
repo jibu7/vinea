@@ -16,10 +16,15 @@ cost this build three times:
 
 Each time it was found by someone happening to look. This is the test that looks.
 
-**What counts as a caller.** A string or template literal anywhere under `frontend/src`
-containing the endpoint's path, with `${…}` wherever the path has a parameter. That is how
-`api.post()` is called throughout the app, and matching the literal rather than the call
-expression keeps this independent of how the request helper is spelled.
+**What counts as a caller.** A string or template literal under `frontend/src` containing the
+endpoint's path, with `${…}` wherever the path has a parameter, **passed to the helper method
+the endpoint serves** — `api.put("/oe/defaults", …)` for a `PUT`. Comments are stripped before
+the search, so prose naming an endpoint is not a caller.
+
+The last two clauses were added at P6 step 6, each because a sensitivity pass found the
+version without it green over a gutted call site: a docstring beside the call covered the
+call, and the `GET` half of a settings pair covered the `PUT`. `_caller_pattern` and
+`_without_comments` carry the detail.
 
 **What counts as an exemption.** An entry in `NO_UI` below with a reason. Two kinds, and the
 difference matters: `by design` is a settled decision, `GAP` is debt that somebody owes. Both
@@ -166,9 +171,57 @@ def _mutating_operations() -> list[str]:
     )
 
 
+def _without_comments(source: str) -> str:
+    """The file with its comments blanked out, string literals left intact.
+
+    **Prose is not a caller.** The rule this file states is "a string or template literal
+    containing the endpoint's path", and until P6 step 6 the scan read the raw text, so a
+    comment naming an endpoint covered it. That is not a hypothetical: gutting both of step
+    6's call sites left this test green, because the screen and the hook each *explain*
+    `/oe/defaults` and `/inventory/items/{id}/kit-components` in a docstring beside the call.
+    An endpoint documented and not called is exactly the state the register exists to name.
+
+    A character scanner rather than a regex, because the two constructs nest the wrong way
+    round for one: `"http://localhost"` is a string containing what looks like a comment, and
+    `/* api.put("/x") */` is a comment containing what looks like a string. Quotes are
+    tracked, so neither is mistaken for the other.
+    """
+    out: list[str] = []
+    i, n = 0, len(source)
+    quote: str | None = None
+    while i < n:
+        ch = source[i]
+        if quote is not None:
+            out.append(ch)
+            if ch == "\\" and i + 1 < n:
+                out.append(source[i + 1])
+                i += 2
+                continue
+            if ch == quote:
+                quote = None
+            i += 1
+            continue
+        if ch in "\"'`":
+            quote = ch
+            out.append(ch)
+            i += 1
+            continue
+        if ch == "/" and i + 1 < n and source[i + 1] == "/":
+            while i < n and source[i] != "\n":
+                i += 1
+            continue
+        if ch == "/" and i + 1 < n and source[i + 1] == "*":
+            end = source.find("*/", i + 2)
+            i = n if end == -1 else end + 2
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
 def _frontend_sources() -> list[str]:
     return [
-        path.read_text(encoding="utf-8")
+        _without_comments(path.read_text(encoding="utf-8"))
         for path in FRONTEND_SRC.rglob("*")
         if path.suffix in {".ts", ".tsx"} and path.is_file()
     ]
@@ -179,7 +232,20 @@ def _frontend_sources() -> list[str]:
 _PATH_PARAMETER = r"(?:\$\{[^}]*\}|\d+)"
 
 
-def _caller_pattern(path: str) -> re.Pattern[str]:
+#: How the request helper is spelled at every mutating call site: `api.put(`, with an optional
+#: type argument, and the path as the first argument. Checked because the path alone cannot
+#: tell a reader which *method* reaches it.
+_CALL = r"api\.{method}(?:<[^()]*>)?\(\s*[`\"']"
+
+#: The one caller that cannot go through the helper, because it *is* the helper: `api.ts`
+#: refreshes the session with a bare `fetch(url, { method: "POST" })`, since routing that
+#: through `request()` would recurse on its own 401 handling. Matched by its shape rather
+#: than exempted by name — an exemption would cover any future bare fetch as well.
+_FETCH_HEAD = r"fetch\(\s*[`\"'][^`\"']*"
+_FETCH_TAIL = r"[^)]{{0,200}}method:\s*[\"']{method}[\"']"
+
+
+def _caller_pattern(path: str, method: str | None = None) -> re.Pattern[str]:
     """A regex matching the path as a frontend literal would spell it.
 
     `/inventory/documents/{document_id}/reverse` becomes
@@ -195,10 +261,25 @@ def _caller_pattern(path: str) -> re.Pattern[str]:
 
     Found by a sensitivity pass rather than by reading: gutting the revoke call site left this
     test green. Tightening it changed no other verdict — every real call site interpolates.
+
+    **`method` requires the call to be the one the endpoint serves**, and that is the second
+    thing a sensitivity pass found, at P6 step 6. The path alone cannot tell a `GET` from a
+    `PUT`, so wherever a settings endpoint serves both on one path — `/oe/defaults`,
+    `/gl/settings`, `/inventory/items/{id}/kit-components` — the *reader* covered the
+    *writer*, and a screen that could display a setting and not change it read as covered.
+    Both of step 6's call sites could be gutted with this test still green. The frontend
+    calls through one helper (`api.put(path, …)`, `src/lib/api.ts`), so requiring the verb
+    beside the path costs nothing and closes the hole; passing no method keeps the loose
+    behaviour for the anti-vacuity tests below.
     """
     without_prefix = path[len(API_PREFIX) :] if path.startswith(API_PREFIX) else path
     literal_parts = [re.escape(part) for part in re.split(r"\{[^}]+\}", without_prefix)]
-    return re.compile(_PATH_PARAMETER.join(literal_parts))
+    body = _PATH_PARAMETER.join(literal_parts)
+    if method is None:
+        return re.compile(body)
+    helper = _CALL.format(method=method.lower()) + body
+    bare_fetch = _FETCH_HEAD + body + _FETCH_TAIL.format(method=method.upper())
+    return re.compile(f"(?:{helper})|(?:{bare_fetch})", re.IGNORECASE | re.DOTALL)
 
 
 def test_a_sibling_literal_path_does_not_cover_a_parameterised_one() -> None:
@@ -212,6 +293,50 @@ def test_a_sibling_literal_path_does_not_cover_a_parameterised_one() -> None:
     assert revoke.search("api.delete(`/invitations/${membershipId}`)")
     assert not revoke.search('api.post("/invitations/accept", payload)')
     assert not revoke.search('api.post("/invitations", payload)')
+
+
+def test_a_reader_does_not_cover_a_writer_on_the_same_path() -> None:
+    """Anti-vacuity for the method rule, written as the case that was wrong.
+
+    `GET /oe/defaults` and `PUT /oe/defaults` are one path and two capabilities. A matcher
+    that cannot tell them apart reports the screen as able to *change* the settings on the
+    strength of its being able to *show* them.
+    """
+    put = _caller_pattern("/api/v1/oe/defaults", "PUT")
+    assert put.search('api.put<OrderDefaults>("/oe/defaults", payload)')
+    assert not put.search('api.get<OrderDefaults>("/oe/defaults")')
+    # The multi-line shape several hooks use, where the path is on its own line.
+    assert put.search('api.put<T>(\n        `/oe/defaults`,\n        payload,\n      )')
+
+
+def test_the_session_refresher_counts_although_it_cannot_use_the_helper() -> None:
+    """`api.ts` refreshes with a bare `fetch`, because routing that through `request()` would
+    recurse on its own 401 handling. It is a caller; the shape says so, so no name has to be
+    written down anywhere. A `fetch` of the same path with no method is still a GET."""
+    refresh = _caller_pattern("/api/v1/auth/refresh", "POST")
+    assert refresh.search(
+        'fetch(`${API_BASE}/auth/refresh`, {\n'
+        '    method: "POST",\n'
+        '    credentials: "include",\n  })'
+    )
+    assert not refresh.search('fetch(`${API_BASE}/auth/refresh`, { credentials: "include" })')
+
+
+def test_a_comment_naming_an_endpoint_is_not_a_caller() -> None:
+    """Anti-vacuity for `_without_comments`, written as the case that was wrong.
+
+    Both spellings that covered step 6's endpoints while nothing called them: a `//` line
+    comment and a `/** */` docstring. And the two constructs that must survive, or the
+    stripper would delete real call sites: a string that contains `//`, and a template
+    literal spanning lines.
+    """
+    assert "/oe/defaults" not in _without_comments('// `GET /oe/defaults` refuses a caller')
+    assert "/oe/defaults" not in _without_comments('/** A PUT: `/oe/defaults` takes … */')
+    assert '"/oe/defaults"' in _without_comments('api.put<T>("/oe/defaults", payload)')
+    assert "http://localhost" in _without_comments('const base = "http://localhost:8000";')
+    assert "/inventory/items/" in _without_comments(
+        "api.put(`/inventory/items/${itemId}/kit-components`, payload)"
+    )
 
 
 def test_the_scan_reads_the_frontend_it_claims_to() -> None:
@@ -240,8 +365,8 @@ def test_every_mutating_endpoint_has_a_caller_or_a_reason() -> None:
     for operation in _mutating_operations():
         if operation in NO_UI:
             continue
-        _, path = operation.split(" ", 1)
-        pattern = _caller_pattern(path)
+        method, path = operation.split(" ", 1)
+        pattern = _caller_pattern(path, method)
         if not any(pattern.search(source) for source in sources):
             uncovered.append(operation)
 
