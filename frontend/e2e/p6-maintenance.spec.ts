@@ -210,6 +210,21 @@ test.describe("Order entry maintenance", () => {
     await pickCombobox(page, "Unit category", "COUNT", { within: dialog(page) });
     await pickCombobox(page, "Base unit", "EA", { within: dialog(page) });
     await dialog(page).getByLabel("Selling price").fill("3500");
+
+    // The purchase account offers ordinary postable accounts and no control account of any
+    // kind — the same predicate the Order defaults screen applies to variance and clearing.
+    // An AP line for a service item landing on 2350, or on the AR or AP control, is refused
+    // at posting, so a picker that offers one is a 409 waiting to be earned. Asserted by the
+    // typeahead: the accrual's own code finds nothing, an ordinary expense account does.
+    await dialog(page).getByRole("button", { name: "Purchase account", exact: true }).click();
+    await page.locator("[cmdk-item]").first().waitFor({ state: "visible" });
+    await page.keyboard.type("2350");
+    await expect(page.locator("[cmdk-item]")).toHaveCount(0);
+    for (let i = 0; i < 4; i += 1) await page.keyboard.press("Backspace");
+    await page.keyboard.type("6100");
+    await expect(page.locator('[cmdk-item]:has-text("6100")').first()).toBeVisible();
+    await page.keyboard.press("Escape");
+
     await dialog(page).getByRole("button", { name: "Create", exact: true }).click();
 
     // The drawer opens on the new item. Close it and read the catalogue row: the **money**
@@ -264,6 +279,16 @@ test.describe("Order entry maintenance", () => {
     // And nothing was half-saved: the definition is still the two rows it was. A whole-list
     // PUT is what makes that true — a row-at-a-time editor would have written the first two
     // again and left the third to fail.
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(drawer.locator("tbody tr")).toHaveCount(2);
+
+    // The other refusal an operator can actually provoke from this editor, and it comes from
+    // the schema rather than the service: a quantity of zero. It arrives keyed the same way
+    // (`components.0.quantity_per_kit`), so it lands on the cell too — one mapping for both.
+    await page.getByRole("button", { name: /Edit definition/ }).click();
+    await page.getByLabel("Per kit").first().fill("0");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(page.getByText("Input should be greater than 0")).toBeVisible();
     await page.getByRole("button", { name: "Cancel", exact: true }).click();
     await expect(drawer.locator("tbody tr")).toHaveCount(2);
 

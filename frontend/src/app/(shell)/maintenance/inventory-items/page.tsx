@@ -942,8 +942,12 @@ function KitComponentsPanel({
       await saveComponents.mutateAsync({
         itemId: kit.id,
         payload: {
+          // Only a row with *nothing* in it is dropped — an "Add component" somebody thought
+          // better of. A row with an item and no quantity is sent and refused on its own
+          // cell ("Input should be a valid decimal"), because silently discarding it would
+          // save a definition missing a line the operator believes they entered.
           components: rows
-            .filter((row) => row.itemId && row.quantity)
+            .filter((row) => row.itemId || row.quantity)
             .map((row) => ({
               component_item_id: Number(row.itemId),
               quantity_per_kit: row.quantity,
