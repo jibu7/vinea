@@ -409,6 +409,12 @@ class DocumentRead(ApiModel):
     doc_type: str
     partner_id: int
     journal_entry_id: int
+    #: The **companion stock entry** (P6 decision 2), when this document carried a valued stock
+    #: line. One document posts two entries — the partner side and the `STK-` entry the stock
+    #: moved on — and the pair is the thing a person following a figure needs: from the invoice
+    #: to what the sale cost, or back. A document with no valued stock line has no companion and
+    #: claims no number, so `None` is an ordinary answer rather than a missing link.
+    stock_entry_id: int | None = None
     document_date: date
     due_date: date | None
     currency_id: int

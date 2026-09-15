@@ -456,7 +456,7 @@ export interface EnquiryLine {
   item_id: number;
   item_code: string;
   item_name: string;
-  description: string;
+  description: string | null;
   uom_id: number;
   warehouse_id: number | null;
   /** As keyed, in `uom_id`. */

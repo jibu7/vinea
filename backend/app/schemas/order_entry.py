@@ -502,7 +502,12 @@ class EnquiryLineRead(ApiModel):
     item_id: int
     item_code: str
     item_name: str
-    description: str
+    #: **Nullable**, and it was not. `order_lines.description` is optional — a line that is
+    #: happy with the item's own name keys nothing — so this required a string that the column
+    #: does not promise, and every enquiry on such an order came back 500. The endpoint shipped
+    #: at step 5 with no caller, so nothing looked at it until step 8 built the screen: the
+    #: rule-13 failure exactly, one layer down from a screen.
+    description: str | None
     uom_id: int
     warehouse_id: int | None
     quantity: Decimal

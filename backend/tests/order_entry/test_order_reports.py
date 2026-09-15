@@ -29,6 +29,7 @@ from app.models.partner import TaxMode
 from app.order_entry import enquiries as oe_enquiries
 from app.order_entry import grn as grn_service
 from app.order_entry import orders as orders_service
+from app.schemas.order_entry import EnquiryLineRead, OrderEnquiryRead
 from tests.order_entry.conftest import MARCH, OrderEntry
 
 D = Decimal
@@ -342,3 +343,48 @@ def test_a_kit_line_reports_beside_its_components(
     # same goods twice.
     assert components[0].net_amount == ZERO
     assert parents[0].net_amount == D(10500)
+
+
+# --- What the screens found in the step-5 endpoints --------------------------------------------
+
+
+def test_the_enquiry_serialises_a_line_that_was_given_no_description(
+    db: Session, order_entry: OrderEntry
+) -> None:
+    """An order line with no description of its own must come back through the API shape.
+
+    `order_lines.description` is optional — a line happy with the item's own name keys nothing
+    — and `EnquiryLineRead` required a string, so `GET /oe/sales-orders/{id}/enquiry` answered
+    **500** for any such order. Which is most of them: neither the order screen nor the
+    order-to-invoice flow fills the column unless somebody types into it.
+
+    The endpoint shipped at step 5 and step 8 is what built its screen. Rule 14 counts mutating
+    endpoints and these are GETs, so nothing was ever going to notice — which is the same
+    failure one layer down from the one rule 13 is written against: it was not a screen that
+    rendered wrong, it was a service that had never been asked a question.
+
+    Asserted through the **Pydantic shape**, not the dataclass: the dataclass was always happy
+    with `None`, and validating the response model is the step that failed.
+    """
+    order = _sales_order(
+        db,
+        order_entry,
+        orders_service.OrderLineInput(
+            item_id=order_entry.stock_item.id, quantity=D(4), unit_price=D(2000)
+        ),
+    )
+    assert order.lines[0].description is None, "the fixture must not fill it in"
+
+    enquiry = oe_enquiries.sales_order_enquiry(db, order_entry.company_id, order.id)
+    read = OrderEnquiryRead(
+        **{
+            field: getattr(enquiry, field)
+            for field in OrderEnquiryRead.model_fields
+            if field not in ("lines", "documents", "total_backordered")
+        },
+        lines=[EnquiryLineRead.model_validate(line) for line in enquiry.lines],
+        documents=[],
+        total_backordered=enquiry.total_backordered,
+    )
+    assert read.lines[0].description is None
+    assert read.lines[0].remaining == D(4)

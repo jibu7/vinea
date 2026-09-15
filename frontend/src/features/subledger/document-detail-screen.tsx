@@ -229,6 +229,26 @@ export function PartnerDocumentDetailScreen({
               </Link>
             </dd>
           </div>
+          {/* The companion (P6 decision 2). A stock-bearing document posts **two** entries and
+              the screen showed one, so an invoice led to the receivable and nothing led to
+              what the sale cost. The `STK-` entry links back here through the same pair, so
+              the round trip closes from either end. Absent on a document with no valued stock
+              line, which has no companion at all. */}
+          {data.stock_entry_id !== null && (
+            <div>
+              <dt className="text-xs text-[var(--vinea-ink-muted)]">{t("stockEntry")}</dt>
+              <dd className="text-sm">
+                <Link
+                  href={`/gl/entries/${data.stock_entry_id}`}
+                  data-testid="document-stock-entry"
+                  className="inline-flex items-center gap-1 font-mono text-xs text-[var(--vinea-brand)] underline"
+                >
+                  {t("viewEntry")}
+                  <ExternalLink className="size-3" />
+                </Link>
+              </dd>
+            </div>
+          )}
         </dl>
         <p className="pt-3 text-sm">{data.description}</p>
         {data.reference && (

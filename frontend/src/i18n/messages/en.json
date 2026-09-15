@@ -1182,7 +1182,8 @@
       "unallocateFailed": "The allocation could not be undone",
       "alreadyUnallocated": "Already unallocated",
       "isAnUnallocation": "This row is itself an unallocation",
-      "noUnallocatePermission": "You do not have permission to unallocate"
+      "noUnallocatePermission": "You do not have permission to unallocate",
+      "stockEntry": "Stock entry"
     }
   },
   "lineGrid": {

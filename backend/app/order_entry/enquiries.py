@@ -64,7 +64,10 @@ class EnquiryLine:
     item_id: int
     item_code: str
     item_name: str
-    description: str
+    #: Nullable, because `sales_order_lines.description` is: a line that took the item's own
+    #: name keys nothing here. Declared `str` until step 8 opened the screen, which made every
+    #: enquiry on an ordinary order a 500 — see `EnquiryLineRead`.
+    description: str | None
     uom_id: int
     warehouse_id: int | None
     quantity: Decimal
