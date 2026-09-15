@@ -29,6 +29,7 @@ import { clearDraft, loadDraft, newDraftId, saveDraft } from "@/lib/drafts";
 import { dotted, formatMoney, formatQuantity, nowIso, todayIso, trimDecimalString } from "@/lib/format";
 import { useApiErrorToast } from "@/lib/use-api-error-toast";
 import { useCreateGrn, useReceiveFromPurchaseOrder } from "./hooks";
+import { useDefaultWarehouseId } from "./order-support";
 import type { GrnLinePayload, PreparedGrnLine } from "./types";
 
 const DRAFT_MODULE = "oe.goods-received";
@@ -163,13 +164,11 @@ export function GrnNewScreen() {
     });
   }, [purchaseOrderId, form, companyId, userId]);
 
-  const defaultWarehouse = support.warehouses.find((w) => w.is_active && !w.is_in_transit);
+  const defaultWarehouseId = useDefaultWarehouseId();
   useEffect(() => {
-    if (purchaseOrderId || form.warehouseId || !defaultWarehouse) return;
-    setForm((prev) =>
-      prev.warehouseId ? prev : { ...prev, warehouseId: String(defaultWarehouse.id) },
-    );
-  }, [purchaseOrderId, defaultWarehouse, form.warehouseId]);
+    if (purchaseOrderId || form.warehouseId || !defaultWarehouseId) return;
+    setForm((prev) => (prev.warehouseId ? prev : { ...prev, warehouseId: defaultWarehouseId }));
+  }, [purchaseOrderId, defaultWarehouseId, form.warehouseId]);
 
   const warehouseOfRow = (row: LineGridRow) =>
     Number(row.warehouseId || form.warehouseId || 0) || 0;

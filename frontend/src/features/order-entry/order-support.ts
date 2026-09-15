@@ -6,6 +6,7 @@ import type { LineGridRow } from "@/design/components/line-grid";
 import { useCurrencies, useTaxCodes } from "@/features/gl/hooks";
 import { byId } from "@/features/gl/lookups";
 import { useItems, useUomCategories, useWarehouses } from "@/features/inventory/hooks";
+import { useOrderDefaults } from "./hooks";
 import type { Item, Uom } from "@/features/inventory/types";
 import { ItemType } from "@/lib/api-enums";
 import { dotted, formatQuantity, trimDecimalString } from "@/lib/format";
@@ -21,6 +22,30 @@ export function formatOrderQuantity(value: string | number): string {
   const text = trimDecimalString(String(value));
   const decimals = text.includes(".") ? text.split(".")[1].length : 0;
   return formatQuantity(Number(value), decimals);
+}
+
+/**
+ * The warehouse a new order or receipt starts on.
+ *
+ * The company's default from `gl_settings` (decision 10) — which is the one the **service**
+ * falls back to when a line names none, so the screen and the posting agree about what is
+ * being promised. `warehouses.is_default` is the same fact wearing a second hat and stands as
+ * the fallback; the first usable warehouse in the list is a last resort.
+ *
+ * It was, briefly, the only rule these screens had, and that was a defect with a sharp edge: a
+ * company whose depot happened to sort first had every order defaulted to a warehouse it does
+ * not sell from, and the only symptom was a refusal naming a warehouse nobody had chosen. The
+ * full e2e suite found it because another spec had created a second warehouse; a suite of one
+ * company with one warehouse never could.
+ */
+export function useDefaultWarehouseId(): string {
+  const defaults = useOrderDefaults();
+  const warehouses = useWarehouses();
+  const usable = (warehouses.data ?? []).filter((w) => w.is_active && !w.is_in_transit);
+  const setting = defaults.data?.default_warehouse_id;
+  const chosen =
+    usable.find((w) => w.id === setting) ?? usable.find((w) => w.is_default) ?? usable[0];
+  return chosen ? String(chosen.id) : "";
 }
 
 /**

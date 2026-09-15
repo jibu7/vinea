@@ -38,7 +38,7 @@ import {
   useUpdatePurchaseOrder,
   useUpdateSalesOrder,
 } from "./hooks";
-import { useOrderLineSupport } from "./order-support";
+import { useDefaultWarehouseId, useOrderLineSupport } from "./order-support";
 import type { OrderLinePayload } from "./types";
 
 export type OrderRole = "sales" | "purchase";
@@ -226,13 +226,11 @@ export function OrderWorkspace({ role, orderId }: { role: OrderRole; orderId?: n
 
   // The inventory default, until the operator says otherwise. Sales and purchase orders both
   // take it (decision 10); the line grid then defaults each row from the header.
-  const defaultWarehouse = support.warehouses.find((w) => w.is_active && !w.is_in_transit);
+  const defaultWarehouseId = useDefaultWarehouseId();
   useEffect(() => {
-    if (editing || form.warehouseId || !defaultWarehouse) return;
-    setForm((prev) =>
-      prev.warehouseId ? prev : { ...prev, warehouseId: String(defaultWarehouse.id) },
-    );
-  }, [editing, defaultWarehouse, form.warehouseId]);
+    if (editing || form.warehouseId || !defaultWarehouseId) return;
+    setForm((prev) => (prev.warehouseId ? prev : { ...prev, warehouseId: defaultWarehouseId }));
+  }, [editing, defaultWarehouseId, form.warehouseId]);
 
   const lineErrors: LineErrors = useMemo(() => {
     const out: LineErrors = {};
