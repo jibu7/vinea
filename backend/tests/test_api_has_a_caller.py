@@ -162,6 +162,11 @@ def _frontend_sources() -> list[str]:
 #: (`${membershipId}`) or a literal id. **Not an arbitrary run of characters** — see below.
 _PATH_PARAMETER = r"(?:\$\{[^}]*\}|\d+)"
 
+#: What may follow the path at a call site: the quote that closes the literal, a query string,
+#: or an interpolation that appends one. **Not a slash**, which is the whole point — see
+#: `_caller_pattern`.
+_PATH_END = r"(?=[`\"']|\?|\$\{)"
+
 
 #: How the request helper is spelled at every mutating call site: `api.put(`, with an optional
 #: type argument, and the path as the first argument. Checked because the path alone cannot
@@ -202,10 +207,20 @@ def _caller_pattern(path: str, method: str | None = None) -> re.Pattern[str]:
     calls through one helper (`api.put(path, …)`, `src/lib/api.ts`), so requiring the verb
     beside the path costs nothing and closes the hole; passing no method keeps the loose
     behaviour for the anti-vacuity tests below.
+
+    **The path must end where the endpoint's path ends**, and that is the third hole a
+    sensitivity pass found, at P6 step 7. Without an end anchor a *longer* sibling covered a
+    *shorter* one: `api.post(`/oe/sales-orders/${orderId}/close`)` satisfied
+    `POST /oe/sales-orders`, so the create endpoint read as called on the strength of a call
+    to the close endpoint. Gutting `useCreateSalesOrder` left this test green. It is the
+    mirror of the sibling-path case below — that one is a shorter literal covering a longer
+    parameterised path, this one a longer literal covering a shorter collection path — and
+    the same answer closes both: a path parameter is an interpolation, and a path ends at the
+    quote that closes it.
     """
     without_prefix = path[len(API_PREFIX) :] if path.startswith(API_PREFIX) else path
     literal_parts = [re.escape(part) for part in re.split(r"\{[^}]+\}", without_prefix)]
-    body = _PATH_PARAMETER.join(literal_parts)
+    body = _PATH_PARAMETER.join(literal_parts) + _PATH_END
     if method is None:
         return re.compile(body)
     helper = _CALL.format(method=method.lower()) + body
@@ -224,6 +239,20 @@ def test_a_sibling_literal_path_does_not_cover_a_parameterised_one() -> None:
     assert revoke.search("api.delete(`/invitations/${membershipId}`)")
     assert not revoke.search('api.post("/invitations/accept", payload)')
     assert not revoke.search('api.post("/invitations", payload)')
+
+
+def test_a_longer_sibling_does_not_cover_a_collection_path() -> None:
+    """Anti-vacuity for the end anchor, written as the case that was wrong.
+
+    `POST /oe/sales-orders` creates an order and `POST /oe/sales-orders/{order_id}/close`
+    gives up what is left of one. They share a prefix and a verb, so a matcher with no end
+    anchor reports the first as called whenever the second is — and the create endpoint, the
+    one the whole screen exists to reach, is the one that goes unproven.
+    """
+    create = _caller_pattern("/api/v1/oe/sales-orders", "post")
+    assert create.search('api.post<SalesOrder>("/oe/sales-orders", payload, headers)')
+    assert not create.search("api.post<SalesOrder>(`/oe/sales-orders/${orderId}/close`, body)")
+    assert not create.search("api.post<SalesOrder>(`/oe/sales-orders/${orderId}/invoice`)")
 
 
 def test_a_reader_does_not_cover_a_writer_on_the_same_path() -> None:
