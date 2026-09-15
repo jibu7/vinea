@@ -928,7 +928,11 @@
         "none": "None",
         "cancel": "Cancel",
         "serverComputed": "calculated on Post",
-        "zeroPlaceholder": "0"
+        "zeroPlaceholder": "0",
+        "outstandingTitle": "Still open on the source document",
+        "outstandingLine": "{quantity} left",
+        "outstandingNote": "Lower a quantity or drop a line and the rest stays open. Raising one past what is left is refused on the line, because the order is where the remaining quantity is known.",
+        "itemLineNote": "A line with an item takes its price and its account from the catalogue and moves stock; a line with only an account is a charge and moves none. Both belong on one document."
       },
       "arInvoice": {
         "title": "Invoice",
