@@ -1,7 +1,8 @@
 """Order-entry API shapes (P6).
 
-Step 1 carries the **Order defaults** screen only. The order, GRN and landed-cost documents
-arrive with the services that write them.
+Step 1 carried the **Order defaults** screen only; the order and GRN documents arrived with
+step 3 and the landed-cost document with step 4. Each shape lands with the service that writes
+it.
 """
 
 from datetime import date
@@ -12,7 +13,12 @@ from pydantic import BaseModel, Field
 
 from app.models.gl import BackorderPolicy
 from app.models.inventory import GrnStatus
-from app.models.order_entry import PurchaseOrderStatus, SalesOrderStatus
+from app.models.order_entry import (
+    LandedCostBasis,
+    LandedCostStatus,
+    PurchaseOrderStatus,
+    SalesOrderStatus,
+)
 from app.models.partner import PartnerRole, TaxMode
 from app.models.subledger import DocumentKind
 from app.schemas.common import ApiModel
@@ -380,3 +386,97 @@ class PreparedGrnRead(BaseModel):
     supplier_reference: str | None
     currency_id: int | None
     lines: list[PreparedGrnLineRead]
+
+
+# --- Landed cost (decision 9) ---------------------------------------------------------------
+
+
+PositiveMoney = Annotated[Decimal, Field(gt=0, max_digits=20, decimal_places=6)]
+
+
+class LandedCostPreview(BaseModel):
+    """What a screen asks for before it commits to anything: the shares this amount would take.
+
+    The same function computes these and posts them, so what is previewed is what is written.
+    """
+
+    amount: PositiveMoney
+    basis: LandedCostBasis
+    #: Any receipt line, from any GRN and any supplier — one freight bill routinely covers
+    #: consignments from several.
+    grn_line_ids: list[int] = Field(min_length=1)
+
+
+class LandedCostCreate(LandedCostPreview):
+    cost_date: date
+    description: str = Field(min_length=1, max_length=500)
+    reference: str | None = Field(default=None, max_length=50)
+    #: Informational: the supplier invoice or cashbook line the cost came from. Nothing is
+    #: derived from either — the clearing account's balance is the arithmetic.
+    source_document_id: int | None = None
+    source_cashbook_line_id: int | None = None
+
+
+class LandedCostReverse(BaseModel):
+    on_date: date
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class LandedCostShareRead(BaseModel):
+    """One target's share, before it is posted. `would_go_to_cogs` is a **preview**, not a
+    promise: whether a location still holds the item is settled under the costing lock at the
+    moment of posting, and a sale in between can change the answer."""
+
+    grn_line_id: int
+    grn_id: int
+    item_id: int
+    warehouse_id: int
+    weight: Decimal
+    share: Decimal
+    would_go_to_cogs: bool
+
+
+class LandedCostPreviewRead(BaseModel):
+    amount: Decimal
+    basis: LandedCostBasis
+    shares: list[LandedCostShareRead]
+
+
+class LandedCostLineRead(ApiModel):
+    id: int
+    line_no: int
+    grn_line_id: int
+    item_id: int
+    warehouse_id: int
+    weight: Decimal
+    share: Decimal
+    #: True when the location held none of the item and the share went to cost of sales. Such
+    #: a line has no move; see `LandedCostLine`.
+    went_to_cogs: bool
+    stock_move_id: int | None
+
+
+class LandedCostRead(ApiModel):
+    id: int
+    number: str
+    cost_date: date
+    description: str
+    reference: str | None
+    amount: Decimal
+    basis: LandedCostBasis
+    status: LandedCostStatus
+    source_document_id: int | None
+    source_cashbook_line_id: int | None
+    journal_entry_id: int | None
+    reversal_entry_id: int | None
+    reversed_on: date | None
+    lines: list[LandedCostLineRead] = []
+
+
+class LandedCostSummary(ApiModel):
+    id: int
+    number: str
+    cost_date: date
+    amount: Decimal
+    basis: LandedCostBasis
+    status: LandedCostStatus

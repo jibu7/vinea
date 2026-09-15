@@ -34,7 +34,12 @@ from app.models.inventory import (
 from app.models.job import JobStatus
 from app.models.journal import JournalStatus
 from app.models.membership import MembershipStatus
-from app.models.order_entry import PurchaseOrderStatus, SalesOrderStatus
+from app.models.order_entry import (
+    LandedCostBasis,
+    LandedCostStatus,
+    PurchaseOrderStatus,
+    SalesOrderStatus,
+)
 from app.models.partner import AgeingBasis, DueBasis, PartnerRole, TaxMode
 from app.models.subledger import DocumentKind, DocumentStatus, InstrumentType
 from app.models.tax import TaxNature
@@ -66,6 +71,8 @@ EXPORTED: tuple[type[enum.StrEnum], ...] = (
     SalesOrderStatus,
     PurchaseOrderStatus,
     GrnStatus,
+    LandedCostBasis,
+    LandedCostStatus,
     # Inventory
     ItemType,
     NegativeStockPolicy,

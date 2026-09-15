@@ -12,6 +12,13 @@ its siblings is reversed: value 1 000 received over quantity 3 and matched 1 + 1
 333 + 333 + 334, and reversing the first leaves the ledger having relieved 667 where a
 recomputation over the survivors gives 666. An invariant that recomputed would disagree with
 the ledger by a franc and would blame the ledger.
+
+The second is the **landed-cost clearing proof**: the clearing account's balance equals what
+was booked to it less what has been allocated off it. Freight, duty and insurance arrive on
+documents this module knows nothing about — a forwarder's invoice, a cashbook payment — and
+landed-cost documents take them off again. Reading "allocated" from `landed_cost_lines.share`
+rather than from the ledger is what makes this a cross-check: the documents say one number and
+the account says another only if the posting and the split have come apart.
 """
 
 from collections import defaultdict
@@ -23,7 +30,12 @@ from sqlalchemy.orm import Session
 from app.kernel.posting import gl_settings_for
 from app.models.inventory import GoodsReceivedNote, GoodsReceivedNoteLine, GrnStatus
 from app.models.journal import JournalEntry, JournalLine, JournalStatus
-from app.models.order_entry import PurchaseOrder, SalesOrder
+from app.models.order_entry import (
+    LandedCostDocument,
+    LandedCostStatus,
+    PurchaseOrder,
+    SalesOrder,
+)
 from app.models.subledger import DocumentStatus, PartnerDocument, PartnerDocumentLine
 from app.order_entry import grn as grn_service
 from app.order_entry import quantities as order_quantities
@@ -133,6 +145,20 @@ def assert_order_invariants(db: Session, company_id: int) -> None:
           this is the assertion that none of them has a gap. An over-fulfilled line makes
           `committed` negative on that line and leaves the status derivation with nothing
           sensible to say.
+       7. The landed-cost clearing account's balance equals what was booked to it less what
+          unreversed landed-cost documents have allocated off it — so a fully allocated
+          clearing account is zero. Read from `landed_cost_lines.share`, never from the
+          ledger, so the two have to agree rather than being the same number twice.
+       8. Every unreversed landed-cost document's shares sum to its amount, exactly. That is
+          the residue rule, and it is what makes clause 7 reachable: a document whose shares
+          summed to a franc less than its amount would leave the clearing account holding that
+          franc forever, and no later allocation could take it off.
+       9. Every landed-cost document's entries are exactly the ones it claims, and a reversed
+          one has exactly one reversal. This is the clause that stands in for the kernel's
+          reversal bookkeeping: a landed cost does not reverse through `posting.reverse`, so
+          its reversing entry carries no `reverses_entry_id` and the unique index on that
+          column is not protecting it. The document-level link is the proof instead, and this
+          is what proves the proof.
     """
     settings = gl_settings_for(db, company_id)
     accrual_account_id = settings.grn_accrual_account_id
@@ -224,6 +250,75 @@ def assert_order_invariants(db: Session, company_id: int) -> None:
             f"{over[0].fulfilled} fulfilled"
         )
 
+    # 7 and 8. The landed-cost clearing proof, and the residue rule underneath it.
+    _assert_clearing_clears(db, company_id, settings.landed_cost_clearing_account_id)
+
+    # 9. The document-level reversal link, which is all there is for a landed cost.
+    assert_landed_cost_entries_tie_back(db, company_id)
+
+
+def _assert_clearing_clears(db: Session, company_id: int, clearing_account_id: int | None) -> None:
+    """The clearing account holds `booked - allocated`, and every allocation allocates it all.
+
+    "Booked" is everything posted to the account by anything that is **not** a landed cost —
+    the forwarder's invoice, the duty payment — and "allocated" is the sum of the shares the
+    landed-cost documents wrote. Taking the second from the document tables rather than from
+    the entry is the whole point: if a posting ever put a different number on the account from
+    the one the shares recorded, this is what says so.
+    """
+    if clearing_account_id is None:
+        return
+    documents = list(
+        db.scalars(
+            select(LandedCostDocument).where(LandedCostDocument.company_id == company_id)
+        )
+    )
+
+    # 8 first, because 7 is only meaningful once it holds.
+    for document in documents:
+        if document.status != LandedCostStatus.POSTED:
+            continue
+        total = sum((line.share for line in document.lines), ZERO)
+        assert total == document.amount, (
+            f"{document.number} allocates {document.amount} and its shares sum to {total}"
+        )
+
+    allocation_entry_ids = {
+        document.journal_entry_id
+        for document in documents
+        if document.journal_entry_id is not None
+    } | {
+        document.reversal_entry_id
+        for document in documents
+        if document.reversal_entry_id is not None
+    }
+    rows = db.execute(
+        select(JournalLine.entry_id, JournalLine.base_amount)
+        .join(JournalEntry, JournalEntry.id == JournalLine.entry_id)
+        .where(
+            JournalLine.company_id == company_id,
+            JournalLine.gl_account_id == clearing_account_id,
+            JournalEntry.status == JournalStatus.POSTED,
+        )
+    ).all()
+    balance = sum((amount for _entry_id, amount in rows), ZERO)
+    booked = sum(
+        (amount for entry_id, amount in rows if entry_id not in allocation_entry_ids), ZERO
+    )
+    allocated = sum(
+        (
+            line.share
+            for document in documents
+            if document.status == LandedCostStatus.POSTED
+            for line in document.lines
+        ),
+        ZERO,
+    )
+    assert balance == booked - allocated, (
+        f"landed-cost clearing drift: the account says {balance}, booked less allocated says "
+        f"{booked - allocated} ({booked} booked, {allocated} allocated)"
+    )
+
 
 def verify_order_statuses(db: Session, company_id: int) -> list[str]:
     """Every receipt and every order whose stored status disagrees with what its lines imply.
@@ -261,3 +356,62 @@ def verify_order_statuses(db: Session, company_id: int) -> list[str]:
         if order.status != expected_purchase:
             drift.append(f"{order.number}: stored {order.status}, derived {expected_purchase}")
     return drift
+
+
+def assert_landed_cost_entries_tie_back(db: Session, company_id: int) -> None:
+    """Every `LCA-` entry belongs to the document that claims it, and a reversed document has
+    exactly one reversal.
+
+    **Why this clause exists.** Every other document in the phase reverses through
+    `posting.reverse`, which writes `journal_entries.reverses_entry_id` and is protected by a
+    unique partial index — one reversal per entry, enforced by the database. A landed cost
+    cannot reverse that way: the value it posted moves on through cost of sales, so its
+    reversal is not a mirror of its entry and the kernel will not link it (see
+    `reverse_landed_cost`). That leaves `landed_cost_documents.reversal_entry_id` carrying the
+    link on its own, and a column carrying a link on its own is a column that can drift.
+
+    So the link is proved from both ends: the document names its entries, and the entries name
+    the document back through `source_doc_type` / `source_doc_id`. A posted document owns
+    exactly its posting entry; a reversed one owns exactly that and its reversal, and nothing
+    else. A second reversal would show up here as a third entry, which is the thing the
+    kernel's index would have refused.
+    """
+    documents = list(
+        db.scalars(
+            select(LandedCostDocument).where(LandedCostDocument.company_id == company_id)
+        )
+    )
+    if not documents:
+        return
+    rows = db.execute(
+        select(JournalEntry.id, JournalEntry.source_doc_id)
+        .where(
+            JournalEntry.company_id == company_id,
+            JournalEntry.source_doc_type == "landed_cost_document",
+            JournalEntry.status == JournalStatus.POSTED,
+        )
+    ).all()
+    by_document: dict[int, set[int]] = defaultdict(set)
+    for entry_id, source_doc_id in rows:
+        assert source_doc_id is not None, (
+            f"entry {entry_id} is a landed cost and names no document"
+        )
+        by_document[int(source_doc_id)].add(int(entry_id))
+
+    for document in documents:
+        found = by_document.get(document.id, set())
+        expected = {document.journal_entry_id} if document.journal_entry_id else set()
+        if document.status == LandedCostStatus.REVERSED:
+            assert document.reversal_entry_id is not None, (
+                f"{document.number} is reversed and names no reversal entry"
+            )
+            expected = expected | {document.reversal_entry_id}
+        else:
+            assert document.reversal_entry_id is None, (
+                f"{document.number} is not reversed but names reversal entry "
+                f"{document.reversal_entry_id}"
+            )
+        assert found == expected, (
+            f"{document.number} claims entries {sorted(expected)} and the ledger carries "
+            f"{sorted(found)} back to it"
+        )

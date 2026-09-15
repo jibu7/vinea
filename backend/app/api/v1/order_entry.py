@@ -1,7 +1,7 @@
 """Order Entry (P6).
 
 Order defaults (step 1), then sales orders, purchase orders, goods receipts and the three
-order-to-document flows (step 3). The landed-cost document arrives with step 4.
+order-to-document flows (step 3), then landed cost (step 4).
 
 **The flows post nothing.** `…/invoice`, `…/receive` and `…/process-invoice` each build a
 document and hand it back for a person to look at; it is submitted through the endpoint that
@@ -22,8 +22,11 @@ from app.api.deps import AuthContext, get_db, get_tenant_context
 from app.api.idempotency import IdempotencyKey, fingerprint
 from app.core import permissions
 from app.core.errors import PermissionDeniedError
+from app.inventory import stock as stock_service
 from app.models.inventory import GoodsReceivedNote, GrnStatus
 from app.models.order_entry import (
+    LandedCostDocument,
+    LandedCostStatus,
     PurchaseOrder,
     PurchaseOrderStatus,
     SalesOrder,
@@ -32,6 +35,7 @@ from app.models.order_entry import (
 from app.order_entry import flows as order_flows
 from app.order_entry import grn as grn_service
 from app.order_entry import kits as order_kits
+from app.order_entry import landed_cost as landed_cost_service
 from app.order_entry import masters
 from app.order_entry import orders as orders_service
 from app.order_entry import quantities as order_quantities
@@ -43,6 +47,14 @@ from app.schemas.order_entry import (
     GrnRead,
     GrnReverse,
     GrnSummary,
+    LandedCostCreate,
+    LandedCostLineRead,
+    LandedCostPreview,
+    LandedCostPreviewRead,
+    LandedCostRead,
+    LandedCostReverse,
+    LandedCostShareRead,
+    LandedCostSummary,
     OrderDefaultsRead,
     OrderDefaultsUpdate,
     OrderTransition,
@@ -715,6 +727,166 @@ def process_invoice_for_grn(
     _require_view(auth)
     grn = grn_service.get_grn(db, auth.company_id, grn_id)
     return _prepared_document(order_flows.prepare_invoice_from_grn(db, auth.company_id, grn))
+
+
+# --- Landed cost (decision 9) -----------------------------------------------------------------
+
+
+@router.post("/landed-costs/preview")
+def preview_landed_cost(
+    payload: LandedCostPreview,
+    auth: AuthContext = permissions.require(permissions.OE_LANDED_COST_POST),
+    db: Session = Depends(get_db),
+) -> LandedCostPreviewRead:
+    """The shares this amount would take, computed and not posted.
+
+    A POST because the answer depends on the company's stock position at the moment it is
+    asked for and the target list is a body rather than a query string, not because it writes:
+    nothing here reaches either ledger. The screen shows this before Post, and Post runs the
+    same function — a preview with arithmetic of its own is a preview that will one day show a
+    person a set of shares and write a different one.
+    """
+    shares = landed_cost_service.preview_shares(
+        db,
+        auth.company_id,
+        amount=payload.amount,
+        basis=payload.basis,
+        grn_line_ids=tuple(payload.grn_line_ids),
+    )
+    return LandedCostPreviewRead(
+        amount=payload.amount,
+        basis=payload.basis,
+        shares=[
+            LandedCostShareRead(
+                grn_line_id=share.grn_line.id,
+                grn_id=share.grn_line.grn_id,
+                item_id=share.grn_line.item_id,
+                warehouse_id=share.grn_line.warehouse_id,
+                weight=share.weight,
+                share=share.share,
+                # A preview of the stockless rule, read without the costing lock — which is
+                # exactly why the posting does not trust it and decides again under the lock.
+                would_go_to_cogs=share.share != 0
+                and stock_service.location_balance(
+                    db, auth.company_id, share.grn_line.item_id, share.grn_line.warehouse_id
+                ).quantity
+                == 0,
+            )
+            for share in shares
+        ],
+    )
+
+
+@router.get("/landed-costs")
+def list_landed_costs(
+    status_filter: LandedCostStatus | None = Query(default=None, alias="status"),
+    cursor: int | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
+    auth: AuthContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+) -> Page[LandedCostSummary]:
+    _require_view(auth)
+    statement = select(LandedCostDocument).where(LandedCostDocument.company_id == auth.company_id)
+    if status_filter is not None:
+        statement = statement.where(LandedCostDocument.status == status_filter)
+    if cursor is not None:
+        statement = statement.where(LandedCostDocument.id > cursor)
+    rows = list(db.scalars(statement.order_by(LandedCostDocument.id).limit(limit + 1)))
+    next_cursor = rows[limit - 1].id if len(rows) > limit else None
+    return Page(
+        items=[LandedCostSummary.model_validate(row) for row in rows[:limit]],
+        next_cursor=next_cursor,
+    )
+
+
+@router.get("/landed-costs/{document_id}")
+def get_landed_cost(
+    document_id: int,
+    auth: AuthContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+) -> LandedCostRead:
+    _require_view(auth)
+    return _landed_cost_read(
+        landed_cost_service.get_landed_cost(db, auth.company_id, document_id)
+    )
+
+
+@router.post("/landed-costs", status_code=status.HTTP_201_CREATED)
+def post_landed_cost(
+    payload: LandedCostCreate,
+    request: Request,
+    response: Response,
+    idempotency_key: str = IdempotencyKey,
+    auth: AuthContext = permissions.require(permissions.OE_LANDED_COST_POST),
+    db: Session = Depends(get_db),
+) -> LandedCostRead:
+    """Spread a cost into the goods it was incurred for. Posts one entry."""
+    document, replayed = landed_cost_service.post_landed_cost(
+        db,
+        auth.company_id,
+        landed_cost_service.LandedCostInput(
+            cost_date=payload.cost_date,
+            description=payload.description,
+            amount=payload.amount,
+            basis=payload.basis,
+            grn_line_ids=tuple(payload.grn_line_ids),
+            reference=payload.reference,
+            source_document_id=payload.source_document_id,
+            source_cashbook_line_id=payload.source_cashbook_line_id,
+        ),
+        actor=auth.user,
+        idempotency_key=idempotency_key,
+        idempotency_hash=fingerprint("landed_cost_document", payload),
+        request=request,
+    )
+    db.commit()
+    response.status_code = status.HTTP_200_OK if replayed else status.HTTP_201_CREATED
+    return _landed_cost_read(document)
+
+
+@router.post("/landed-costs/{document_id}/reverse", status_code=status.HTTP_201_CREATED)
+def reverse_landed_cost(
+    document_id: int,
+    payload: LandedCostReverse,
+    request: Request,
+    idempotency_key: str = IdempotencyKey,
+    auth: AuthContext = permissions.require(permissions.OE_LANDED_COST_POST),
+    db: Session = Depends(get_db),
+) -> LandedCostRead:
+    """Take the allocation back out, at the original values. Under `block` a reversal that
+    would take value off a location the goods have since left is refused."""
+    document = landed_cost_service.get_landed_cost(db, auth.company_id, document_id)
+    landed_cost_service.reverse_landed_cost(
+        db,
+        document,
+        on_date=payload.on_date,
+        reason=payload.reason,
+        actor=auth.user,
+        idempotency_key=idempotency_key,
+        idempotency_hash=fingerprint("landed_cost_reverse", payload),
+        request=request,
+    )
+    db.commit()
+    return _landed_cost_read(document)
+
+
+def _landed_cost_read(document: LandedCostDocument) -> LandedCostRead:
+    return LandedCostRead(
+        id=document.id,
+        number=document.number,
+        cost_date=document.cost_date,
+        description=document.description,
+        reference=document.reference,
+        amount=document.amount,
+        basis=document.basis,
+        status=document.status,
+        source_document_id=document.source_document_id,
+        source_cashbook_line_id=document.source_cashbook_line_id,
+        journal_entry_id=document.journal_entry_id,
+        reversal_entry_id=document.reversal_entry_id,
+        reversed_on=document.reversed_on,
+        lines=[LandedCostLineRead.model_validate(line) for line in document.lines],
+    )
 
 
 # --- Shared ---------------------------------------------------------------------------------
