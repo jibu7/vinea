@@ -3,8 +3,8 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
-import { FileText, Undo2 } from "lucide-react";
-import { Button, buttonVariants } from "@/design/components/button";
+import { Undo2 } from "lucide-react";
+import { Button } from "@/design/components/button";
 import { IsoDatePicker } from "@/design/components/date-picker";
 import { Dialog, DialogContent } from "@/design/components/dialog";
 import { DocumentWorkspaceShell } from "@/design/components/document-workspace";
@@ -15,42 +15,38 @@ import { useToast } from "@/design/components/toast";
 import { isApiError, useHasPermission } from "@/features/auth/hooks";
 import { useCurrencies } from "@/features/gl/hooks";
 import { useInventoryLineSupport } from "@/features/inventory/line-support";
-import { usePartners } from "@/features/subledger/hooks";
-import { partnerCode } from "@/features/subledger/types";
-import { GrnStatus } from "@/lib/api-enums";
+import { LandedCostStatus } from "@/lib/api-enums";
 import { newDraftId } from "@/lib/drafts";
 import { dotted, formatDate, formatMoney, formatQuantity, todayIso } from "@/lib/format";
 import { useApiErrorToast } from "@/lib/use-api-error-toast";
-import { GRN_STATUS_TONE } from "./goods-received-screen";
-import { useGrn, useReverseGrn } from "./hooks";
+import { useLandedCost, useReverseLandedCost } from "./hooks";
+import { LANDED_COST_STATUS_TONE } from "./landed-costs-screen";
 
 /**
- * One goods receipt: what arrived, what it was valued at, and how much of it an invoice has
- * since claimed.
+ * One landed cost: what was spread, over what, and how it fell.
  *
- * **Reverse is disabled with its reason, never silently.** A receipt any part of which has
- * been matched refuses reversal with `grn_matched` — the invoice that matched it is the
- * document that has to come back first, and saying so on the button is the difference between
- * a rule and a mystery. A receipt already reversed has nothing left to undo. Everything else
- * reverses, subject to the negative-stock policy at the moment it is tried, which is the
- * service's call and arrives in this dialog if it goes against.
+ * A line marked **to cost of sales** is one whose goods had already left the location by the
+ * time the cost was posted. There was no stock left to add value to, so the share went
+ * straight to cost of sales and that line has no stock move — the alternative, holding the
+ * cost back until the goods come back, would mean holding it for ever.
  *
- * **Process invoice** hands the unmatched lines to the supplier invoice screen in matching
- * mode — the second half of the two-step. It prepares and posts nothing.
+ * **Reverse** takes the allocation out at the values it went in at, never at today's average.
+ * Under the `block` negative-stock policy a reversal that would strip value off a location the
+ * goods have since left is refused, and that refusal arrives in this dialog rather than as a
+ * toast, because it is an answer to what was just asked.
  */
-export function GrnScreen({ grnId }: { grnId: number }) {
-  const t = useTranslations("orderEntry.goodsReceipt");
+export function LandedCostScreen({ documentId }: { documentId: number }) {
+  const t = useTranslations("orderEntry.landedCost");
   const tc = useTranslations("orderEntry.common");
-  const ts = useTranslations("orderEntry.grnStatus");
+  const ts = useTranslations("orderEntry.landedCostStatus");
   const toast = useToast();
   const showApiError = useApiErrorToast();
-  const canProcess = useHasPermission()("oe:grv_process");
+  const canPost = useHasPermission()("oe:landed_cost_post");
 
-  const grn = useGrn(grnId);
-  const partners = usePartners("ap", {});
-  const support = useInventoryLineSupport({ includeInactiveItems: true });
+  const document = useLandedCost(documentId);
+  const support = useInventoryLineSupport({ includeInactiveItems: true, includeInTransitWarehouses: true });
   const currencies = useCurrencies();
-  const reverseGrn = useReverseGrn();
+  const reverse = useReverseLandedCost();
 
   const [reversing, setReversing] = useState(false);
   const [onDate, setOnDate] = useState(todayIso);
@@ -58,20 +54,20 @@ export function GrnScreen({ grnId }: { grnId: number }) {
   const [idempotencyKey, setIdempotencyKey] = useState(newDraftId);
   const [banner, setBanner] = useState<string | null>(null);
 
-  const data = grn.data;
+  const data = document.data;
   const currency = useMemo(() => {
-    const found = (currencies.data ?? []).find((c) => c.id === data?.currency_id);
+    const base = (currencies.data ?? []).find((c) => c.is_base);
     return {
-      code: found?.code ?? "",
-      decimalPlaces: found?.decimal_places ?? 0,
-      symbol: found?.symbol ?? null,
+      code: base?.code ?? "",
+      decimalPlaces: base?.decimal_places ?? 0,
+      symbol: base?.symbol ?? null,
     };
-  }, [currencies.data, data?.currency_id]);
+  }, [currencies.data]);
 
   if (!data) {
     return (
       <DocumentWorkspaceShell
-        backHref="/oe/goods-received"
+        backHref="/oe/landed-costs"
         title={t("detailTitle")}
         footer={<span className="text-xs text-[var(--vinea-ink-subtle)]">{tc("loading")}</span>}
       >
@@ -80,23 +76,16 @@ export function GrnScreen({ grnId }: { grnId: number }) {
     );
   }
 
-  const partner = partners.data?.find((p) => p.id === data.partner_id);
-  const isReversed = data.status === GrnStatus.REVERSED;
-  const anyMatched = data.lines.some((line) => Number(line.matched) > 0);
-  const anyUnmatched = data.lines.some((line) => Number(line.unmatched) > 0);
-  const receivedValue = data.lines.reduce((sum, line) => sum + Number(line.value), 0);
-
-  /** Why Reverse cannot be pressed, in the service's own terms. Null means it can. */
-  const reverseBlockedBy = isReversed
-    ? t("alreadyReversed")
-    : anyMatched
-      ? t("matchedCannotReverse")
-      : null;
+  const isReversed = data.status === LandedCostStatus.REVERSED;
 
   async function runReverse() {
     setBanner(null);
     try {
-      await reverseGrn.mutateAsync({ grnId, payload: { on_date: onDate, reason }, idempotencyKey });
+      await reverse.mutateAsync({
+        documentId,
+        payload: { on_date: onDate, reason },
+        idempotencyKey,
+      });
       toast.show({ title: t("reversed", { number: data!.number }), tone: "success" });
       setReversing(false);
       setIdempotencyKey(newDraftId());
@@ -108,69 +97,51 @@ export function GrnScreen({ grnId }: { grnId: number }) {
 
   return (
     <DocumentWorkspaceShell
-      backHref="/oe/goods-received"
+      backHref="/oe/landed-costs"
       title={data.number}
-      subtitle={dotted(partnerCode(partner!, "ap") ?? "", partner?.name ?? "")}
+      subtitle={data.description}
       statusChip={
-        <StatusChip tone={GRN_STATUS_TONE[data.status] ?? "neutral"}>{ts(data.status)}</StatusChip>
+        <StatusChip tone={LANDED_COST_STATUS_TONE[data.status] ?? "neutral"}>
+          {ts(data.status)}
+        </StatusChip>
       }
       errorBanner={banner}
       footer={
         <div className="flex items-center justify-between gap-6">
           <span className="text-sm text-[var(--vinea-ink-muted)]">
-            {t("receivedValue")}{" "}
+            {t("amount")}{" "}
             <span
               className="font-mono tabular-nums text-[var(--vinea-ink)]"
-              data-testid="grn-value"
+              data-testid="landed-cost-amount"
             >
-              {formatMoney(receivedValue, currency)}
+              {formatMoney(Number(data.amount), currency)}
             </span>
           </span>
           <div className="flex items-center gap-3">
-            {reverseBlockedBy ? (
+            {isReversed ? (
               <p className="text-xs text-[var(--vinea-ink-subtle)]" data-testid="reverse-blocked">
-                {reverseBlockedBy}
+                {t("alreadyReversed")}
               </p>
             ) : null}
             <Button
               variant="secondary"
-              disabled={!canProcess || reverseBlockedBy !== null}
+              disabled={!canPost || isReversed}
               onClick={() => setReversing(true)}
-              data-testid="reverse-grn"
+              data-testid="reverse-landed-cost"
             >
               <Undo2 className="size-3.5" /> {tc("reverse")}
             </Button>
-            {canProcess && !isReversed && anyUnmatched ? (
-              <Link
-                href={`/ap/supplier-invoices/new?grn_id=${data.id}`}
-                className={buttonVariants({ variant: "primary" })}
-                data-testid="process-invoice"
-              >
-                <FileText className="size-3.5" /> {t("processInvoice")}
-              </Link>
-            ) : (
-              <Button variant="primary" disabled title={t("nothingToInvoice")}>
-                <FileText className="size-3.5" /> {t("processInvoice")}
-              </Button>
-            )}
           </div>
         </div>
       }
     >
-      <section className="grid grid-cols-2 gap-3 rounded-[var(--radius-card)] border border-[var(--vinea-border)] bg-[var(--vinea-surface-raised)] p-4 sm:grid-cols-5">
+      <section className="grid grid-cols-2 gap-3 rounded-[var(--radius-card)] border border-[var(--vinea-border)] bg-[var(--vinea-surface-raised)] p-4 sm:grid-cols-4">
         {(
           [
-            [tc("date"), formatDate(data.grn_date)],
-            [
-              tc("warehouse"),
-              support.warehouses.find((w) => w.id === data.warehouse_id)?.code ?? tc("emptyValue"),
-            ],
-            [t("supplierReference"), data.supplier_reference ?? tc("emptyValue")],
-            [tc("description"), data.description],
-            [
-              tc("reversed"),
-              data.reversed_on ? formatDate(data.reversed_on) : tc("emptyValue"),
-            ],
+            [tc("date"), formatDate(data.cost_date)],
+            [t("basis"), t(`basis_${data.basis}`)],
+            [t("reference"), data.reference ?? tc("emptyValue")],
+            [tc("reversed"), data.reversed_on ? formatDate(data.reversed_on) : tc("emptyValue")],
           ] as Array<[string, string]>
         ).map(([label, value]) => (
           <div key={label}>
@@ -188,7 +159,7 @@ export function GrnScreen({ grnId }: { grnId: number }) {
           <Link
             href={`/gl/entries/${data.journal_entry_id}`}
             className="font-medium text-[var(--vinea-brand)] hover:underline"
-            data-testid="grn-entry-link"
+            data-testid="landed-cost-entry-link"
           >
             {t("viewEntry")}
           </Link>
@@ -210,25 +181,22 @@ export function GrnScreen({ grnId }: { grnId: number }) {
 
       <section className="space-y-2">
         <h2 className="text-xs font-medium uppercase tracking-wide text-[var(--vinea-ink-subtle)]">
-          {t("lines")}
+          {t("shares")}
         </h2>
         <Table>
           <THead>
             <TR>
               <TH className="w-12">{t("lineNo")}</TH>
               <TH>{tc("item")}</TH>
-              <TH className="w-24 text-right">{tc("quantity")}</TH>
-              <TH className="w-28 text-right">{t("unitCost")}</TH>
-              <TH className="w-32 text-right">{tc("value")}</TH>
-              <TH className="w-28 text-right">{t("matched")}</TH>
-              <TH className="w-28 text-right">{t("unmatched")}</TH>
+              <TH className="w-32">{tc("warehouse")}</TH>
+              <TH className="w-28 text-right">{t("weight")}</TH>
+              <TH className="w-36 text-right">{t("share")}</TH>
+              <TH className="w-32 text-right">{t("where")}</TH>
             </TR>
           </THead>
           <TBody>
             {data.lines.map((line) => {
               const item = support.itemById.get(line.item_id);
-              const decimals =
-                support.uomById.get(item?.base_uom_id ?? 0)?.decimal_places ?? 0;
               return (
                 <TR key={line.id}>
                   <TD className="font-mono text-xs text-[var(--vinea-ink-subtle)]">
@@ -236,39 +204,31 @@ export function GrnScreen({ grnId }: { grnId: number }) {
                   </TD>
                   <TD className="text-xs font-medium text-[var(--vinea-ink)]">
                     {item ? dotted(item.code, item.name) : line.item_id}
-                    {line.description ? (
-                      <span className="block text-[var(--vinea-ink-subtle)]">
-                        {line.description}
-                      </span>
-                    ) : null}
+                  </TD>
+                  <TD className="text-xs text-[var(--vinea-ink-muted)]">
+                    {support.warehouses.find((w) => w.id === line.warehouse_id)?.code ??
+                      tc("emptyValue")}
+                  </TD>
+                  <TD className="text-right font-mono tabular-nums text-xs text-[var(--vinea-ink-muted)]">
+                    {formatQuantity(Number(line.weight), 4)}
                   </TD>
                   <TD
                     className="text-right font-mono tabular-nums text-xs text-[var(--vinea-ink)]"
-                    data-testid="grn-line-quantity"
+                    data-testid="landed-cost-share"
                   >
-                    {formatQuantity(Number(line.quantity), decimals)}
+                    {formatMoney(Number(line.share), currency)}
                   </TD>
-                  <TD className="text-right font-mono tabular-nums text-xs text-[var(--vinea-ink-muted)]">
-                    {formatMoney(Number(line.unit_cost), currency)}
-                  </TD>
-                  <TD
-                    className="text-right font-mono tabular-nums text-xs text-[var(--vinea-ink)]"
-                    data-testid="grn-line-value"
-                  >
-                    {formatMoney(Number(line.value), currency)}
-                  </TD>
-                  <TD className="text-right font-mono tabular-nums text-xs text-[var(--vinea-ink-muted)]">
-                    {formatQuantity(Number(line.matched), decimals)}
-                  </TD>
-                  <TD className="text-right font-mono tabular-nums text-xs text-[var(--vinea-ink)]">
-                    {formatQuantity(Number(line.unmatched), decimals)}
+                  <TD className="text-right">
+                    <StatusChip tone={line.went_to_cogs ? "warning" : "neutral"}>
+                      {line.went_to_cogs ? t("toCogs") : t("toStock")}
+                    </StatusChip>
                   </TD>
                 </TR>
               );
             })}
           </TBody>
         </Table>
-        <p className="text-xs text-[var(--vinea-ink-subtle)]">{t("linesNote")}</p>
+        <p className="text-xs text-[var(--vinea-ink-subtle)]">{t("cogsNote")}</p>
       </section>
 
       <Dialog open={reversing} onOpenChange={(open) => !open && setReversing(false)}>
@@ -291,10 +251,10 @@ export function GrnScreen({ grnId }: { grnId: number }) {
               <Button
                 variant="danger"
                 onClick={runReverse}
-                disabled={!reason || reverseGrn.isPending}
+                disabled={!reason || reverse.isPending}
                 data-testid="reverse-confirm"
               >
-                {reverseGrn.isPending ? tc("saving") : t("reverseConfirm")}
+                {reverse.isPending ? tc("saving") : t("reverseConfirm")}
               </Button>
             </div>
           </div>

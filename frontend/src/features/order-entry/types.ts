@@ -1,9 +1,9 @@
 /**
  * Order-entry wire types (P6).
  *
- * Only what the **Order defaults** screen needs so far. Orders, receipts and landed costs
- * arrive with their screens at steps 7 and 8; a type written ahead of the screen that reads
- * it is a guess about a shape nobody has rendered yet.
+ * Orders, receipts, landed costs and the documents the flows prepare — each shape written
+ * against the screen that renders it, which is the only way to know a field is real rather
+ * than assumed.
  *
  * Enum-valued fields import from `@/lib/api-enums` and are re-exported here, so a screen
  * holding an `OrderDefaults` never has to reach past this module for the policy union.
@@ -416,6 +416,7 @@ export interface LandedCostSummary {
   id: number;
   number: string;
   cost_date: string;
+  description: string;
   amount: string;
   basis: LandedCostBasis;
   status: LandedCostStatus;

@@ -1,6 +1,7 @@
 "use client";
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMemo } from "react";
 import { api } from "@/lib/api";
 import type { Page } from "@/features/inventory/types";
 import type {
@@ -275,6 +276,24 @@ export function useGrn(grnId: number | null) {
     queryFn: () => api.get<Grn>(`/oe/goods-received-notes/${grnId}`),
     enabled: grnId !== null,
   });
+}
+
+/** Several receipts at once, for the landed-cost screen: one freight bill routinely covers
+ * consignments from more than one supplier, so its targets are lines from more than one GRN.
+ * One query per receipt, cached under the same keys `useGrn` uses, so a reversal refreshes
+ * them all. */
+export function useGrns(grnIds: number[]) {
+  const unique = useMemo(() => [...new Set(grnIds.filter((id) => id > 0))].sort(), [grnIds]);
+  const results = useQueries({
+    queries: unique.map((grnId) => ({
+      queryKey: [ROOT, "goods-received-notes", grnId],
+      queryFn: () => api.get<Grn>(`/oe/goods-received-notes/${grnId}`),
+    })),
+  });
+  return useMemo(
+    () => results.map((result) => result.data).filter((row): row is Grn => row !== undefined),
+    [results],
+  );
 }
 
 export function useCreateGrn() {
