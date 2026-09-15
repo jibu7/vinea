@@ -55,6 +55,11 @@ jobs:
     defaults: { run: { working-directory: frontend } }
     env:
       NEXT_PUBLIC_API_URL: http://localhost:8000
+      # Layer the e2e overlay onto every `docker compose` in this job — including the ones
+      # `make db-reset` runs — rather than repeating `-f` at eight call sites and having the
+      # ninth forget. It adds exactly one setting, the mail catcher the suite reads one-time
+      # tokens from; see docker-compose.e2e.yml.
+      COMPOSE_FILE: docker-compose.yml:docker-compose.e2e.yml
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

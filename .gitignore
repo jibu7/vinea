@@ -21,6 +21,10 @@ frontend/coverage/
 # frontend-only rule does not catch it.
 playwright-report/
 test-results/
+# The e2e mail catcher (docker-compose.e2e.yml). One-time tokens in plain text — never
+# committed, and never written at all unless EMAIL_OUTBOX_FILE is set.
+backend/.e2e-outbox.jsonl
+
 # Local Postgres data directories (rootless dev instances)
 vinea-pgdata/
 vinea-pgdata

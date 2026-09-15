@@ -4,8 +4,10 @@ Non-production runs keep the last messages in `outbox` so tests can read the one
 tokens without the API ever returning them.
 """
 
+import json
 import logging
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Any
 
 from app.config import settings
@@ -32,7 +34,34 @@ def send_email(*, to: str, subject: str, body: str, **context: Any) -> SentEmail
     if not settings.is_production:
         outbox.append(message)
         del outbox[:-_OUTBOX_LIMIT]
+        _append_to_outbox_file(message)
     return message
+
+
+def _append_to_outbox_file(message: SentEmail) -> None:
+    """Also drop the message into a file, when one is configured.
+
+    `outbox` above serves the backend's own tests, which run in this process. An end-to-end
+    test does not: Playwright drives a browser against a container, and the one-time token it
+    needs to click a reset or an invitation link exists nowhere it can reach — the token is
+    **hashed** in `user_tokens`, so the database cannot give it back either.
+
+    The alternative was an endpoint that hands the token out, which would turn a mailed secret
+    into an API affordance and undo the reason it is mailed. This is a local mail catcher with
+    no moving parts: same non-production guard, no new surface, and production refuses to boot
+    if the setting is ever set (see `Settings._harden_production`).
+
+    Failures are swallowed on purpose. A mail sink that cannot write must not take down the
+    request that was sending mail — the email itself has already been handed over.
+    """
+    path = settings.email_outbox_file
+    if not path:
+        return
+    try:
+        with Path(path).open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(asdict(message)) + "\n")
+    except OSError:  # pragma: no cover - a broken sink must not break the send
+        logger.warning("email.outbox_file_unwritable", extra={"path": path})
 
 
 def send_invitation_email(*, to: str, company_name: str, token: str) -> SentEmail:

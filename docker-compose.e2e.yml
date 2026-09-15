@@ -1,0 +1,25 @@
+# Overlay for **end-to-end runs only**. Layered on top of `docker-compose.yml`, never instead
+# of it:
+#
+#     docker compose -f docker-compose.yml -f docker-compose.e2e.yml up -d backend frontend
+#
+# or, for a whole shell or CI job, once:
+#
+#     export COMPOSE_FILE=docker-compose.yml:docker-compose.e2e.yml
+#
+# It exists for one setting. Playwright has to read one-time tokens — a password-reset link, an
+# invitation link — and those live only in the backend process's in-memory outbox: the database
+# stores them hashed, and an endpoint that handed them out would turn a mailed secret into an
+# API affordance. So the non-production mail stub also appends every message to a file, and the
+# suite reads it. A local mail catcher, with no surface added to the product.
+#
+# **Not in the default compose, and not in `.env.example` beyond a commented line.** Bringing
+# the dev stack up the ordinary way writes no tokens anywhere, and production refuses to boot
+# at all if this is ever set (`Settings._harden_production`).
+services:
+  backend:
+    environment:
+      # Inside the container `/app` is the `./backend` bind mount, so the file lands at
+      # `backend/.e2e-outbox.jsonl` on the host — readable by the suite without a shell-out,
+      # and gitignored.
+      EMAIL_OUTBOX_FILE: /app/.e2e-outbox.jsonl
