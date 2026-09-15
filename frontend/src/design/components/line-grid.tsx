@@ -161,7 +161,7 @@ const INCREASE_KINDS: ReadonlySet<string> = new Set([
 ]);
 
 export interface LineGridProps {
-  mode: "journal" | "cashbook" | "document" | "batch" | "inventory";
+  mode: "journal" | "cashbook" | "document" | "batch" | "inventory" | "order";
   rows: LineGridRow[];
   onRowsChange: (rows: LineGridRow[]) => void;
   errors?: LineErrors;
@@ -230,6 +230,19 @@ export function LineGrid({
 }: LineGridProps) {
   const inv = { ...ALL_INVENTORY_COLUMNS, ...(inventoryColumns ?? {}) };
   const isInventory = mode === "inventory";
+  /**
+   * An order line (P6 decision 3) is an **item** line with a price on it: the item, unit and
+   * warehouse of an inventory line, and the quantity, price, discount and net of a document
+   * line. It carries no GL account — the account an order line will post to is resolved by
+   * the service when a document is raised from it (decision 1), and an order posts nothing
+   * anyway. Its tax code is a column rather than an extra, because tax is part of what an
+   * order quotes a customer.
+   *
+   * Composed out of the cells the other two modes already have rather than written again:
+   * the keyboard model, the amount display and the per-cell error rendering are the grid's,
+   * and a second implementation of them is a second thing to get wrong.
+   */
+  const isOrder = mode === "order";
   // Document mode is P4 and fully externalised; the journal/cashbook literals below predate
   // it and are part of the P3 i18n backfill (docs/i18n-backfill-p3.md, issue #6).
   const t = useTranslations("lineGrid");
@@ -327,7 +340,7 @@ export function LineGrid({
             ? showExtra
               ? t("fewerColumns")
               : t("moreColumns")
-            : mode === "batch"
+            : mode === "batch" || isOrder
             ? showExtra
               ? t("fewerColumns")
               : t("moreColumns")
@@ -360,17 +373,29 @@ export function LineGrid({
                   {inv.value && <th className="px-3 py-2 text-right">{t("value")}</th>}
                 </>
               )}
-              {!isInventory && (
+              {isOrder && (
+                <>
+                  <th className="px-3 py-2 text-left">{t("item")}</th>
+                  <th className="px-3 py-2 text-left">{t("warehouse")}</th>
+                </>
+              )}
+              {!isInventory && !isOrder && (
                 <th className="px-3 py-2 text-left">{mode === "batch" ? t("contraAccount") : t("account")}</th>
               )}
               {isInventory && showExtra && inv.contra && (
                 <th className="px-3 py-2 text-left">{t("contraAccount")}</th>
               )}
               <th className="px-3 py-2 text-left">{t("description")}</th>
+              {isOrder && <th className="px-3 py-2 text-left">{t("uom")}</th>}
+              {isOrder && <th className="px-3 py-2 text-left">{t("taxCode")}</th>}
               {showExtra && !isInventory && <th className="px-3 py-2 text-left">{t("branch")}</th>}
               {showExtra && <th className="px-3 py-2 text-left">{t("project")}</th>}
-              {showExtra && !isInventory && <th className="px-3 py-2 text-left">{t("currencyRate")}</th>}
-              {showExtra && !isInventory && <th className="px-3 py-2 text-left">{t("taxCode")}</th>}
+              {showExtra && !isInventory && !isOrder && (
+                <th className="px-3 py-2 text-left">{t("currencyRate")}</th>
+              )}
+              {showExtra && !isInventory && !isOrder && (
+                <th className="px-3 py-2 text-left">{t("taxCode")}</th>
+              )}
               {mode === "journal" && (
                 <>
                   <th className="px-3 py-2 text-right">{t("debit")}</th>
@@ -388,7 +413,7 @@ export function LineGrid({
                   <th className="px-3 py-2 text-right">{t("amount")}</th>
                 </>
               )}
-              {mode === "document" && (
+              {(mode === "document" || isOrder) && (
                 <>
                   <th className="px-3 py-2 text-right">{t("quantity")}</th>
                   <th className="px-3 py-2 text-right">{t("unitPrice")}</th>
@@ -608,7 +633,45 @@ export function LineGrid({
                       )}
                     </>
                   )}
-                  {(!isInventory || (showExtra && inv.contra)) && (
+                  {isOrder && (
+                    <>
+                      <td data-row={r} data-col={COL.item} className="min-w-56 p-1 align-top">
+                        <Combobox
+                          options={itemOptions}
+                          value={row.itemId}
+                          // A new item means a new base unit, and a new price: the screen
+                          // fills those in, so the grid only clears what it knows is stale.
+                          onValueChange={(v) => updateRow(r, { itemId: v, uomId: "" })}
+                          placeholder={t("itemPlaceholder")}
+                          ariaLabel={t("itemAria", { row: r + 1 })}
+                          className={cn("h-8 w-56", itemErr && "border-[var(--vinea-danger)]")}
+                          onFocus={() => startCellEdit(r, COL.item, "itemId", row.itemId)}
+                          onKeyDown={(e) => onCellKeyDown(e, r, COL.item, "itemId")}
+                        />
+                        {itemErr && (
+                          <p className="mt-0.5 px-1 text-xs text-[var(--vinea-danger)]">{itemErr}</p>
+                        )}
+                      </td>
+                      <td data-row={r} data-col={COL.warehouse} className="min-w-40 p-1 align-top">
+                        <Combobox
+                          options={warehouseOptions}
+                          value={row.warehouseId}
+                          onValueChange={(v) => updateRow(r, { warehouseId: v })}
+                          placeholder={t("warehousePlaceholder")}
+                          ariaLabel={t("warehouseAria", { row: r + 1 })}
+                          className={cn("h-8", warehouseErr && "border-[var(--vinea-danger)]")}
+                          onFocus={() => startCellEdit(r, COL.warehouse, "warehouseId", row.warehouseId)}
+                          onKeyDown={(e) => onCellKeyDown(e, r, COL.warehouse, "warehouseId")}
+                        />
+                        {warehouseErr && (
+                          <p className="mt-0.5 px-1 text-xs text-[var(--vinea-danger)]">
+                            {warehouseErr}
+                          </p>
+                        )}
+                      </td>
+                    </>
+                  )}
+                  {((!isInventory && !isOrder) || (showExtra && inv.contra)) && (
                   <td data-row={r} data-col={COL.account} className="min-w-48 p-1 align-top">
                     <Combobox
                       options={accountOptions}
@@ -645,6 +708,47 @@ export function LineGrid({
                     />
                     {descErr && <p className="mt-0.5 px-1 text-xs text-[var(--vinea-danger)]">{descErr}</p>}
                   </td>
+                  {isOrder && (
+                    <>
+                      <td data-row={r} data-col={COL.uom} className="min-w-32 p-1 align-top">
+                        <Combobox
+                          options={uomOptionsFor?.(row) ?? []}
+                          value={row.uomId}
+                          onValueChange={(v) => updateRow(r, { uomId: v })}
+                          placeholder={t("uomPlaceholder")}
+                          ariaLabel={t("uomAria", { row: r + 1 })}
+                          className={cn("h-8", uomErr && "border-[var(--vinea-danger)]")}
+                          onFocus={() => startCellEdit(r, COL.uom, "uomId", row.uomId)}
+                          onKeyDown={(e) => onCellKeyDown(e, r, COL.uom, "uomId")}
+                        />
+                        {/* "6 x BOX12 = 72 EA" — what the line will commit in base units,
+                            shown where the unit was chosen rather than left to be worked out. */}
+                        {conversionFor?.(row) && (
+                          <p className="mt-0.5 px-1 text-xs text-[var(--vinea-ink-subtle)]">
+                            {conversionFor(row)}
+                          </p>
+                        )}
+                        {uomErr && (
+                          <p className="mt-0.5 px-1 text-xs text-[var(--vinea-danger)]">{uomErr}</p>
+                        )}
+                      </td>
+                      <td data-row={r} data-col={COL.taxCode} className="min-w-36 p-1 align-top">
+                        <Combobox
+                          options={taxCodeOptions}
+                          value={row.taxCodeId}
+                          onValueChange={(v) => updateRow(r, { taxCodeId: v })}
+                          placeholder={t("taxCodePlaceholder")}
+                          ariaLabel={`Tax code, row ${r + 1}`}
+                          className={cn("h-8", taxErr && "border-[var(--vinea-danger)]")}
+                          onFocus={() => startCellEdit(r, COL.taxCode, "taxCodeId", row.taxCodeId)}
+                          onKeyDown={(e) => onCellKeyDown(e, r, COL.taxCode, "taxCodeId")}
+                        />
+                        {taxErr && (
+                          <p className="mt-0.5 px-1 text-xs text-[var(--vinea-danger)]">{taxErr}</p>
+                        )}
+                      </td>
+                    </>
+                  )}
                   {showExtra && !isInventory && (
                     <td data-row={r} data-col={COL.branch} className="min-w-36 p-1 align-top">
                       <Combobox
@@ -675,7 +779,7 @@ export function LineGrid({
                       {projectErr && <p className="mt-0.5 px-1 text-xs text-[var(--vinea-danger)]">{projectErr}</p>}
                     </td>
                   )}
-                  {showExtra && !isInventory && (
+                  {showExtra && !isInventory && !isOrder && (
                     <td data-row={r} data-col={COL.currency} className="min-w-44 p-1 align-top">
                       <div className="flex gap-1">
                         <Combobox
@@ -704,7 +808,7 @@ export function LineGrid({
                       {currencyErr && <p className="mt-0.5 px-1 text-xs text-[var(--vinea-danger)]">{currencyErr}</p>}
                     </td>
                   )}
-                  {showExtra && !isInventory && (
+                  {showExtra && !isInventory && !isOrder && (
                     <td data-row={r} data-col={COL.taxCode} className="min-w-36 p-1 align-top">
                       <Combobox
                         options={taxCodeOptions}
@@ -807,7 +911,7 @@ export function LineGrid({
                       {amountErr && <p className="mt-0.5 text-right text-xs text-[var(--vinea-danger)]">{amountErr}</p>}
                     </td>
                   )}
-                  {mode === "document" && (
+                  {(mode === "document" || isOrder) && (
                     <>
                       <td data-row={r} data-col={COL.quantity} className="w-24 p-1 align-top">
                         <input
@@ -880,7 +984,9 @@ export function LineGrid({
             onClick={addRow}
             className="w-full border-t border-[var(--vinea-border)] px-3 py-2 text-left text-xs font-medium text-[var(--vinea-brand)] hover:bg-[var(--vinea-surface-sunken)]"
           >
-            {mode === "document" || mode === "batch" || isInventory ? t("addLine") : "+ Add line"}
+            {mode === "document" || mode === "batch" || isInventory || isOrder
+              ? t("addLine")
+              : "+ Add line"}
           </button>
         )}
       </div>
