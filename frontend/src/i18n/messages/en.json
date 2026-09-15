@@ -2206,6 +2206,22 @@
       "entryPrefix": "Journal entry:",
       "viewEntry": "View the entry",
       "viewReversalEntry": "View the reversal"
+    },
+    "breakupScreen": {
+      "title": "Breakup",
+      "subtitle": "What ships in one order’s box. Choose an open sales order and a kit line on it.",
+      "order": "Sales order",
+      "chooseOrder": "Choose an order",
+      "chooseFirst": "Choose a sales order to see the kit lines on it.",
+      "noKits": "This order has no kit lines.",
+      "lineNo": "#",
+      "components": "Components",
+      "edited": "Breakup",
+      "editedYes": "Edited by hand",
+      "editedNo": "From the catalogue",
+      "edit": "Edit breakup",
+      "openOrder": "Open {number}",
+      "note": "Only open orders are offered. What has been invoiced has shipped, and no edit here reaches the lines it went out on."
     }
   }
 }

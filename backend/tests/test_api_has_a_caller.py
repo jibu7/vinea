@@ -60,91 +60,22 @@ NO_UI: dict[str, str] = {
         "deletes expired artifacts on a schedule; there is no moment at which a person wants "
         "to press it."
     ),
-    # --- GAP: P6, endpoints ahead of their screens ----------------------------------------------
-    # These are **scheduled debt, not a decision**, and the schedule is the point: P6 builds
-    # its services in steps 1-5 and its screens in steps 6-8, so between those two points the
-    # endpoints exist and nothing calls them. Each entry is deleted by the step that builds the
-    # screen calling it, and P6's definition of done requires this list to carry no P6 entry
-    # at all.
-    #
-    # **Step 6 has taken its two.** `PUT /oe/defaults` and
-    # `PUT /inventory/items/{item_id}/kit-components` stood here until the Order defaults
-    # screen and the Items screen's Kit components section landed; they are now called from
-    # `features/order-entry/hooks.ts` and `features/inventory/hooks.ts`, so the register is
-    # down to step 7's lines.
+    # --- P6 carries no entry. -------------------------------------------------------------------
+    # There were twenty. P6 builds its services in steps 1-5 and its screens in steps 6-8, so
+    # between those two points the endpoints existed and nothing called them; each entry named
+    # the step that would delete it, and each step did. Step 6 took `PUT /oe/defaults` and
+    # `PUT /inventory/items/{item_id}/kit-components`; **step 7 took the remaining eighteen** —
+    # the sales and purchase orders and their close, cancel, invoice, receive and
+    # process-invoice flows, the breakup PUT, the goods receipt with its reverse and
+    # process-invoice, and the landed cost with its preview and reverse. P6's definition of
+    # done requires this list to carry no P6 entry at all, and it does not.
     #
     # A hook with no screen would satisfy this test and would be the worse answer: that is
     # exactly what `useReverseStockDocument` was (C.1.7), and what the AR/AP reversal was for a
-    # whole phase. An honest line in the register beats a caller that nobody can reach.
+    # whole phase. An honest line in the register beats a caller that nobody can reach. So
+    # every one of the eighteen was deleted by a screen a person can open and press, not by a
+    # hook written to satisfy the matcher.
     #
-    # Step 3's orders, receipts and flows. Their screens are **step 7** — Sales order, Purchase
-    # order and GRV, plus Breakup under Transactions → Order Entry — and that step deletes every
-    # line below. Each names the screen that owns it, so the register reads as a schedule rather
-    # than a pile.
-    "POST /api/v1/oe/sales-orders": (
-        "GAP (P6) — the Sales order screen is step 7. Remove this entry with `/oe/sales-orders`."
-    ),
-    "PUT /api/v1/oe/sales-orders/{order_id}": (
-        "GAP (P6) — editing an open order, on the same step-7 Sales order screen."
-    ),
-    "POST /api/v1/oe/sales-orders/{order_id}/close": (
-        "GAP (P6) — the Close remaining action on the step-7 Sales order screen."
-    ),
-    "POST /api/v1/oe/sales-orders/{order_id}/cancel": (
-        "GAP (P6) — the Cancel action on the step-7 Sales order screen."
-    ),
-    "POST /api/v1/oe/sales-orders/{order_id}/invoice": (
-        "GAP (P6) — the Invoice action on the step-7 Sales order screen, which opens the AR "
-        "invoice pre-filled. It posts nothing; it prepares a document."
-    ),
-    "PUT /api/v1/oe/sales-orders/{order_id}/lines/{line_id}/breakup": (
-        "GAP (P6) — the Breakup screen (Transactions → Order Entry) is step 7, and the same "
-        "action opens from the line on the order workspace."
-    ),
-    "POST /api/v1/oe/purchase-orders": (
-        "GAP (P6) — the Purchase order screen is step 7."
-    ),
-    "PUT /api/v1/oe/purchase-orders/{order_id}": (
-        "GAP (P6) — editing an open order, on the same step-7 Purchase order screen."
-    ),
-    "POST /api/v1/oe/purchase-orders/{order_id}/close": (
-        "GAP (P6) — the Close remaining action on the step-7 Purchase order screen."
-    ),
-    "POST /api/v1/oe/purchase-orders/{order_id}/cancel": (
-        "GAP (P6) — the Cancel action on the step-7 Purchase order screen."
-    ),
-    "POST /api/v1/oe/purchase-orders/{order_id}/receive": (
-        "GAP (P6) — the Receive action on the step-7 Purchase order screen, which opens the GRV "
-        "pre-filled. Prepares a receipt; posts nothing."
-    ),
-    "POST /api/v1/oe/purchase-orders/{order_id}/process-invoice": (
-        "GAP (P6) — the Process invoice action for a purchase order's service lines, step 7."
-    ),
-    "POST /api/v1/oe/goods-received-notes": (
-        "GAP (P6) — the GRV screen is step 7. The service landed at step 2 and had no endpoint "
-        "at all until step 3 needed the Receive flow to lead somewhere."
-    ),
-    "POST /api/v1/oe/goods-received-notes/{grn_id}/reverse": (
-        "GAP (P6) — the Reverse action on the step-7 GRV screen."
-    ),
-    "POST /api/v1/oe/goods-received-notes/{grn_id}/process-invoice": (
-        "GAP (P6) — the Process invoice action on the step-7 GRV screen, which opens the "
-        "supplier invoice in matching mode. Prepares a document; posts nothing."
-    ),
-    # Step 4's landed cost. Its screen is **step 7** — Landed cost under Transactions → Order
-    # Entry, with the share preview and Reverse on the detail — and that step deletes these
-    # three lines.
-    "POST /api/v1/oe/landed-costs": (
-        "GAP (P6) — the Landed cost screen is step 7. Remove this entry with `/oe/landed-costs`."
-    ),
-    "POST /api/v1/oe/landed-costs/preview": (
-        "GAP (P6) — the share preview the step-7 Landed cost screen shows before Post. A POST "
-        "because the target list is a body and the answer depends on today's stock position; "
-        "it writes nothing."
-    ),
-    "POST /api/v1/oe/landed-costs/{document_id}/reverse": (
-        "GAP (P6) — the Reverse action on the step-7 Landed cost detail screen."
-    ),
     # --- GAP: the operator console, planned but unscheduled ------------------------------------
     "POST /api/v1/operator/tenants/{company_id}/activate": (
         "GAP (SaaS admin, Appendix C.2) — the operator console has no screens in any phase yet. "

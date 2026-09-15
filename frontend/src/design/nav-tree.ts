@@ -139,11 +139,40 @@ export const navIntents: NavIntent[] = [
       // it posts the reversing entry and leaves the open item standing — and the kernel now
       // refuses it. Appendix C.1.7, the same remedy as Inventory's Documents row below.
       { label: "Documents", module: "Accounts Receivable", permission: "ar:reports_view", href: "/ar/documents" },
-      // GRV and Purchase order are P6: goods receipt and the three-way match are the
-      // purchasing cycle, not the AP subledger P4 builds. Supplier invoice, Receipt and
+      // GRV and Purchase order sit under Accounts Payable in the owner's tree and under /oe
+      // in the product: goods receipt and the three-way match are the purchasing cycle, not
+      // the AP subledger P4 builds, and the routes follow the module that owns the service
+      // rather than the menu the storeman finds them in. Supplier invoice, Receipt and
       // Payment are additions to the owner's list — master plan C.1.5.
-      { label: "GRV", module: "Accounts Payable", phase: "P6" },
-      { label: "Purchase order", module: "Accounts Payable", phase: "P6" },
+      //
+      // Both list on the view permissions the endpoint itself accepts, so a storeman with
+      // only `oe:grv_process` sees the receipts and a controller with only `oe:reports_view`
+      // sees them too — the sidebar offering a screen the API would refuse is the failure
+      // these lists exist to prevent.
+      {
+        label: "GRV",
+        module: "Accounts Payable",
+        permission: [
+          "oe:setup_manage",
+          "oe:sales_orders_manage",
+          "oe:purchase_orders_manage",
+          "oe:grv_process",
+          "oe:reports_view",
+        ],
+        href: "/oe/goods-received",
+      },
+      {
+        label: "Purchase order",
+        module: "Accounts Payable",
+        permission: [
+          "oe:setup_manage",
+          "oe:sales_orders_manage",
+          "oe:purchase_orders_manage",
+          "oe:grv_process",
+          "oe:reports_view",
+        ],
+        href: "/oe/purchase-orders",
+      },
       { label: "Supplier invoice", module: "Accounts Payable", permission: "ap:transactions_post", href: "/ap/supplier-invoices/new" },
       { label: "Return to supplier", module: "Accounts Payable", permission: "ap:transactions_post", href: "/ap/returns/new" },
       { label: "Payment", module: "Accounts Payable", permission: "ap:transactions_post", href: "/ap/payments/new" },
@@ -151,7 +180,31 @@ export const navIntents: NavIntent[] = [
       { label: "Post-dated payments", module: "Accounts Payable", permission: "ap:reports_view", href: "/ap/post-dated" },
       { label: "Account payable batches", module: "Accounts Payable", permission: "ap:transactions_post", href: "/ap/batches/new" },
       { label: "Documents", module: "Accounts Payable", permission: "ap:reports_view", href: "/ap/documents" },
-      { label: "Sales order", module: "Order Entry", phase: "P6" },
+      {
+        label: "Sales order",
+        module: "Order Entry",
+        permission: [
+          "oe:setup_manage",
+          "oe:sales_orders_manage",
+          "oe:purchase_orders_manage",
+          "oe:grv_process",
+          "oe:reports_view",
+        ],
+        href: "/oe/sales-orders",
+      },
+      // Breakup and Landed cost are Appendix C rows that had no row to be tagged: the tree
+      // carried only "Sales order" under Order Entry, so the P6 tag was covering three
+      // screens. Breakup edits what ships in one order's box (decision 8); it is reachable
+      // from the order it belongs to, and standing on its own here because that is where the
+      // owner's menu puts it and because an operator who has been told "fix the breakup on
+      // SO-14" should not have to know which screen owns it.
+      {
+        label: "Breakup",
+        module: "Order Entry",
+        permission: "oe:sales_orders_manage",
+        href: "/oe/breakup",
+      },
+      { label: "Landed cost", module: "Order Entry", permission: "oe:landed_cost_post", href: "/oe/landed-costs" },
       // Appendix C's Inventory block, in the owner's order: Journal batches, Transfers,
       // Adjustments, Counts. The tree carried three of the four, out of order, under a P5
       // tag; the screens landed at P5 step 7 and the row the tag was covering arrived with
