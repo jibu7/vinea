@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { Button } from "@/design/components/button";
 import { Combobox } from "@/design/components/combobox";
@@ -22,11 +22,18 @@ import { Select } from "@/design/components/select";
 import { StatusChip } from "@/design/components/status-chip";
 import { useToast } from "@/design/components/toast";
 import { useMe } from "@/features/auth/hooks";
+import {
+  useInvoiceFromSalesOrder,
+  useProcessInvoiceFromGrn,
+  useProcessInvoiceFromPurchaseOrder,
+} from "@/features/order-entry/hooks";
+import { useOrderLineSupport } from "@/features/order-entry/order-support";
+import type { PreparedLine } from "@/features/order-entry/types";
 import { useAccounts, useBranches, useCurrencies, useProjects, useTaxCodes } from "@/features/gl/hooks";
 import { toOptions } from "@/features/gl/lookups";
 import { isApiError } from "@/features/auth/hooks";
 import { clearDraft, loadDraft, newDraftId, saveDraft } from "@/lib/drafts";
-import { formatMoney, nowIso, todayIso } from "@/lib/format";
+import { formatMoney, formatQuantity, nowIso, todayIso, trimDecimalString } from "@/lib/format";
 import { useApiErrorToast } from "@/lib/use-api-error-toast";
 import { ControlType } from "@/lib/api-enums";
 import { dueDateFor } from "./due-date";
@@ -40,6 +47,18 @@ import {
   type InstrumentType,
   type TaxMode,
 } from "./types";
+
+/**
+ * What a flow prepared this document from, named in the query string (P6 decision 7).
+ *
+ * The flow endpoints **prepare and post nothing**: they build a document out of what an order
+ * or a receipt still has open, and it comes back through the endpoint that posts that kind of
+ * document — which is where every over-fulfilment guard already lives. So the screen the
+ * operator lands on is this one, and it asks the service for the document rather than being
+ * handed a copy through the URL: a document carried in a query string is a document that can
+ * be edited in the address bar.
+ */
+const FLOW_PARAMS = ["sales_order_id", "purchase_order_id", "grn_id"] as const;
 
 interface DocumentDraft {
   partnerId: string;
@@ -114,6 +133,23 @@ export function DocumentScreen({ spec }: { spec: DocumentScreenSpec }) {
   const [banner, setBanner] = useState<string | null>(null);
   const restored = useRef(false);
 
+  // --- P6: prepared from an order or a receipt ------------------------------------------
+  const searchParams = useSearchParams();
+  const flow = FLOW_PARAMS.map((key) => [key, searchParams.get(key)] as const).find(
+    ([, value]) => value !== null,
+  );
+  /** The prepared line each row came from, keyed by the row's own id. It carries the keys the
+   * post has to send back — which order line is being fulfilled, which receipt line relieved —
+   * and a hand-edited kit explosion where there is one. None of it is a grid cell, because
+   * none of it is the operator's to type. */
+  const [sources, setSources] = useState<Record<string, PreparedLine>>({});
+  const [outstanding, setOutstanding] = useState<PreparedLine[]>([]);
+  const prepared = useRef(false);
+  const orderSupport = useOrderLineSupport({ role: role === "ar" ? "sales" : "purchase" });
+  const invoiceFromSalesOrder = useInvoiceFromSalesOrder();
+  const invoiceFromPurchaseOrder = useProcessInvoiceFromPurchaseOrder();
+  const invoiceFromGrn = useProcessInvoiceFromGrn();
+
   const partners = usePartners(role);
   const terms = usePaymentTerms();
   const reps = useSalesReps();
@@ -127,9 +163,64 @@ export function DocumentScreen({ spec }: { spec: DocumentScreenSpec }) {
   const partnerId = form.partnerId ? Number(form.partnerId) : null;
   const enquiry = usePartnerEnquiry(role, partnerId, form.documentDate || undefined);
 
-  // --- draft autosave, keyed by the UUID that becomes the Idempotency-Key ----------------
+  // --- prepared from an order or a receipt ----------------------------------------------
   useEffect(() => {
-    if (restored.current || !companyId || !userId) return;
+    if (!flow || prepared.current) return;
+    prepared.current = true;
+    const [key, value] = flow;
+    const id = Number(value);
+    const request =
+      key === "sales_order_id"
+        ? invoiceFromSalesOrder.mutateAsync(id)
+        : key === "purchase_order_id"
+          ? invoiceFromPurchaseOrder.mutateAsync(id)
+          : invoiceFromGrn.mutateAsync(id);
+    request
+      .then((document) => {
+        const nextSources: Record<string, PreparedLine> = {};
+        const rows = document.lines.map((line) => {
+          const row = emptyLineGridRow({
+            itemId: line.item_id ? String(line.item_id) : "",
+            warehouseId: line.warehouse_id ? String(line.warehouse_id) : "",
+            quantity: trimDecimalString(line.quantity),
+            unitPrice: line.unit_price ? trimDecimalString(line.unit_price) : "",
+            discountPercent: trimDecimalString(line.discount_percent),
+            taxCodeId: line.tax_code_id ? String(line.tax_code_id) : "",
+            projectId: line.project_id ? String(line.project_id) : "",
+            description: line.description ?? "",
+          });
+          nextSources[row.id] = line;
+          return row;
+        });
+        setSources(nextSources);
+        setOutstanding(document.lines.filter((line) => line.remaining !== null));
+        setForm((current) => ({
+          ...current,
+          partnerId: String(document.partner_id),
+          documentDate: document.document_date,
+          description: document.description,
+          reference: document.reference ?? "",
+          currencyId: document.currency_id ? String(document.currency_id) : "",
+          branchId: document.branch_id ? String(document.branch_id) : "",
+          projectId: document.project_id ? String(document.project_id) : "",
+          paymentTermsId: document.payment_terms_id ? String(document.payment_terms_id) : "",
+          salesRepId: document.sales_rep_id ? String(document.sales_rep_id) : "",
+          taxMode: document.tax_mode ?? current.taxMode,
+          rows,
+        }));
+      })
+      .catch((err) => {
+        if (isApiError(err)) setBanner(err.message);
+        else showApiError(err, t("postFailed"));
+      });
+  }, [flow, invoiceFromSalesOrder, invoiceFromPurchaseOrder, invoiceFromGrn, showApiError, t]);
+
+  // --- draft autosave, keyed by the UUID that becomes the Idempotency-Key ----------------
+  // A document prepared from an order or a receipt keeps no draft. The order is the record of
+  // what is owed, and a half-edited copy of it restored days later — over quantities that have
+  // since been invoiced by someone else — is worse than losing the typing.
+  useEffect(() => {
+    if (flow || restored.current || !companyId || !userId) return;
     restored.current = true;
     const saved = loadDraft<DocumentDraft>(draftModule, companyId, userId);
     if (saved) {
@@ -137,16 +228,16 @@ export function DocumentScreen({ spec }: { spec: DocumentScreenSpec }) {
       setForm(saved.data);
       toast.show({ title: t("draftRestored"), tone: "neutral" });
     }
-  }, [companyId, userId, draftModule, t, toast]);
+  }, [flow, companyId, userId, draftModule, t, toast]);
 
   useEffect(() => {
-    if (!restored.current || !companyId || !userId) return;
+    if (flow || !restored.current || !companyId || !userId) return;
     saveDraft(draftModule, companyId, userId, {
       draftId,
       updatedAt: nowIso(),
       data: form,
     });
-  }, [form, draftId, companyId, userId, draftModule]);
+  }, [flow, form, draftId, companyId, userId, draftModule]);
 
   const selectedTerms = useMemo(
     () => (terms.data ?? []).find((row) => String(row.id) === form.paymentTermsId),
@@ -184,9 +275,14 @@ export function DocumentScreen({ spec }: { spec: DocumentScreenSpec }) {
     [accounts.data],
   );
 
+  /** A line the operator has actually filled in. An **item** line needs no price — the
+   * catalogue's is used when it is left out (decision 1) — so having an item is enough; a GL
+   * line has no catalogue to fall back on and is only a line once it has an amount. */
+  const filledRows = form.rows.filter((row) => row.unitPrice || row.itemId);
+
   const exclusiveTotal = isSettlement
     ? Number(form.amount || 0)
-    : form.rows.reduce((sum, row) => sum + lineNet(row), 0);
+    : filledRows.reduce((sum, row) => sum + lineNet(row), 0);
 
   const lineErrors: LineErrors = useMemo(() => {
     const out: LineErrors = {};
@@ -202,27 +298,75 @@ export function DocumentScreen({ spec }: { spec: DocumentScreenSpec }) {
     !!form.partnerId &&
     !!form.description &&
     !postDocument.isPending &&
-    (isSettlement ? !!form.amount && !!form.cashAccountId : form.rows.some((r) => r.unitPrice));
+    (isSettlement ? !!form.amount && !!form.cashAccountId : filledRows.length > 0);
 
   function patch(next: Partial<DocumentDraft>) {
     setForm((current) => ({ ...current, ...next }));
   }
 
+  /** Picking an item fills the price and the tax code it carries, and typing over either
+   * afterwards is the operator's business. A row that changes item loses whatever a flow had
+   * attached to it: the line no longer fulfils the order line it was built from, and sending
+   * that key on would relieve an accrual against goods nobody ordered. */
+  function onRowsChange(rows: LineGridRow[]) {
+    const changed = rows.filter((row, index) => {
+      const before = form.rows[index];
+      return before && before.id === row.id && before.itemId !== row.itemId;
+    });
+    if (changed.length > 0) {
+      setSources((current) => {
+        const next = { ...current };
+        for (const row of changed) delete next[row.id];
+        return next;
+      });
+    }
+    patch({
+      rows: rows.map((row, index) => {
+        const before = form.rows[index];
+        if (!row.itemId || before?.itemId === row.itemId) return row;
+        return {
+          ...row,
+          unitPrice: orderSupport.cataloguePrice(row.itemId),
+          taxCodeId: orderSupport.defaultTaxCode(row.itemId),
+        };
+      }),
+    });
+  }
+
   async function handlePost() {
     setBanner(null);
     setFieldErrors({});
-    const lines: DocumentLinePayload[] = form.rows
-      .filter((row) => row.unitPrice)
-      .map((row) => ({
+    const lines: DocumentLinePayload[] = filledRows.map((row) => {
+      const source = sources[row.id];
+      return {
         description: row.description || null,
         quantity: row.quantity || "1",
-        unit_price: row.unitPrice,
+        unit_price: row.unitPrice || null,
         discount_percent: row.discountPercent || "0",
         gl_account_id: row.accountId ? Number(row.accountId) : null,
         tax_code_id: row.taxCodeId ? Number(row.taxCodeId) : null,
         branch_id: row.branchId ? Number(row.branchId) : null,
         project_id: row.projectId ? Number(row.projectId) : null,
-      }));
+        item_id: row.itemId ? Number(row.itemId) : null,
+        uom_id: row.uomId ? Number(row.uomId) : null,
+        warehouse_id: row.warehouseId ? Number(row.warehouseId) : null,
+        // Only a line a flow built carries these, and it carries exactly the ones the flow
+        // put on it. A line the operator typed fulfils nothing and matches nothing.
+        sales_order_line_id: source?.sales_order_line_id ?? null,
+        purchase_order_line_id: source?.purchase_order_line_id ?? null,
+        grn_line_id: source?.grn_line_id ?? null,
+        kit_components: source?.kit_components
+          ? source.kit_components.map((component) => ({
+              item_id: Number(component.item_id),
+              quantity: component.quantity,
+              warehouse_id: component.warehouse_id,
+              project_id: component.project_id,
+              description: component.description,
+              sales_order_line_id: component.sales_order_line_id,
+            }))
+          : null,
+      };
+    });
 
     const payload: DocumentCreatePayload = {
       kind,
@@ -513,16 +657,48 @@ export function DocumentScreen({ spec }: { spec: DocumentScreenSpec }) {
           <h2 className="text-xs font-medium uppercase tracking-wide text-[var(--vinea-ink-subtle)]">
             {t("lines")}
           </h2>
+          {outstanding.length > 0 && (
+            <div
+              className="rounded-[var(--radius-card)] border border-[var(--vinea-border)] bg-[var(--vinea-surface-sunken)]/40 p-3"
+              data-testid="document-outstanding"
+            >
+              <p className="text-xs uppercase tracking-wider text-[var(--vinea-ink-subtle)]">
+                {t("outstandingTitle")}
+              </p>
+              <ul className="mt-1 space-y-1">
+                {outstanding.map((line, index) => (
+                  <li key={index} className="flex justify-between text-xs text-[var(--vinea-ink)]">
+                    <span>{orderSupport.itemLabel(line.item_id)}</span>
+                    <span className="font-mono tabular-nums">
+                      {t("outstandingLine", {
+                        quantity: formatQuantity(
+                          Number(line.remaining ?? 0),
+                          orderSupport.quantityDecimals(line.item_id),
+                        ),
+                      })}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-2 text-xs text-[var(--vinea-ink-subtle)]">{t("outstandingNote")}</p>
+            </div>
+          )}
           <LineGrid
             mode="document"
+            itemLines
             rows={form.rows}
-            onRowsChange={(rows) => patch({ rows })}
+            onRowsChange={onRowsChange}
             errors={lineErrors}
             accountOptions={toOptions(postableAccounts, (a) => `${a.code} · ${a.name}`)}
             branchOptions={toOptions(branches.data ?? [], (b) => `${b.code} · ${b.name}`)}
             projectOptions={toOptions(projects.data ?? [], (p) => `${p.code} · ${p.name}`)}
             taxCodeOptions={toOptions(taxCodes.data ?? [], (x) => `${x.code} · ${x.name}`)}
+            itemOptions={orderSupport.itemOptions}
+            warehouseOptions={orderSupport.warehouseOptions}
+            uomOptionsFor={orderSupport.uomOptionsFor}
+            conversionFor={orderSupport.conversionFor}
           />
+          <p className="text-xs text-[var(--vinea-ink-subtle)]">{t("itemLineNote")}</p>
         </section>
       )}
     </DocumentWorkspaceShell>

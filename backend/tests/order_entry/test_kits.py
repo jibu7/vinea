@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.inventory import masters as inventory_masters
 from app.kernel.errors import LedgerStateError
-from app.models.inventory import StockMove
+from app.models.inventory import ItemType, StockMove
 from app.models.order_entry import SalesOrderStatus
 from app.models.partner import PartnerRole
 from app.models.subledger import DocumentKind
@@ -213,6 +213,74 @@ def test_a_kit_invoice_moves_the_components_and_bills_the_kit(
     assert moves[0].quantity == Decimal(-4)
     assert moves[0].value == Decimal(-4000)
     assert moves[0].source_line_id == component.id
+    assert_order_invariants(db, order_entry.company_id)
+
+
+def test_a_kit_with_no_sales_account_of_its_own_still_posts(
+    db: Session, order_entry: OrderEntry
+) -> None:
+    """A kit item that leaves `sales_account_id` unset — which is the normal case, since the
+    point of a default is not having to set one per item.
+
+    This was a **500**. The component line records the account the kit's revenue went to, and
+    it was being taken from the parent *as keyed* rather than as resolved: the engine resolves
+    an unset account from the partner's default or the transaction type, and until it has run
+    the parent's is `None`. The component then carried `None` into a column that cannot hold
+    it, and the assertion guarding that column fired on a request the operator had every right
+    to make. Found by driving the Invoice action on a sales order from the step-7 screen; the
+    existing kit tests all use the fixture's kit, which names 4100 itself and so never reached
+    the fallback.
+    """
+    _stock_up(db, order_entry, Decimal(20))
+    plain_kit = inventory_masters.create_item(
+        db,
+        order_entry.company_id,
+        inventory_masters.ItemInput(
+            code="GIFT-PLAIN",
+            name="Gift pack, no account of its own",
+            uom_category_id=order_entry.stock_item.uom_category_id,
+            base_uom_id=order_entry.each.id,
+            item_type=ItemType.KIT,
+            selling_price=Decimal(3500),
+        ),
+        actor=order_entry.owner,
+    )
+    inventory_masters.replace_kit_components(
+        db,
+        order_entry.company_id,
+        plain_kit,
+        [{"component_item_id": order_entry.stock_item.id, "quantity_per_kit": Decimal(2)}],
+        actor=order_entry.owner,
+    )
+
+    document, _ = documents_service.post_document(
+        db,
+        order_entry.company_id,
+        PartnerRole.AR,
+        documents_service.DocumentInput(
+            kind=DocumentKind.INVOICE,
+            partner_id=order_entry.customer.id,
+            document_date=MARCH,
+            description="One plain gift pack",
+            lines=(
+                documents_service.LineInput(
+                    item_id=plain_kit.id,
+                    quantity=Decimal(1),
+                    unit_price=Decimal(3500),
+                    warehouse_id=order_entry.main.id,
+                ),
+            ),
+        ),
+        actor=order_entry.owner,
+    )
+
+    parent, component = document.lines
+    assert parent.gl_account_id is not None
+    # The component names the account the revenue actually went to, not an account of its own:
+    # an item's own sales account on a component would name a revenue line that does not exist.
+    assert component.gl_account_id == parent.gl_account_id
+    assert component.net_amount == ZERO
+    assert component.kit_parent_line_id == parent.id
     assert_order_invariants(db, order_entry.company_id)
 
 

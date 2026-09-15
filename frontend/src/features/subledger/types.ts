@@ -249,15 +249,42 @@ export const INSTRUMENT_TYPES: readonly InstrumentType[] = [
   "other",
 ] as const;
 
+/** One component of one kit line, in the component item's **base** unit — what ships, not a
+ * per-kit rate. A screen sends these only when it is invoicing a sales order whose kit line
+ * was broken up by hand; keyed straight onto an invoice, a kit explodes from its catalogue
+ * definition and this stays empty (P6 decision 8). */
+export interface DocumentKitComponentPayload {
+  item_id: number;
+  quantity: string;
+  warehouse_id?: number | null;
+  project_id?: number | null;
+  description?: string | null;
+  sales_order_line_id?: number | null;
+}
+
 export interface DocumentLinePayload {
   description?: string | null;
   quantity: string;
-  unit_price: string;
+  /** Optional on an **item** line — the catalogue price is used when it is left out — and
+   * required on a GL line, which has no catalogue to fall back on (P6 decision 1). */
+  unit_price?: string | null;
   discount_percent: string;
   gl_account_id?: number | null;
   tax_code_id?: number | null;
   branch_id?: number | null;
   project_id?: number | null;
+  // --- P6 item line ----------------------------------------------------------------------
+  item_id?: number | null;
+  uom_id?: number | null;
+  warehouse_id?: number | null;
+  /** What this line fulfils or matches. A flow prepares them; nothing on this screen invents
+   * one, because a line claiming to relieve a receipt it was not built from would relieve the
+   * accrual by the wrong amount. */
+  sales_order_line_id?: number | null;
+  purchase_order_line_id?: number | null;
+  grn_line_id?: number | null;
+  returns_line_id?: number | null;
+  kit_components?: DocumentKitComponentPayload[] | null;
 }
 
 export interface DocumentCreatePayload {

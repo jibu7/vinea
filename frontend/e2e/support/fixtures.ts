@@ -216,9 +216,42 @@ export async function accountIdByCode(page: Page, code: string): Promise<number>
 /** Flips the theme and waits out the `transition-colors` on every themed element. Without
  * the settle, axe samples mid-transition and reports contrast against interpolated colors
  * that are never actually painted at rest. */
+/**
+ * Flips the theme and waits for the page to **stop changing colour**, rather than for a guess
+ * at how long that takes.
+ *
+ * `buttonVariants` carries `transition-colors`, and the two palettes *invert* the brand pair:
+ * light is white ink on `#2f7a4d`, dark is `#12160f` ink on `#58b37f` (tokens.css says why —
+ * dark mode's lighter brand needs dark ink). So for the ~150ms after the attribute changes,
+ * every primary and danger button has a background travelling dark → light while its ink
+ * travels light → dark, and the two **cross**: measured at 60ms, a primary button is
+ * `rgb(71,155,106)` under `rgb(119,121,117)`, about 1.1:1.
+ *
+ * Axe reads computed colour at the moment it runs, so a scan landing in that window reports a
+ * serious `color-contrast` violation that does not exist at rest. The old fixed 200ms covered
+ * it on an idle machine and not on a loaded CI runner, which is what took `e2e (rest-3)` red
+ * while the same test passed on main an hour earlier. Reproduced 2 runs in 3 scanning with no
+ * wait; clean in 3 of 3 once settled.
+ *
+ * Not a weaker assertion — a scan of the state the test means to scan.
+ */
 export async function setTheme(page: Page, theme: "light" | "dark"): Promise<void> {
   await page.evaluate((t) => document.documentElement.setAttribute("data-theme", t), theme);
-  await page.waitForTimeout(200);
+  await page.evaluate(async () => {
+    // One frame first: `getAnimations()` returns what has *started*, and an empty list read
+    // before the style recalc has produced the transitions is the same race with extra steps.
+    await new Promise((resolve) => requestAnimationFrame(() => resolve(undefined)));
+    await Promise.all(
+      document.getAnimations().map((animation) =>
+        // Bounded, because a looping animation never finishes and this is a settle rather
+        // than a promise that the page has stopped moving for ever.
+        Promise.race([
+          animation.finished.catch(() => undefined),
+          new Promise((resolve) => setTimeout(resolve, 600)),
+        ]),
+      ),
+    );
+  });
 }
 
 export interface SeriousViolation {

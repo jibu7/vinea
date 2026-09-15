@@ -80,6 +80,15 @@ import { navIntents, type IntentLabel } from "@/design/nav-tree";
  * step 7's, and the Breakup and Landed cost rows the appendix wants under Transactions →
  * Order Entry arrive with them.
  *
+ * Amended at P6 step 7: the last three `P6` tags cleared, and the two Order Entry rows the
+ * appendix wants beside them added. "GRV", "Purchase order" and "Sales order" are the
+ * ordinary kind of edit — the screens landed, at `/oe/goods-received`, `/oe/purchase-orders`
+ * and `/oe/sales-orders`. **"Breakup"** and **"Landed cost"** are the other kind, and the same
+ * kind P5 steps 6 and 7 made twice: not new scope, but rows the tag was covering. Appendix C
+ * reads "Sales Order, Breakup, Landed Cost" for Transactions → Order Entry and the tree only
+ * ever carried the first, so the tag stood for three screens and could only ever be cleared
+ * by one. `navIntents` now carries no P6 tag at all, which the guard below pins.
+ *
  * Amended before P6 step 1 with **"Documents"** under Transactions → AR and → AP, the other
  * half of that same C.1.7 entry. The appendix already recorded it: "the same hole is open in
  * AR and AP, one phase older and twice over". `POST /{role}/documents/{id}/reverse` and
@@ -136,8 +145,8 @@ const APPENDIX_C: Record<IntentLabel, Array<[string, string, string | null]>> = 
     ["Accounts Receivable", "Post-dated receipts", null],
     ["Accounts Receivable", "Account receivable batches", null],
     ["Accounts Receivable", "Documents", null],
-    ["Accounts Payable", "GRV", "P6"],
-    ["Accounts Payable", "Purchase order", "P6"],
+    ["Accounts Payable", "GRV", null],
+    ["Accounts Payable", "Purchase order", null],
     ["Accounts Payable", "Supplier invoice", null],
     ["Accounts Payable", "Return to supplier", null],
     ["Accounts Payable", "Payment", null],
@@ -145,7 +154,9 @@ const APPENDIX_C: Record<IntentLabel, Array<[string, string, string | null]>> = 
     ["Accounts Payable", "Post-dated payments", null],
     ["Accounts Payable", "Account payable batches", null],
     ["Accounts Payable", "Documents", null],
-    ["Order Entry", "Sales order", "P6"],
+    ["Order Entry", "Sales order", null],
+    ["Order Entry", "Breakup", null],
+    ["Order Entry", "Landed cost", null],
     ["Inventory", "Journal batches", null],
     ["Inventory", "Transfers", null],
     ["Inventory", "Adjustments", null],
@@ -206,13 +217,15 @@ describe("the Appendix C navigation contract", () => {
     );
   });
 
-  it("has no P4 or P5 tag left anywhere in the tree", () => {
-    // Both phases are complete in the nav: P4 at its step 9, P5 at step 8. A tag left on a
-    // screen that exists is a row nobody can reach, which is exactly how such a row goes
-    // unnoticed — the table above would still pass, because it pins the tag it finds.
+  it("has no P4, P5 or P6 tag left anywhere in the tree", () => {
+    // All three phases are complete in the nav: P4 at its step 9, P5 at step 8, P6 at step 7.
+    // A tag left on a screen that exists is a row nobody can reach, which is exactly how such
+    // a row goes unnoticed — the table above would still pass, because it pins the tag it
+    // finds.
+    const done = new Set(["P4", "P5", "P6"]);
     const stillTagged = navIntents.flatMap((intent) =>
       intent.items
-        .filter((item) => item.phase === "P4" || item.phase === "P5")
+        .filter((item) => item.phase !== undefined && done.has(item.phase))
         .map((item) => `${intent.label}/${item.module}/${item.label} (${item.phase})`),
     );
     expect(stillTagged).toEqual([]);

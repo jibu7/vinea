@@ -39,14 +39,15 @@ describe("SidebarNav permission filtering", () => {
   it("always renders phase-tagged items, disabled, regardless of permissions", () => {
     render(<SidebarNav permissions={new Set()} />);
 
-    // Order Entry's GRV, still P6 — its screen is step 7. This assertion has now moved
-    // twice for the same reason: it read "Items" until P5 step 6 and "Order defaults" until
-    // P6 step 6, each time because the row it named went live. It has to point at something
-    // actually still tagged or it stops testing the tagging at all.
-    const tagged = screen.getByText("GRV");
+    // Bill of Materials, P12. This assertion has now moved four times for the same reason:
+    // it read "Items" until P5 step 6, "Order defaults" until P6 step 6 and "GRV" until P6
+    // step 7, each time because the row it named went live. It has to point at something
+    // actually still tagged or it stops testing the tagging at all — so this time it points
+    // at the furthest-out phase in the tree rather than the nearest.
+    const tagged = screen.getByText("BOM items & defaults");
     expect(tagged).toBeInTheDocument();
     expect(tagged.tagName).toBe("SPAN"); // disabled items render as inert text, not a link
-    expect(screen.getAllByText("P6").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("P12").length).toBeGreaterThan(0);
   });
 
   it("renders a live item's label as a link, not disabled text", () => {
@@ -263,16 +264,28 @@ describe("P6 maintenance screens", () => {
     expect(link).toHaveAttribute("href", "/maintenance/order-defaults");
   });
 
-  it("leaves Order defaults untagged, and the other P6 rows tagged until step 7", () => {
+  it("leaves no P6 row tagged, and gives every order-entry transaction screen a route", () => {
     const maintenance = navIntents.find((i) => i.label === "Maintenance")!;
     const defaults = maintenance.items.find((item) => item.label === "Order defaults");
     expect(defaults?.phase).toBeUndefined();
     expect(defaults?.href).toBe("/maintenance/order-defaults");
 
+    // Step 7 clears the last three tags and adds the two rows the tag was covering. A row
+    // still tagged here is a screen nobody can reach from the sidebar; a row live with no
+    // href is worse, because it renders as a link to nowhere.
     const transactions = navIntents.find((i) => i.label === "Transactions")!;
+    expect(transactions.items.filter((item) => item.phase === "P6")).toEqual([]);
     expect(
-      transactions.items.filter((item) => item.phase === "P6").map((item) => item.label),
-    ).toEqual(["GRV", "Purchase order", "Sales order"]);
+      transactions.items
+        .filter((item) => ["GRV", "Purchase order", "Sales order", "Breakup", "Landed cost"].includes(item.label))
+        .map((item) => [item.label, item.href]),
+    ).toEqual([
+      ["GRV", "/oe/goods-received"],
+      ["Purchase order", "/oe/purchase-orders"],
+      ["Sales order", "/oe/sales-orders"],
+      ["Breakup", "/oe/breakup"],
+      ["Landed cost", "/oe/landed-costs"],
+    ]);
   });
 
   it("hides Order defaults from a role holding none of the order-entry permissions", () => {

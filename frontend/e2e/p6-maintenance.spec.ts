@@ -110,6 +110,58 @@ async function openKitComponents(page: Page, code: string) {
   await page.getByRole("tab", { name: "Kit components" }).click();
 }
 
+/**
+ * The kit, whoever made it.
+ *
+ * The test below it opens the kit editor, and the kit is created by the *catalogue* test
+ * above — through the screen, which is what that test is about. Depending on it was a trap
+ * with a sharp edge: Playwright retries in a **fresh worker**, so `SUFFIX` (a module-level
+ * `Date.now()`) is re-evaluated and `KIT_CODE` becomes a code nothing has ever created. The
+ * accessibility test could therefore only ever pass on its first attempt — a retry failed
+ * looking for a row that did not exist, which is not the failure the retry was called to
+ * re-examine and hid the one that was. CI showed exactly that: attempt one failed on an axe
+ * violation, attempt two on `E2EKIT392488` not being in the table.
+ *
+ * So it makes its own when it has to, through the API — the screen path stays the catalogue
+ * test's to prove, and this one stops depending on which worker it landed in.
+ */
+async function ensureKit(page: Page): Promise<void> {
+  const existing = await pageFetch(page, "/inventory/items?include_inactive=true");
+  const items = existing.json as Array<{ id: number; code: string }>;
+  if (items.some((item) => item.code === KIT_CODE)) return;
+
+  const { bottle, coffee } = await seedComponents(page);
+  const categories = await pageFetch(page, "/inventory/uom-categories");
+  const rows = categories.json as Array<{ code: string; id: number; uoms: Array<{ id: number; code: string }> }>;
+  const count = rows.find((c) => c.code === "COUNT")!;
+  const kit = await pageFetch(page, "/inventory/items", {
+    method: "POST",
+    body: {
+      code: KIT_CODE,
+      name: `E2E Gift kit ${SUFFIX}`,
+      uom_category_id: count.id,
+      base_uom_id: count.uoms.find((u) => u.code === "EA")!.id,
+      item_type: "kit",
+      selling_price: "3500",
+    },
+  });
+  expect(kit.ok, JSON.stringify(kit.json)).toBe(true);
+  const defined = await pageFetch(
+    page,
+    `/inventory/items/${(kit.json as { id: number }).id}/kit-components`,
+    {
+      method: "PUT",
+      body: {
+        components: [
+          { component_item_id: bottle.id, quantity_per_kit: "2" },
+          { component_item_id: coffee.id, quantity_per_kit: "0.75" },
+        ],
+      },
+    },
+  );
+  expect(defined.ok, JSON.stringify(defined.json)).toBe(true);
+}
+
 /** Closes the drawer and waits for it to be gone. `Escape` is not enough on its own: while a
  * Radix dialog is open the page behind it is `aria-hidden`, so a `getByLabel` that follows
  * resolves against a tree the test cannot actually type into. */
@@ -323,6 +375,7 @@ test.describe("Order entry maintenance", () => {
     // The editor is the part with the controls, so it gets its own pass with the drawer open.
     test("the kit components editor — light and dark", async ({ page }) => {
       await login(page, PRIMARY_EMAIL);
+      await ensureKit(page);
       await openKitComponents(page, KIT_CODE);
       await page.getByRole("button", { name: /Edit definition/ }).click();
 

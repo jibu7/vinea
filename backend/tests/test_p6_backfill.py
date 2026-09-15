@@ -12,6 +12,7 @@ phase, upgrade to head, assert every back-filled row. It runs on its own throwaw
 so it cannot disturb the suite's schema.
 """
 
+import os
 from collections.abc import Iterator
 
 import pytest
@@ -23,7 +24,13 @@ from alembic import command
 from app.core.permissions import ALL_PERMISSIONS
 from tests.conftest import ADMIN_URL
 
-BACKFILL_DB = f"{ADMIN_URL.database}_p6_backfill"
+#: **Per process**, exactly as `conftest.py` names its own test database, and for a reason the
+#: suite going parallel made sharp: this fixture drops and re-creates the scratch database and
+#: terminates every other connection to it. A fixed name is a cluster-global resource, so two
+#: xdist workers running two tests from this file killed each other's connections mid-test —
+#: "server closed the connection unexpectedly", which reads like an infrastructure fault and is
+#: not one. One database per worker, and the race cannot be run.
+BACKFILL_DB = f"{ADMIN_URL.database}_p6_backfill_{os.getpid()}"
 PRE_P6_REVISION = "0017_p5_count_enter"
 
 # The slice of `rw_sme_v1` the P6 back-fill keys off, as a pre-P6 tenant would have had it:

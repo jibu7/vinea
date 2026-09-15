@@ -482,6 +482,10 @@ class LandedCostSummary(ApiModel):
     id: int
     number: str
     cost_date: date
+    #: What the cost was for, in the words it was keyed with. A listing of numbers and amounts
+    #: with no description cannot answer "which one was the freight on the March container?",
+    #: which is the only question anyone opens this listing to ask.
+    description: str
     amount: Decimal
     basis: LandedCostBasis
     status: LandedCostStatus

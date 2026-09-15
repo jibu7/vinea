@@ -783,7 +783,14 @@ def post_document(
                 unit_price=line.unit_price,
                 discount_percent=line.source.discount_percent,
                 gl_account_id=_line_account_id(
-                    entry, net_positions[index - 1], line.gl_account_id
+                    entry,
+                    net_positions[index - 1],
+                    line.gl_account_id,
+                    parent_position=(
+                        net_positions[line.kit_parent_index]
+                        if line.kit_parent_index is not None
+                        else None
+                    ),
                 ),
                 # Denormalised from the document above it, and held equal to it by a composite
                 # foreign key — which is what lets the AR/AP order-link rule be a CHECK rather
@@ -897,17 +904,31 @@ def _assert_order_links(
             )
 
 
-def _line_account_id(entry: JournalEntry, position: int | None, fallback: int | None) -> int:
+def _line_account_id(
+    entry: JournalEntry,
+    position: int | None,
+    fallback: int | None,
+    *,
+    parent_position: int | None = None,
+) -> int:
     """The engine resolved the account (line override, partner default, transaction type);
     read it back rather than re-deriving it, so the document and the ledger agree.
 
-    A kit component posts no journal line, so it has no position to read back and keeps the
-    account the explosion gave it — the parent's, which is where the kit's revenue went.
+    A kit component posts no journal line, so it has no position of its own and records the
+    account the kit's revenue actually went to — the **parent's**, read back off the entry for
+    the same reason the parent reads its own back. Taking it from the explosion instead was
+    wrong twice over: the parent's account is not resolved until the engine runs, so at
+    explosion time it is whatever the line was keyed with, and a kit line is normally keyed
+    with nothing at all. That left the component with `None` and the assertion below firing —
+    a 500 on every kit line whose item carries no sales account of its own, which is most of
+    them, since the point of a default is not having to set one per item.
     """
-    if position is None:
-        assert fallback is not None, "a line with no journal line must carry its own account"
-        return fallback
-    return entry.lines[position].gl_account_id
+    if position is not None:
+        return entry.lines[position].gl_account_id
+    if parent_position is not None:
+        return entry.lines[parent_position].gl_account_id
+    assert fallback is not None, "a line with no journal line must carry its own account"
+    return fallback
 
 
 def _replay(

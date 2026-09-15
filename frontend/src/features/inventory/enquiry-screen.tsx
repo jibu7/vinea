@@ -18,6 +18,7 @@ import { StatusChip } from "@/design/components/status-chip";
 import { TBody, TD, TH, THead, TR, Table } from "@/design/components/table";
 import { useAccounts, useCompanyDetails, useCurrencies, useJournalEntry } from "@/features/gl/hooks";
 import { byId } from "@/features/gl/lookups";
+import { cn } from "@/lib/cn";
 import { exportToCsv } from "@/lib/csv";
 import { dotted, formatDate, formatMoney, formatQuantity, todayIso } from "@/lib/format";
 import { useItemEnquiry } from "./hooks";
@@ -234,6 +235,9 @@ export function ItemEnquiryScreen() {
                     <TH>{tr("name")}</TH>
                     <TH className="text-right">{tr("quantity")}</TH>
                     <TH className="text-right">{tr("value")}</TH>
+                    <TH className="text-right">{t("committed")}</TH>
+                    <TH className="text-right">{t("onOrder")}</TH>
+                    <TH className="text-right">{t("available")}</TH>
                   </TR>
                 </THead>
                 <TBody>
@@ -277,11 +281,39 @@ export function ItemEnquiryScreen() {
                         <TD className="text-right font-mono text-xs tabular-nums">
                           {money(location.value)}
                         </TD>
+                        <TD
+                          className="text-right font-mono text-xs tabular-nums text-[var(--vinea-ink-muted)]"
+                          data-testid="location-committed"
+                        >
+                          {quantity(location.committed)}
+                        </TD>
+                        <TD
+                          className="text-right font-mono text-xs tabular-nums text-[var(--vinea-ink-muted)]"
+                          data-testid="location-on-order"
+                        >
+                          {quantity(location.on_order)}
+                        </TD>
+                        {/* Signed, and coloured where it is negative rather than silently
+                            absolute: the company has promised more than it holds. */}
+                        <TD
+                          className={cn(
+                            "text-right font-mono text-xs tabular-nums",
+                            Number(location.available) < 0
+                              ? "text-[var(--vinea-warning)]"
+                              : "text-[var(--vinea-ink)]",
+                          )}
+                          data-testid="location-available"
+                        >
+                          {quantity(location.available)}
+                        </TD>
                       </TR>
                     );
                   })}
                 </TBody>
               </Table>
+            )}
+            {data.locations.length > 0 && (
+              <p className="pt-2 text-xs text-[var(--vinea-ink-subtle)]">{t("availableNote")}</p>
             )}
           </ReportPanel>
 

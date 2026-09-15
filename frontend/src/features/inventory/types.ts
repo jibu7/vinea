@@ -519,6 +519,15 @@ export interface EnquiryLocation {
   is_in_transit: boolean;
   quantity: string;
   value: string;
+  // --- P6 decision 4. Queries over open order lines, never columns. ----------------------
+  /** Σ (ordered − invoiced) over open **sales** order lines at this warehouse. */
+  committed: string;
+  /** Σ (ordered − received) over open **purchase** order lines at this warehouse. */
+  on_order: string;
+  /** `quantity − committed`, and **signed**: negative is a backorder, which the default
+   * policy permits. The screen shows the sign rather than the absolute value, because minus
+   * nine is a different fact from nine and the operator is entitled to both. */
+  available: string;
 }
 
 /** One move, with every key the screen needs to drill onwards from it. */
