@@ -36,11 +36,14 @@ from app.inventory import stock as stock_service
 from app.models.inventory import GoodsReceivedNote, GoodsReceivedNoteLine, GrnStatus, Item
 from app.models.journal import JournalEntry
 from app.models.order_entry import (
+    OPEN_PURCHASE_STATUSES,
     OPEN_SALES_STATUSES,
     LandedCostDocument,
     LandedCostLine,
     PurchaseOrder,
+    PurchaseOrderLine,
     SalesOrder,
+    SalesOrderLine,
 )
 from app.models.partner import Partner
 from app.models.subledger import DocumentStatus, PartnerDocument, PartnerDocumentLine
@@ -847,4 +850,353 @@ def landed_cost_listing(  # noqa: PLR0913
         rows=rows,
         next_cursor=page[-1][0].id if has_more and page else None,
         total_allocated=total,
+    )
+
+
+# --- The order reports, per line (P6 step 8) ----------------------------------------------------
+#
+# The two listings above answer "which receipts" and "what did the freight cost". These answer
+# the question the plan's step 8 names for the order reports — *what is still outstanding* —
+# and they answer it **per line**, which is the only grain that can.
+#
+# An order-level figure cannot. `SalesOrderSummary.backordered` sums base quantities across
+# lines that may be counted in different units, so three kilograms short and two crates short
+# reads five; that is a recorded step-9 finding, and the rule here is that step 8 must not add
+# a second one. So nothing in this section sums a quantity across units: each row carries its
+# own unit, and the totals are **subtotalled by unit** and counted, never added together. The
+# same rule runs one column across for money, because an order's `exchange_rate` is display
+# only (decision 3) and there is therefore no rate that could put two currencies on one line.
+
+
+@dataclass(frozen=True)
+class OrderLineRow:
+    """One order line, its header, and what is still owed on it.
+
+    `ordered`, `fulfilled` and `remaining` are in the **item's base unit**: they come from the
+    same view the order service and the enquiry read, so the report cannot disagree with the
+    screen that raised the order. `quantity` beside them is what was keyed, in `uom_id`, and
+    the two differ on any line entered in something other than the base unit.
+    """
+
+    order_id: int
+    number: str
+    order_date: date
+    expected_date: date | None
+    partner_id: int
+    partner_name: str
+    status: str
+    currency_id: int
+    reference: str | None
+    line_id: int
+    line_no: int
+    item_id: int
+    item_code: str
+    item_name: str
+    #: The unit the line was keyed in.
+    uom_id: int
+    #: The unit `ordered`, `fulfilled` and `remaining` are counted in.
+    base_uom_id: int
+    warehouse_id: int | None
+    description: str | None
+    quantity: Decimal
+    ordered: Decimal
+    fulfilled: Decimal
+    remaining: Decimal
+    unit_price: Decimal
+    net_amount: Decimal
+    tax_amount: Decimal
+    gross_amount: Decimal
+    kit_parent_line_id: int | None
+
+
+@dataclass(frozen=True)
+class UnitSubtotal:
+    """Σ ordered and Σ remaining for **one unit**, over the whole filtered set.
+
+    A list of these rather than one number, because there is no such thing as the total of
+    3 kg and 2 crates. Printing one anyway is easy, which is exactly why the rule has to be
+    stated somewhere rather than left to whoever writes the next report.
+    """
+
+    uom_id: int
+    ordered: Decimal
+    remaining: Decimal
+
+
+@dataclass(frozen=True)
+class CurrencySubtotal:
+    """Σ net and Σ gross for **one currency**, over the whole filtered set."""
+
+    currency_id: int
+    net_amount: Decimal
+    gross_amount: Decimal
+
+
+@dataclass(frozen=True)
+class OrderLineListing:
+    rows: list[OrderLineRow]
+    next_cursor: int | None
+    #: How many lines the filters select — the one total that is always a number, and the
+    #: fallback the plan names: "count lines or subtotal by unit".
+    line_count: int
+    by_unit: list[UnitSubtotal]
+    by_currency: list[CurrencySubtotal]
+
+
+#: The statuses that can still owe something, per side. A closed or cancelled order owes
+#: nothing by decision; an invoiced or fully received one owes nothing by arithmetic.
+_OPEN_BY_SIDE = {
+    "sales": OPEN_SALES_STATUSES,
+    "purchase": OPEN_PURCHASE_STATUSES,
+}
+
+
+@dataclass(frozen=True)
+class _Side:
+    """Which tables the two reports differ by — everything else about them is identical."""
+
+    view: object
+    line_model: type
+    order_model: type
+    line_key: str
+    order_key: str
+    done_key: str
+
+
+_SIDES = {
+    "sales": _Side(
+        view=order_quantities.sales_order_line_quantities,
+        line_model=SalesOrderLine,
+        order_model=SalesOrder,
+        line_key="sales_order_line_id",
+        order_key="sales_order_id",
+        done_key="invoiced",
+    ),
+    "purchase": _Side(
+        view=order_quantities.purchase_order_line_quantities,
+        line_model=PurchaseOrderLine,
+        order_model=PurchaseOrder,
+        line_key="purchase_order_line_id",
+        order_key="purchase_order_id",
+        done_key="received",
+    ),
+}
+
+
+def _order_line_filters(  # noqa: PLR0913
+    statement: Select,
+    side: _Side,
+    *,
+    company_id: int,
+    partner_id: int | None,
+    status: str | None,
+    warehouse_id: int | None,
+    item_id: int | None,
+    date_from: date | None,
+    date_to: date | None,
+    outstanding_only: bool,
+    side_name: str,
+) -> Select:
+    """The joins and the wheres, applied to whatever column list the caller asked for.
+
+    One function rather than two because the page and its subtotals must select the **same**
+    rows: a total computed over a set the page is not a window into is a number that agrees
+    with nothing, and that divergence is invisible until somebody reconciles the report against
+    the ledger — which is precisely what the goods-received report is for.
+    """
+    view = side.view
+    done_column = getattr(view.c, side.done_key)
+    # `select_from(view)` rather than letting the planner infer the first table: a subtotal
+    # selects only aggregate columns, none of which names the view, and SQLAlchemy would open
+    # the FROM on whichever mapped table it saw first — leaving the view dangling as a second
+    # FROM entry and the join condition referring to nothing. Postgres refuses that outright,
+    # which is the good case; the bad one is a query that runs and cross-joins.
+    statement = (
+        statement.select_from(view)
+        .join(side.line_model, side.line_model.id == getattr(view.c, side.line_key))
+        .join(side.order_model, side.order_model.id == getattr(view.c, side.order_key))
+        .join(Item, Item.id == view.c.item_id)
+        .join(Partner, Partner.id == side.order_model.partner_id)
+        .where(
+            view.c.company_id == company_id,
+            side.line_model.company_id == company_id,
+            side.order_model.company_id == company_id,
+            Item.company_id == company_id,
+        )
+    )
+    if partner_id is not None:
+        statement = statement.where(side.order_model.partner_id == partner_id)
+    if status is not None:
+        statement = statement.where(side.order_model.status == status)
+    if warehouse_id is not None:
+        statement = statement.where(view.c.warehouse_id == warehouse_id)
+    if item_id is not None:
+        statement = statement.where(view.c.item_id == item_id)
+    if date_from is not None:
+        statement = statement.where(side.order_model.order_date >= date_from)
+    if date_to is not None:
+        statement = statement.where(side.order_model.order_date <= date_to)
+    if outstanding_only:
+        # Both halves are needed. The status is the **decision** — Close remaining takes the
+        # order out of this set and that is the whole of how closing releases what it held
+        # (decision 3) — and `ordered > fulfilled` is the **arithmetic**, which drops a line
+        # that has been delivered in full while its order is still open for its siblings.
+        statement = statement.where(
+            side.order_model.status.in_(_OPEN_BY_SIDE[side_name]),
+            view.c.ordered > done_column,
+        )
+    return statement
+
+
+def order_line_report(  # noqa: PLR0913
+    db: Session,
+    company_id: int,
+    *,
+    side: str,
+    partner_id: int | None = None,
+    status: str | None = None,
+    warehouse_id: int | None = None,
+    item_id: int | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    outstanding_only: bool = False,
+    cursor: int | None = None,
+    limit: int = 50,
+) -> OrderLineListing:
+    """Order lines with what each one still owes — the Sales orders and Purchase orders reports.
+
+    `outstanding_only` is the filter the *outstanding orders* invariant is stated against: a
+    sales order with a backorder appears here with its remaining quantity, and after **Close
+    remaining** it does not. Nothing is written to make that true and no flag is cleared — the
+    order leaves `_OPEN_BY_SIDE` and the row stops being selected. The purchase side falls out
+    the same way after a receipt of the full quantity, by arithmetic rather than by decision.
+
+    The subtotals are over the **filtered set** and not the page, for the reason
+    `unmatched_total` is: a page is not the report.
+    """
+    chosen = _SIDES[side]
+    view = chosen.view
+    line_id_column = getattr(view.c, chosen.line_key)
+    done_column = getattr(view.c, chosen.done_key)
+    #: Floored, like `_sum_outstanding`: a line delivered beyond what it ordered must not lend
+    #: its excess to the subtotal and quietly reduce what a sibling still owes.
+    remaining = func.greatest(view.c.ordered - done_column, 0)
+
+    def filtered(statement: Select) -> Select:
+        return _order_line_filters(
+            statement,
+            chosen,
+            company_id=company_id,
+            partner_id=partner_id,
+            status=status,
+            warehouse_id=warehouse_id,
+            item_id=item_id,
+            date_from=date_from,
+            date_to=date_to,
+            outstanding_only=outstanding_only,
+            side_name=side,
+        )
+
+    page_statement = filtered(
+        select(
+            line_id_column.label("line_id"),
+            view.c.ordered,
+            done_column.label("fulfilled"),
+            remaining.label("remaining"),
+            Item.code.label("item_code"),
+            Item.name.label("item_name"),
+            Item.base_uom_id,
+            Partner.name.label("partner_name"),
+            chosen.line_model,
+            chosen.order_model,
+        )
+    )
+    if cursor is not None:
+        page_statement = page_statement.where(line_id_column > cursor)
+    listed = db.execute(page_statement.order_by(line_id_column).limit(limit + 1)).all()
+    has_more = len(listed) > limit
+    page = listed[:limit]
+
+    rows = [
+        OrderLineRow(
+            order_id=order.id,
+            number=order.number,
+            order_date=order.order_date,
+            expected_date=order.expected_date,
+            partner_id=order.partner_id,
+            partner_name=row.partner_name,
+            status=str(order.status),
+            currency_id=order.currency_id,
+            reference=order.reference,
+            line_id=int(row.line_id),
+            line_no=line.line_no,
+            item_id=line.item_id,
+            item_code=row.item_code,
+            item_name=row.item_name,
+            uom_id=line.uom_id,
+            base_uom_id=int(row.base_uom_id),
+            warehouse_id=line.warehouse_id,
+            description=line.description,
+            quantity=line.quantity,
+            ordered=Decimal(row.ordered),
+            fulfilled=Decimal(row.fulfilled),
+            remaining=Decimal(row.remaining),
+            unit_price=line.unit_price,
+            net_amount=line.net_amount,
+            tax_amount=line.tax_amount,
+            gross_amount=line.gross_amount,
+            kit_parent_line_id=getattr(line, "kit_parent_line_id", None),
+        )
+        for row, line, order in (
+            (
+                row,
+                getattr(row, chosen.line_model.__name__),
+                getattr(row, chosen.order_model.__name__),
+            )
+            for row in page
+        )
+    ]
+
+    by_unit = [
+        UnitSubtotal(
+            uom_id=int(uom_id), ordered=Decimal(ordered or 0), remaining=Decimal(left or 0)
+        )
+        for uom_id, ordered, left in db.execute(
+            filtered(
+                select(
+                    Item.base_uom_id,
+                    func.sum(view.c.ordered),
+                    func.sum(remaining),
+                )
+            )
+            .group_by(Item.base_uom_id)
+            .order_by(Item.base_uom_id)
+        ).all()
+    ]
+    by_currency = [
+        CurrencySubtotal(
+            currency_id=int(currency_id),
+            net_amount=Decimal(net or 0),
+            gross_amount=Decimal(gross or 0),
+        )
+        for currency_id, net, gross in db.execute(
+            filtered(
+                select(
+                    chosen.order_model.currency_id,
+                    func.sum(chosen.line_model.net_amount),
+                    func.sum(chosen.line_model.gross_amount),
+                )
+            )
+            .group_by(chosen.order_model.currency_id)
+            .order_by(chosen.order_model.currency_id)
+        ).all()
+    ]
+    line_count = int(db.scalar(filtered(select(func.count(line_id_column)))) or 0)
+
+    return OrderLineListing(
+        rows=rows,
+        next_cursor=int(page[-1].line_id) if has_more and page else None,
+        line_count=line_count,
+        by_unit=by_unit,
+        by_currency=by_currency,
     )

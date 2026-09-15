@@ -1441,6 +1441,7 @@ def item_enquiry(
         item_code=enquiry.item.code,
         item_name=enquiry.item.name,
         base_uom_id=enquiry.item.base_uom_id,
+        item_type=enquiry.item.item_type,
         as_of=enquiry.as_of,
         date_from=enquiry.date_from,
         warehouse_id=enquiry.warehouse_id,

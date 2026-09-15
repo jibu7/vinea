@@ -617,3 +617,77 @@ class LandedCostListingRead(BaseModel):
     items: list[LandedCostAllocationRead]
     next_cursor: int | None = None
     total_allocated: Decimal
+
+
+# --- The order reports, per line (P6 step 8) --------------------------------------------------
+
+
+class OrderLineRowRead(ApiModel):
+    """One order line on the Sales orders / Purchase orders report.
+
+    `quantity` is what was keyed, in `uom_id`; `ordered`, `fulfilled` and `remaining` are in
+    `base_uom_id`, which is the unit the derived quantities of decision 4 are counted in. Both
+    units are on the row because a report that printed the figures without saying which unit
+    they are in is unreadable the moment two items are counted differently.
+    """
+
+    order_id: int
+    number: str
+    order_date: date
+    expected_date: date | None
+    partner_id: int
+    partner_name: str
+    status: str
+    currency_id: int
+    reference: str | None
+    line_id: int
+    line_no: int
+    item_id: int
+    item_code: str
+    item_name: str
+    uom_id: int
+    base_uom_id: int
+    warehouse_id: int | None
+    description: str | None
+    quantity: Decimal
+    ordered: Decimal
+    fulfilled: Decimal
+    remaining: Decimal
+    unit_price: Decimal
+    net_amount: Decimal
+    tax_amount: Decimal
+    gross_amount: Decimal
+    kit_parent_line_id: int | None
+
+
+class UnitSubtotalRead(ApiModel):
+    """Σ ordered and Σ remaining for one unit, over the whole filtered set."""
+
+    uom_id: int
+    ordered: Decimal
+    remaining: Decimal
+
+
+class CurrencySubtotalRead(ApiModel):
+    """Σ net and Σ gross for one currency, over the whole filtered set."""
+
+    currency_id: int
+    net_amount: Decimal
+    gross_amount: Decimal
+
+
+class OrderLineReportRead(BaseModel):
+    """The report's page, and the totals over everything the filters select.
+
+    There is deliberately **no single quantity total and no single money total**. Quantities
+    are subtotalled by unit and money by currency, because 3 kg plus 2 crates is not a
+    quantity and RWF plus USD is not an amount — an order's `exchange_rate` is display only
+    (decision 3), so there is no rate here that could honestly convert one into the other.
+    `line_count` is the total that always means something.
+    """
+
+    items: list[OrderLineRowRead]
+    next_cursor: int | None = None
+    line_count: int
+    by_unit: list[UnitSubtotalRead]
+    by_currency: list[CurrencySubtotalRead]
