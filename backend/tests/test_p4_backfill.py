@@ -9,6 +9,7 @@ asserts every back-filled row.
 It runs on its own throwaway database so it cannot disturb the suite's schema.
 """
 
+import os
 from collections.abc import Iterator
 
 import pytest
@@ -19,7 +20,13 @@ from sqlalchemy.engine import Engine
 from alembic import command
 from tests.conftest import ADMIN_URL
 
-BACKFILL_DB = f"{ADMIN_URL.database}_backfill"
+#: **Per process**, exactly as `conftest.py` names its own test database, and for a reason the
+#: suite going parallel made sharp: this fixture drops and re-creates the scratch database and
+#: terminates every other connection to it. A fixed name is a cluster-global resource, so two
+#: xdist workers running two tests from this file killed each other's connections mid-test —
+#: "server closed the connection unexpectedly", which reads like an infrastructure fault and is
+#: not one. One database per worker, and the race cannot be run.
+BACKFILL_DB = f"{ADMIN_URL.database}_backfill_{os.getpid()}"
 PRE_P4_REVISION = "0005_p3_reference"
 
 # The slice of `rw_sme_v1` the back-fill keys off, as a pre-P4 tenant would have had it.
