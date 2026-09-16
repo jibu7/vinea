@@ -73,8 +73,8 @@ jobs:
       - run: uv run alembic check          # models and migrations must not drift apart
 
   # The frontend's own checks, split out of the e2e job so that a lint error is reported in
-  # ninety seconds instead of behind a twenty-minute Playwright run, and so the e2e shards do
-  # not each repeat them.
+  # under two minutes instead of behind the e2e run, and so the e2e shards do not each repeat
+  # them.
   frontend-checks:
     runs-on: ubuntu-latest
     defaults: { run: { working-directory: frontend } }
@@ -178,11 +178,11 @@ jobs:
       - name: start database
         run: docker compose up -d --wait db
         working-directory: .
-      # Not layer-cached. A `type=gha` cache needs the `docker-container` builder, and whether
+      # Not layer-cached, and that is the next lever if this job needs one. A `type=gha` cache
+      # would remove the build, but it needs the `docker-container` builder, and whether
       # `docker compose build` then loads the image into the engine for `up` is exactly the
-      # kind of thing that has to be watched on a real runner — which this branch could not
-      # do. The build is 51s of a job this change brings to about eight minutes, so it is the
-      # next lever if the measured numbers need one, not a bet taken on the required check.
+      # kind of thing that has to be watched on a real runner — which the branch that added
+      # this could not do. So it was not shipped unverified on a required check.
       - name: build backend and frontend images
         run: docker compose build backend frontend
         working-directory: .
