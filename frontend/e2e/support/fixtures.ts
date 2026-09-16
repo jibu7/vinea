@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import type { Locator, Page } from "@playwright/test";
 
@@ -19,12 +20,19 @@ export const POSTER_EMAIL = "e2e.poster@vinea.example";
  * The same three-line parse `seed_e2e.py:password_from_dotenv` does, for the same reason and
  * with the same quote-stripping: a value that works for `docker compose` has to work here. */
 function passwordFromDotenv(): string {
-  let text: string;
-  try {
-    text = readFileSync(new URL("../../../.env", import.meta.url), "utf8");
-  } catch {
-    return "";
-  }
+  // The repo root, from wherever Playwright was launched — `frontend/` for `npm run e2e`, the
+  // repo root for `npx playwright test -c frontend`. Resolved by trying both rather than from
+  // `import.meta.url`, which Playwright's CJS transpile turns into a syntax error at load time
+  // (found by running the suite, which is the only place it shows).
+  const text = ["../.env", ".env"].reduce<string>((found, candidate) => {
+    if (found) return found;
+    try {
+      return readFileSync(join(process.cwd(), candidate), "utf8");
+    } catch {
+      return "";
+    }
+  }, "");
+  if (!text) return "";
   for (const raw of text.split("\n")) {
     const line = raw.trim();
     if (!line.startsWith("E2E_PASSWORD=")) continue;

@@ -26,10 +26,15 @@ import { PRIMARY_EMAIL, login } from "./support/fixtures";
 
 const MESSAGE = "Period 2026-03 is closed — this report cannot be built for it.";
 
-/** Refuses the next call to any endpoint whose path contains `fragment`. */
+/** Refuses every **API** call whose path contains `fragment`.
+ *
+ * `/api/v1` in the predicate is not decoration. The app's page routes are named after the
+ * endpoints behind them — `/oe/sales-orders` is both a screen and an endpoint — so a predicate
+ * on the fragment alone fulfils the *document* request with a JSON body, and the screen never
+ * renders at all. Which is a failure that looks exactly like the one this spec is about. */
 async function refuse(page: Page, fragment: string) {
   await page.route(
-    (url) => url.pathname.includes(fragment),
+    (url) => url.pathname.startsWith("/api/v1") && url.pathname.includes(fragment),
     (route) =>
       route.fulfill({
         status: 409,
@@ -61,7 +66,7 @@ const SCREENS: Array<{ name: string; path: string; heading: string; endpoint: st
   {
     name: "the inventory documents listing",
     path: "/inventory/documents",
-    heading: "Stock documents",
+    heading: "Inventory documents",
     endpoint: "/inventory/documents",
   },
   {

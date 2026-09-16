@@ -72,6 +72,13 @@ def password_from_dotenv() -> str:
     return ""
 
 
+def password_source() -> str:
+    """Which of the two places the credential came from, for the seed's summary line."""
+    if os.environ.get(PASSWORD_ENV):
+        return f"${PASSWORD_ENV}"
+    return str(DOTENV) if password_from_dotenv() else "nowhere"
+
+
 def fixture_password() -> str:
     """The fixture password: the environment first, then the repo-root `.env`.
 
@@ -538,9 +545,12 @@ def main() -> None:
                     "poster_role": POSTER_ROLE_NAME,
                     "supplier_code": supplier_code,
                     "aged_customer_code": aged_customer_code,
-                    # The value itself stays out of the log — it came from the environment
-                    # and the reader already has it there.
-                    "password_from": PASSWORD_ENV,
+                    # **Which of the two sources it came from**, never the value itself: the
+                    # reader already has that wherever it lives, and a credential in a log is a
+                    # credential in a CI artefact. Saying which one is what makes a wrong
+                    # password diagnosable — "it read .env" when you thought you had exported
+                    # one is the whole of step 8's drift, in a line.
+                    "password_from": password_source(),
                     "closed_period": closed_period,
                 },
                 indent=2,
