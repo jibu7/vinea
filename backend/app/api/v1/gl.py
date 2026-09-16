@@ -220,6 +220,11 @@ def _module_document(
     them and the entry page was left offering a disabled Reverse and no way onward — the
     P4 failure mode rule 13 exists for. `sources.resolve` knows all four kinds, and every P6
     entry carries the source link it needs, because every one of them was posted after step 9.
+
+    The order between the two is proven by
+    `tests/order_entry/test_entry_drill.py::test_the_module_table_is_asked_before_the_source_link`,
+    which builds the one state where they disagree — an entry with a module-table row *and* a
+    source link naming something else — and swaps the answer when the blocks are swapped.
     """
     table = MODULE_DOCUMENT_TABLES.get(entry.module)
     if table is PartnerDocument:
