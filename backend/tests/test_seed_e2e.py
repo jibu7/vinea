@@ -64,3 +64,73 @@ def test_seeding_twice_with_the_same_password_leaves_the_hash_alone(
     capsys.readouterr()
 
     assert {email: _hashed_password(db, email) for email in FIXTURE_EMAILS} == before
+
+
+# --- Where the credential comes from (P6 step 9) ---------------------------------------------
+
+
+def test_the_password_falls_back_to_the_dotenv_docker_compose_reads(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """Step 8's drift, and the two-step that closes it.
+
+    `.env` is the file this project asks you to put `E2E_PASSWORD` in, and until step 9 it
+    reached `docker compose` and nothing else: the seed read only the exported variable, which
+    `make db-reset` passes into the container with `-e`. Fill in `.env` and forget to export
+    it and the seed refused to run at all; export one value and leave a different one in the
+    file and the two sides used different strings. Both are `invalid_credentials` on every
+    spec, which reads like a broken branch.
+
+    Environment first, file second — the same order `frontend/e2e/support/fixtures.ts` uses.
+    """
+    dotenv = tmp_path / ".env"
+    dotenv.write_text("APP_ENV=dev\nE2E_PASSWORD=from-the-file\nCOOKIE_SECURE=false\n")
+    monkeypatch.setattr(seed_e2e, "DOTENV", dotenv)
+
+    monkeypatch.delenv(seed_e2e.PASSWORD_ENV, raising=False)
+    assert seed_e2e.fixture_password() == "from-the-file"
+
+    # The environment still wins, because that is what CI sets and what `-e E2E_PASSWORD`
+    # delivers into the container.
+    monkeypatch.setenv(seed_e2e.PASSWORD_ENV, "from-the-environment")
+    assert seed_e2e.fixture_password() == "from-the-environment"
+
+
+def test_a_quoted_dotenv_value_is_read_the_way_compose_reads_it(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """`E2E_PASSWORD="a b c"` is one value, not a value with quotes in it.
+
+    `docker compose` strips them, so a `.env` that works for compose has to work here — a
+    password read as `"a b c"` including the quote characters is a different string, and the
+    failure is once again a wall of `invalid_credentials` with nothing pointing at the cause.
+    """
+    monkeypatch.delenv(seed_e2e.PASSWORD_ENV, raising=False)
+    for line, expected in (
+        ('E2E_PASSWORD="quoted value"', "quoted value"),
+        ("E2E_PASSWORD='single quoted'", "single quoted"),
+        ("E2E_PASSWORD=bare", "bare"),
+        ("E2E_PASSWORD=  padded  ", "padded"),
+    ):
+        dotenv = tmp_path / ".env"
+        dotenv.write_text(line + "\n")
+        monkeypatch.setattr(seed_e2e, "DOTENV", dotenv)
+        assert seed_e2e.fixture_password() == expected, line
+
+
+def test_neither_source_set_stops_the_seed_rather_than_inventing_a_password(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """There is no literal to fall back to, and there must not be: a default would be a
+    credential in the tree that every deployment shares."""
+    monkeypatch.delenv(seed_e2e.PASSWORD_ENV, raising=False)
+    monkeypatch.setattr(seed_e2e, "DOTENV", tmp_path / "does-not-exist")
+
+    with pytest.raises(SystemExit) as exit_info:
+        seed_e2e.fixture_password()
+    message = str(exit_info.value)
+    # The message names both places it looked, because "not set" without "where" is what sent
+    # the last person to the wrong file.
+    assert "not in the environment" in message
+    assert str(tmp_path / "does-not-exist") in message
+    assert "make db-reset" not in message  # that is the *drift* fix, not the *unset* fix
