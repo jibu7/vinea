@@ -137,8 +137,17 @@ class OrderEnquiry:
     documents: list[LinkedDocument]
 
     @property
-    def total_backordered(self) -> Decimal:
-        return sum((line.backordered for line in self.lines), ZERO)
+    def backordered_lines(self) -> int:
+        """**How many lines are short**, not how much is short in total.
+
+        This used to be `total_backordered`, a sum of `line.backordered` across the order.
+        Those are base quantities in each item's own unit, so an order three kilograms short
+        of coffee and two crates short of wine reported five — a number in no unit at all.
+        Step 7 recorded it, step 8 refused to repeat it in the order reports, and step 9
+        decides it: there is no honest order-level backorder *quantity*, so the order level
+        carries a **count** and the quantities stay on the lines, each with its unit.
+        """
+        return sum(1 for line in self.lines if line.backordered > ZERO)
 
 
 def _backordered_by_line(
@@ -474,21 +483,28 @@ def _enquiry_line(
     )
 
 
-def backordered_by_order(
+def backordered_lines_by_order(
     db: Session, company_id: int, orders: Sequence
-) -> dict[int, Decimal]:
-    """Total backordered per sales order, in bulk, for the **listing**.
+) -> dict[int, int]:
+    """**How many lines are short** per sales order, in bulk, for the listing.
 
     Decision 7 asks for the backorder on the enquiry, the listing and the line grid. The
     enquiry computes it one order at a time because it needs it per line; a listing cannot
     afford that — fifty orders a page would be a query per order — so the same rule is applied
     over two bulk reads.
 
+    **A count, not a sum** (step 9). It was a sum of the per-line base quantities, and base
+    quantities are each in their own item's unit: an order three kilograms short of coffee and
+    two crates short of wine listed `5`, which is not a quantity. A count is the one
+    order-level figure that survives mixing units — "two lines are short" is true whatever
+    they are counted in — and it is also the figure the listing is for, which is deciding
+    which order to open. The shortfall itself, per line and in its own unit, is on the order.
+
     Same apportionment as `_backordered_by_line`, and it has to stay the same: a listing that
-    said 40 where the order it links to said 0 would be worse than no column. The rule is
-    "what every *other* open order has claimed comes first", so an order's own remaining is
-    taken back out of the committed total — but only when the order is open, because a closed
-    or cancelled one was never in that total to begin with.
+    counted a line the order it links to shows as covered would be worse than no column. The
+    rule is "what every *other* open order has claimed comes first", so an order's own
+    remaining is taken back out of the committed total — but only when the order is open,
+    because a closed or cancelled one was never in that total to begin with.
     """
     lines = [(order, line) for order in orders for line in order.lines]
     if not lines:
@@ -499,7 +515,7 @@ def backordered_by_order(
         db, company_id, [line.id for _order, line in lines]
     )
 
-    out: dict[int, Decimal] = {}
+    out: dict[int, int] = {}
     for order in orders:
         mine: dict[tuple[int, int], Decimal] = {}
         for line in order.lines:
@@ -510,13 +526,13 @@ def backordered_by_order(
             mine[key] = mine.get(key, ZERO) + row.remaining
         if order.status not in OPEN_SALES_STATUSES:
             # Same rule as the enquiry: a released remainder is not a backorder.
-            out[order.id] = ZERO
+            out[order.id] = 0
             continue
         free = {
             key: on_hand.get(key, ZERO) - (committed.get(key, ZERO) - mine[key])
             for key in mine
         }
-        total = ZERO
+        short = 0
         for line in order.lines:
             row = fulfilment.get(line.id)
             if row is None or line.warehouse_id is None:
@@ -524,8 +540,12 @@ def backordered_by_order(
             key = (line.item_id, line.warehouse_id)
             takeable = max(min(row.remaining, free[key]), ZERO)
             free[key] = free[key] - takeable
-            total += row.remaining - takeable
-        out[order.id] = total
+            # The apportionment still runs line by line — `free` is consumed in line order, so
+            # which lines end up short is the same question it always was. Only the tally at
+            # the end changed: one per line that is short rather than how much.
+            if row.remaining - takeable > ZERO:
+                short += 1
+        out[order.id] = short
     return out
 
 
@@ -862,10 +882,10 @@ def landed_cost_listing(  # noqa: PLR0913
 # the question the plan's step 8 names for the order reports — *what is still outstanding* —
 # and they answer it **per line**, which is the only grain that can.
 #
-# An order-level figure cannot. `SalesOrderSummary.backordered` sums base quantities across
-# lines that may be counted in different units, so three kilograms short and two crates short
-# reads five; that is a recorded step-9 finding, and the rule here is that step 8 must not add
-# a second one. So nothing in this section sums a quantity across units: each row carries its
+# An order-level figure cannot. That is why `SalesOrderSummary` carries a **count** of
+# backordered lines and not a quantity (step 9 decided it; it used to sum base quantities
+# across lines counted in different units, so three kilograms short and two crates short read
+# five). Nothing in this section sums a quantity across units either: each row carries its
 # own unit, and the totals are **subtotalled by unit** and counted, never added together. The
 # same rule runs one column across for money, because an order's `exchange_rate` is display
 # only (decision 3) and there is therefore no rate that could put two currencies on one line.

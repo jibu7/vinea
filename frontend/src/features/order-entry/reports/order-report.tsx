@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { Combobox } from "@/design/components/combobox";
+import { QueryState } from "@/design/components/query-state";
 import { IsoDatePicker } from "@/design/components/date-picker";
 import { Field } from "@/design/components/input";
 import {
@@ -32,10 +33,11 @@ type Role = "sales" | "purchase";
  * Sales orders / Purchase orders report (P6 step 8) — order lines and what each still owes.
  *
  * **Per line, and that is the whole design.** The order listings under Transactions answer
- * "which orders"; this answers "what is outstanding", and an order-level figure cannot: the
- * listing's `backordered` sums base quantities across lines counted in different units, so 3 kg
- * short and 2 crates short reads 5. That is a recorded step-9 finding and this report must not
- * repeat it, so every quantity here carries the unit it is counted in.
+ * "which orders"; this answers "what is outstanding", and an order-level quantity cannot: the
+ * listing's `backordered` summed base quantities across lines counted in different units, so
+ * 3 kg short and 2 crates short read 5. Step 8 recorded it and refused to repeat it here;
+ * step 9 settled it by making that column a count of short lines. Every quantity here carries
+ * the unit it is counted in.
  *
  * **Nothing in the footer is a grand total.** Quantities are subtotalled by unit and money by
  * currency, because there is no honest single number for either — an order's `exchange_rate` is
@@ -205,18 +207,8 @@ export function OrderReport({ role }: { role: Role }) {
       }
     >
       <ReportPanel>
-        {report.isError ? (
-          /* An error is not an empty report — see `order-enquiry-screen.tsx`. */
-          <p
-            className="py-8 text-center text-xs text-[var(--vinea-danger)]"
-            data-testid="report-error"
-          >
-            {(report.error as { message?: string })?.message ?? t("reportFailed")}
-          </p>
-        ) : rows.length === 0 ? (
-          <p className="py-8 text-center text-xs text-[var(--vinea-ink-subtle)]">
-            {report.isLoading ? tr("loading") : tr("noRows")}
-          </p>
+        {rows.length === 0 ? (
+          <QueryState query={report} isEmpty empty={tr("noRows")} testId="query" />
         ) : (
           <>
             <Table>

@@ -173,9 +173,13 @@ export interface SalesOrderSummary {
   currency_id: number;
   status: SalesOrderStatus;
   total_amount: string;
-  /** What this order has promised that its warehouses cannot currently cover — the same rule
-   * the enquiry uses per line, so the two screens cannot disagree. */
-  backordered: string;
+  /** **How many** of this order's lines its warehouses cannot currently cover — the same rule
+   * the enquiry uses per line, so the two screens cannot disagree about which lines are short.
+   *
+   * A count, not a quantity (step 9). It was the sum of the per-line base quantities, each in
+   * its own item's unit, so an order 3 kg short of coffee and 2 crates short of wine listed
+   * `5`. How much each line is short, in its own unit, is on the order. */
+  backordered_lines: number;
 }
 
 export interface PurchaseOrderSummary {
@@ -520,7 +524,8 @@ export interface OrderEnquiry {
   cancelled_on: string | null;
   lines: EnquiryLine[];
   documents: LinkedDocument[];
-  total_backordered: string;
+  /** How many lines are short, matching the listing's column (step 9). */
+  backordered_lines: number;
 }
 
 // --- The order reports, per line (P6 step 8) ---------------------------------------------------

@@ -13,6 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.inventory import enquiries as inventory_enquiries
+from app.inventory import masters as inventory_masters
 from app.inventory import reports as inventory_reports
 from app.models.inventory import GrnStatus, ItemType
 from app.models.journal import JournalEntry
@@ -172,7 +173,7 @@ def test_the_enquiry_shares_the_shelf_between_two_lines_of_one_order(
     )
     enquiry = oe_enquiries.sales_order_enquiry(db, order_entry.company_id, order.id)
     assert [line.backordered for line in enquiry.lines] == [ZERO, D(4)]
-    assert enquiry.total_backordered == D(4)
+    assert enquiry.backordered_lines == 1
 
 
 def test_the_purchase_order_enquiry_lists_receipts_and_invoices_together(
@@ -569,21 +570,100 @@ def test_the_sales_order_listing_carries_the_same_backorder_as_the_enquiry(
         actor=order_entry.owner,
     )
 
-    listed = oe_enquiries.backordered_by_order(db, order_entry.company_id, [short, behind])
-    # **Each order sees the shelf after every other order's claim**, which is the conservative
-    # answer and the only one available: nothing in the system reserves, so nothing can say
-    # which of these two gets served. The 25-line sees 10 less the other order's 4, so 6 are
-    # coverable and 19 are not; the 4-line sees 10 less 25, so none are coverable.
-    assert listed[short.id] == D(19)
-    assert listed[behind.id] == D(4)
-    # And so the two figures do **not** sum to the warehouse's own shortfall of 19 — they
-    # answer a per-order question, and a screen must not total them.
-    assert listed[short.id] + listed[behind.id] == D(23)
+    listed = oe_enquiries.backordered_lines_by_order(
+        db, order_entry.company_id, [short, behind]
+    )
+    # The listing counts the lines that are short. One each, and the count is what the listing
+    # carries (step 9) — a quantity at order level could not survive an order in two units.
+    assert listed[short.id] == 1
+    assert listed[behind.id] == 1
 
-    # And the enquiry, computed one order at a time, agrees with both.
+    # **The apportionment behind the count is unchanged**, and it is the enquiry that shows
+    # it, per line and in the line's own unit. Each order sees the shelf after every other
+    # order's claim, which is the conservative answer and the only one available: nothing in
+    # the system reserves, so nothing can say which of these two gets served. The 25-line sees
+    # 10 less the other order's 4, so 6 are coverable and 19 are not; the 4-line sees 10 less
+    # 25, so none are coverable.
+    enquiries = {}
     for order in (short, behind):
         enquiry = oe_enquiries.sales_order_enquiry(db, order_entry.company_id, order.id)
-        assert enquiry.total_backordered == listed[order.id], order.number
+        enquiries[order.id] = enquiry
+        # The enquiry counts them the same way, so the two screens cannot disagree about
+        # *which* lines are short even though only one of them shows by how much.
+        assert enquiry.backordered_lines == listed[order.id], order.number
+    assert [line.backordered for line in enquiries[short.id].lines] == [D(19)]
+    assert [line.backordered for line in enquiries[behind.id].lines] == [D(4)]
+    # And those two do **not** sum to the warehouse's own shortfall of 19 — they answer a
+    # per-order question, and nothing may total them.
+    assert D(19) + D(4) == D(23)
+
+
+def test_the_listing_counts_short_lines_because_their_units_cannot_be_added(
+    db: Session, order_entry: OrderEntry
+) -> None:
+    """The step-9 decision, and the defect it settles.
+
+    An order for 3 kg of coffee and 2 crates of wine, with nothing on the shelf for either, is
+    short on both lines. The listing used to report `5` — the sum of two base quantities in
+    two different units, a number in no unit at all, which is what it would still report if
+    the count were reverted to a sum. It now reports **2**: two lines are short, which is true
+    whatever they are counted in and is the question the listing is actually for.
+
+    The quantities themselves are on the order, each with its own unit, and this asserts them
+    there so the decision is "moved", not "dropped".
+    """
+    kilogram = order_entry.inventory.base_uoms["WEIGHT"]
+    coffee = inventory_masters.create_item(
+        db,
+        order_entry.company_id,
+        inventory_masters.ItemInput(
+            code="COFFEE-B",
+            name="Green coffee, bulk",
+            uom_category_id=order_entry.inventory.categories["WEIGHT"].id,
+            base_uom_id=kilogram.id,
+            item_type=ItemType.STOCK,
+            selling_price=D(4000),
+            sales_account_id=order_entry.accounts["4100"].id,
+            cogs_account_id=order_entry.accounts["5100"].id,
+        ),
+        actor=order_entry.owner,
+    )
+    order, _ = orders_service.create_sales_order(
+        db,
+        order_entry.company_id,
+        orders_service.SalesOrderInput(
+            partner_id=order_entry.customer.id,
+            order_date=MARCH,
+            description="Three kilos and two crates",
+            warehouse_id=order_entry.main.id,
+            tax_mode=TaxMode.EXCLUSIVE,
+            lines=(
+                orders_service.OrderLineInput(
+                    item_id=coffee.id, quantity=D(3), unit_price=D(4000)
+                ),
+                orders_service.OrderLineInput(
+                    item_id=order_entry.stock_item.id, quantity=D(2), unit_price=D(2000)
+                ),
+            ),
+        ),
+        actor=order_entry.owner,
+    )
+
+    listed = oe_enquiries.backordered_lines_by_order(db, order_entry.company_id, [order])
+    assert listed[order.id] == 2
+
+    enquiry = oe_enquiries.sales_order_enquiry(db, order_entry.company_id, order.id)
+    assert enquiry.backordered_lines == 2
+    # Three kilograms and two each — and the units they are counted in, so the reader can see
+    # that the 3 and the 2 are not addable and that nothing here added them.
+    assert [line.backordered for line in enquiry.lines] == [D(3), D(2)]
+    assert [line.uom_id for line in enquiry.lines] == [
+        kilogram.id,
+        order_entry.inventory.each.id,
+    ]
+    # The number the old sum produced, spelled out: it is what a reverted count would report,
+    # and it is in neither unit.
+    assert sum(line.backordered for line in enquiry.lines) == D(5)
 
 
 def test_a_closed_order_is_not_credited_stock_nobody_is_holding(
@@ -614,16 +694,20 @@ def test_a_closed_order_is_not_credited_stock_nobody_is_holding(
         ),
         actor=order_entry.owner,
     )
-    assert oe_enquiries.sales_order_enquiry(
-        db, order_entry.company_id, order.id
-    ).total_backordered == D(15)
+    before = oe_enquiries.sales_order_enquiry(db, order_entry.company_id, order.id)
+    assert [line.backordered for line in before.lines] == [D(15)]
+    assert before.backordered_lines == 1
 
     orders_service.close_sales_order(db, order, on_date=MARCH, actor=order_entry.owner)
     db.flush()
     enquiry = oe_enquiries.sales_order_enquiry(db, order_entry.company_id, order.id)
     # The remainder is released, so there is no longer a promise to be short against: the
     # 5 on the shelf now cover everything this order still shows as outstanding.
-    assert enquiry.total_backordered == ZERO
+    assert [line.backordered for line in enquiry.lines] == [ZERO]
+    assert enquiry.backordered_lines == 0
+    assert oe_enquiries.backordered_lines_by_order(
+        db, order_entry.company_id, [order]
+    ) == {order.id: 0}
 
 
 # --- What the enquiry reports for a kit (P6 step 8) -------------------------------------------

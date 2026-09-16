@@ -248,9 +248,13 @@ test.describe("P6 order entry", () => {
 
     // Back on the receipt: fully claimed, and Reverse says why it cannot be pressed rather
     // than being greyed out with no reason.
+    //
+    // `exact` on the chip, because "Unprocessed" **contains** "Processed": the substring match
+    // this used to make was satisfied by the status it was meant to prove had changed, so the
+    // assertion passed whether the invoice had claimed the receipt or not.
     await page.goto(grnUrl);
     await page.waitForSelector("[data-testid='grn-value']");
-    await expect(page.getByText("Processed").first()).toBeVisible();
+    await expect(page.getByText("Processed", { exact: true }).first()).toBeVisible();
     await expect(page.getByTestId("reverse-blocked")).toContainText("reverse that invoice first");
     await expect(page.getByTestId("reverse-grn")).toBeDisabled();
 
@@ -304,15 +308,29 @@ test.describe("P6 order entry", () => {
     await expect(page.getByText(BOX)).toBeVisible();
 
     // The listing's backorder column, and the figure it exists for. 25 bottles arrived; this
-    // order promises 30 plus the 4 inside the two kits, so 9 are short. The 2 gift boxes the
-    // kits explode into are covered by the 10 that came in on the same receipt — which is the
-    // point of counting the **exploded** lines rather than the line the customer sees: the
-    // warehouse has to find the components, not the kit.
+    // order promises 30 on its own line plus the 4 inside the two kits, so **two lines** are
+    // short. The 2 gift boxes the kits explode into are covered by the 10 that came in on the
+    // same receipt — which is the point of counting the **exploded** lines rather than the
+    // line the customer sees: the warehouse has to find the components, not the kit.
+    //
+    // A count, not a quantity (step 9). The column used to read `9`: 5 short on the bottle
+    // line plus 4 on the kit's bottle component, which happen to share a unit here and would
+    // not on an order that mixed them. The 5 and the 4 are asserted on the enquiry below,
+    // each against its line — that is where a shortfall has a unit to be in.
     await page.goto("/oe/sales-orders");
     await page.waitForSelector("h1:has-text('Sales orders')");
     const row = page.locator("tbody tr", { hasText: orderNumber }).first();
-    await expect(row.getByTestId("order-backordered")).toHaveText("9");
+    await expect(row.getByTestId("order-backordered-lines")).toHaveText("2");
     await expect(row.getByTestId("order-total")).toHaveText("FRw 70,000");
+
+    // The per-line half of the same fact, on the enquiry the listing sends you to. Three lines
+    // after the explosion — 30 bottles, 4 bottles, 2 boxes — and the two that are short say by
+    // how much, in the unit they are counted in. Their sum is the 9 the listing used to print;
+    // that it is printable here and not there is the whole of the step-9 decision.
+    await page.goto("/oe/enquiries/sales-orders");
+    await page.waitForSelector("h1:has-text('Sales order enquiry')");
+    await pickCombobox(page, "Sales order", orderNumber);
+    await expect(page.getByTestId("enquiry-line-backordered")).toHaveText(["5", "4", "0"]);
 
     // The same fact from the other side, and the other sign. The listing shows the shortfall
     // as a positive number because that is what a person is short *by*; the item enquiry shows
@@ -347,8 +365,18 @@ test.describe("P6 order entry", () => {
     await expect(page.getByTestId("breakup-kit-quantity")).toHaveText("2");
 
     // --- the edit that would throw it away ------------------------------------------------
+    //
+    // **Wait for the order, not for the heading.** This used to wait on `h1:has-text('Sales
+    // order')`, which is the shell: the workspace renders that heading — without a number in
+    // it, and matching as a substring — before the order query has returned, and until step 9
+    // it rendered three blank editable rows under it as well. A `fill` that landed in that
+    // window was thrown away when the saved order seeded the form, the save then changed
+    // nothing, and the reset dialog this test is about never appeared. That is what made these
+    // two cycles intermittent (step 8's F-7); the fix is in `order-workspace.tsx`, which no
+    // longer offers a grid over an order it has not loaded, and the wait below is what says so
+    // from the outside: row 2's quantity holding the *saved* 2 means the seeding has happened.
     await page.goto(`${orderUrl}/edit`);
-    await page.waitForSelector("h1:has-text('Sales order')");
+    await expect(page.getByLabel("Quantity, row 2", { exact: true })).toHaveValue("2");
     await page.getByLabel("Quantity, row 2", { exact: true }).fill("3");
     await page.getByRole("button", { name: "Save order" }).click();
 
