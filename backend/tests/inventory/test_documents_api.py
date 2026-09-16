@@ -558,9 +558,20 @@ def test_an_entry_resolves_its_document_even_with_no_source_link(
     the guarantee that makes the ledger worth trusting. So the screen resolves the other way,
     through `inventory_documents.journal_entry_id`, which has been there since 0014.
 
-    Simulated by clearing the column on the *document* side of the pair rather than the entry
-    (which cannot be touched): what is asserted is that resolution never reads `source_doc_id`
-    at all, so an entry that has none is no worse off.
+    **Amended at P6 step 8.** `_module_document` now has a second resolution behind this one,
+    through `sources.resolve` on the entry's own source link, because P6 put three documents
+    that are not `inventory_documents` rows under the `inv` module. The module table is still
+    asked **first**, which is what keeps this claim true — but "resolution never reads
+    `source_doc_id`" is no longer the reason, and saying so would be a docstring describing
+    code that has moved.
+
+    What is asserted instead is what this test can actually see: an inventory adjustment
+    resolves to its own document, and to that document rather than to whatever its source link
+    might name. The ordering itself is **not observable from a test**, and the sensitivity pass
+    for step 8 records it as such: the two resolutions only disagree for an entry whose module
+    table has a row and whose source link points elsewhere, and no such entry can be created —
+    the one case the ordering protects is an entry with a null `source_doc_id`, which the
+    database will not let a test manufacture.
     """
     company_id = _signup(client)
     posted = client.post(

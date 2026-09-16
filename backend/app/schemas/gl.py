@@ -212,6 +212,13 @@ class JournalEntryRead(ApiModel):
     #: entry, old or new, the link the screen needs.
     module_document_id: int | None = None
     module_document_number: str | None = None
+    #: Which **kind** of page opens that document — the same routing key
+    #: `SourceDocumentRead.target` carries, so one map in the frontend serves the entry screen
+    #: and the enquiries alike. `module` alone is not enough and P6 is where that stopped
+    #: being a detail: a goods receipt, a landed cost and an inventory adjustment are all
+    #: posted by `inv` and live on three different screens, so an entry page routing by module
+    #: sent an `LCA-` entry to `/inventory/documents/<a landed cost id>`.
+    module_document_target: str | None = None
     lines: list[JournalLineRead]
 
 

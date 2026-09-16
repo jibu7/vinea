@@ -16,6 +16,7 @@ import {
 import { StatusChip } from "@/design/components/status-chip";
 import { TBody, TD, TH, THead, TR, Table } from "@/design/components/table";
 import { useCompanyDetails, useCurrencies } from "@/features/gl/hooks";
+import { documentHref } from "@/lib/document-route";
 import { exportToCsv } from "@/lib/csv";
 import { formatDate, formatMoney, formatQuantity, monthToDateIso } from "@/lib/format";
 import { useTransactionReport } from "../hooks";
@@ -90,6 +91,7 @@ export function TransactionReport() {
         t("unitCost"),
         t("value"),
         t("provisional"),
+        t("document"),
         t("entry"),
       ],
       rows.map((row) => [
@@ -103,6 +105,7 @@ export function TransactionReport() {
         row.unit_cost ?? "",
         row.value,
         row.cost_provisional ? t("yes") : t("no"),
+        row.source?.number ?? "",
         row.entry_number ?? "",
       ]),
     );
@@ -178,6 +181,7 @@ export function TransactionReport() {
                   <TH className="text-right">{t("quantity")}</TH>
                   <TH className="text-right">{t("unitCost")}</TH>
                   <TH className="text-right">{t("value")}</TH>
+                  <TH className="w-28">{t("document")}</TH>
                   <TH className="w-28">{t("entry")}</TH>
                 </TR>
               </THead>
@@ -220,6 +224,31 @@ export function TransactionReport() {
                       className="text-right font-mono text-xs tabular-nums"
                     >
                       {money(row.value)}
+                    </TD>
+                    {/* The document, before the entry it posted. P6 gave a move four possible
+                        sources and the server resolves all four; this column is where the
+                        resolution lands, so a valuation figure leads back to the receipt or
+                        the sale that made it and not only to a journal number. A move that
+                        carried no value has no entry at all, and its document is the only way
+                        to it. */}
+                    <TD>
+                      {(() => {
+                        const href = documentHref(row.source?.target, row.source?.source_doc_id);
+                        return href && row.source ? (
+                          <Link
+                            href={href}
+                            data-testid="transaction-document"
+                            className="inline-flex items-center gap-1 font-mono text-xs text-[var(--vinea-brand)] underline"
+                          >
+                            {row.source.number}
+                            <ExternalLink className="size-3" />
+                          </Link>
+                        ) : (
+                          <span className="text-xs text-[var(--vinea-ink-subtle)]">
+                            {t("emptyValue")}
+                          </span>
+                        );
+                      })()}
                     </TD>
                     <TD>
                       {row.journal_entry_id === null ? (

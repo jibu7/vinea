@@ -31,6 +31,7 @@ from app.models.gl import GLSettings
 from app.models.inventory import INVENTORY_MODULE, InventoryDocument
 from app.models.journal import JournalEntry
 from app.models.order_entry import LandedCostDocument
+from app.models.partner import PartnerRole
 from app.models.subledger import PartnerDocument
 from app.order_entry import sources as order_sources
 from app.schemas.common import Page
@@ -115,7 +116,11 @@ def _entry_read(db: Session, entry: JournalEntry) -> JournalEntryRead:
     data.reversed_by_entry_id = rvd_by_id
     data.reversed_by_number = rvd_by_num
     _resolve_landed_cost_pair(db, loaded, data)
-    data.module_document_id, data.module_document_number = _module_document(db, loaded)
+    (
+        data.module_document_id,
+        data.module_document_number,
+        data.module_document_target,
+    ) = _module_document(db, loaded)
     return data
 
 
@@ -177,32 +182,71 @@ def _entry_number(db: Session, company_id: int, entry_id: int) -> str | None:
     )
 
 
-#: Where each module keeps the documents it posts. Both tables have carried `journal_entry_id`
-#: since they were created, which is why this direction works for every entry ever posted.
+#: Where each module keeps the documents it posts, keyed by the module that posted the entry.
+#: Both tables have carried `journal_entry_id` since they were created, which is why this
+#: direction answers for every entry ever posted — including the ones from before
+#: `journal_entries.source_doc_id` was written at all.
 MODULE_DOCUMENT_TABLES: dict[str, type] = {
     "inv": InventoryDocument,
     "ar": PartnerDocument,
     "ap": PartnerDocument,
 }
 
+#: The routing key for each module table. A partner document splits by role, which
+#: `_module_document` settles from the row it found rather than from the entry's module — the
+#: same rule `sources.resolve` applies, and for the same reason: which subledger a document
+#: belongs to is a property of the document.
+_MODULE_TABLE_TARGET = {"inv": order_sources.INVENTORY_DOCUMENT}
 
-def _module_document(db: Session, entry: JournalEntry) -> tuple[int | None, str | None]:
-    """The document a module-owned entry belongs to, or `(None, None)`.
 
-    Resolved from the document side rather than from `journal_entries.source_doc_id`: that
-    column was only populated from P5 step 9 and cannot be back-filled, because a posted entry
-    is immutable in the database and rewriting one would cost the guarantee that makes the
-    ledger worth trusting. The document's own `journal_entry_id` has always been there.
+def _module_document(
+    db: Session, entry: JournalEntry
+) -> tuple[int | None, str | None, str | None]:
+    """The document a module-owned entry belongs to, and what kind of page opens it.
+
+    **Two resolutions, in this order, and the order is the point.**
+
+    The module's own table is asked first. `journal_entries.source_doc_id` was only populated
+    from P5 step 9 and cannot be back-filled — a posted entry is immutable in the database, and
+    rewriting one would cost the guarantee that makes the ledger worth trusting (rule 10) — so
+    an entry posted before then has a null source link and a perfectly findable document. Going
+    this way round is what gives every entry, old or new, the link the screen needs, and
+    `test_an_entry_resolves_its_document_even_with_no_source_link` pins it.
+
+    What that cannot answer is **P6**, and this is why the second resolution exists. A goods
+    receipt, a landed cost, an inventory adjustment and the companion stock entry of a partner
+    document are all posted by the `inv` module and live on four different screens. Three of
+    them are not `inventory_documents` rows at all, so the table above returns nothing for
+    them and the entry page was left offering a disabled Reverse and no way onward — the
+    P4 failure mode rule 13 exists for. `sources.resolve` knows all four kinds, and every P6
+    entry carries the source link it needs, because every one of them was posted after step 9.
     """
     table = MODULE_DOCUMENT_TABLES.get(entry.module)
-    if table is None:
-        return None, None
-    found = db.execute(
-        select(table.id, table.number).where(
-            table.company_id == entry.company_id, table.journal_entry_id == entry.id
-        )
-    ).first()
-    return (found[0], found[1]) if found is not None else (None, None)
+    if table is PartnerDocument:
+        found = db.execute(
+            select(PartnerDocument.id, PartnerDocument.number, PartnerDocument.role).where(
+                PartnerDocument.company_id == entry.company_id,
+                PartnerDocument.journal_entry_id == entry.id,
+            )
+        ).first()
+        if found is not None:
+            target = "ar_document" if found[2] == PartnerRole.AR else "ap_document"
+            return found[0], found[1], target
+    elif table is not None:
+        found = db.execute(
+            select(table.id, table.number).where(
+                table.company_id == entry.company_id, table.journal_entry_id == entry.id
+            )
+        ).first()
+        if found is not None:
+            return found[0], found[1], _MODULE_TABLE_TARGET.get(entry.module)
+
+    if entry.source_doc_type is not None and entry.source_doc_id is not None:
+        ref = (entry.source_doc_type, int(entry.source_doc_id))
+        resolved = order_sources.resolve(db, entry.company_id, [ref]).get(ref)
+        if resolved is not None:
+            return resolved.source_doc_id, resolved.number, resolved.target
+    return None, None, None
 
 
 def _posted_response(

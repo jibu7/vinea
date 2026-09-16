@@ -17,21 +17,9 @@ import { useJournalEntry, useReverseEntry } from "@/features/gl/hooks";
 import { useGLLookups, byId } from "@/features/gl/lookups";
 import { useApiErrorToast } from "@/lib/use-api-error-toast";
 import { useToast } from "@/design/components/toast";
+import { documentHref } from "@/lib/document-route";
 import { newDraftId } from "@/lib/drafts";
 import { DOT, dotted, formatDate, toLocalIsoDate } from "@/lib/format";
-
-/**
- * Where each module's documents live. A module-owned entry is reversed from its own document
- * — the kernel refuses a GL reversal of one — so this is the link that has to land on the
- * right screen. It was hardcoded to inventory when `/inventory/documents` was the only such
- * screen in the product, which sent every AR and AP entry to an inventory route that could
- * not load them; `ar` and `ap` have had a document detail since Appendix C.1.7 closed.
- */
-const MODULE_DOCUMENT_ROUTE: Record<string, string> = {
-  inv: "/inventory/documents",
-  ar: "/ar/documents",
-  ap: "/ap/documents",
-};
 
 export default function EntryViewPage() {
   const params = useParams<{ id: string }>();
@@ -79,11 +67,19 @@ export default function EntryViewPage() {
   // an action it knows will be refused, and saying where the action does live.
   const isModuleOwned = entry.module !== "gl";
   const canReverse = !isReversed && !isReversal && !isModuleOwned;
-  const reverseBlockedReason = isReversed
-    ? t("reverseAlreadyReversed")
-    : isReversal
-      ? t("reverseIsAReversal")
-      : t("reverseModuleOwned", { module: entry.module });
+  const moduleDocumentHref = documentHref(
+    entry.module_document_target,
+    entry.module_document_id,
+  );
+  // Module ownership is checked **first**, and the order is not cosmetic: an entry that is
+  // both module-owned and already reversed is refused for the module reason — the GL has no
+  // say either way — and telling a reader it is "already reversed" would send them looking for
+  // a reversal on the wrong screen.
+  const reverseBlockedReason = isModuleOwned
+    ? t("reverseModuleOwned", { module: entry.module })
+    : isReversed
+      ? t("reverseAlreadyReversed")
+      : t("reverseIsAReversal");
 
   async function handleReverse() {
     setReverseError(null);
@@ -226,21 +222,42 @@ export default function EntryViewPage() {
             </div>
           </div>
           {/* A module-owned entry is reversed from its own document, so this is the way there
-              rather than a button that cannot be honoured. The link resolves through the
-              module's document table, which means an entry posted long before the link column
-              existed still has one. */}
-          {isModuleOwned && entry.module_document_id !== null ? (
-            <Link
-              href={`${MODULE_DOCUMENT_ROUTE[entry.module] ?? "/inventory/documents"}/${entry.module_document_id}`}
-              data-testid="reverse-via-module"
-              className="inline-flex items-center gap-1 text-sm font-medium text-[var(--vinea-brand)] underline"
-            >
-              {t("reverseViaModule", {
-                module: entry.module,
-                number: entry.module_document_number ?? "",
-              })}
-              <ArrowRight className="size-3.5" />
-            </Link>
+              rather than a button that cannot be honoured.
+
+              **The refusal is written out, not hidden in a tooltip.** `reverse_via_module_document`
+              is what the service says and it says it for a reason a person needs to read:
+              reversing here would write the ledger half of a sale and leave the goods sold. A
+              `title` attribute is invisible to a keyboard and to a screen reader, and on a
+              greyed-out button it is invisible to a mouse as well until somebody hovers and
+              waits. So the sentence is on the page, with the document beside it.
+
+              The route comes from `module_document_target`, not from the module. P6 is where
+              that stopped being a detail: a goods receipt, a landed cost, an inventory
+              adjustment and the companion entry of a stock-bearing invoice are all `inv`, and
+              `/inventory/documents/<a landed cost id>` opens somebody else's document with no
+              sign that it is the wrong one. */}
+          {isModuleOwned ? (
+            <div className="flex items-center gap-3 text-right">
+              <p
+                className="max-w-md text-xs text-[var(--vinea-ink-muted)]"
+                data-testid="reverse-blocked"
+              >
+                {reverseBlockedReason}
+              </p>
+              {moduleDocumentHref && (
+                <Link
+                  href={moduleDocumentHref}
+                  data-testid="reverse-via-module"
+                  className="inline-flex shrink-0 items-center gap-1 text-sm font-medium text-[var(--vinea-brand)] underline"
+                >
+                  {t("reverseViaModule", {
+                    module: entry.module,
+                    number: entry.module_document_number ?? "",
+                  })}
+                  <ArrowRight className="size-3.5" />
+                </Link>
+              )}
+            </div>
           ) : canReverse ? (
             <Dialog open={reverseOpen} onOpenChange={setReverseOpen}>
               <DialogTrigger asChild>
@@ -269,9 +286,14 @@ export default function EntryViewPage() {
               </DialogContent>
             </Dialog>
           ) : (
-            <Button variant="danger" disabled title={reverseBlockedReason}>
-              {t("reverse")}
-            </Button>
+            <div className="flex items-center gap-3">
+              <p className="text-xs text-[var(--vinea-ink-muted)]" data-testid="reverse-blocked">
+                {reverseBlockedReason}
+              </p>
+              <Button variant="danger" disabled>
+                {t("reverse")}
+              </Button>
+            </div>
           )}
         </div>
       </footer>

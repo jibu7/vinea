@@ -13,11 +13,14 @@ import type {
   LandedCost,
   LandedCostPayload,
   LandedCostPreview,
+  LandedCostAllocationListing,
   LandedCostPreviewPayload,
   LandedCostReversePayload,
   LandedCostSummary,
   OrderDefaults,
   OrderDefaultsPayload,
+  OrderEnquiry,
+  OrderLineReport,
   OrderTransitionPayload,
   PreparedDocument,
   PreparedGrn,
@@ -77,10 +80,14 @@ function orderQuery(opts: OrderListParams): string {
   return query ? `?${query}` : "";
 }
 
-export function useSalesOrders(opts: OrderListParams = {}) {
+/** `enabled` is for a screen that renders one side or the other: hooks cannot be called
+ * conditionally, so the one that is not wanted is switched off rather than left to fetch a
+ * page nothing will read. */
+export function useSalesOrders(opts: OrderListParams = {}, { enabled = true } = {}) {
   return useQuery({
     queryKey: [ROOT, "sales-orders", opts],
     queryFn: () => api.get<Page<SalesOrderSummary>>(`/oe/sales-orders${orderQuery(opts)}`),
+    enabled,
   });
 }
 
@@ -167,10 +174,11 @@ export function useInvoiceFromSalesOrder() {
 
 // --- Purchase orders -------------------------------------------------------------------------
 
-export function usePurchaseOrders(opts: OrderListParams = {}) {
+export function usePurchaseOrders(opts: OrderListParams = {}, { enabled = true } = {}) {
   return useQuery({
     queryKey: [ROOT, "purchase-orders", opts],
     queryFn: () => api.get<Page<PurchaseOrderSummary>>(`/oe/purchase-orders${orderQuery(opts)}`),
+    enabled,
   });
 }
 
@@ -399,5 +407,100 @@ export function useReverseLandedCost() {
         "Idempotency-Key": idempotencyKey,
       }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: [ROOT] }),
+  });
+}
+
+// --- Enquiries and reports (P6 step 8) ---------------------------------------------------------
+
+export function useSalesOrderEnquiry(orderId: number | null) {
+  return useQuery({
+    queryKey: [ROOT, "sales-orders", orderId, "enquiry"],
+    queryFn: () => api.get<OrderEnquiry>(`/oe/sales-orders/${orderId}/enquiry`),
+    enabled: orderId !== null,
+  });
+}
+
+export function usePurchaseOrderEnquiry(orderId: number | null) {
+  return useQuery({
+    queryKey: [ROOT, "purchase-orders", orderId, "enquiry"],
+    queryFn: () => api.get<OrderEnquiry>(`/oe/purchase-orders/${orderId}/enquiry`),
+    enabled: orderId !== null,
+  });
+}
+
+export interface OrderReportParams {
+  partnerId?: number;
+  status?: string;
+  warehouseId?: number;
+  itemId?: number;
+  dateFrom?: string;
+  dateTo?: string;
+  outstandingOnly?: boolean;
+  limit?: number;
+  cursor?: number | null;
+}
+
+function reportQuery(opts: OrderReportParams): string {
+  const params = new URLSearchParams();
+  if (opts.partnerId) params.set("partner_id", String(opts.partnerId));
+  if (opts.status) params.set("status", opts.status);
+  if (opts.warehouseId) params.set("warehouse_id", String(opts.warehouseId));
+  if (opts.itemId) params.set("item_id", String(opts.itemId));
+  if (opts.dateFrom) params.set("date_from", opts.dateFrom);
+  if (opts.dateTo) params.set("date_to", opts.dateTo);
+  if (opts.outstandingOnly) params.set("outstanding_only", "true");
+  if (opts.limit) params.set("limit", String(opts.limit));
+  if (opts.cursor) params.set("cursor", String(opts.cursor));
+  const query = params.toString();
+  return query ? `?${query}` : "";
+}
+
+/** `outstanding_only` is the report the plan calls "outstanding orders": a line with a
+ * backorder is on it with its remaining quantity, and after Close remaining it is not. */
+export function useSalesOrderReport(opts: OrderReportParams = {}, { enabled = true } = {}) {
+  return useQuery({
+    queryKey: [ROOT, "reports", "sales-orders", opts],
+    queryFn: () => api.get<OrderLineReport>(`/oe/reports/sales-orders${reportQuery(opts)}`),
+    enabled,
+  });
+}
+
+export function usePurchaseOrderReport(opts: OrderReportParams = {}, { enabled = true } = {}) {
+  return useQuery({
+    queryKey: [ROOT, "reports", "purchase-orders", opts],
+    queryFn: () => api.get<OrderLineReport>(`/oe/reports/purchase-orders${reportQuery(opts)}`),
+    enabled,
+  });
+}
+
+export interface LandedCostAllocationParams {
+  status?: string;
+  grnId?: number;
+  itemId?: number;
+  dateFrom?: string;
+  dateTo?: string;
+  limit?: number;
+  cursor?: number | null;
+}
+
+/** Landed cost **per receipt line** — the grain the plan asks the report for, and the one that
+ * answers "what did this consignment cost". `/oe/landed-costs` answers "what did we book",
+ * which is the listing the transaction screen shows. */
+export function useLandedCostAllocations(opts: LandedCostAllocationParams = {}) {
+  const params = new URLSearchParams();
+  if (opts.status) params.set("status", opts.status);
+  if (opts.grnId) params.set("grn_id", String(opts.grnId));
+  if (opts.itemId) params.set("item_id", String(opts.itemId));
+  if (opts.dateFrom) params.set("date_from", opts.dateFrom);
+  if (opts.dateTo) params.set("date_to", opts.dateTo);
+  if (opts.limit) params.set("limit", String(opts.limit));
+  if (opts.cursor) params.set("cursor", String(opts.cursor));
+  const query = params.toString();
+  return useQuery({
+    queryKey: [ROOT, "landed-cost-allocations", opts],
+    queryFn: () =>
+      api.get<LandedCostAllocationListing>(
+        `/oe/landed-cost-allocations${query ? `?${query}` : ""}`,
+      ),
   });
 }

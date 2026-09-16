@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.inventory import enquiries as inventory_enquiries
 from app.inventory import reports as inventory_reports
-from app.models.inventory import GrnStatus
+from app.models.inventory import GrnStatus, ItemType
 from app.models.journal import JournalEntry
 from app.models.order_entry import LandedCostBasis
 from app.models.partner import PartnerRole, TaxMode
@@ -624,3 +624,59 @@ def test_a_closed_order_is_not_credited_stock_nobody_is_holding(
     # The remainder is released, so there is no longer a promise to be short against: the
     # 5 on the shelf now cover everything this order still shows as outstanding.
     assert enquiry.total_backordered == ZERO
+
+
+# --- What the enquiry reports for a kit (P6 step 8) -------------------------------------------
+
+
+def test_the_item_enquiry_reports_nothing_at_all_for_a_kit(
+    db: Session, order_entry: OrderEntry
+) -> None:
+    """A kit has no position, no commitment and no availability — and the screen has to be able
+    to say so rather than print a zero.
+
+    A kit is a virtual bundle (decision 8): it is never on a shelf, never received, and
+    `committed_by_warehouse` counts stock items only, because what a kit line promises is its
+    **components**, which are summed on their own rows. Counting the parent as well would
+    double the promise and leave the kit reading a permanent negative `available` against stock
+    that by definition can never exist.
+
+    So the honest answer for a kit is *nothing*, and this pins it: an open sales order for 3
+    kits commits 6 bottles and commits the kit itself not at all. What the enquiry must not do
+    is render that as `0`, which is what an ordinary item nobody holds looks like — a different
+    fact. `item_type` is on the read so the screen can tell the two apart, and that is the only
+    thing it is there for.
+    """
+    _receive(db, order_entry, "100", "1000")
+    orders_service.create_sales_order(
+        db,
+        order_entry.company_id,
+        orders_service.SalesOrderInput(
+            partner_id=order_entry.customer.id,
+            order_date=MARCH,
+            description="Gift packs",
+            warehouse_id=order_entry.main.id,
+            tax_mode=TaxMode.EXCLUSIVE,
+            lines=(
+                orders_service.OrderLineInput(
+                    item_id=order_entry.kit_item.id, quantity=D(3), unit_price=D(3500)
+                ),
+            ),
+        ),
+        actor=order_entry.owner,
+    )
+
+    kit = inventory_enquiries.item_enquiry(
+        db, order_entry.company_id, order_entry.kit_item.id, as_of=MARCH
+    )
+    assert kit.item.item_type == ItemType.KIT
+    assert kit.locations == [], "no warehouse holds, commits or has a kit on order"
+    assert (kit.total_quantity, kit.total_value) == (ZERO, ZERO)
+
+    # And the promise did land — on the component, where the warehouse can act on it.
+    component = inventory_enquiries.item_enquiry(
+        db, order_entry.company_id, order_entry.stock_item.id, as_of=MARCH
+    )
+    main = next(row for row in component.locations if row.warehouse_id == order_entry.main.id)
+    assert main.committed == D(6)
+    assert main.available == D(94)

@@ -660,6 +660,13 @@ class ItemEnquiryRead(BaseModel):
     item_code: str
     item_name: str
     base_uom_id: int
+    #: What kind of item this is, so the screen can say what its figures mean rather than
+    #: leaving a reader to guess. A **kit** is the case that needs saying: it is a virtual
+    #: bundle (decision 8), it is never on a shelf and never committed, and
+    #: `committed_by_warehouse` counts stock items only — so the service reports *nothing* for
+    #: one, and `locations` comes back empty. Rendered without this, that is indistinguishable
+    #: from an ordinary item nobody holds, which is a different fact.
+    item_type: ItemType
     as_of: date
     date_from: date | None
     warehouse_id: int | None

@@ -531,6 +531,21 @@ export interface EnquiryLocation {
 }
 
 /** One move, with every key the screen needs to drill onwards from it. */
+/**
+ * The document a move came from, resolved by the server (P6 step 5).
+ *
+ * `target` is a **routing key**, not a URL — `lib/document-route.ts` maps it to a route, once,
+ * rather than every screen that lists moves growing a branch per source type. A partner
+ * document splits into `ar_document` / `ap_document` on the server, because which subledger a
+ * document belongs to is a fact about the document.
+ */
+export interface MoveSource {
+  source_doc_type: string;
+  source_doc_id: number;
+  number: string;
+  target: string;
+}
+
 export interface EnquiryMove {
   move_id: number;
   move_date: string;
@@ -557,6 +572,9 @@ export interface EnquiryMove {
   source_doc_id: number | null;
   source_line_id: number | null;
   reverses_move_id: number | null;
+  /** Resolved to a number and a routing key, or null when the move names no source or names
+   * one this phase has no page for. The raw pair above stays: it is what the move carries. */
+  source: MoveSource | null;
 }
 
 export interface ItemEnquiry {
@@ -564,6 +582,10 @@ export interface ItemEnquiry {
   item_code: string;
   item_name: string;
   base_uom_id: number;
+  /** What kind of item this is. A **kit** is the reason it is here: a kit is a virtual bundle,
+   * never held and never committed, so the service reports no locations at all for one — and
+   * rendered without this that is indistinguishable from an ordinary item nobody holds. */
+  item_type: string;
   as_of: string;
   date_from: string | null;
   warehouse_id: number | null;
@@ -634,6 +656,7 @@ export interface TransactionRow {
   source_doc_type: string | null;
   source_doc_id: number | null;
   source_line_id: number | null;
+  source: MoveSource | null;
 }
 
 export interface TransactionReport {

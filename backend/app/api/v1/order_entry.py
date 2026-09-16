@@ -43,6 +43,7 @@ from app.order_entry import quantities as order_quantities
 from app.schemas.common import Page
 from app.schemas.order_entry import (
     BreakupWrite,
+    CurrencySubtotalRead,
     EnquiryLineRead,
     GrnCreate,
     GrnLineRead,
@@ -65,6 +66,8 @@ from app.schemas.order_entry import (
     OrderDefaultsRead,
     OrderDefaultsUpdate,
     OrderEnquiryRead,
+    OrderLineReportRead,
+    OrderLineRowRead,
     OrderTransition,
     PreparedDocumentRead,
     PreparedGrnLineRead,
@@ -78,6 +81,7 @@ from app.schemas.order_entry import (
     SalesOrderRead,
     SalesOrderSummary,
     SalesOrderWrite,
+    UnitSubtotalRead,
 )
 
 router = APIRouter(prefix="/oe", tags=["order-entry"])
@@ -1078,4 +1082,120 @@ def landed_cost_allocations(  # noqa: PLR0913
         items=[LandedCostAllocationRead.model_validate(row) for row in listing.rows],
         next_cursor=listing.next_cursor,
         total_allocated=listing.total_allocated,
+    )
+
+
+# --- The order reports, per line (P6 step 8) --------------------------------------------------
+#
+# GETs, like everything in the section above: step 8 builds screens for services that already
+# exist and adds no mutating endpoint, so the rule-14 register gains no line.
+
+
+def _order_line_report(  # noqa: PLR0913
+    db: Session,
+    company_id: int,
+    side: str,
+    *,
+    partner_id: int | None,
+    status_value: str | None,
+    warehouse_id: int | None,
+    item_id: int | None,
+    date_from: date | None,
+    date_to: date | None,
+    outstanding_only: bool,
+    cursor: int | None,
+    limit: int,
+) -> OrderLineReportRead:
+    listing = oe_enquiries.order_line_report(
+        db,
+        company_id,
+        side=side,
+        partner_id=partner_id,
+        status=status_value,
+        warehouse_id=warehouse_id,
+        item_id=item_id,
+        date_from=date_from,
+        date_to=date_to,
+        outstanding_only=outstanding_only,
+        cursor=cursor,
+        limit=limit,
+    )
+    return OrderLineReportRead(
+        items=[OrderLineRowRead.model_validate(row) for row in listing.rows],
+        next_cursor=listing.next_cursor,
+        line_count=listing.line_count,
+        by_unit=[UnitSubtotalRead.model_validate(row) for row in listing.by_unit],
+        by_currency=[CurrencySubtotalRead.model_validate(row) for row in listing.by_currency],
+    )
+
+
+@router.get("/reports/sales-orders")
+def sales_order_report(  # noqa: PLR0913
+    partner_id: int | None = None,
+    status_filter: SalesOrderStatus | None = Query(default=None, alias="status"),
+    warehouse_id: int | None = None,
+    item_id: int | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    outstanding_only: bool = False,
+    cursor: int | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
+    auth: AuthContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+) -> OrderLineReportRead:
+    """Sales order lines, with what each one still owes.
+
+    `outstanding_only` is the report the plan's "outstanding orders" means: a line with a
+    backorder is here with its remaining quantity, and after Close remaining it is not.
+    """
+    _require_view(auth)
+    return _order_line_report(
+        db,
+        auth.company_id,
+        "sales",
+        partner_id=partner_id,
+        status_value=status_filter,
+        warehouse_id=warehouse_id,
+        item_id=item_id,
+        date_from=date_from,
+        date_to=date_to,
+        outstanding_only=outstanding_only,
+        cursor=cursor,
+        limit=limit,
+    )
+
+
+@router.get("/reports/purchase-orders")
+def purchase_order_report(  # noqa: PLR0913
+    partner_id: int | None = None,
+    status_filter: PurchaseOrderStatus | None = Query(default=None, alias="status"),
+    warehouse_id: int | None = None,
+    item_id: int | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    outstanding_only: bool = False,
+    cursor: int | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
+    auth: AuthContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+) -> OrderLineReportRead:
+    """Purchase order lines, with what each one is still owed.
+
+    The mirror of the sales report, and `outstanding_only` drops a line the same way: by Close
+    remaining on the order, or by a receipt of the full quantity.
+    """
+    _require_view(auth)
+    return _order_line_report(
+        db,
+        auth.company_id,
+        "purchase",
+        partner_id=partner_id,
+        status_value=status_filter,
+        warehouse_id=warehouse_id,
+        item_id=item_id,
+        date_from=date_from,
+        date_to=date_to,
+        outstanding_only=outstanding_only,
+        cursor=cursor,
+        limit=limit,
     )

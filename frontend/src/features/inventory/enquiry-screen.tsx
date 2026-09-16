@@ -18,8 +18,10 @@ import { StatusChip } from "@/design/components/status-chip";
 import { TBody, TD, TH, THead, TR, Table } from "@/design/components/table";
 import { useAccounts, useCompanyDetails, useCurrencies, useJournalEntry } from "@/features/gl/hooks";
 import { byId } from "@/features/gl/lookups";
+import { ItemType } from "@/lib/api-enums";
 import { cn } from "@/lib/cn";
 import { exportToCsv } from "@/lib/csv";
+import { documentHref } from "@/lib/document-route";
 import { dotted, formatDate, formatMoney, formatQuantity, todayIso } from "@/lib/format";
 import { useItemEnquiry } from "./hooks";
 import { useInventoryLineSupport } from "./line-support";
@@ -50,7 +52,9 @@ export function ItemEnquiryScreen() {
   const [includeZeroLocations, setIncludeZeroLocations] = useState(false);
   const [drillEntryId, setDrillEntryId] = useState<number | null>(null);
 
-  const support = useInventoryLineSupport();
+  // Every active item, not only the stock ones: an enquiry is a read, and "what does this
+  // kit have available" is a fair question with a real answer (see `kitNote` below).
+  const support = useInventoryLineSupport({ includeNonStockItems: true });
   const company = useCompanyDetails();
   const currencies = useCurrencies();
   const accounts = useAccounts();
@@ -78,6 +82,27 @@ export function ItemEnquiryScreen() {
   const baseUom = data ? support.uomById.get(data.base_uom_id) : undefined;
   const unitDecimals = baseUom?.decimal_places ?? 0;
   const unit = baseUom?.code ?? "";
+  const isKit = data?.item_type === ItemType.KIT;
+
+  /**
+   * The footer of the locations table, summed over the **rows on screen**.
+   *
+   * Every column here is in one unit — the item's base unit — and one currency, so this is the
+   * one place on the screen where adding up is honest. It is deliberately not the same figure
+   * as the panel above: the panel is item-wide as at the as-of date and a warehouse filter
+   * narrows these rows without touching it, so the two can legitimately differ and the caption
+   * under the table says which is which.
+   */
+  const locationTotals = (data?.locations ?? []).reduce(
+    (sum, row) => ({
+      quantity: sum.quantity + Number(row.quantity),
+      value: sum.value + Number(row.value),
+      committed: sum.committed + Number(row.committed),
+      onOrder: sum.onOrder + Number(row.on_order),
+      available: sum.available + Number(row.available),
+    }),
+    { quantity: 0, value: 0, committed: 0, onOrder: 0, available: 0 },
+  );
 
   /** A quantity at the item's base-unit decimals, with its unit — "2.500 KG", never "2.5". */
   function quantity(value: string): string {
@@ -225,7 +250,11 @@ export function ItemEnquiryScreen() {
             )}
             {data.locations.length === 0 ? (
               <p className="py-6 text-center text-xs text-[var(--vinea-ink-subtle)]">
-                {t("noLocations")}
+                {/* A kit is not "held nowhere on this date" — it is never held anywhere, ever,
+                    and that is a different sentence. Saying the generic one would read as an
+                    item that happens to be out of stock, which is exactly the fact an operator
+                    is trying to establish. */}
+                {isKit ? t("kitHasNoPosition") : t("noLocations")}
               </p>
             ) : (
               <Table>
@@ -309,11 +338,50 @@ export function ItemEnquiryScreen() {
                       </TR>
                     );
                   })}
+                  {/* The step-6 standard: a report's totals row carries one money value and
+                      one quantity, both at the scale the column is counted in. */}
+                  <TR className="border-t-2 border-[var(--vinea-border-strong)] font-semibold">
+                    <TD colSpan={2} className="text-xs uppercase tracking-wide">
+                      {warehouseId ? t("totalForWarehouse") : t("totalAllLocations")}
+                    </TD>
+                    <TD
+                      className="text-right font-mono text-xs tabular-nums"
+                      data-testid="locations-total-quantity"
+                    >
+                      {quantity(String(locationTotals.quantity))}
+                    </TD>
+                    <TD
+                      className="text-right font-mono text-xs tabular-nums"
+                      data-testid="locations-total-value"
+                    >
+                      {money(String(locationTotals.value))}
+                    </TD>
+                    <TD className="text-right font-mono text-xs tabular-nums">
+                      {quantity(String(locationTotals.committed))}
+                    </TD>
+                    <TD className="text-right font-mono text-xs tabular-nums">
+                      {quantity(String(locationTotals.onOrder))}
+                    </TD>
+                    <TD
+                      className={cn(
+                        "text-right font-mono text-xs tabular-nums",
+                        locationTotals.available < 0
+                          ? "text-[var(--vinea-warning)]"
+                          : undefined,
+                      )}
+                      data-testid="locations-total-available"
+                    >
+                      {quantity(String(locationTotals.available))}
+                    </TD>
+                  </TR>
                 </TBody>
               </Table>
             )}
             {data.locations.length > 0 && (
-              <p className="pt-2 text-xs text-[var(--vinea-ink-subtle)]">{t("availableNote")}</p>
+              <>
+                <p className="pt-2 text-xs text-[var(--vinea-ink-subtle)]">{t("availableNote")}</p>
+                <p className="pt-1 text-xs text-[var(--vinea-ink-subtle)]">{t("totalsNote")}</p>
+              </>
             )}
           </ReportPanel>
 
@@ -406,22 +474,37 @@ export function ItemEnquiryScreen() {
                           {/* Drill two: the move's document — the link that is always there.
                               A move that carried no value has no entry at all (a free-sample
                               receipt), and that is a real posting rather than a broken row,
-                              so the document is what this row leads to. */}
-                          {move.source_doc_type === "inventory_document" &&
-                          move.source_doc_id !== null ? (
-                            <Link
-                              href={`/inventory/documents/${move.source_doc_id}`}
-                              aria-label={t("openDocument", { number: String(move.source_doc_id) })}
-                              className="inline-flex items-center gap-1 font-mono text-xs text-[var(--vinea-brand)] underline"
-                            >
-                              {t("viewDocument")}
-                              <ExternalLink className="size-3" />
-                            </Link>
-                          ) : (
-                            <span className="text-xs text-[var(--vinea-ink-subtle)]">
-                              {tr("emptyValue")}
-                            </span>
-                          )}
+                              so the document is what this row leads to.
+
+                              Routed from the **server's** resolution, not from a string
+                              compared here. This cell read `source_doc_type ===
+                              "inventory_document"` while P6 was adding four more source types,
+                              so every receipt, sale, landed cost and companion entry rendered
+                              an empty cell on a screen that had shipped and passed review —
+                              the row there, the link missing, nothing failing. It also shows
+                              the document's **number** now: "Open" told a reader nothing about
+                              where they were going. */}
+                          {(() => {
+                            const href = documentHref(
+                              move.source?.target,
+                              move.source?.source_doc_id,
+                            );
+                            return href && move.source ? (
+                              <Link
+                                href={href}
+                                aria-label={t("openDocument", { number: move.source.number })}
+                                data-testid="move-document"
+                                className="inline-flex items-center gap-1 font-mono text-xs text-[var(--vinea-brand)] underline"
+                              >
+                                {move.source.number}
+                                <ExternalLink className="size-3" />
+                              </Link>
+                            ) : (
+                              <span className="text-xs text-[var(--vinea-ink-subtle)]">
+                                {tr("emptyValue")}
+                              </span>
+                            );
+                          })()}
                         </TD>
                         <TD>
                           {/* Drill three: the move's entry. A revaluation posts no entry of

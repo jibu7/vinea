@@ -26,13 +26,24 @@ import type { Item, OnHandRow, Uom } from "./types";
  * off any of these screens is asserted as the rendered string.
  */
 export function useInventoryLineSupport(
-  opts: { includeInactiveItems?: boolean; includeInTransitWarehouses?: boolean } = {},
+  opts: {
+    includeInactiveItems?: boolean;
+    includeInTransitWarehouses?: boolean;
+    includeNonStockItems?: boolean;
+  } = {},
 ) {
-  // Both flags exist for the reports, and neither reaches a picker: `stockItems` still
-  // filters to the active items and `warehouseOptions` still drops the in-transit location,
-  // so no document gains an option decision 6 says it must not offer. What the reports need
-  // is the *lookup* — a row naming a deactivated item prints its quantity at the wrong scale,
-  // and stock in transit is a line on the valuation report with a warehouse code to resolve.
+  // The first two flags exist for the reports, and neither reaches a picker: `stockItems`
+  // still filters to the active items and `warehouseOptions` still drops the in-transit
+  // location, so no document gains an option decision 6 says it must not offer. What the
+  // reports need is the *lookup* — a row naming a deactivated item prints its quantity at the
+  // wrong scale, and stock in transit is a line on the valuation report with a warehouse code
+  // to resolve.
+  //
+  // `includeNonStockItems` is the one that **does** reach a picker, and only the enquiry's.
+  // An enquiry is a read: asking what a kit or a service item holds is a fair question with a
+  // real answer, and the answer happens to be "nothing, and here is why" (P6 decision 8). A
+  // document grid must keep offering stock items alone — there is nothing to adjust, transfer
+  // or count about a kit — which is why this is a flag rather than a widening of the set.
   const items = useItems({ includeInactive: opts.includeInactiveItems });
   const barcodes = useBarcodes();
   const warehouses = useWarehouses({ includeInTransit: opts.includeInTransitWarehouses });
@@ -42,6 +53,14 @@ export function useInventoryLineSupport(
   const stockItems = useMemo(
     () => (items.data ?? []).filter((item) => item.item_type === ItemType.STOCK && item.is_active),
     [items.data],
+  );
+  /** What `itemOptions()` offers — stock items, plus the rest when the caller asked for them. */
+  const pickableItems = useMemo(
+    () =>
+      opts.includeNonStockItems
+        ? (items.data ?? []).filter((item) => item.is_active)
+        : stockItems,
+    [items.data, opts.includeNonStockItems, stockItems],
   );
   const itemById = useMemo(() => byId(items.data), [items.data]);
   const uomById = useMemo(() => {
@@ -80,7 +99,7 @@ export function useInventoryLineSupport(
   );
 
   function itemOptions(onHand?: Map<number, OnHandRow>): SelectOption[] {
-    return stockItems.map((item) => {
+    return pickableItems.map((item) => {
       const base = uomById.get(item.base_uom_id);
       const held = onHand?.get(item.id);
       const suffix =
@@ -170,6 +189,7 @@ export function useInventoryLineSupport(
   return {
     isLoading: items.isLoading || warehouses.isLoading || categories.isLoading || types.isLoading,
     stockItems,
+    pickableItems,
     itemById,
     uomById,
     typeById,

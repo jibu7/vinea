@@ -315,6 +315,10 @@ export interface PartnerDocument {
   number: string;
   partner_id: number;
   journal_entry_id: number;
+  /** The companion stock entry (P6 decision 2), when this document carried a valued stock
+   * line. One document, two entries — and null is an ordinary answer: a document with no
+   * valued stock line has no companion and claims no `STK-` number. */
+  stock_entry_id: number | null;
   document_date: string;
   due_date: string | null;
   currency_id: number;
