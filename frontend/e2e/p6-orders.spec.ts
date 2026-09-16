@@ -323,14 +323,20 @@ test.describe("P6 order entry", () => {
     await expect(row.getByTestId("order-backordered-lines")).toHaveText("2");
     await expect(row.getByTestId("order-total")).toHaveText("FRw 70,000");
 
-    // The per-line half of the same fact, on the enquiry the listing sends you to. Three lines
-    // after the explosion — 30 bottles, 4 bottles, 2 boxes — and the two that are short say by
-    // how much, in the unit they are counted in. Their sum is the 9 the listing used to print;
-    // that it is printable here and not there is the whole of the step-9 decision.
+    // The per-line half of the same fact, on the enquiry the listing sends you to. Four lines
+    // after the explosion — 30 bottles, the kit, its 4 bottles, its 2 boxes — and the two that
+    // are short say by how much, in the unit they are counted in. Their sum is the 9 the
+    // listing used to print; that it is printable here and not there is the step-9 decision.
+    //
+    // **The kit line reads 0, and finding that it did not is why this assertion is here.** It
+    // read 2 — the same promise counted twice, once against an item that is never on a shelf
+    // and never committed — and the listing, which computes the apportionment the other way
+    // round, read 0 for it. So the two screens disagreed about which lines were short, which
+    // is the one thing both of them promise they cannot do.
     await page.goto("/oe/enquiries/sales-orders");
     await page.waitForSelector("h1:has-text('Sales order enquiry')");
     await pickCombobox(page, "Sales order", orderNumber);
-    await expect(page.getByTestId("enquiry-line-backordered")).toHaveText(["5", "4", "0"]);
+    await expect(page.getByTestId("enquiry-line-backordered")).toHaveText(["5", "0", "4", "0"]);
 
     // The same fact from the other side, and the other sign. The listing shows the shortfall
     // as a positive number because that is what a person is short *by*; the item enquiry shows

@@ -33,7 +33,13 @@ from sqlalchemy.orm import Session
 
 from app.core.errors import NotFoundError
 from app.inventory import stock as stock_service
-from app.models.inventory import GoodsReceivedNote, GoodsReceivedNoteLine, GrnStatus, Item
+from app.models.inventory import (
+    GoodsReceivedNote,
+    GoodsReceivedNoteLine,
+    GrnStatus,
+    Item,
+    ItemType,
+)
 from app.models.journal import JournalEntry
 from app.models.order_entry import (
     OPEN_PURCHASE_STATUSES,
@@ -150,6 +156,43 @@ class OrderEnquiry:
         return sum(1 for line in self.lines if line.backordered > ZERO)
 
 
+def _stock_line_ids(db: Session, company_id: int, lines: Sequence) -> set[int]:
+    """The lines whose item can actually be short — i.e. the **stock** ones.
+
+    A backorder is "what this line promises that the shelf cannot cover", and three of the four
+    item types have no shelf. A service is delivered by being performed; a non-stock item is
+    bought and passed on; a **kit** is a virtual bundle that is never received and never
+    committed (decision 8) — what a kit line promises is its component lines, which are on the
+    order in their own right and counted there.
+
+    Without this, every such line reported its whole remaining quantity as backordered: a
+    delivery charge on a sales order read "5 backordered", and the two-kit line of an order
+    read 2 while the four bottles it explodes into read 4 on the row below — the same promise
+    counted twice, once against an item that cannot be stocked. It shipped at step 5 and was
+    found at step 9 by driving the order-to-cash cycle through the screens and comparing the
+    enquiry against the listing, which had never been done for an order with a kit on it.
+
+    The two also *disagreed*, which is the part neither docstring allowed for: the bulk path
+    adds an order's own remaining back into `free` and the per-order path excludes the order
+    from `committed` instead, and for an item that is never committed those are not the same
+    arithmetic. Both now ask this first, so the question does not arise.
+    """
+    item_ids = {line.item_id for line in lines}
+    if not item_ids:
+        return set()
+    stock_items = {
+        row
+        for row in db.scalars(
+            select(Item.id).where(
+                Item.company_id == company_id,
+                Item.id.in_(item_ids),
+                Item.item_type == ItemType.STOCK,
+            )
+        )
+    }
+    return {line.id for line in lines if line.item_id in stock_items}
+
+
 def _backordered_by_line(
     db: Session,
     company_id: int,
@@ -196,10 +239,13 @@ def _backordered_by_line(
         # against it would warn about a promise nobody is keeping, and would do it while the
         # stock sits free on the shelf.
         return {}
+    stock_lines = _stock_line_ids(db, company_id, lines)
     wanted = {
         (line.item_id, line.warehouse_id)
         for line in lines
-        if line.warehouse_id is not None and fulfilment.get(line.id) is not None
+        if line.warehouse_id is not None
+        and fulfilment.get(line.id) is not None
+        and line.id in stock_lines
     }
     if not wanted:
         return {}
@@ -218,6 +264,10 @@ def _backordered_by_line(
     for line in lines:
         row = fulfilment.get(line.id)
         if row is None or line.warehouse_id is None:
+            continue
+        if line.id not in stock_lines:
+            # A kit, a service or a non-stock item: no shelf, so nothing to be short of.
+            out[line.id] = ZERO
             continue
         key = (line.item_id, line.warehouse_id)
         takeable = max(min(row.remaining, free[key]), ZERO)
@@ -515,12 +565,13 @@ def backordered_lines_by_order(
         db, company_id, [line.id for _order, line in lines]
     )
 
+    stock_lines = _stock_line_ids(db, company_id, [line for _order, line in lines])
     out: dict[int, int] = {}
     for order in orders:
         mine: dict[tuple[int, int], Decimal] = {}
         for line in order.lines:
             row = fulfilment.get(line.id)
-            if row is None or line.warehouse_id is None:
+            if row is None or line.warehouse_id is None or line.id not in stock_lines:
                 continue
             key = (line.item_id, line.warehouse_id)
             mine[key] = mine.get(key, ZERO) + row.remaining
@@ -535,7 +586,7 @@ def backordered_lines_by_order(
         short = 0
         for line in order.lines:
             row = fulfilment.get(line.id)
-            if row is None or line.warehouse_id is None:
+            if row is None or line.warehouse_id is None or line.id not in stock_lines:
                 continue
             key = (line.item_id, line.warehouse_id)
             takeable = max(min(row.remaining, free[key]), ZERO)

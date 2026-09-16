@@ -666,6 +666,72 @@ def test_the_listing_counts_short_lines_because_their_units_cannot_be_added(
     assert sum(line.backordered for line in enquiry.lines) == D(5)
 
 
+def test_a_line_with_no_shelf_is_never_backordered(
+    db: Session, order_entry: OrderEntry
+) -> None:
+    """A kit line and a service line report **zero**, and the enquiry and the listing agree.
+
+    Found at step 9 by driving order-to-cash through the screens: an order for 30 bottles plus
+    2 gift packs, against 25 bottles on the shelf, showed a backorder of 5 on the bottle line,
+    **2 on the kit line** and 4 on the kit's bottle component — the same promise counted twice,
+    once against an item that is never on a shelf and never committed (decision 8). A service
+    line was worse: its whole remaining quantity, every time, because a delivery charge has no
+    location balance to draw on.
+
+    The two paths also *disagreed*, which neither docstring allowed for. The bulk path adds an
+    order's own remaining back into `free`; the per-order path excludes the order from
+    `committed` instead. For an item that is never in `committed` those are not the same
+    arithmetic, so the listing said "none short" where the enquiry said 2.
+    """
+    _receive(db, order_entry, "25", "1000")
+    order, _ = orders_service.create_sales_order(
+        db,
+        order_entry.company_id,
+        orders_service.SalesOrderInput(
+            partner_id=order_entry.customer.id,
+            order_date=MARCH,
+            description="Bottles, a gift pack and a delivery",
+            warehouse_id=order_entry.main.id,
+            tax_mode=TaxMode.EXCLUSIVE,
+            lines=(
+                orders_service.OrderLineInput(
+                    item_id=order_entry.stock_item.id, quantity=D(30), unit_price=D(2000)
+                ),
+                orders_service.OrderLineInput(
+                    item_id=order_entry.kit_item.id, quantity=D(2), unit_price=D(3500)
+                ),
+                orders_service.OrderLineInput(
+                    item_id=order_entry.service_item.id, quantity=D(1), unit_price=D(5000)
+                ),
+            ),
+        ),
+        actor=order_entry.owner,
+    )
+
+    enquiry = oe_enquiries.sales_order_enquiry(db, order_entry.company_id, order.id)
+    # Four lines, not the three that were keyed: the kit exploded at entry into two bottles per
+    # pack, and the explosion is numbered before the line that followed it. Asserted as the
+    # whole shape — line number, item, shortfall — so a change in either the numbering or a
+    # figure fails with something readable.
+    assert [(line.line_no, line.item_id, line.backordered) for line in enquiry.lines] == [
+        # The bottle line takes the 25 that are there and is 5 short.
+        (1, order_entry.stock_item.id, D(5)),
+        # The kit itself: never on a shelf, never committed, never short.
+        (2, order_entry.kit_item.id, ZERO),
+        # Its four bottles find nothing left, and are short in their own right — which is
+        # where a kit's promise is counted.
+        (3, order_entry.stock_item.id, D(4)),
+        # The delivery charge: no shelf, so nothing to be short of. This read `1` before.
+        (4, order_entry.service_item.id, ZERO),
+    ]
+
+    # Two lines short, and the listing counts the same two.
+    assert enquiry.backordered_lines == 2
+    assert oe_enquiries.backordered_lines_by_order(
+        db, order_entry.company_id, [order]
+    ) == {order.id: 2}
+
+
 def test_a_closed_order_is_not_credited_stock_nobody_is_holding(
     db: Session, order_entry: OrderEntry
 ) -> None:
