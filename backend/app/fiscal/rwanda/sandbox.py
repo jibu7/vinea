@@ -36,6 +36,7 @@ from typing import Any
 from fastapi import APIRouter, FastAPI
 from fastapi.responses import JSONResponse
 
+from app.config import settings
 from app.fiscal.rwanda import codes
 from app.fiscal.rwanda.routes import ROUTES, Operation
 
@@ -639,8 +640,47 @@ def create_sandbox_router(state: SandboxState) -> APIRouter:
 
 
 def create_sandbox_app(state: SandboxState | None = None) -> FastAPI:
-    """A standalone app, for `docker-compose.e2e.yml` and for `httpx.ASGITransport` in tests."""
+    """A standalone app, for `docker-compose.e2e.yml` and for the test client in the suite."""
     app = FastAPI(title="Vinea EBM sandbox", docs_url=None, redoc_url=None)
     app.state.sandbox = state or SandboxState()
     app.include_router(create_sandbox_router(app.state.sandbox))
     return app
+
+
+class SandboxRefused(RuntimeError):
+    """The sandbox was asked to serve somewhere it must not."""
+
+
+def _module_app() -> FastAPI:
+    """What `uvicorn app.fiscal.rwanda.sandbox:app` serves.
+
+    **Refuses outside development and test**, and refuses without `FISCAL_SANDBOX_ENABLED` even
+    there. Two gates rather than one because they fail differently: the environment check stops
+    a production image that happened to inherit the flag, and the flag stops a development
+    machine from serving a revenue authority's API by accident. Same shape as the mail sink,
+    and for the same reason — the mistake is plausible, so it is made impossible.
+    """
+    if settings.is_production:
+        raise SandboxRefused(
+            "the EBM sandbox answers saveSales itself and hands back a receipt nobody filed. "
+            "It must never run in production."
+        )
+    if not settings.fiscal_sandbox_enabled:
+        raise SandboxRefused(
+            "set FISCAL_SANDBOX_ENABLED to serve the EBM sandbox. It is off by default so "
+            "that bringing the dev stack up the ordinary way answers no fiscal call at all."
+        )
+    return create_sandbox_app()
+
+
+def __getattr__(name: str) -> FastAPI:
+    """`uvicorn app.fiscal.rwanda.sandbox:app` resolves through here.
+
+    A module-level `app = _module_app()` would raise on *import*, which the test suite does to
+    reach `create_sandbox_app`; a module-level `app = None` would make uvicorn complain that it
+    is not an ASGI application, which says nothing about why. Resolving the attribute lazily
+    means the refusal reaches the person who asked for it, with its reason.
+    """
+    if name == "app":
+        return _module_app()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

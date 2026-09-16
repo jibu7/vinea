@@ -36,12 +36,53 @@ jobs:
       # `-m slow` is the property suite. `--hypothesis-show-statistics` puts the example
       # count and the shrink in the log, so a run that silently degraded to the fast profile
       # is visible rather than passing quietly.
+      # `-s` so the census `print`s reach the log: pytest captures stdout by default, and the
+      # counters are printed from a module-scoped fixture at teardown, which capture swallows
+      # on a passing run — the run where they are most worth having.
       - name: deep property run
         id: deep
         run: |
           set -o pipefail
-          uv run pytest -m slow -q -p no:randomly --no-header -rA \
+          uv run pytest -m slow -q -s -p no:randomly --no-header -rA \
             --hypothesis-show-statistics 2>&1 | tee deep.log
+      # The census, where somebody will actually see it.
+      #
+      # `_REFUSALS` and `_REACH` in `tests/order_entry/test_property_order.py` say how often the
+      # deep pass provoked each refusal and how far the machine got towards the ones that need a
+      # chain of operations. They were printed into a log nobody opens unless the run is red —
+      # which is backwards, because the number that matters most is the one on a **green** run:
+      # a guard reached three times by luck is a guard the next seed may not reach at all.
+      #
+      # P6 closed asking whoever next touched this to pick `max_examples` against these counters
+      # (final report, F-9.10). Putting them on the run summary is what makes that possible
+      # without re-running anything.
+      - name: put the census on the run summary
+        if: always()
+        run: |
+          {
+            echo '## Property census'
+            echo
+            if grep -q '\[property\]' deep.log; then
+              echo '```'
+              grep '\[property\]' deep.log
+              echo '```'
+              echo
+              echo 'Floors are enforced on the four refusals a single drawn operation can'
+              echo 'provoke. The other four are covered by construction in'
+              echo '`tests/order_entry/test_property_targeted_refusals.py` — if one of those'
+              echo 'reads low here it is information, not a failure.'
+            else
+              echo 'No census lines in the log: the property module did not run, or the run'
+              echo 'degraded to a profile below 100 examples.'
+            fi
+            echo
+            echo '## Example counts'
+            echo
+            echo '```'
+            grep -E 'max_examples|passing examples' deep.log | head -40 || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: upload the log
         if: always()
         uses: actions/upload-artifact@v4

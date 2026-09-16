@@ -253,3 +253,53 @@ def test_a_tin_lookup_answers_for_a_known_taxpayer_and_refuses_an_unknown_one(
 
     assert known["data"]["custList"][0]["taxprNm"] == "Customer C Ltd"
     assert unknown["resultCd"] == codes.RESULT_UNKNOWN_TIN
+
+
+# --- Where it may run -----------------------------------------------------------------------
+
+
+def test_the_served_app_is_refused_without_the_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`uvicorn app.fiscal.rwanda.sandbox:app` with the flag off.
+
+    Off by default, so bringing the dev stack up the ordinary way answers no fiscal call at
+    all — and the refusal says how to turn it on rather than leaving uvicorn to complain that
+    something is not an ASGI application.
+    """
+    from app.fiscal.rwanda import sandbox as module
+
+    monkeypatch.setattr(module.settings, "fiscal_sandbox_enabled", False)
+    monkeypatch.setattr(module.settings, "app_env", "dev")
+
+    with pytest.raises(module.SandboxRefused) as refused:
+        module.app  # noqa: B018 - resolving the attribute is the thing under test
+
+    assert "FISCAL_SANDBOX_ENABLED" in str(refused.value)
+
+
+def test_the_served_app_is_refused_in_production(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Even with the flag on. An app that answers `saveSales` itself hands back a receipt
+    nobody filed, and finding that out on a VAT return is too late."""
+    from app.fiscal.rwanda import sandbox as module
+
+    monkeypatch.setattr(module.settings, "fiscal_sandbox_enabled", True)
+    monkeypatch.setattr(module.settings, "app_env", "prod")
+
+    with pytest.raises(module.SandboxRefused) as refused:
+        module.app  # noqa: B018
+
+    assert "never run in production" in str(refused.value)
+
+
+def test_the_served_app_is_a_real_app_when_both_gates_pass(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.fiscal.rwanda import sandbox as module
+
+    monkeypatch.setattr(module.settings, "fiscal_sandbox_enabled", True)
+    monkeypatch.setattr(module.settings, "app_env", "test")
+
+    served = TestClient(module.app, base_url="http://ebm.sandbox")
+
+    assert served.post("/trnsSales/saveSales", json=sale()).json()["resultCd"] == (
+        codes.RESULT_OK
+    )

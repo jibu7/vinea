@@ -55,6 +55,17 @@ def _count(key: str) -> None:
     _RESIDUE_CENSUS[key] = _RESIDUE_CENSUS.get(key, 0) + 1
 
 
+def emitted_amount(value: int | float) -> Decimal:
+    """A wire amount, back as an exact `Decimal`.
+
+    Through `str`, never `Decimal(float)`: the wire carries JSON numbers, and `Decimal(1.18)`
+    is the binary expansion `1.17999…`, which would make this property fail on arithmetic it
+    introduced itself. The same reason `app.kernel.money` never builds a `Decimal` from a
+    float — stated here because a test that gets this wrong looks like a product bug.
+    """
+    return Decimal(str(value))
+
+
 @pytest.fixture(scope="module", autouse=True)
 def _report_residue():  # noqa: ANN202
     yield
@@ -353,28 +364,30 @@ def test_the_header_is_the_sum_of_the_lines_and_the_tax_is_the_inclusive_rate(
             (builders.wire(item.tax_amount) for item in lines if item.tax_class == tax_class),
             ZERO,
         )
-        assert Decimal(emitted[f"taxblAmt{tax_class.value}"]) == expected_taxable
-        assert Decimal(emitted[f"taxAmt{tax_class.value}"]) == expected_tax
+        assert emitted_amount(emitted[f"taxblAmt{tax_class.value}"]) == expected_taxable
+        assert emitted_amount(emitted[f"taxAmt{tax_class.value}"]) == expected_tax
 
     # 2. The totals are the sum of the buckets — never a separate computation.
-    assert Decimal(emitted["totTaxblAmt"]) == sum(
-        (Decimal(emitted[f"taxblAmt{c.value}"]) for c in FiscalTaxType), ZERO
+    assert emitted_amount(emitted["totTaxblAmt"]) == sum(
+        (emitted_amount(emitted[f"taxblAmt{c.value}"]) for c in FiscalTaxType), ZERO
     )
-    assert Decimal(emitted["totTaxAmt"]) == sum(
-        (Decimal(emitted[f"taxAmt{c.value}"]) for c in FiscalTaxType), ZERO
+    assert emitted_amount(emitted["totTaxAmt"]) == sum(
+        (emitted_amount(emitted[f"taxAmt{c.value}"]) for c in FiscalTaxType), ZERO
     )
-    assert Decimal(emitted["totAmt"]) == Decimal(emitted["totTaxblAmt"])
+    assert emitted_amount(emitted["totAmt"]) == emitted_amount(emitted["totTaxblAmt"])
     assert emitted["totItemCnt"] == len(lines)
 
     # 3. Every line's tax is its taxable amount at the programmed rate, VAT-inclusive, at the
     # *base currency's* decimals — which is what the sandbox and RRA both check.
     for item, source in zip(emitted["itemList"], lines, strict=True):
         rate = Decimal(codes.PROGRAMMED_RATES[source.tax_class.value])
-        expected = (Decimal(item["taxblAmt"]) * rate / (HUNDRED + rate)).quantize(exponent)
-        assert Decimal(item["taxAmt"]) == expected
+        expected = (emitted_amount(item["taxblAmt"]) * rate / (HUNDRED + rate)).quantize(
+            exponent
+        )
+        assert emitted_amount(item["taxAmt"]) == expected
 
         # 4. The census: how often the wire price fails to multiply back to the posted gross.
-        residue = Decimal(item["dcAmt"])
+        residue = emitted_amount(item["dcAmt"])
         _count(
             f"{base_decimals}dp: dcAmt residue on an undiscounted line"
             if residue != ZERO
@@ -385,8 +398,8 @@ def test_the_header_is_the_sum_of_the_lines_and_the_tax_is_the_inclusive_rate(
         # there. On a zero-decimal base the two agree only when the gross is a multiple of
         # 59 — so this counts how often they differ and by how much, because that is the
         # question step 5's live run has to answer.
-        two_dp = (Decimal(item["taxblAmt"]) * rate / (HUNDRED + rate)).quantize(PENNY)
-        gap = abs(Decimal(item["taxAmt"]) - two_dp)
+        two_dp = (emitted_amount(item["taxblAmt"]) * rate / (HUNDRED + rate)).quantize(PENNY)
+        gap = abs(emitted_amount(item["taxAmt"]) - two_dp)
         _count(
             f"{base_decimals}dp: taxAmt equals the 2dp recomputation"
             if gap == ZERO

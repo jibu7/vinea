@@ -112,14 +112,27 @@ def _count(counter: dict[str, int], key: str) -> None:
 #: once in 300 examples is a boundary the next seed may well miss, and a guard "covered" by a
 #: single draw is covered by luck. Three is not a statistical claim — it is the smallest number
 #: that cannot be a single lucky plan.
+#: **Four of the eight moved out at P7**, and the reasoning is the point rather than the list.
+#:
+#: `grn_matched`, `weight_missing`, `period_not_open` and `invoice_exceeds_order` are
+#: *conjunctions* three and four operations deep in a 24-step plan, and this machine reached
+#: them by hoping to: the margins were 7–10 against a floor of 3, `pytest-randomly` reseeds
+#: every run, and `main` at #45 failed two deep runs in three on exactly those four. P6 left the
+#: question open (F-9.10) with `max_examples` 300 → 600 as the obvious lever — twice the nightly
+#: to buy reach.
+#:
+#: P7 took the other answer: each of the four now has a property in
+#: `test_property_targeted_refusals.py` that **constructs its precondition**, so it is reached
+#: on every one of fifty examples instead of on three of three hundred if the seed is kind.
+#: They are still counted in `_REFUSALS` below — what this machine no longer does is *fail* when
+#: a seed misses a chain it was never the right tool for.
+#:
+#: The four that remain are the ones a single drawn operation can provoke, which is what a
+#: machine like this is good at.
 REQUIRED_REFUSALS = (
-    "grn_matched",
     "grn_reversed",
-    "weight_missing",
-    "period_not_open",
     "match_exceeds_receipt",
     "receipt_exceeds_order",
-    "invoice_exceeds_order",
     "exceeds_available",
 )
 CENSUS_FLOOR = 3
@@ -154,7 +167,9 @@ def _report_refusals():  # noqa: ANN202
         f"the deep pass did not reach {short} at least {CENSUS_FLOOR} times each.\n"
         "A refusal the machine never provokes is a guard this suite does not cover, however "
         "green it looks. Read the reach counters below before touching the floor: they say "
-        "whether the guard held or the generator never got near it.\n" + _census()
+        "whether the guard held or the generator never got near it — and if the answer is "
+        "'never got near it', the fix is a targeted property in "
+        "test_property_targeted_refusals.py, not a bigger max_examples.\n" + _census()
     )
 ZERO = Decimal(0)
 
@@ -1359,16 +1374,23 @@ def test_the_census_floor_would_notice_a_guard_the_machine_stopped_reaching() ->
     that can never be false, would leave a gate that greets every run with approval. The three
     passes that shipped a zero in the census are what this is standing in for.
     """
-    census = {"exceeds_available": 40, "grn_matched": 2}
+    below_the_floor, *rest = REQUIRED_REFUSALS
+    census = {rest[-1]: 40, below_the_floor: CENSUS_FLOOR - 1}
     short = {
         name: census.get(name, 0)
         for name in REQUIRED_REFUSALS
         if census.get(name, 0) < CENSUS_FLOOR
     }
-    # One below the floor and six absent — absent has to count as short, not as "not
+    # One below the floor and the rest absent — absent has to count as short, not as "not
     # applicable", which is the reading that let `grn_reversed` sit missing for a whole pass.
-    assert short["grn_matched"] == 2
-    assert set(short) == set(REQUIRED_REFUSALS) - {"exceeds_available"}
+    #
+    # Named off `REQUIRED_REFUSALS` rather than spelled out, so that moving a floor to a
+    # targeted property (P7) changes one list and not two. Hard-coding `grn_matched` here is
+    # what made this test fail when that happened, which is the right failure for the wrong
+    # reason: the sensitivity claim is about the *comparison*, not about which guards it runs
+    # over.
+    assert short[below_the_floor] == CENSUS_FLOOR - 1
+    assert set(short) == set(REQUIRED_REFUSALS) - {rest[-1]}
 
     # A census that clears every floor produces nothing to report.
     clear = dict.fromkeys(REQUIRED_REFUSALS, CENSUS_FLOOR)
