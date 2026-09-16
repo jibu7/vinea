@@ -10,19 +10,38 @@ logs: ; docker compose logs -f backend
 # on the compose network. What cost the time was the per-process test database and its
 # migration run, not where pytest is invoked.
 #
-# Which is what `-n auto` is for. `conftest.py` names its database `vinea_test_<pid>` and every
-# xdist worker is its own process, so each gets its own database, its own migration run and its
-# own session fixture — the setup that dominated the wall clock now happens on every core at
-# once. Nothing is deselected: the item count is the same as serial, and a run that reports
+# Which is what running under xdist is for. `conftest.py` names its database `vinea_test_<pid>`
+# and every worker is its own process, so each gets its own database, its own migration run and
+# its own session fixture — the setup that dominated the wall clock now happens on several cores
+# at once. Nothing is deselected: the item count is the same as serial, and a run that reports
 # fewer is a bug in this line, not a faster suite.
-be-test: ; docker compose exec -T backend uv run pytest -n auto -q
+#: **Capped, not `auto`.** Each xdist worker migrates and holds open its own
+#: `vinea_test_<pid>` database, and the migration run takes locks on every table it touches
+#: inside one transaction. Postgres' `max_locks_per_transaction` defaults to 64 and the lock
+#: table is sized `max_locks_per_transaction x (max_connections + max_prepared_transactions)`
+#: **for the whole cluster**, so the limit is shared: on a 16-core machine `-n auto` started
+#: sixteen concurrent migration runs and they exhausted it together —
+#: `out of shared memory / You might need to increase max_locks_per_transaction` — on a
+#: machine where nothing was wrong except the core count.
+#:
+#: Capping the workers is the fix chosen over raising the limit in the compose Postgres
+#: command, for two reasons. The limit would have to be raised on every developer's database
+#: and in CI, which is a second thing to keep in step; and the cap costs nothing measurable —
+#: past four workers the suite is bounded by Postgres, not by cores, so the eight extra
+#: workers on a 16-core machine were buying contention rather than speed.
+#:
+#: CI is unaffected either way: its runner has 4 cores, so `auto` and this cap are the same
+#: number there. Override it on a machine that wants a different one:
+#:   PYTEST_WORKERS=8 make be-test
+PYTEST_WORKERS ?= 4
+be-test: ; docker compose exec -T backend uv run pytest -n $(PYTEST_WORKERS) -q
 be-lint: ; docker compose exec -T backend uv run ruff check .
 
 # For a machine whose `backend/.venv` is its own. Same commands on the host, opt-in, so nobody
 # whose venv works is forced through Docker — and so the comparison above stays reproducible.
 # `UV_PROJECT_ENVIRONMENT` points elsewhere if the bind-mounted venv is root-owned:
 #   UV_PROJECT_ENVIRONMENT=/tmp/vinea-hostvenv make be-test-host
-be-test-host: ; cd backend && env -u DATABASE_URL uv run pytest -n auto -q
+be-test-host: ; cd backend && env -u DATABASE_URL uv run pytest -n $(PYTEST_WORKERS) -q
 be-lint-host: ; cd backend && env -u DATABASE_URL uv run ruff check .
 fe-dev: ; cd frontend && npm run dev
 
@@ -35,10 +54,15 @@ fe-dev: ; cd frontend && npm run dev
 # per-database, not per-cluster — recreating the volume is what actually gets the app role's
 # permissions back.
 #
-# **Export E2E_PASSWORD first.** The seed hashes it and the Playwright suite signs in with it;
-# neither has a literal to fall back to, so an unset variable stops the seed with a message
-# rather than creating users nothing can log in as:
+# **Set E2E_PASSWORD first**, in the environment or in the repo-root `.env`. The seed hashes
+# it and the Playwright suite signs in with it; neither has a literal to fall back to, so an
+# unset variable stops the seed with a message rather than creating users nothing can log in
+# as. Both sides read the environment first and `.env` second (P6 step 9 — until then only the
+# exported value reached the seed, and a password left in `.env` was read by `docker compose`
+# and by nothing else), so either of these works and the two cannot disagree:
 #   export E2E_PASSWORD="$$(openssl rand -base64 24)"
+# or, in .env:
+#   E2E_PASSWORD=...
 db-reset:
 	docker compose down -v
 	docker compose up -d --wait db
