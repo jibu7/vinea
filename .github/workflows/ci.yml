@@ -111,9 +111,14 @@ jobs:
       matrix:
         include:
           # The two heaviest parts of the suite, each on its own runner. `--shard` splits by
-          # **test count**, and these were 8.9 of the 21.0 minutes in 11 of the 97 tests —
-          # adjacent alphabetically, so every count-balanced split of three put both in shard 1
-          # and left it at ~14 minutes. Measured on #41's run; the numbers are in the PR body.
+          # **test count and not by time**, and these two are both slow and adjacent
+          # alphabetically — so every count-balanced split of three put them in the same shard
+          # and left it carrying most of the suite's wall clock while the other two idled.
+          # Naming them is what makes the remaining three shards mean anything.
+          #
+          # No timings here on purpose: a measurement in a comment is a measurement nobody
+          # re-takes, and this one was still quoting a run from three PRs back. They belong in
+          # the body of whichever PR moved them.
           #
           # The a11y group is **five files and `--workers=4`** (P6 step 9). It was one file
           # holding one test per intent, each sweeping thirty-odd screens in sequence, and a
