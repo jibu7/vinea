@@ -4,9 +4,13 @@ Decision 2 says they are "encrypted at rest, never returned by any endpoint, nev
 stripped from every stored payload/response". Each clause gets a test, and the last one walks
 whatever a run actually produced rather than checking a place somebody remembered to check.
 
-At step 1 that means the device rows and the sync responses. Step 2 extends the same walk over
-`fiscal_outbox` and `fiscal_receipts` once a tape exists to fill them — the helper here is
-written to take a list of (table, column) pairs for exactly that reason.
+At step 1 that means the device rows and the audit trail. `fiscal_outbox` and
+`fiscal_receipts` are already in the list and fill from step 2, at which point the same walk
+covers every payload and response a tape produced.
+
+The strongest clause is the one that needs no redaction at all: **the initialization response,
+which is the only message that ever carries the three keys, is not stored anywhere.** What
+reaches the database is the encrypted columns and an audit row of counters.
 """
 
 import logging
@@ -100,16 +104,22 @@ def test_every_stored_json_column_is_free_of_key_material(
     db.commit()
 
     leaks: list[str] = []
+    examined = 0
     for table, column in JSON_COLUMNS:
         rows = db.execute(
             text(f"SELECT id, {column}::text FROM {table} WHERE {column} IS NOT NULL")  # noqa: S608
         ).all()
+        examined += len(rows)
         for row_id, rendered in rows:
             for secret in SECRET_VALUES:
                 if secret in rendered:
                     leaks.append(f"{table}.{column} row {row_id}")
 
     assert leaks == [], f"device key material found in stored JSON: {leaks}"
+    # A walk that examined nothing proves nothing. At step 1 the rows are the devices'
+    # watermarks; `fiscal_outbox` and `fiscal_receipts` are listed above and fill from step 2,
+    # at which point this same walk covers every payload and response a tape produced.
+    assert examined > 0, "the walk found no stored JSON at all — it is proving nothing"
 
 
 def test_the_audit_trail_records_the_counters_and_not_the_keys(

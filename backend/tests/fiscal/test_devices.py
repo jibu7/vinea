@@ -99,12 +99,27 @@ def test_the_three_keys_are_stored_encrypted_and_read_back_only_through_decrypt(
 
 
 def test_activation_locks_the_negative_stock_policy_at_block(
-    db: Session, fiscal_company: Company, active_device: FiscalDevice
+    db: Session,
+    fiscal_company: Company,
+    fiscal_owner: User,
+    registered_device: FiscalDevice,
+    sandbox_client: httpx.Client,
 ) -> None:
     """CIS §7.30: no receipt for goods the stock does not hold. P5's `block` policy is what
-    makes that true, so activation sets it."""
+    makes that true, so activation sets it.
+
+    **Set to `allow` first.** The seed pack already defaults to `block`, so asserting `block`
+    after activating an already-`block` company proves nothing at all — a sensitivity probe
+    that gutted `activate()` entirely left the first version of this test green.
+    """
     settings_row = db.scalar(
         select(GLSettings).where(GLSettings.company_id == fiscal_company.id)
+    )
+    settings_row.negative_stock_policy = NegativeStockPolicy.ALLOW
+    db.flush()
+
+    device_service.initialize_device(
+        db, fiscal_company.id, registered_device, actor=fiscal_owner, client=sandbox_client
     )
 
     assert settings_row.negative_stock_policy == NegativeStockPolicy.BLOCK

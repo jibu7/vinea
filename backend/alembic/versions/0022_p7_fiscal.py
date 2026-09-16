@@ -851,7 +851,7 @@ def upgrade() -> None:
 
     for body in FISCAL_FUNCTIONS.values():
         op.execute(body)
-    for name, table, definition in FISCAL_TRIGGERS:
+    for name, _table, definition in FISCAL_TRIGGERS:
         op.execute(f"CREATE TRIGGER {name} {definition}")
 
     _backfill_existing_tenants()
