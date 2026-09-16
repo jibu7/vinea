@@ -141,11 +141,33 @@ the phase needs; each step's PR body carries the full set.
   listing and the enquiry also *disagreed* about which lines were short, which both of them
   promise they cannot do. Found by driving order-to-cash through the screens and comparing the
   two, which nothing had done for an order with a kit on it.
-* **F-9.10** The census floors are seed-dependent. `reverse_lca` chose its date by `pick % 2`,
-  and Hypothesis shrinks every value toward its zero — so in the examples a deep pass spends
-  most of its budget near, `pick` is 0 and every boolean in the plan is False. Four deep passes
-  counted the closed-period split as 10 of 24, then 0 of 20, then 0 of 20, then 0 of 21. It
-  alternates on a counter now: half of a rare event by construction rather than in expectation.
+* **F-9.10** `reverse_lca` chose its date by `pick % 2`, and Hypothesis shrinks every value
+  toward its zero — so in the examples a deep pass spends most of its budget near, `pick` is 0
+  and every boolean in the plan is False. Four deep passes counted the closed-period split as
+  10 of 24, then 0 of 20, then 0 of 20, then 0 of 21. It alternates on a counter now: half of a
+  rare event by construction rather than in expectation, and the two passes since read 7/7 and
+  15/14.
+
+  **That was one cause, not the cause, and the rest is `main`'s.** The floors sit at 3, the
+  guards clear them by 5–15, and the deep ones are *conjunctions*: `grn_matched` needs a
+  receipt, a match against it, and then a `reverse_grn` landing on that receipt — three
+  operations deep in a 24-step plan. A seed that runs short on open sales orders zeroes it
+  (`invoice_from_so: an open order to invoice` was 2 on one pass and 23 on another).
+
+  Measured rather than argued, because the generator on this branch is `main`'s — one line
+  differs, the `reverse_lca` date — and a claim of "pre-existing" from reading a diff is not
+  evidence. **`main` at #45, deep profile, three runs: one passed, two failed**, the second
+  naming `{'grn_matched': 0, 'weight_missing': 0, 'period_not_open': 0}` and the first
+  reproducing the closed-period correlation at 1 reach. A gate that fails two runs in three is
+  not a gate.
+
+  **Not fixed here**, because the fix is a cost decision rather than a defect repair. The
+  obvious lever is the deep profile's `max_examples`: 300 → 600 roughly doubles the reach
+  counts and lifts the conjunctions clear, at the price of doubling the nightly (the whole
+  `-m slow` set is 26 minutes at 300). Biasing the draw was tried at step 3 and bought nothing.
+  Whoever picks the number should pick it against the reach counters, which is what they are
+  for. Until then a red nightly on this suite is not necessarily a regression, and that is the
+  part worth knowing.
 * **F-9.11** `ci-e2e-groups.test.ts` reads `args:` with a line regex and cannot see a YAML block
   scalar. Written that way, five spec files would have looked named by no group and matched by
   the shard filter, been scheduled twice, and the partition test would have reported green over
@@ -206,9 +228,12 @@ screen a person can open and press, not by a hook written to satisfy the matcher
   listing, report and enquiry behind one `QueryState` and banned the old idiom by name, but the
   thing that found F-9.9 was a person's sequence driven through a browser, not a unit test.
   `p6-cycle-tape.spec.ts` is the shape to copy: drive it, then read a figure back.
-* **A census with measured margins.** The floors clear by 7–10 against a floor of 3, and step 9
-  showed that the margin is luck-dependent until a rare branch is alternated rather than drawn.
-  A new censused refusal needs the same treatment.
+* **A census that does not currently hold.** The floors clear by 5–15 against a floor of 3, and
+  `main` at #45 failed two deep runs in three. Step 9 removed one cause (a rare branch drawn
+  from a shrunk integer's parity rather than alternated) and measured the rest; see F-9.10 for
+  the numbers and for the lever nobody has pulled. **P7 should not read a red nightly on this
+  suite as a regression without checking the reach counters first** — and should decide the
+  `max_examples` question rather than inherit it a third time.
 * **The `NO_UI` register at four lines**, three of which are the SaaS admin console. P7's
   fiscalization queue is the next thing that could add to it, and the rule is the phase's: build
   the screen, or write the line.
