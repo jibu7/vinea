@@ -105,3 +105,8 @@ At each STOP gate, before continuing:
 1. `git rev-parse --short HEAD` — the commit the report describes.
 2. Paste the owner's approving message verbatim, however short.
 3. Name the artefact concretely enough that someone can go and look at it.
+
+
+| Step 2 | PR #35 | 2026-09-16 | Approved (recorded after the fact) |
+| Step 5 | 8f75e5e / PR #38 | 2026-09-16 | Approved (recorded after the fact) |
+
