@@ -149,20 +149,52 @@ def assert_ledger_invariants(
     # `document_sequences`, and a doc type that registers no claimant fails this assertion
     # rather than being skipped — so a later phase that starts numbering something registers
     # it where the numbers are defined instead of editing this file.
-    for sequence in db.scalars(
-        select(DocumentSequence).where(DocumentSequence.company_id == company_id)
-    ):
+    sequences = list(
+        db.scalars(select(DocumentSequence).where(DocumentSequence.company_id == company_id))
+    )
+    #: doc type → the branches running their own sequence for it. A company may run a
+    #: branch-level sequence on one branch and the company-wide fallback everywhere else
+    #: (P7: a device creates branch rows at activation, and a branch with no device has none),
+    #: so the two number spaces have to be told apart before either is counted.
+    branch_runs: dict[str, tuple[int, ...]] = {}
+    for sequence in sequences:
         if sequence.branch_id is not None:
-            # Branch-scoped runs are their own number space and nothing claims one yet; when
-            # something does, this check needs the claimant query scoped to the branch too.
-            # Skipping loudly beats checking the wrong space quietly.
-            continue
+            key = str(sequence.doc_type)
+            branch_runs[key] = (*branch_runs.get(key, ()), sequence.branch_id)
+
+    for sequence in sequences:
         try:
             claimants = claimants_for(sequence.doc_type)
         except KeyError as unregistered:  # noqa: PERF203 - one sequence, one message
             raise AssertionError(str(unregistered)) from unregistered
+        # Branch-scoped runs are their own number space. Until P7 this loop skipped them,
+        # because nothing claimed one and checking the wrong space quietly is worse than not
+        # checking; P7's device runs are the first that do, and each says how to find its
+        # branch's rows. A branch-scoped run whose claimant cannot is an assertion failure
+        # rather than a silent skip, so the old behaviour cannot return by accident.
+        if sequence.branch_id is not None:
+            unscoped = [c.table for c in claimants if c.branch_expression is None]
+            assert not unscoped, (
+                f"{sequence.doc_type} has a branch-level sequence but {unscoped} cannot say "
+                "which branch a row belongs to. Give the claimant a `branch_expression` in "
+                "app/kernel/sequences.py — a branch's numbers are its own number space, and "
+                "counting the company's rows against it would prove nothing."
+            )
         numbers = sorted(
-            _claimed_numbers(db, company_id, sequence.doc_type, claimants)
+            _claimed_numbers(
+                db,
+                company_id,
+                sequence.doc_type,
+                claimants,
+                branch_id=sequence.branch_id,
+                # The company-wide row of a doc type that also runs per branch counts what is
+                # left: the branches with a row of their own own their numbers.
+                excluded_branch_ids=(
+                    branch_runs.get(str(sequence.doc_type), ())
+                    if sequence.branch_id is None
+                    else ()
+                ),
+            )
         )
         assert numbers == list(range(1, len(numbers) + 1)), (
             f"gap in {sequence.doc_type}: {numbers}"
@@ -180,11 +212,18 @@ def _claimed_numbers(
     company_id: int,
     doc_type: str,
     claimants: Sequence[SequenceClaimant],
+    *,
+    branch_id: int | None = None,
+    excluded_branch_ids: Sequence[int] = (),
 ) -> list[int]:
     """Every number held in this run, from every table the registry says may hold one.
 
     A number belonging to two claimants shows up twice and fails the 1..N check, which is the
     point: "gapless" means every number belongs to exactly one thing.
+
+    A claimant marked `numeric` holds the integer the sequence issued rather than a formatted
+    `PREFIX-000007` (P7: a revenue authority receives `invcNo: 7`). Both shapes are counted the
+    same way once read; what differs is only how the number is got out of the column.
     """
     numbers: list[int] = []
     for claimant in claimants:
@@ -193,14 +232,31 @@ def _claimed_numbers(
             conditions.append(f"{claimant.doc_type_column} = :doc_type")
         if claimant.where is not None:
             conditions.append(f"({claimant.where})")
+        if claimant.branch_expression is not None:
+            if branch_id is not None:
+                conditions.append(f"{claimant.branch_expression} = :branch_id")
+            elif excluded_branch_ids:
+                conditions.append(
+                    f"NOT ({claimant.branch_expression} = ANY(:excluded_branch_ids))"
+                )
         rows = db.execute(
             text(
                 f"SELECT {claimant.number_column} FROM {claimant.table} "  # noqa: S608 - names
                 f"WHERE {' AND '.join(conditions)}"  # come from the registry, never a request
             ),
-            {"company_id": company_id, "doc_type": str(doc_type)},
+            {
+                "company_id": company_id,
+                "doc_type": str(doc_type),
+                "branch_id": branch_id,
+                "excluded_branch_ids": list(excluded_branch_ids),
+            },
         ).all()
         for (number,) in rows:
+            if number is None:
+                continue
+            if claimant.numeric:
+                numbers.append(int(number))
+                continue
             match = _TRAILING_DIGITS.search(number)
             assert match, f"unparseable number {number}"
             numbers.append(int(match.group(1)))

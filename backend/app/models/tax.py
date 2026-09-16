@@ -14,6 +14,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
+from app.models.fiscalization import FiscalTaxType, fiscal_tax_type_type
 from app.models.mixins import AuditedMixin, CompanyScopedMixin, pg_enum
 
 
@@ -53,6 +54,11 @@ class TaxCode(AuditedMixin, CompanyScopedMixin, Base):
     valid_from: Mapped[date] = mapped_column(Date, nullable=False)
     valid_to: Mapped[date | None] = mapped_column(Date)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    #: P7 — which tax class a line carrying this code is reported under on a fiscal receipt
+    #: (decision 8). Nullable, because a company that never fiscalizes never needs one; a
+    #: sale line whose code has none is refused (`tax_class_unmapped`) rather than sent under
+    #: a guessed class, because the class is what the authority computes the tax from.
+    fiscal_tax_type: Mapped[FiscalTaxType | None] = mapped_column(fiscal_tax_type_type)
 
     def is_effective_on(self, on_date: date) -> bool:
         return self.valid_from <= on_date and (self.valid_to is None or on_date <= self.valid_to)

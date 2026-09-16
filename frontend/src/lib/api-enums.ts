@@ -221,3 +221,121 @@ export const StockCountStatus = {
   CANCELLED: "cancelled",
 } as const;
 export type StockCountStatus = (typeof StockCountStatus)[keyof typeof StockCountStatus];
+
+export const FiscalProfile = {
+  VSDC: "vsdc",
+  OSDC: "osdc",
+} as const;
+export type FiscalProfile = (typeof FiscalProfile)[keyof typeof FiscalProfile];
+
+export const FiscalEnvironment = {
+  TEST: "test",
+  PRODUCTION: "production",
+} as const;
+export type FiscalEnvironment = (typeof FiscalEnvironment)[keyof typeof FiscalEnvironment];
+
+export const FiscalDeviceStatus = {
+  PENDING: "pending",
+  ACTIVE: "active",
+  SUSPENDED: "suspended",
+} as const;
+export type FiscalDeviceStatus = (typeof FiscalDeviceStatus)[keyof typeof FiscalDeviceStatus];
+
+export const FiscalSyncKind = {
+  CODES: "codes",
+  ITEM_CLASSES: "item_classes",
+  BRANCHES: "branches",
+  NOTICES: "notices",
+  PURCHASES: "purchases",
+  IMPORTS: "imports",
+  STOCK_MOVES: "stock_moves",
+} as const;
+export type FiscalSyncKind = (typeof FiscalSyncKind)[keyof typeof FiscalSyncKind];
+
+export const FiscalOutboxKind = {
+  ITEM: "item",
+  SALE: "sale",
+  REFUND: "refund",
+  PURCHASE: "purchase",
+  PURCHASE_CONFIRM: "purchase_confirm",
+  STOCK_IO: "stock_io",
+  STOCK_MASTER: "stock_master",
+  IMPORT_UPDATE: "import_update",
+} as const;
+export type FiscalOutboxKind = (typeof FiscalOutboxKind)[keyof typeof FiscalOutboxKind];
+
+export const FiscalOutboxStatus = {
+  QUEUED: "queued",
+  SENDING: "sending",
+  SENT: "sent",
+  FAILED: "failed",
+  UNKNOWN: "unknown",
+  NEEDS_RECEIPT: "needs_receipt",
+  CANCELLED: "cancelled",
+} as const;
+export type FiscalOutboxStatus = (typeof FiscalOutboxStatus)[keyof typeof FiscalOutboxStatus];
+
+export const FiscalReceiptType = {
+  NORMAL_SALE: "NS",
+  NORMAL_REFUND: "NR",
+} as const;
+export type FiscalReceiptType = (typeof FiscalReceiptType)[keyof typeof FiscalReceiptType];
+
+export const FiscalTaxType = {
+  A: "A",
+  B: "B",
+  C: "C",
+  D: "D",
+} as const;
+export type FiscalTaxType = (typeof FiscalTaxType)[keyof typeof FiscalTaxType];
+
+export const FiscalItemTypeCode = {
+  RAW_MATERIAL: "1",
+  FINISHED_PRODUCT: "2",
+  SERVICE: "3",
+} as const;
+export type FiscalItemTypeCode = (typeof FiscalItemTypeCode)[keyof typeof FiscalItemTypeCode];
+
+export const PaymentMethod = {
+  CASH: "cash",
+  CREDIT: "credit",
+  CASH_CREDIT: "cash_credit",
+  BANK_CHEQUE: "bank_cheque",
+  CARD: "card",
+  MOBILE_MONEY: "mobile_money",
+  OTHER: "other",
+} as const;
+export type PaymentMethod = (typeof PaymentMethod)[keyof typeof PaymentMethod];
+
+export const FiscalFeedDecision = {
+  PENDING: "pending",
+  ACCEPTED: "accepted",
+  REJECTED: "rejected",
+} as const;
+export type FiscalFeedDecision = (typeof FiscalFeedDecision)[keyof typeof FiscalFeedDecision];
+
+export const FiscalImportStatus = {
+  PENDING: "pending",
+  APPROVED: "approved",
+  REJECTED: "rejected",
+} as const;
+export type FiscalImportStatus = (typeof FiscalImportStatus)[keyof typeof FiscalImportStatus];
+
+export const VatReturnStatus = {
+  POSTED: "posted",
+  REVERSED: "reversed",
+} as const;
+export type VatReturnStatus = (typeof VatReturnStatus)[keyof typeof VatReturnStatus];
+
+export const FxRevaluationStatus = {
+  POSTED: "posted",
+  REVERSED: "reversed",
+} as const;
+export type FxRevaluationStatus = (typeof FxRevaluationStatus)[keyof typeof FxRevaluationStatus];
+
+export const FxRevaluationRole = {
+  AR: "ar",
+  AP: "ap",
+  BOTH: "both",
+} as const;
+export type FxRevaluationRole = (typeof FxRevaluationRole)[keyof typeof FxRevaluationRole];

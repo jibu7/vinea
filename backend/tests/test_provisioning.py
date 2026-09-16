@@ -8,6 +8,7 @@ from app.db import set_tenant
 from app.models.company import Branch, CompanyStatus
 from app.models.currency import Currency
 from app.models.fiscal import AccountingPeriod, FiscalYear
+from app.models.fiscalization import FiscalTaxType
 from app.models.gl import GLSettings, GLTransactionType
 from app.models.inventory import (
     INVENTORY_MODULE,
@@ -70,7 +71,10 @@ def test_seed_pack_uses_the_corrected_vat_labels(db: Session, two_tenants) -> No
     set_tenant(db, tenant.company.id)
 
     codes = {code.code: code for code in db.scalars(select(TaxCode))}
-    assert set(codes) == {"VAT-OUT-18", "VAT-IN-18", "VAT-EXEMPT", "VAT-ZERO"}
+    # Five since P7: imports get their own input code, because the VAT return reports VAT
+    # paid at the border on its own line and an accountant has to see it apart from VAT paid
+    # to a supplier.
+    assert set(codes) == {"VAT-OUT-18", "VAT-IN-18", "VAT-EXEMPT", "VAT-ZERO", "VAT-IN-IMP"}
 
     assert codes["VAT-OUT-18"].nature == TaxNature.OUTPUT
     assert codes["VAT-OUT-18"].name == "Output VAT 18% (Sales)"
@@ -85,12 +89,30 @@ def test_seed_pack_uses_the_corrected_vat_labels(db: Session, two_tenants) -> No
     assert codes["VAT-ZERO"].nature == TaxNature.ZERO_RATED
     assert codes["VAT-ZERO"].rate_pct == 0
 
+    assert codes["VAT-IN-IMP"].nature == TaxNature.INPUT
+    assert codes["VAT-IN-IMP"].name == "Input VAT 18% (Imports)"
+    assert codes["VAT-IN-IMP"].rate_pct == 18
+    # Import VAT posts to the same account as any other input VAT: it is the same claim
+    # against the authority, distinguished for *reporting*, not for accounting.
+    assert codes["VAT-IN-IMP"].gl_account_id == codes["VAT-IN-18"].gl_account_id
+
+    # P7: every seeded code carries the class the authority reports a line on it under. A
+    # code with none is refused at post (`tax_class_unmapped`) rather than sent under a guess,
+    # so a seed pack that forgot one would make its own tenants un-fiscalizable.
+    assert {code: row.fiscal_tax_type for code, row in codes.items()} == {
+        "VAT-OUT-18": FiscalTaxType.B,
+        "VAT-IN-18": FiscalTaxType.B,
+        "VAT-IN-IMP": FiscalTaxType.B,
+        "VAT-EXEMPT": FiscalTaxType.A,
+        "VAT-ZERO": FiscalTaxType.C,
+    }
+
 
 def test_each_tenant_gets_its_own_seed_pack(db: Session, two_tenants) -> None:
     first, second = two_tenants
     for tenant in (first, second):
         set_tenant(db, tenant.company.id)
-        assert db.scalars(select(TaxCode)).all().__len__() == 4
+        assert db.scalars(select(TaxCode)).all().__len__() == 5
         assert db.scalars(select(Currency)).all().__len__() == 2
 
 

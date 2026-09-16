@@ -83,6 +83,34 @@ class DocType(enum.StrEnum):
     #: it: a landed cost **always** values something, because an allocation of zero is refused
     #: before a document exists.
     LANDED_COST = "LCA"
+    # P7 — fiscalization. Five of these are **branch-scoped**: a device's numbers are its own,
+    # because the revenue authority keys a sale by (taxpayer, branch, invoice number) and two
+    # branches sharing a run would each see the other's holes. `claim_number` falls back to
+    # the company-wide row when no branch row exists, and device activation creates the
+    # branch-level rows — so the fallback is what a *non-fiscalized* company gets and the
+    # branch row is what a device gets.
+    #
+    # Four of them number an **integer column** rather than a formatted string: what the
+    # authority receives is `invcNo: 7`, not `FIS-000007`. The claimant registry says so
+    # (`numeric=True`) and the gapless checker reads the integer, rather than the run being
+    # left out of the check — a fiscal number space is the last one that should go unproven.
+    #: The authority's invoice number for a sale or refund (`fiscal_outbox.invc_no`).
+    FISCAL_SALE = "FIS"
+    #: The same, for a purchase or a purchase confirmation.
+    FISCAL_PURCHASE = "FIP"
+    #: The stock-movement number on a stock in/out report.
+    FISCAL_STOCK = "FSAR"
+    #: The 7-digit sequence inside a registered item code (`RW2NTXU0000001`). Company-wide,
+    #: not branch-scoped: an item is registered once for the taxpayer, not once per shop.
+    FISCAL_ITEM = "FITM"
+    #: Z-report numbers per device.
+    FISCAL_Z_REPORT = "FZR"
+    # P7 — the two things this phase posts through the kernel.
+    #: A filed VAT return and its settlement entry (decision 12).
+    VAT_RETURN = "VAT"
+    #: An unrealized FX revaluation run (decision 13). ADR-05 reserved `FXR` for it at P2 and
+    #: this is the phase that makes it real.
+    FX_REVALUATION = "FXR"
 
 
 DEFAULT_PREFIXES: dict[str, str] = {
@@ -110,6 +138,16 @@ DEFAULT_PREFIXES: dict[str, str] = {
     DocType.SALES_ORDER: "SO-",
     DocType.PURCHASE_ORDER: "PO-",
     DocType.LANDED_COST: "LCA-",
+    # The four numeric runs carry a prefix only because `document_sequences.prefix` is NOT
+    # NULL and `format_number` is shared. Nothing prints these strings: what the payload
+    # carries is the integer, and what the *receipt* prints is the document's own number.
+    DocType.FISCAL_SALE: "FIS-",
+    DocType.FISCAL_PURCHASE: "FIP-",
+    DocType.FISCAL_STOCK: "FSAR-",
+    DocType.FISCAL_ITEM: "FITM-",
+    DocType.FISCAL_Z_REPORT: "Z-",
+    DocType.VAT_RETURN: "VATR-",
+    DocType.FX_REVALUATION: "FXR-",
 }
 
 
@@ -137,6 +175,32 @@ class SequenceClaimant:
     #: that posted a journal entry shares that entry's number, and counting both would make
     #: every ordinary document look like a duplicate claim.
     where: str | None = None
+    #: The column holds the **integer** the sequence issued, not a formatted `PREFIX-000007`.
+    #:
+    #: P7 is the first phase whose numbers leave the building as numbers: a revenue authority
+    #: receives `invcNo: 7`, and storing `FIS-000007` beside it so that one checker could keep
+    #: parsing trailing digits would be a formatted copy of a value the wire never carries.
+    #: The alternative considered and rejected was to leave these runs out of the gapless
+    #: check — which is exactly backwards, since a fiscal invoice number with a hole in it is
+    #: a question from a revenue authority rather than an untidy report.
+    numeric: bool = False
+    #: A SQL expression yielding the **branch** a row belongs to, in terms of the claimant's
+    #: own table. Required of any claimant whose run can be branch-scoped, and absent on every
+    #: run that cannot.
+    #:
+    #: An expression rather than a predicate, because the checker asks two different questions
+    #: of it. A *branch-level* sequence asks "which of these rows are mine" — the expression
+    #: equals that branch. The *company-wide* row for the same doc type asks the complement:
+    #: "which rows are nobody's branch" — because a company may run a branch-level sequence on
+    #: one branch and the company-wide fallback everywhere else, and counting a branch's rows
+    #: against the fallback would report a gap in a run that has none.
+    #:
+    #: Until P7 the gapless checker skipped branch-scoped runs outright, saying so in a
+    #: comment: nothing claimed one, and checking the wrong number space quietly is worse than
+    #: not checking. P7's device runs are the first that do, and the checker now refuses a
+    #: branch-scoped run whose claimant cannot say which branch a row belongs to — so the skip
+    #: cannot come back by accident.
+    branch_expression: str | None = None
 
 
 #: Nearly every run: the entry a posting produced, which is also the number its document
@@ -169,6 +233,56 @@ _ALLOCATION = SequenceClaimant(table="allocations")
 #: number of its own, including the cancelled ones (P6 decision 3).
 _SALES_ORDER = SequenceClaimant(table="sales_orders")
 _PURCHASE_ORDER = SequenceClaimant(table="purchase_orders")
+#: P7. An outbox row holds the authority's number for its kind: `invc_no` on a sale, a refund,
+#: a purchase and a purchase confirmation, `sar_no` on a stock movement. Two runs share the
+#: `invc_no` column and are told apart by `kind`, which is what `where` is doing here — a
+#: `doc_type_column` would need the table to carry a doc type it has no other use for.
+#: A device belongs to exactly one branch, so a row's branch is its device's — one subquery,
+#: and no branch column denormalised onto the outbox to go stale.
+def _device_branch(table: str) -> str:
+    return f"(SELECT d.branch_id FROM fiscal_devices d WHERE d.id = {table}.device_id)"
+
+
+_OUTBOX_BRANCH = _device_branch("fiscal_outbox")
+_DAILY_REPORT_BRANCH = _device_branch("fiscal_daily_reports")
+_FISCAL_SALE_ROW = SequenceClaimant(
+    table="fiscal_outbox",
+    number_column="invc_no",
+    where="kind IN ('sale', 'refund')",
+    numeric=True,
+    branch_expression=_OUTBOX_BRANCH,
+)
+_FISCAL_PURCHASE_ROW = SequenceClaimant(
+    table="fiscal_outbox",
+    number_column="invc_no",
+    where="kind IN ('purchase', 'purchase_confirm')",
+    numeric=True,
+    branch_expression=_OUTBOX_BRANCH,
+)
+_FISCAL_STOCK_ROW = SequenceClaimant(
+    table="fiscal_outbox",
+    number_column="sar_no",
+    where="kind = 'stock_io'",
+    numeric=True,
+    branch_expression=_OUTBOX_BRANCH,
+)
+#: The registered item code carries its sequence as its last seven digits (`RW2NTXU0000001`),
+#: so the ordinary trailing-digit parse reads it and this claimant is **not** numeric.
+_FISCAL_ITEM = SequenceClaimant(table="fiscal_items", number_column="item_cd")
+_FISCAL_Z_REPORT = SequenceClaimant(
+    table="fiscal_daily_reports",
+    number_column="report_no",
+    numeric=True,
+    branch_expression=_DAILY_REPORT_BRANCH,
+)
+_VAT_RETURN = SequenceClaimant(table="vat_returns")
+#: A revaluation run whose every difference was zero posts nothing, so there is no entry to
+#: take a number from and the run holds its own — the same shape as a valueless stock document
+#: (P5 decision 1). A run that *did* post shares its entry's number, which is why this
+#: claimant is narrowed rather than counting every row.
+_VALUELESS_REVALUATION = SequenceClaimant(
+    table="fx_revaluations", where="journal_entry_id IS NULL"
+)
 
 #: A claimant is checked against the live schema, so a run can only be registered once the
 #: table that holds its numbers exists — see the P6 note in `DocType`.
@@ -206,6 +320,14 @@ SEQUENCE_CLAIMANTS: dict[str, tuple[SequenceClaimant, ...]] = {
     # One claimant, not two: an allocation of nothing never becomes a document, so there
     # is no valueless landed cost to hold a number of its own.
     DocType.LANDED_COST: (_ENTRY,),
+    DocType.FISCAL_SALE: (_FISCAL_SALE_ROW,),
+    DocType.FISCAL_PURCHASE: (_FISCAL_PURCHASE_ROW,),
+    DocType.FISCAL_STOCK: (_FISCAL_STOCK_ROW,),
+    DocType.FISCAL_ITEM: (_FISCAL_ITEM,),
+    DocType.FISCAL_Z_REPORT: (_FISCAL_Z_REPORT,),
+    # The return's entry takes the return's number, as every posting document's does.
+    DocType.VAT_RETURN: (_ENTRY,),
+    DocType.FX_REVALUATION: (_ENTRY, _VALUELESS_REVALUATION),
 }
 
 

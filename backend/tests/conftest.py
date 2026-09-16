@@ -57,6 +57,22 @@ from app.services.provisioning import ProvisionedTenant, provision_tenant  # noq
 
 TABLES_IN_TRUNCATION_ORDER = (
     "jobs",
+    # P7 first: every one of these points at something later in the list, and the fiscal
+    # receipt / partner document pair points *both* ways. `CASCADE` would sort it out, but
+    # naming them keeps the list an inventory of what a tenant owns rather than a list of
+    # whatever happened to need saying.
+    "fx_revaluation_lines",
+    "fx_revaluations",
+    "vat_returns",
+    "fiscal_import_declarations",
+    "fiscal_purchase_feed",
+    "fiscal_daily_reports",
+    "fiscal_receipts",
+    "fiscal_outbox",
+    "fiscal_items",
+    "fiscal_item_classes",
+    "fiscal_codes",
+    "fiscal_devices",
     "stock_moves",
     "stock_balances",
     "item_cost_state",

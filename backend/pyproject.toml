@@ -14,10 +14,15 @@ dependencies = [
   "argon2-cffi>=23.1",
   "email-validator>=2.2",
   "weasyprint>=70.0",
+  # P7. `httpx` is the EBM transport and moves out of the dev group: the adapter imports it at
+  # runtime, and a runtime dependency listed as a test one is an image that works until the
+  # day it is built without dev extras. `cryptography` is Fernet, for the three device keys.
+  "httpx>=0.27",
+  "cryptography>=43",
 ]
 
 [dependency-groups]
-dev = ["pytest>=8", "pytest-xdist>=3.6", "httpx>=0.27", "ruff>=0.6", "hypothesis>=6.100"]
+dev = ["pytest>=8", "pytest-xdist>=3.6", "ruff>=0.6", "hypothesis>=6.100"]
 
 [tool.ruff]
 line-length = 100
