@@ -1,0 +1,31 @@
+{
+  "resultCd": "000",
+  "resultMsg": "It is succeeded",
+  "resultDt": "20260316130000",
+  "data": {
+    "itemList": [
+      {
+        "taskCd": "2231990000",
+        "dclDe": "20260310",
+        "itemSeq": 1,
+        "dclNo": "IM 2026 000123",
+        "hsCd": "22042100",
+        "itemNm": "Imported wine",
+        "imptItemSttsCd": "2",
+        "orgnNatCd": "ZA",
+        "exptNatCd": "ZA",
+        "pkg": "20.00",
+        "pkgUnitCd": "BX",
+        "qty": "240.00",
+        "qtyUnitCd": "U",
+        "totWt": "300.00",
+        "netWt": "280.00",
+        "spplrNm": "Cape Vineyards",
+        "agntNm": "Kigali Clearing",
+        "invcFcurAmt": "1200.00",
+        "invcFcurCd": "USD",
+        "invcFcurExcrt": "1320.00"
+      }
+    ]
+  }
+}

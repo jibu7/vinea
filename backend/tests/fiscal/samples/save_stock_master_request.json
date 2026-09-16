@@ -1,0 +1,14 @@
+{
+  "tin": "999000099",
+  "bhfId": "00",
+  "stockItemList": [
+    {
+      "itemCd": "RW2NTXU0000001",
+      "rsdQty": "90.00",
+      "regrId": "17",
+      "regrNm": "Owner",
+      "modrId": "17",
+      "modrNm": "Owner"
+    }
+  ]
+}

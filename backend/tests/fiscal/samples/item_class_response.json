@@ -1,0 +1,17 @@
+{
+  "resultCd": "000",
+  "resultMsg": "It is succeeded",
+  "resultDt": "20260316103000",
+  "data": {
+    "itemClsList": [
+      {
+        "itemClsCd": "5059020800",
+        "itemClsNm": "Wine of fresh grapes",
+        "itemClsLvl": 5,
+        "taxTyCd": "B",
+        "mjrTgYn": "N",
+        "useYn": "Y"
+      }
+    ]
+  }
+}

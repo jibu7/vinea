@@ -1,0 +1,52 @@
+{
+  "resultCd": "000",
+  "resultMsg": "It is succeeded",
+  "resultDt": "20260316120000",
+  "data": {
+    "saleList": [
+      {
+        "spplrTin": "100000003",
+        "spplrBhfId": "00",
+        "spplrNm": "Feed Supplier Ltd",
+        "spplrInvcNo": 77,
+        "rcptTyCd": "S",
+        "pmtTyCd": "01",
+        "cfmDt": "20260316115900",
+        "salesDt": "20260316",
+        "stockRlsDt": "20260316115900",
+        "totItemCnt": 1,
+        "taxblAmtA": "0.00",
+        "taxblAmtB": "11800.00",
+        "taxblAmtC": "0.00",
+        "taxblAmtD": "0.00",
+        "taxAmtA": "0.00",
+        "taxAmtB": "1800.00",
+        "taxAmtC": "0.00",
+        "taxAmtD": "0.00",
+        "totTaxblAmt": "11800.00",
+        "totTaxAmt": "1800.00",
+        "totAmt": "11800.00",
+        "itemList": [
+          {
+            "itemSeq": 1,
+            "itemCd": "RW2NTXU0000009",
+            "itemClsCd": "5059020800",
+            "itemNm": "Supplied goods",
+            "pkgUnitCd": "NT",
+            "pkg": "1.00",
+            "qtyUnitCd": "U",
+            "qty": "1.00",
+            "prc": "11800.00",
+            "splyAmt": "11800.00",
+            "dcRt": "0.00",
+            "dcAmt": "0.00",
+            "taxTyCd": "B",
+            "taxblAmt": "11800.00",
+            "taxAmt": "1800.00",
+            "totAmt": "11800.00"
+          }
+        ]
+      }
+    ]
+  }
+}

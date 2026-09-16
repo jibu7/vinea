@@ -3,6 +3,7 @@ from fastapi import APIRouter
 from app.api.v1 import (
     auth,
     company,
+    fiscal,
     gl,
     inventory,
     invitations,
@@ -22,3 +23,4 @@ api_router.include_router(gl.router)
 api_router.include_router(subledger.router)
 api_router.include_router(inventory.router)
 api_router.include_router(order_entry.router)
+api_router.include_router(fiscal.router)
