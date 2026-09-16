@@ -48,7 +48,6 @@ from app.fiscal.rwanda.payloads import (
     SaveStockIoRequest,
     SaveStockMasterRequest,
     StockItem,
-    StockMasterItem,
 )
 from app.models.fiscalization import FiscalDevice, FiscalTaxType, PaymentMethod
 
@@ -409,22 +408,20 @@ def build_stock_io_request(
 
 
 def build_stock_master_request(
-    device: FiscalDevice, masters: Sequence[FiscalStockMaster]
+    device: FiscalDevice, master: FiscalStockMaster
 ) -> SaveStockMasterRequest:
+    """One item per call — §3.3.8.3's request object is flat."""
+    actor_id = (master.actor_id or "vinea")[:ACTOR_ID_LIMIT]
+    actor_name = (master.actor_name or "Vinea")[:ACTOR_NAME_LIMIT]
     return SaveStockMasterRequest(
         tin=device.tin or "",
         bhfId=device.bhf_id,
-        stockItemList=[
-            StockMasterItem(
-                itemCd=master.item_code,
-                rsdQty=wire(master.quantity_on_hand),
-                regrId=(master.actor_id or "vinea")[:ACTOR_ID_LIMIT],
-                regrNm=(master.actor_name or "Vinea")[:ACTOR_NAME_LIMIT],
-                modrId=(master.actor_id or "vinea")[:ACTOR_ID_LIMIT],
-                modrNm=(master.actor_name or "Vinea")[:ACTOR_NAME_LIMIT],
-            )
-            for master in masters
-        ],
+        itemCd=master.item_code,
+        rsdQty=wire(master.quantity_on_hand),
+        regrId=actor_id,
+        regrNm=actor_name,
+        modrId=actor_id,
+        modrNm=actor_name,
     )
 
 

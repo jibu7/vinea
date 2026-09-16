@@ -100,7 +100,7 @@ class RwandaEbmAdapter:
     """One device's conversation with RRA.
 
     A `client` can be injected, which is how the in-process sandbox is mounted in tests
-    (`httpx.ASGITransport`) — the adapter under test is then the real one, not a double.
+    — the adapter under test is then the real one, not a double.
     """
 
     def __init__(self, *, client: httpx.Client | None = None) -> None:
@@ -139,9 +139,12 @@ class RwandaEbmAdapter:
         return envelope, elapsed_ms
 
     def _request(self, url: str, body: dict[str, Any]) -> httpx.Response:
-        timeout = httpx.Timeout(READ_TIMEOUT_SECONDS, connect=CONNECT_TIMEOUT_SECONDS)
         if self._client is not None:
-            return self._client.post(url, json=body, timeout=timeout)
+            # An injected client carries its own timeout policy. The in-process sandbox has no
+            # network to time out on, and a per-request timeout handed to a test transport is
+            # a setting with nothing to apply to.
+            return self._client.post(url, json=body)
+        timeout = httpx.Timeout(READ_TIMEOUT_SECONDS, connect=CONNECT_TIMEOUT_SECONDS)
         with httpx.Client(timeout=timeout) as client:
             return client.post(url, json=body)
 
@@ -392,14 +395,10 @@ class RwandaEbmAdapter:
         return self._envelope_result(envelope, elapsed_ms)
 
     def report_stock_master(
-        self,
-        device: FiscalDevice,
-        master: FiscalStockMaster | tuple[FiscalStockMaster, ...],
-        *,
-        cmc_key: str | None = None,
+        self, device: FiscalDevice, master: FiscalStockMaster, *, cmc_key: str | None = None
     ) -> FiscalResult:
-        masters = (master,) if isinstance(master, FiscalStockMaster) else master
-        request = builders.build_stock_master_request(device, masters)
+        """One item per call (§3.3.8.3), which is also one outbox row per (item, branch)."""
+        request = builders.build_stock_master_request(device, master)
         envelope, elapsed_ms = self._post(
             device, Operation.SAVE_STOCK_MASTER, self._body(device, request, cmc_key=cmc_key)
         )

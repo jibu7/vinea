@@ -1,33 +1,58 @@
 {
   "resultCd": "000",
   "resultMsg": "It is succeeded",
-  "resultDt": "20260316103000",
+  "resultDt": "20200226143506",
   "data": {
     "clsList": [
       {
         "cdCls": "04",
-        "cdClsNm": "Taxation Type",
-        "cdClsDesc": "Tax classes and their programmed rates",
+        "cdClsNm": "Tax Type",
+        "cdClsDesc": null,
         "useYn": "Y",
-        "userDfnNm1": "Rate",
+        "userDfnNm1": "Tax Rate",
+        "userDfnNm2": null,
+        "userDfnNm3": null,
         "dtlList": [
-          {"cd": "A", "cdNm": "A-EX", "cdDesc": "Exempt", "useYn": "Y", "srtOrd": 1,
-           "userDfnCd1": "0.00"},
-          {"cd": "B", "cdNm": "B-18.00%", "cdDesc": "Standard rate", "useYn": "Y", "srtOrd": 2,
-           "userDfnCd1": "18.00"},
-          {"cd": "C", "cdNm": "C-0.00%", "cdDesc": "Zero rated", "useYn": "Y", "srtOrd": 3,
-           "userDfnCd1": "0.00"},
-          {"cd": "D", "cdNm": "D-0.00%", "cdDesc": "Non-VAT", "useYn": "Y", "srtOrd": 4,
-           "userDfnCd1": "0.00"}
-        ]
-      },
-      {
-        "cdCls": "17",
-        "cdClsNm": "Packing Unit",
-        "useYn": "Y",
-        "dtlList": [
-          {"cd": "NT", "cdNm": "Net", "useYn": "Y", "srtOrd": 1},
-          {"cd": "BX", "cdNm": "Box", "useYn": "Y", "srtOrd": 2}
+          {
+            "cd": "A",
+            "cdNm": "A-EX",
+            "cdDesc": "...",
+            "useYn": "Y",
+            "srtOrd": 1,
+            "userDfnCd1": "0",
+            "userDfnCd2": null,
+            "userDfnCd3": null
+          },
+          {
+            "cd": "B",
+            "cdNm": "B-18.00%",
+            "cdDesc": "B-18.00%",
+            "useYn": "Y",
+            "srtOrd": 2,
+            "userDfnCd1": "18",
+            "userDfnCd2": null,
+            "userDfnCd3": null
+          },
+          {
+            "cd": "C",
+            "cdNm": "C",
+            "cdDesc": "C",
+            "useYn": "Y",
+            "srtOrd": 3,
+            "userDfnCd1": "0",
+            "userDfnCd2": null,
+            "userDfnCd3": null
+          },
+          {
+            "cd": "D",
+            "cdNm": "D",
+            "cdDesc": "D",
+            "useYn": "Y",
+            "srtOrd": 4,
+            "userDfnCd1": "0",
+            "userDfnCd2": null,
+            "userDfnCd3": null
+          }
         ]
       }
     ]

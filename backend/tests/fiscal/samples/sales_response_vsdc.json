@@ -1,17 +1,14 @@
 {
   "resultCd": "000",
   "resultMsg": "It is succeeded",
-  "resultDt": "20260316103001",
+  "resultDt": "20200226194328",
   "data": {
-    "rcptNo": 1,
-    "totRcptNo": 1,
-    "intrlData": "SQ4M-UDVG-3DNE-M5SF-3JGF-QQ",
-    "rcptSign": "3KFB-ZBWX-2SYU-R6RA",
-    "vsdcRcptPbctDate": "20260316103001",
+    "rcptNo": 27,
+    "intrlData": "GZGGIZL YTJSSD7YL YLGIIG6FCY",
+    "rcptSign": "TQZMKL57AGBMSTPO",
+    "totRcptNo": 32,
+    "vsdcRcptPbctDate": "20211027162114",
     "sdcId": "SDC010000005",
-    "mrcNo": "WIS01006230",
-    "totTaxblAmt": "45400.00",
-    "totTaxAmt": "5400.00",
-    "totAmt": "45400.00"
+    "mrcNo": "WIS01006230"
   }
 }

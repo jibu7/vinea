@@ -291,6 +291,32 @@ def test_a_failed_sync_does_not_advance_the_watermark(
     assert active_device.last_error.startswith("894")
 
 
+def test_a_watermark_never_goes_backwards(
+    db: Session,
+    fiscal_company: Company,
+    fiscal_owner: User,
+    active_device: FiscalDevice,
+    sandbox_client: httpx.Client,
+) -> None:
+    """Certification checkpoint 67: each `lastReqDt` must be greater than the previous one.
+
+    RRA enforces it on the imports feed; keeping the stored value monotonic makes it true of
+    every kind. The failure it prevents is a clock skew or a restored backup quietly re-opening
+    a window the device has already been told about — which RRA refuses rather than tolerates.
+    """
+    device_service.sync_codes(
+        db, fiscal_company.id, active_device, actor=fiscal_owner, client=sandbox_client
+    )
+    ahead = "29991231235959"
+    active_device.watermarks = {**active_device.watermarks, FiscalSyncKind.CODES: ahead}
+
+    device_service.sync_codes(
+        db, fiscal_company.id, active_device, actor=fiscal_owner, client=sandbox_client
+    )
+
+    assert active_device.watermarks[FiscalSyncKind.CODES] == ahead
+
+
 def test_syncing_item_classes_stores_them_searchably(
     db: Session,
     fiscal_company: Company,

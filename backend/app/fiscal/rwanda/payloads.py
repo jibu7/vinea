@@ -10,10 +10,12 @@ Models rather than dicts, for one reason worth stating: a payload built as a dic
 by the revenue authority, once, in production. A model is checked here — a mistyped
 `taxblAmtB` is an error at construction and a test, not a `881` on somebody's invoice.
 
-**Money on the wire is `NUMBER 18,2`.** Rwanda's base currency has *no* decimal places, so
-every amount crosses this boundary as a two-decimal string built from a franc figure. That
-conversion happens in exactly one place (`Money` below); a float anywhere in this file would
-be a rule-6 violation with a revenue authority on the other end of it.
+**Money on the wire is `NUMBER 18,2`, sent as a JSON number.** Rwanda's base currency has *no*
+decimal places, so nearly every amount crosses this boundary as a whole number of francs —
+which is exactly what the documents' own samples show (`"taxAmt":30508`, `"taxAmt":534`). The
+conversion happens in exactly one place (`Money` below), and a `Decimal` becomes a float only
+there: everything upstream computes in `Decimal`, which is rule 6 with a revenue authority on
+the other end of it.
 
 Responses are modelled `extra="allow"`: RRA adds fields, and a response that carried something
 new should not fail to parse. Requests are `extra="forbid"`, because a field this code invented
@@ -25,17 +27,36 @@ from typing import Annotated, Any
 
 from pydantic import BaseModel, ConfigDict, Field, PlainSerializer, field_validator
 
-#: Two decimal places, half-up, as a string. Half-up rather than banker's rounding because it
-#: is what `app.kernel.money` does and the two must not disagree about the same figure.
+#: Two decimal places, half-up. Half-up rather than banker's rounding because it is what
+#: `app.kernel.money` does and the two must not disagree about the same figure — and because
+#: the RRA certification checkpoint sheet spells the same rule out in the same words
+#: ("round values of tax on two decimals, <5 down, >=5 up", row 47).
 WIRE_EXPONENT = Decimal("0.01")
 
 
-def _to_wire_amount(value: Decimal | int | float | str) -> str:
-    return str(Decimal(str(value)).quantize(WIRE_EXPONENT, rounding=ROUND_HALF_UP))
+def _to_wire_amount(value: Decimal | int | float | str) -> int | float:
+    """A JSON **number**, integral where the value is.
+
+    RRA's own samples are unquoted and mixed: `"taxblAmt":200000`, `"taxAmt":30508`,
+    `"totTaxAmt":100677.97`. A quoted `"200000.00"` very probably parses on their side — the
+    field is a Jackson `BigDecimal` — but "probably" is not a thing to find out in production,
+    and matching the published samples costs nothing.
+
+    `int` when the two-decimal value is whole, which on a base currency with no decimal places
+    is every amount except an inclusive unit price. The `Decimal` is computed exactly and
+    becomes a float only here, at the JSON boundary, because JSON has no decimal type: a
+    two-decimal value below ~2^53 round-trips through a float exactly, and nothing downstream
+    of this line does arithmetic.
+    """
+    quantized = Decimal(str(value)).quantize(WIRE_EXPONENT, rounding=ROUND_HALF_UP)
+    integral = quantized.to_integral_value()
+    return int(integral) if quantized == integral else float(quantized)
 
 
 #: `NUMBER 18,2` — amounts and quantities on the wire.
-Money = Annotated[Decimal, PlainSerializer(_to_wire_amount, return_type=str, when_used="json")]
+Money = Annotated[
+    Decimal, PlainSerializer(_to_wire_amount, return_type=int | float, when_used="json")
+]
 
 
 class _Request(BaseModel):
@@ -545,21 +566,25 @@ class SaveStockIoRequest(_DeviceScopedRequest):
     itemList: list[StockItem]
 
 
-class StockMasterItem(_Request):
+class SaveStockMasterRequest(_DeviceScopedRequest):
+    """On-hand for **one** item, snapshotted when the outbox row was *enqueued*.
+
+    One item per call, not a list: §3.3.8.3's request object is flat and its sample is a single
+    `itemCd`/`rsdQty` pair. That shape suits the outbox anyway — decision 10 queues one
+    `stock_master` row per (item, branch) touched, so each row is one call and a row that fails
+    does not take the others with it.
+
+    Snapshotted at enqueue rather than at send, because by the time the queue drains the shelf
+    has moved on, and what RRA is being told is what was true at the moment of the movement it
+    has just received.
+    """
+
     itemCd: str
     rsdQty: Money
     regrId: str
     regrNm: str
     modrId: str
     modrNm: str
-
-
-class SaveStockMasterRequest(_DeviceScopedRequest):
-    """On-hand per item, snapshotted when the outbox row was *enqueued* — by the time the
-    queue drains the shelf has moved on, and what RRA is being told is what was true at the
-    moment of the movement it just received."""
-
-    stockItemList: list[StockMasterItem]
 
 
 class StockMoveRequest(_WatermarkedRequest):

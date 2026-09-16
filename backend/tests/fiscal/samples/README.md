@@ -3,17 +3,36 @@
 One JSON document per pydantic model in `app/fiscal/rwanda/payloads.py`, round-tripped by
 `tests/fiscal/test_payloads.py`.
 
-**Provenance, stated plainly.** The phase asks for "the document's own JSON sample". The three
-RRA PDFs could not be fetched in the build environment — `docs/rra/README.md` says why — so
-these are **reconstructed** from the field lists and formats transcribed in
-`docs/rra/contract-notes.md`, not copied out of a document. They are therefore a check that the
-models parse and re-emit the shape the code was written to, and *not* evidence that the shape
-matches what RRA publishes.
+**These are the documents' own samples**, lifted from the `JSON REQUEST SAMPLE` /
+`JSON RESPONSE SAMPLE` blocks of the two specifications pinned under `docs/rra/`:
 
-What turns them into that evidence, in order:
+* `docs/rra/VSDC_SPECIFICATION_DOCUMENT_v1.0.5_okay.pdf` — all but two of them;
+* `docs/rra/osdc_documentation_v1.0.1_2022-04-08.pdf` — `init_response`,
+  `sales_response_osdc` and `purchase_feed_response`.
 
-1. Pin the PDFs (`docs/rra/README.md` says how) and replace each file here with the document's
-   own example, keeping the file name. The round-trip test does not change.
-2. Step 5's live run against `sdcsandbox.rra.gov.rw`, which answers the question empirically.
+Two edits were made, both recorded here and nowhere else:
 
-Until then this gap is named as a plan deviation in the step-1 report rather than papered over.
+1. **Whitespace removed from keys.** The specifications wrap long tables across columns, so
+   text extraction yields keys like `"curRcptNo "` and `"sa lesSttsCd"`. No RRA field name
+   contains a space, so this is lossless.
+2. **One typo repaired.** The v1.0.5 sales sample reads `prcOrdCd”:”123456”` — a smart-quoted
+   key missing its opening quote. Repaired to `"prcOrdCd": "123456"`; nothing else in that
+   sample was touched.
+
+## What round-tripping them proves
+
+That the models parse what RRA publishes and re-emit it unchanged: no field dropped, no amount
+re-scaled, no required field the document's own sample does not carry. Because requests are
+`extra="forbid"`, it also proves the models know **every** field the samples use.
+
+It does not prove the samples are internally consistent — they are not. The v1.0.5 sales sample
+carries `taxAmtB: 94576` beside `totTaxAmt: 38135`, where the item list sums to 38135; and the
+tax on a line is rounded to whole francs in the Rwandan samples (`taxblAmt: 200000` →
+`taxAmt: 30508`) and to two decimals in the Korean ones (`taxblAmt: 660000` →
+`taxAmt: 100677.97`). Those are the documents' own inconsistencies, and the build follows the
+CIS specification and the certification checkpoint sheet where they disagree.
+
+## Regenerating
+
+The extraction script is not checked in — these files are the artefact. Replacing one means
+copying the block out of the PDF again and applying the two edits above.

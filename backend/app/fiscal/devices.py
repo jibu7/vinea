@@ -544,18 +544,30 @@ def _store_item_classes(
 
 
 def _record_success(device: FiscalDevice, kind: FiscalSyncKind, watermark: str | None) -> None:
-    """Store the watermark **only here** — after a success, beside the rows it brought.
+    """Store the watermark **only here** — after a success, beside the rows it brought, and
+    only when it moves forward.
 
-    A failed sync that advanced the watermark would skip every row published between the two
-    calls, silently and for good, which is why this is one function and not an assignment at
-    each call site.
+    Two rules in one function, for the same reason: a watermark is a promise about what has
+    already been fetched, and both ways of breaking it are silent.
+
+    A failed sync that advanced it would skip every row published between the two calls, for
+    good, because nothing ever asks for that window again. And a watermark that went
+    *backwards* — a clock skew, a restored backup, a device whose host drifted — would re-fetch
+    harmlessly here but is refused outright by RRA on the imports feed: certification
+    checkpoint 67 requires each `lastReqDt` to be greater than the previous request's. Keeping
+    the stored value monotonic makes that true of every kind rather than of the one that is
+    checked.
     """
     device.last_success_at = datetime.now(UTC)
     device.last_error = None
-    if watermark:
-        # Reassigned rather than mutated: SQLAlchemy does not track in-place changes to a
-        # JSONB dict, so `device.watermarks[kind] = …` would be written nowhere.
-        device.watermarks = {**device.watermarks, str(kind): watermark}
+    if not watermark:
+        return
+    previous = device.watermarks.get(str(kind))
+    if previous is not None and watermark <= previous:
+        return
+    # Reassigned rather than mutated: SQLAlchemy does not track in-place changes to a JSONB
+    # dict, so `device.watermarks[kind] = …` would be written nowhere.
+    device.watermarks = {**device.watermarks, str(kind): watermark}
 
 
 def _record_failure(device: FiscalDevice, result) -> None:  # noqa: ANN001

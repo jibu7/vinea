@@ -1,12 +1,12 @@
 {
   "resultCd": "000",
   "resultMsg": "It is succeeded",
-  "resultDt": "20260316103001",
+  "resultDt": "20200226194328",
   "data": {
-    "curRcptNo": 1,
-    "totRcptNo": 1,
-    "intrlData": "SQ4M-UDVG-3DNE-M5SF-3JGF-QQ",
-    "rcptSign": "3KFB-ZBWX-2SYU-R6RA",
-    "sdcDateTime": "20260316103001"
+    "curRcptNo": "1",
+    "totRcptNo": "1",
+    "intrlData": "EAHSA V6ECUUXSY6PCCJYAUP6MI",
+    "rcptSign": "QUII27MATATSHFRB",
+    "sdcDateTime": "20210502115145"
   }
 }

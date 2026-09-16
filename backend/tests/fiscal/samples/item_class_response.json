@@ -1,12 +1,28 @@
 {
   "resultCd": "000",
   "resultMsg": "It is succeeded",
-  "resultDt": "20260316103000",
+  "resultDt": "20200226185625",
   "data": {
     "itemClsList": [
       {
-        "itemClsCd": "5059020800",
-        "itemClsNm": "Wine of fresh grapes",
+        "itemClsCd": "14111400",
+        "itemClsNm": "Paper products no use",
+        "itemClsLvl": 3,
+        "taxTyCd": null,
+        "mjrTgYn": null,
+        "useYn": "Y"
+      },
+      {
+        "itemClsCd": "14111401",
+        "itemClsNm": "Paper products no use Commodity",
+        "itemClsLvl": 4,
+        "taxTyCd": null,
+        "mjrTgYn": null,
+        "useYn": "Y"
+      },
+      {
+        "itemClsCd": "3133130600",
+        "itemClsNm": "Non metallic sonic welded structural assemblies",
         "itemClsLvl": 5,
         "taxTyCd": "B",
         "mjrTgYn": "N",

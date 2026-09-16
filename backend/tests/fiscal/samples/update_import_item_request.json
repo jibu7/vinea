@@ -1,14 +1,14 @@
 {
-  "tin": "999000099",
+  "tin": "999991130",
   "bhfId": "00",
-  "taskCd": "2231990000",
-  "dclDe": "20260310",
+  "taskCd": "2231943",
+  "dclDe": "20191217",
   "itemSeq": 1,
-  "hsCd": "22042100",
-  "itemClsCd": "5059020800",
-  "itemCd": "RW2NTXU0000001",
-  "imptItemSttsCd": "3",
-  "remark": "Received on GRN-000004",
-  "modrNm": "Owner",
-  "modrId": "17"
+  "hsCd": "1231531231",
+  "itemClsCd": "5022110801",
+  "itemCd": "RW1NTXU0000001",
+  "imptItemSttsCd": "1",
+  "remark": "remark",
+  "modrNm": "Admin",
+  "modrId": "Admin"
 }

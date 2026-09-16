@@ -52,6 +52,10 @@ INTERNAL_DATA_LENGTH = 26
 RECEIPT_SIGN_LENGTH = 16
 HUNDRED = Decimal(100)
 PENNY = Decimal("0.01")
+#: How far a line's tax may sit from a two-decimal recomputation. See `_validate_sale` step 3:
+#: one whole unit is the largest rounding step a base currency can impose, and RWF's is exactly
+#: that. Named rather than inlined because the live run at step 5 is what settles it.
+BASE_UNIT_TOLERANCE = Decimal(1)
 
 
 class SandboxMode(enum.StrEnum):
@@ -175,14 +179,29 @@ def _validate_sale(payload: dict[str, Any]) -> tuple[str, str] | None:
     if _decimal(payload.get("totTaxAmt")) != total_tax:
         return "803", "totTaxAmt does not equal the sum of the buckets"
 
-    # 3. Each line's tax is its taxable amount at the programmed rate, VAT-inclusive.
+    # 3. Each line's tax is its taxable amount at the programmed rate, VAT-inclusive —
+    # **within one unit of the base currency**, and that tolerance is the interesting part.
+    #
+    # The wire is `NUMBER 18,2`; Rwanda's base currency has *no* decimal places. So the tax
+    # Vinea sends is the tax the ledger posted, rounded to the franc, while a recomputation at
+    # two decimals lands somewhere between it and the next franc: 100.00 at 18 % inclusive is
+    # 15.2542…, the ledger holds 15, and the two differ by a quarter of a franc. Sending
+    # 15.25 instead would make the receipt disagree with the ledger — and the VAT return is a
+    # query over the ledger, so the return would then not tie to the receipts. The ledger is
+    # the truth and the receipt is derived from it, which settles which of the two moves.
+    #
+    # **Whether RRA tolerates it is a sandbox question for step 5** (decision 6), and it is
+    # modelled here rather than assumed away: one whole unit is the largest rounding step a
+    # base currency can impose, and a wider tolerance would stop catching the defect this
+    # check exists for — a line taxed exclusively and reported inclusively is out by 18 % of
+    # the gross against 15.25 %, which on any material amount is far more than a franc.
     for item in items:
         rate = Decimal(codes.PROGRAMMED_RATES.get(item.get("taxTyCd", "D"), "0"))
         taxable = _decimal(item.get("taxblAmt"))
         expected = (taxable * rate / (HUNDRED + rate)).quantize(
             PENNY, rounding=ROUND_HALF_UP
         )
-        if _decimal(item.get("taxAmt")) != expected:
+        if abs(_decimal(item.get("taxAmt")) - expected) >= BASE_UNIT_TOLERANCE:
             return (
                 "804",
                 f"item {item.get('itemSeq')}: taxAmt {item.get('taxAmt')} is not "

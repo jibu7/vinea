@@ -6,7 +6,9 @@ and what `sync_codes` refreshes; what lives here is the subset the code has to *
 tax classes it maps onto, the movement types it chooses between, the result codes it decides
 retry policy from. A code the product never branches on belongs in the synced table alone.
 
-Provenance: `docs/rra/contract-notes.md`, which records why it exists rather than the PDFs.
+Provenance: **VSDC API documentation v1.0.5 §4**, pinned at
+`docs/rra/VSDC_SPECIFICATION_DOCUMENT_v1.0.5_okay.pdf`. Section numbers below are that
+document's; `docs/rra/contract-notes.md` summarises them.
 
 The `item_code` builder at the bottom is here rather than in `payloads.py` because it is a
 *format*, not a field: §4.17 composes an item code out of four codes and a seven-digit
@@ -17,27 +19,35 @@ import enum
 
 #: Code classes, as `/code/selectCodes` returns them. Named so a sync can key the rows it
 #: stores, and so a screen asking for "the packaging units" does not carry a bare "17".
-CLASS_TAX_TYPE = "04"
-CLASS_PAYMENT_TYPE = "07"
-CLASS_QUANTITY_UNIT = "10"
-CLASS_TRANSACTION_PROGRESS = "11"
-CLASS_STOCK_IO_TYPE = "12"
-CLASS_PACKAGING_UNIT = "17"
-CLASS_PRODUCT_TYPE = "24"
-CLASS_REGISTRATION_TYPE = "31"
-CLASS_REFUND_REASON = "32"
-CLASS_SALES_RECEIPT_TYPE = "37"
-CLASS_PURCHASE_RECEIPT_TYPE = "38"
+CLASS_TAX_TYPE = "04"  # §4.1
+CLASS_NATION = "05"  # §4.4
+CLASS_PAYMENT_TYPE = "07"  # §4.10
+CLASS_QUANTITY_UNIT = "10"  # §4.6
+CLASS_TRANSACTION_PROGRESS = "11"  # §4.11
+CLASS_STOCK_IO_TYPE = "12"  # §4.15
+CLASS_TRANSACTION_TYPE = "14"  # §4.8 — `salesTyCd` / `pchsTyCd`
+CLASS_TAXPAYER_STATUS = "15"  # §4.2
+CLASS_PACKAGING_UNIT = "17"  # §4.5
+CLASS_PRODUCT_TYPE = "24"  # §4.3
+CLASS_IMPORT_ITEM_STATUS = "26"  # §4.18
+CLASS_REGISTRATION_TYPE = "31"  # §4.12
+CLASS_REFUND_REASON = "32"  # §4.16
+CLASS_CURRENCY = "33"  # §4.7
+CLASS_SALES_RECEIPT_TYPE = "37"  # §4.9
+CLASS_PURCHASE_RECEIPT_TYPE = "38"  # §4.13
 
 #: Every class this phase syncs and offers. A class not in here is one no screen shows.
 SYNCED_CODE_CLASSES: tuple[str, ...] = (
     CLASS_TAX_TYPE,
+    CLASS_NATION,
     CLASS_PAYMENT_TYPE,
     CLASS_QUANTITY_UNIT,
     CLASS_TRANSACTION_PROGRESS,
     CLASS_STOCK_IO_TYPE,
+    CLASS_TRANSACTION_TYPE,
     CLASS_PACKAGING_UNIT,
     CLASS_PRODUCT_TYPE,
+    CLASS_IMPORT_ITEM_STATUS,
     CLASS_REGISTRATION_TYPE,
     CLASS_REFUND_REASON,
     CLASS_SALES_RECEIPT_TYPE,
@@ -47,6 +57,9 @@ SYNCED_CODE_CLASSES: tuple[str, ...] = (
 
 class TaxType(enum.StrEnum):
     """§4.1 — the four tax classes, and the rates RRA programs them at.
+
+    The published code names are `A-EX`, `B-18.00%`, `C` and `D`: only the standard rate
+    carries its percentage in the name, because only a rate above zero prints unconditionally.
 
     The rate lives beside the class in `PROGRAMMED_RATES` below rather than being read off the
     Vinea tax code, because CIS §7.22–7.23 requires **every programmed rate above zero** to
@@ -70,7 +83,7 @@ PROGRAMMED_RATES: dict[str, str] = {
 
 
 class PaymentType(enum.StrEnum):
-    """§4.5 — `pmtTyCd`."""
+    """§4.10 — `pmtTyCd`."""
 
     CASH = "01"
     CREDIT = "02"
@@ -82,21 +95,20 @@ class PaymentType(enum.StrEnum):
 
 
 class TransactionProgress(enum.StrEnum):
-    """§4.8 — `salesSttsCd` / `pchsSttsCd`. Vinea posts finished documents, so everything it
-    sends is `APPROVED`; `CANCELLED` and `REFUND_APPROVED` are here because the purchase feed
-    returns them and a rejected feed row is sent back as `CANCELLED`."""
+    """§4.11 — `salesSttsCd` / `pchsSttsCd`. Vinea posts finished documents, so everything it
+    sends is `APPROVED`; the rest are here because the purchase feed returns them and a
+    rejected feed row is sent back as `CANCELLED`."""
 
     WAIT_APPROVAL = "01"
     APPROVED = "02"
     CANCEL_REQUESTED = "03"
     CANCELLED = "04"
-    CREDIT_NOTE_REQUESTED = "05"
-    CREDIT_NOTE_APPROVED = "06"
-    TRANSFERRED = "07"
+    REFUNDED = "05"
+    TRANSFERRED = "06"
 
 
 class StockIoType(enum.StrEnum):
-    """§4.9 — `sarTyCd`. In and out are separate codes for the same business event, which is
+    """§4.15 — `sarTyCd`. In and out are separate codes for the same business event, which is
     why the mapping from a Vinea source document to one of these is a table rather than a
     sign: a sale is `SALE` and a customer return is `RETURN_IN`, not "sale with a minus"."""
 
@@ -110,11 +122,15 @@ class StockIoType(enum.StrEnum):
     RETURN_OUT = "12"
     MOVEMENT_OUT = "13"
     PROCESSING_OUT = "14"
+    #: Outgoing — discarding. No Vinea document maps to it: a write-off is an adjustment out
+    #: (decision 10), and a second code for the same movement would split the same figure
+    #: across two lines of RRA's stock report. Listed because the table has it.
+    DISCARDING_OUT = "15"
     ADJUSTMENT_OUT = "16"
 
 
 class RegistrationType(enum.StrEnum):
-    """§4.13 — `regTyCd`. `MANUAL` is a purchase this system originated; `AUTOMATIC` is a
+    """§4.12 — `regTyCd`. `MANUAL` is a purchase this system originated; `AUTOMATIC` is a
     confirmation of one RRA is already holding."""
 
     MANUAL = "M"
@@ -122,23 +138,23 @@ class RegistrationType(enum.StrEnum):
 
 
 class SalesReceiptType(enum.StrEnum):
-    """§4.14 — `rcptTyCd`."""
+    """§4.9 — `rcptTyCd`. `R` is "Refund after Sale"."""
 
     SALE = "S"
     REFUND = "R"
 
 
 class PurchaseReceiptType(enum.StrEnum):
-    """§4.15 — the purchase side's `rcptTyCd`."""
+    """§4.13 — the purchase side's `rcptTyCd`. `R` is "Refund after Purchase"."""
 
     PURCHASE = "P"
     RETURN = "R"
 
 
 class SalesType(enum.StrEnum):
-    """§4.14 — `salesTyCd`. v1.0.5 says to send `NORMAL` only, so the other three are here for
-    reading a response rather than for writing a request. Training and proforma are out of
-    scope for this phase; `COPY` is an open question the sandbox run settles (decision 11)."""
+    """§4.8 — `salesTyCd` / `pchsTyCd`. v1.0.5 says to send `NORMAL` only, so the other three
+    are here for reading a response rather than for writing a request. Training and proforma
+    are out of scope for this phase; `COPY` is an open question decision 11 leaves open."""
 
     NORMAL = "N"
     COPY = "C"
@@ -147,7 +163,7 @@ class SalesType(enum.StrEnum):
 
 
 class ProductType(enum.StrEnum):
-    """§4.4 — the product-type segment of an item code."""
+    """§4.3 — the product-type segment of an item code. `3` is "Service without stock"."""
 
     RAW_MATERIAL = "1"
     FINISHED_PRODUCT = "2"
@@ -155,33 +171,44 @@ class ProductType(enum.StrEnum):
 
 
 class ImportItemStatus(enum.StrEnum):
-    """§4.18 — `imptItemSttsCd`. Only the two an operator can choose are used."""
+    """§4.18 — `imptItemSttsCd`. Only the two an operator can choose are ever sent.
 
-    WAIT = "2"
+    `4` is published as **Cancelled**, not "rejected" — the operator's act is to decline the
+    declaration, and the name says what RRA calls the resulting state rather than what the
+    button says.
+    """
+
+    UNSENT = "1"
+    WAITING = "2"
     APPROVED = "3"
-    REJECTED = "4"
+    CANCELLED = "4"
 
 
 class RefundReason(enum.StrEnum):
     """§4.16 — `rfdRsnCd`, required on every credit note.
 
+    The names are RRA's own, verbatim from the table. They are not a tidy taxonomy — "Refund"
+    is itself one of the thirteen reasons for a refund — and they are kept as published rather
+    than improved, because the code is what RRA reports on and a friendlier name here would
+    only mislead whoever compares a Vinea credit note with an EBM report.
+
     Required and **not defaulted**: "why was this refunded" is a question only the person
     issuing the credit note can answer, and a default would put the same answer on every one.
     """
 
-    WRONG_QUANTITY = "01"
-    WRONG_PRICE = "02"
-    DAMAGED_GOODS = "03"
-    WRONG_ITEM = "04"
-    ORDER_CANCELLED = "05"
-    RETURN_OF_GOODS = "06"
-    INVOICE_ERROR = "07"
-    DUPLICATE_INVOICE = "08"
-    CUSTOMER_DISSATISFIED = "09"
-    EXPIRED_GOODS = "10"
-    DISCOUNT_ADJUSTMENT = "11"
-    TAX_CORRECTION = "12"
-    OTHER = "13"
+    MISSING_QUANTITY = "01"
+    MISSING_ITEM = "02"
+    DAMAGED = "03"
+    WASTED = "04"
+    RAW_MATERIAL_SHORTAGE = "05"
+    REFUND = "06"
+    WRONG_CUSTOMER_TIN = "07"
+    WRONG_CUSTOMER_NAME = "08"
+    WRONG_AMOUNT_OR_PRICE = "09"
+    WRONG_QUANTITY = "10"
+    WRONG_ITEMS = "11"
+    WRONG_TAX_TYPE = "12"
+    OTHER_REASON = "13"
 
 
 # --- Response codes ----------------------------------------------------------------------
@@ -190,7 +217,10 @@ class RefundReason(enum.StrEnum):
 # through the drainer.
 
 RESULT_OK = "000"
-#: Transport and temporary server trouble: retry on the backoff, forever.
+#: "There is no search result" — an *answer*, not a failure. A TIN lookup that finds nothing
+#: comes back here or on `884`, and both mean the same thing to the person who asked.
+RESULT_NO_RESULT = "001"
+#: "An error regarding server communication occurred": retry on the backoff, forever.
 RESULT_TEMPORARY = "894"
 #: A business customer's sale with no purchase code, and the codes for one that is wrong.
 RESULT_PURCHASE_CODE_REQUIRED = "881"
@@ -201,6 +231,12 @@ RESULT_UNKNOWN_TIN = "884"
 #: never arrived is never resent blindly: the resend succeeds as a duplicate and there is
 #: nothing to print.
 RESULT_DUPLICATE = "994"
+#: The ordering rules, in RRA's own words: `921` "Sales or sales invoice data which is declared
+#: cannot be received" and `922` "Sales invoice data can be received after receiving the sales
+#: data". They are the authority's statement of why the outbox drains per device in FIFO with
+#: one row in flight — a stock report that overtakes its sale is refused, not merely untidy.
+RESULT_SALES_NOT_RECEIVABLE = "921"
+RESULT_SALES_MUST_COME_FIRST = "922"
 
 #: Codes the drainer retries. Everything else that is not `000` is a refusal RRA will make
 #: again, so retrying it only fills a log.
@@ -213,11 +249,20 @@ def is_retryable(result_code: str) -> bool:
 
 # --- §4.17, the item code -----------------------------------------------------------------
 
-#: How wide the quantity-unit segment is, and what it is padded with. The documents' own
-#: samples show `RW1NTXU0000006` — a one-character unit `U` padded to two with `X` — and the
-#: padding character is not stated in prose anywhere the build could find. Written as
-#: constants so that the sandbox run at step 5 changes one line rather than a format string.
-QUANTITY_UNIT_WIDTH = 2
+#: The quantity-unit segment: **at least** two characters, left-padded with `X`, never
+#: truncated.
+#:
+#: §4.17's worked example is `RW2NTBA0000012` — `BA` is the two-character Barrel code and needs
+#: no padding. The document's other Rwandan samples are `RW1NTXU0000001` / `RW1NTXU0000006`,
+#: whose items carry `qtyUnitCd: "U"` in the same request bodies: a one-character code padded
+#: to two with a leading `X`. Neither is stated as a rule in prose, and the padding character
+#: is only visible by comparing the two.
+#:
+#: **Never truncated**, because §4.6 publishes three-character codes (`BLL`, `CMT`, `GRM`,
+#: `TNE`, `MWT`…) and the document's own `KR2AMXBLL0000001` keeps `BLL` whole. `itemCd` is
+#: `CHAR(20)`, so a fifteen-character code fits; cutting `BLL` to `BL` would silently collide
+#: with the Bale packaging code and mis-register the item.
+QUANTITY_UNIT_MIN_WIDTH = 2
 QUANTITY_UNIT_PAD = "X"
 ITEM_SEQUENCE_WIDTH = 7
 
@@ -232,12 +277,12 @@ def build_item_code(
 ) -> str:
     """§4.17: origin + product type + packaging unit + quantity unit + a 7-digit sequence.
 
+    `RW2NTBA0000012` — Rwanda, finished product, Net packaging, Barrel quantity, item 12.
+
     The sequence is claimed from the `FITM` run, so it is gapless per taxpayer — which is
     what makes the code itself a usable audit key rather than an opaque string.
     """
-    padded_unit = quantity_unit.rjust(QUANTITY_UNIT_WIDTH, QUANTITY_UNIT_PAD)[
-        :QUANTITY_UNIT_WIDTH
-    ]
+    padded_unit = quantity_unit.rjust(QUANTITY_UNIT_MIN_WIDTH, QUANTITY_UNIT_PAD)
     return (
         f"{origin_country.upper()}"
         f"{product_type}"

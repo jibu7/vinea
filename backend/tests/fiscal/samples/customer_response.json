@@ -1,17 +1,26 @@
 {
   "resultCd": "000",
   "resultMsg": "It is succeeded",
-  "resultDt": "20260316103000",
+  "resultDt": "20200226192053",
   "data": {
     "custList": [
       {
-        "tin": "100000001",
-        "taxprNm": "Customer C Ltd",
-        "taxprSttsCd": "01",
-        "prvncNm": "Kigali City",
-        "dstrtNm": "Gasabo",
-        "sctrNm": "Remera",
-        "locDesc": "KG 11 Ave"
+        "tin": "841562115",
+        "taxprNm": "TAXPAYER1",
+        "taxprSttsCd": "A",
+        "prvncNm": "KIGALI CITY",
+        "dstrtNm": "KICUKIRO",
+        "sctrNm": "KAGARAMA",
+        "locDesc": "Kicukiro"
+      },
+      {
+        "tin": "451848361",
+        "taxprNm": "TAXPAYER2",
+        "taxprSttsCd": "A",
+        "prvncNm": "KIGALI ===== PAGE 23 ===== 19 Object Attribute Object ID Object Name Sub Object_1 Sub Object_2 Attribute ID Attribute Name Data Type Required Data Length Format Object ID Object Name Object ID Object Name CITY",
+        "dstrtNm": "KICUKIRO",
+        "sctrNm": "KAGARAMA",
+        "locDesc": "123-233"
       }
     ]
   }
