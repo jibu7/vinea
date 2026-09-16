@@ -33,6 +33,26 @@ import {
 const auth = messages.auth;
 const maintenance = messages.maintenance;
 
+/**
+ * Where this spec's screenshots land.
+ *
+ * **Not into the repository by default**, which is what it used to do: every run of the suite
+ * rewrote the ten committed PNGs under `docs/screenshots/p1-gap/`, so `git status` came back
+ * dirty after a green run and the working tree could not be used as a signal. A capture is an
+ * artefact of a deliberate act, not a side effect of running the tests — every other phase
+ * already treats it that way, through the `frontend/scripts/capture-*.ts` scripts.
+ *
+ * So the shots go to `test-results/`, which is gitignored, and refreshing the committed ones
+ * is an explicit request:
+ *
+ *     SCREENSHOT_DIR=../docs/screenshots/p1-gap npx playwright test p1-auth-screens
+ *
+ * The capture itself stays inside the spec rather than moving to a script, because what makes
+ * these shots worth having is the state the *test* builds — a live reset token, a dead one, a
+ * pending invitation — and a script would have to rebuild all of it to stand in the same place.
+ */
+const SHOTS = process.env.SCREENSHOT_DIR ?? "test-results/p1-gap";
+
 /** A fresh address per run, so a re-run never collides with a membership left by the last. */
 function uniqueEmail(prefix: string): string {
   return `${prefix}.${Date.now()}.${Math.floor(Math.random() * 10_000)}@vinea.example`;
@@ -317,7 +337,7 @@ test.describe("P1 gap — the auth screens", () => {
       await waitForHydration(page, "form");
       await page.getByLabel(auth.email).fill(shot);
       await setTheme(page, theme);
-      await page.screenshot({ path: `../docs/screenshots/p1-gap/forgot-password-${theme}.png` });
+      await page.screenshot({ path: `${SHOTS}/forgot-password-${theme}.png` });
     }
 
     await page.getByRole("button", { name: auth.sendResetLink }).click();
@@ -330,13 +350,13 @@ test.describe("P1 gap — the auth screens", () => {
       await page.getByLabel(auth.newPassword, { exact: true }).fill("a brand new passphrase");
       await page.getByLabel(auth.confirmPassword).fill("a brand new passphrase");
       await setTheme(page, theme);
-      await page.screenshot({ path: `../docs/screenshots/p1-gap/reset-password-${theme}.png` });
+      await page.screenshot({ path: `${SHOTS}/reset-password-${theme}.png` });
 
       await page.goto(`/invitations/accept?token=${encodeURIComponent(token)}&company=Rugari+Wines`);
       await waitForHydration(page, "form");
       await page.getByLabel(auth.fullName).fill("Invited Colleague");
       await setTheme(page, theme);
-      await page.screenshot({ path: `../docs/screenshots/p1-gap/accept-invitation-${theme}.png` });
+      await page.screenshot({ path: `${SHOTS}/accept-invitation-${theme}.png` });
     }
 
     // The verification landing page, in its resolved state. The token above is a *reset*
@@ -346,7 +366,7 @@ test.describe("P1 gap — the auth screens", () => {
       await page.goto(`/verify-email?token=${encodeURIComponent(token)}`);
       await expect(page.getByText(auth.verifyFailed)).toBeVisible();
       await setTheme(page, theme);
-      await page.screenshot({ path: `../docs/screenshots/p1-gap/verify-email-${theme}.png` });
+      await page.screenshot({ path: `${SHOTS}/verify-email-${theme}.png` });
     }
 
     // The banner, on a signed-in unverified user, with the rest of the shell around it.
@@ -361,7 +381,7 @@ test.describe("P1 gap — the auth screens", () => {
         maintenance.pending,
       );
       await setTheme(page, theme);
-      await page.screenshot({ path: `../docs/screenshots/p1-gap/users-revoke-${theme}.png` });
+      await page.screenshot({ path: `${SHOTS}/users-revoke-${theme}.png` });
     }
     expect(PASSWORD.length).toBeGreaterThan(0);
   });
