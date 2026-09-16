@@ -1310,6 +1310,21 @@ def replace_kit_components(
                 code="nested_kit",
                 field_errors={f"components.{index}.component_item_id": ["is a kit"]},
             )
+        # Decision 8 in full: a kit explodes into things that can be *delivered* — stock, which
+        # moves and carries COGS, and service, which is billed and has no shelf. A non-stock
+        # component is neither. It would sit on the order as a line that commits nothing,
+        # relieves nothing and costs nothing, and the kit's revenue would have been split with
+        # a row that never becomes anything. Refused at the definition rather than at line
+        # entry, so the operator learns it once in the kit editor instead of every time an
+        # order is keyed.
+        if component_item.item_type not in (ItemType.STOCK, ItemType.SERVICE):
+            raise LedgerStateError(
+                f"{component_item.code} is neither a stock nor a service item",
+                code="component_not_stock_or_service",
+                field_errors={
+                    f"components.{index}.component_item_id": ["not a stock or service item"]
+                },
+            )
         if not component_item.is_active:
             raise LedgerStateError(
                 f"{component_item.code} is not active",

@@ -35,6 +35,9 @@ const SUFFIX = String(Date.now()).slice(-6);
 const KIT_CODE = `E2EKIT${SUFFIX}`;
 const BOTTLE_CODE = `E2EKB${SUFFIX}`;
 const COFFEE_CODE = `E2EKC${SUFFIX}`;
+/** A **non-stock** item, which decision 8 says a kit may not explode into. It exists in this
+ * spec only so the component picker can be asked whether it offers it. */
+const CARD_CODE = `E2EKN${SUFFIX}`;
 
 /** The accounts the Rwanda seed pack and the P6 back-fill leave on `gl_settings`, as the
  * pickers render them — `dotted(code, name)`. Asserting the resolved label rather than "not
@@ -85,6 +88,27 @@ async function seedComponents(page: Page): Promise<{ bottle: SeededItem; coffee:
     bottle: await make(BOTTLE_CODE, `E2E Bottle ${SUFFIX}`, count, "EA"),
     coffee: await make(COFFEE_CODE, `E2E Coffee ${SUFFIX}`, weight, "KG"),
   };
+}
+
+/** The non-stock item the component picker must not offer. Made through the API for the same
+ * reason the two components are: this spec is about the kit, not about the catalogue dialog. */
+async function seedNonStock(page: Page): Promise<SeededItem> {
+  const categories = await pageFetch(page, "/inventory/uom-categories");
+  const rows = categories.json as Array<{ code: string; id: number; uoms: Array<{ id: number; code: string }> }>;
+  const count = rows.find((c) => c.code === "COUNT")!;
+  const res = await pageFetch(page, "/inventory/items", {
+    method: "POST",
+    body: {
+      code: CARD_CODE,
+      name: `E2E Gift card ${SUFFIX}`,
+      uom_category_id: count.id,
+      base_uom_id: count.uoms.find((u) => u.code === "EA")!.id,
+      item_type: "non_stock",
+      selling_price: "500",
+    },
+  });
+  expect(res.ok, JSON.stringify(res.json)).toBe(true);
+  return res.json as SeededItem;
 }
 
 function dialog(page: Page) {
@@ -249,6 +273,8 @@ test.describe("Order entry maintenance", () => {
     const { bottle, coffee } = await seedComponents(page);
     expect(bottle.code).toBe(BOTTLE_CODE);
     expect(coffee.code).toBe(COFFEE_CODE);
+    const card = await seedNonStock(page);
+    expect(card.code).toBe(CARD_CODE);
 
     await page.goto("/maintenance/inventory-items");
     await page.waitForSelector("h1:has-text('Inventory items')");
@@ -294,7 +320,22 @@ test.describe("Order entry maintenance", () => {
 
     await page.getByRole("button", { name: /Edit definition/ }).click();
     await page.getByRole("button", { name: /Add component/ }).click();
-    await pickCombobox(page, "Component", BOTTLE_CODE);
+
+    // Decision 8, on the picker rather than only in the service: a kit explodes into stock and
+    // service items, so the **non-stock** item seeded above is not on offer. Asserted the way
+    // the purchase account's control accounts are — by typeahead, because "not in the list" is
+    // a claim about the whole list and typing the code is how you ask about one row. The
+    // service refuses it too (`component_not_stock_or_service`); an operator should not be
+    // able to choose a row whose save is a 409.
+    await page.getByLabel("Component").last().click();
+    await page.locator("[cmdk-item]").first().waitFor({ state: "visible" });
+    await page.keyboard.type(CARD_CODE);
+    await expect(page.locator("[cmdk-item]")).toHaveCount(0);
+    for (let i = 0; i < CARD_CODE.length; i += 1) await page.keyboard.press("Backspace");
+    // …and the stock item it is otherwise identical to *is*, so this measures the type and not
+    // a typeahead that stopped matching anything at all.
+    await page.keyboard.type(BOTTLE_CODE);
+    await page.locator(`[cmdk-item]:has-text("${BOTTLE_CODE}")`).first().click();
     await page.getByLabel("Per kit").fill("2");
     await page.getByRole("button", { name: /Add component/ }).click();
     await page.getByLabel("Component").last().click();

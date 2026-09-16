@@ -307,6 +307,52 @@ def test_a_kit_may_not_contain_itself_or_another_kit(client: TestClient) -> None
     assert nested.json()["code"] == "nested_kit"
 
 
+def test_a_component_must_be_a_stock_or_a_service_item(client: TestClient) -> None:
+    """Decision 8's other half. A kit explodes into things that can be delivered — stock, which
+    moves and carries COGS, and service, which is billed and never on a shelf. A **non-stock**
+    component is neither: it would ride the order as a line committing nothing, relieving
+    nothing and costing nothing, while taking a share of the kit's revenue with it.
+
+    Keyed on the row, like the other five refusals, so the kit editor puts the message on the
+    cell that is wrong rather than in a toast over five rows.
+    """
+    _signup(client)
+    kit = _item(client, "GIFT-01", item_type="kit")
+    non_stock = _item(client, "CARD-01", item_type="non_stock")
+    service = _item(client, "GIFTWRAP", item_type="service")
+    stock = _item(client, "WINE-750", item_type="stock")
+
+    refused = client.put(
+        f"/api/v1/inventory/items/{kit['id']}/kit-components",
+        json={
+            "components": [
+                {"component_item_id": stock["id"], "quantity_per_kit": "2"},
+                {"component_item_id": non_stock["id"], "quantity_per_kit": "1"},
+            ]
+        },
+    )
+
+    assert refused.status_code == 409
+    assert refused.json()["code"] == "component_not_stock_or_service"
+    assert refused.json()["field_errors"] == {
+        "components.1.component_item_id": ["not a stock or service item"]
+    }
+
+    # And the two types that are allowed go in together, so the refusal is about non-stock
+    # rather than about anything that is not stock.
+    allowed = client.put(
+        f"/api/v1/inventory/items/{kit['id']}/kit-components",
+        json={
+            "components": [
+                {"component_item_id": stock["id"], "quantity_per_kit": "2"},
+                {"component_item_id": service["id"], "quantity_per_kit": "1"},
+            ]
+        },
+    )
+    assert allowed.status_code == 200, allowed.text
+    assert [row["component_item_id"] for row in allowed.json()] == [stock["id"], service["id"]]
+
+
 def test_a_component_may_not_appear_twice(client: TestClient) -> None:
     _signup(client)
     bottle = _item(client, "WINE-750")

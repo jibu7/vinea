@@ -44,6 +44,7 @@ from hypothesis import strategies as st
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.inventory import masters as inventory_masters
 from app.kernel import posting
 from app.kernel.errors import LedgerStateError, PostingError
 from app.kernel.events import CashbookEntry, CashbookKind, CashbookLineSpec
@@ -189,6 +190,15 @@ OPERATIONS = (
     #: no quantity, so `block` has nothing to refuse and a landed cost is otherwise always
     #: reversible however the goods have moved since (step 4's negative finding).
     "reverse_lca",
+    # --- Step 9: the kit definition moves under the orders already taken -------------------
+    #: Redefines what the kit explodes into, mid-plan. Decision 8 says a definition is a
+    #: **default**: editing it changes what the *next* kit line explodes into and restates
+    #: nothing already keyed. Until this existed the machine could never say so — the kit was
+    #: defined once in the fixture and never touched again, so "orders keep the components
+    #: they were keyed with" was a claim held up by one unit test and by the invariants never
+    #: being given a chance to disagree. Now `create_so` draws kits on either side of a
+    #: redefinition and the recomputation walks the *lines*, not the catalogue.
+    "kit",
 )
 
 #: What the machine actually draws from, and it is **not** `OPERATIONS`.
@@ -209,12 +219,18 @@ OPERATIONS = (
 #: land on and `reverse_lca` needs an allocation to take back out, so both are conjunctions of
 #: the same shape as `grn_matched`, and the same lever applies: draw them more often rather
 #: than hope. `_REACH` counts what each one actually found, so the claim stays measured.
+#: Step 9 adds `kit` at the end and draws it **once**, like the order operations rather than
+#: twice like the posting ones. It is not a conjunction — it needs nothing to already exist —
+#: and it is the one operation whose interest is in what happens *after* it, so density buys
+#: nothing and dilution of the eight censused refusals costs. Measured: the deep pass clears
+#: every floor with it in.
 DRAW_POOL = (
     *OPERATIONS[:7],
     *OPERATIONS[:7],
     *OPERATIONS[7:14],
-    *OPERATIONS[14:],
-    *OPERATIONS[14:],
+    *OPERATIONS[14:17],
+    *OPERATIONS[14:17],
+    *OPERATIONS[17:],
 )
 
 QUANTITIES = st.integers(min_value=1, max_value=40).map(Decimal)
@@ -758,6 +774,42 @@ def _step(  # noqa: PLR0913
             documents[pick % len(documents)],
             on_date=APRIL if into_a_closed_period else MARCH,
             reason="Property reversal",
+            actor=fixture.owner,
+        )
+        return
+
+    if operation == "kit":
+        if fixture.kit_item is None:
+            _count(_REACH, "kit: no kit to redefine")
+            return
+        # **Stock and service only** (decision 8). A kit explodes into things that can be
+        # delivered; `replace_kit_components` refuses anything else with
+        # `component_not_stock_or_service`, so a generator that drew the kit itself or a
+        # non-stock item would spend these draws on a refusal with its own unit test instead
+        # of on the redefinition this operation exists to reach. The pool is the fixture's
+        # two stock items and its service item — and it deliberately includes the service
+        # one, because a kit whose explosion is half stock and half service is the shape that
+        # commits on one row and not the other.
+        pool = [fixture.stock_item, fixture.service_item]
+        if fixture.weighted_item is not None:
+            pool.append(fixture.weighted_item)
+        chosen = [pool[pick % len(pool)]]
+        if pick % 3 == 0:
+            chosen.append(pool[(pick + 1) % len(pool)])
+        _count(_REACH, f"kit: redefined to {len(chosen)} component(s)")
+        inventory_masters.replace_kit_components(
+            db,
+            fixture.company_id,
+            fixture.kit_item,
+            [
+                {
+                    "component_item_id": component.id,
+                    # 1, 2 or 3 per kit. Varied because "components sum to kit quantity x
+                    # per-kit" is only a property if the per-kit is not always the fixture's 2.
+                    "quantity_per_kit": Decimal(1 + ((pick + index) % 3)),
+                }
+                for index, component in enumerate(chosen)
+            ],
             actor=fixture.owner,
         )
         return
