@@ -20,10 +20,20 @@ import { describe, expect, it } from "vitest";
 const WORKFLOW = join(process.cwd(), "..", ".github", "workflows", "ci.yml");
 const E2E_DIR = join(process.cwd(), "e2e");
 
-/** The `args:` values of the e2e matrix, as the shell will receive them. */
+/** The `args:` values of the e2e matrix, as the shell will receive them.
+ *
+ * A **line** regex, which is the whole reason for the assertion below. P6 step 9 wrote the
+ * a11y group's five file names as a YAML block scalar (`args: >-`) and this function dutifully
+ * returned `">-"`: the five files then looked named by no group and matched by the shard
+ * filter, so they were scheduled twice, and this test reported green over it. A partition
+ * checker that cannot read one of the partitions is worse than none, so an `args:` value that
+ * hands over a block-scalar indicator instead of arguments fails here by name. */
 function matrixArgs(): string[] {
   const workflow = readFileSync(WORKFLOW, "utf8");
-  return [...workflow.matchAll(/^\s*args:\s*(.+)$/gm)].map(([, value]) => value.trim());
+  const values = [...workflow.matchAll(/^\s*args:\s*(.+)$/gm)].map(([, value]) => value.trim());
+  const folded = values.filter((value) => /^[>|][-+]?\d*$/.test(value));
+  expect(folded, "args: written as a YAML block scalar — this reader cannot see it").toEqual([]);
+  return values;
 }
 
 function specFiles(): string[] {
