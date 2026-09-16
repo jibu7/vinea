@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { Combobox } from "@/design/components/combobox";
+import { QueryState } from "@/design/components/query-state";
 import { IsoDatePicker } from "@/design/components/date-picker";
 import { Field } from "@/design/components/input";
 import {
@@ -162,9 +163,7 @@ export function PartnerDocumentsScreen({ role }: { role: PartnerRole }) {
     >
       <ReportPanel>
         {rows.length === 0 ? (
-          <p className="py-8 text-center text-xs text-[var(--vinea-ink-subtle)]">
-            {page.isLoading ? t("loading") : t("noRows")}
-          </p>
+          <QueryState query={page} isEmpty empty={t("noRows")} testId="query" />
         ) : (
           <>
             <Table>

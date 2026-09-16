@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { ArrowLeft, CheckCircle2, AlertTriangle, ArrowUpRight } from "lucide-react";
 import { DatePicker } from "@/design/components/date-picker";
+import { QueryState } from "@/design/components/query-state";
 import { Field } from "@/design/components/input";
 import { Money } from "@/design/components/money";
 import { StatusChip } from "@/design/components/status-chip";
@@ -29,11 +30,12 @@ export default function TrialBalanceEnquiryPage() {
   const baseCurrency = useMemo(() => currencies.data?.find((c) => c.is_base), [currencies.data]);
 
   const asOfStr = toLocalIsoDate(asOfDate);
-  const { data: tb, isLoading } = useTrialBalance({
+  const trialBalance = useTrialBalance({
     as_of: asOfStr,
     branch_id: branchId ? Number(branchId) : null,
     project_id: projectId ? Number(projectId) : null,
   });
+  const tb = trialBalance.data;
 
   const currencyLike = baseCurrency
     ? { code: baseCurrency.code, decimalPlaces: baseCurrency.decimal_places, symbol: baseCurrency.symbol }
@@ -167,14 +169,15 @@ export default function TrialBalanceEnquiryPage() {
           </div>
 
           {/* Trial Balance Table */}
-          {isLoading ? (
-            <div className="flex h-48 items-center justify-center text-sm text-[var(--vinea-ink-subtle)]">
-              {t("loadingTrialBalance")}
-            </div>
-          ) : !tb || tb.rows.length === 0 ? (
-            <div className="rounded-[var(--radius-card)] border border-dashed border-[var(--vinea-border)] p-12 text-center text-sm text-[var(--vinea-ink-subtle)]">
-              {t("noBalancesAsOf", { date: formatDate(asOfDate) })}
-            </div>
+          {!tb || tb.rows.length === 0 ? (
+            <QueryState
+              query={trialBalance}
+              isEmpty
+              loading={t("loadingTrialBalance")}
+              empty={t("noBalancesAsOf", { date: formatDate(asOfDate) })}
+              testId="query"
+              className="rounded-[var(--radius-card)] border border-dashed border-[var(--vinea-border)] p-12 text-center text-sm"
+            />
           ) : (
             <Table>
               <THead>

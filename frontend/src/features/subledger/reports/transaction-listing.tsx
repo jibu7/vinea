@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useTranslations } from "next-intl";
 import { IsoDatePicker } from "@/design/components/date-picker";
+import { QueryState } from "@/design/components/query-state";
 import { Field } from "@/design/components/input";
 import {
   ReportPage,
@@ -94,9 +95,7 @@ export function TransactionListingReport({ role }: { role: PartnerRole }) {
     >
       <ReportPanel>
         {rows.length === 0 ? (
-          <p className="py-8 text-center text-xs text-[var(--vinea-ink-subtle)]">
-            {page.isLoading ? t("loading") : t("noRows")}
-          </p>
+          <QueryState query={page} isEmpty empty={t("noRows")} testId="query" />
         ) : (
           <>
             <Table>

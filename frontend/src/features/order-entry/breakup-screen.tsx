@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { Boxes } from "lucide-react";
 import { Button } from "@/design/components/button";
+import { QueryState } from "@/design/components/query-state";
 import { Combobox } from "@/design/components/combobox";
 import { Field } from "@/design/components/input";
 import { MaintenancePage } from "@/design/components/maintenance-page";
@@ -80,9 +81,7 @@ export function BreakupScreen() {
       {!orderId ? (
         <p className="py-10 text-center text-xs text-[var(--vinea-ink-subtle)]">{t("chooseFirst")}</p>
       ) : kitLines.length === 0 ? (
-        <p className="py-10 text-center text-xs text-[var(--vinea-ink-subtle)]">
-          {order.isLoading ? tc("loading") : t("noKits")}
-        </p>
+        <QueryState query={order} isEmpty empty={t("noKits")} testId="query" />
       ) : (
         <Table>
           <THead>

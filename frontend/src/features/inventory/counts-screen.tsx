@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { Plus } from "lucide-react";
 import { Button } from "@/design/components/button";
+import { QueryState } from "@/design/components/query-state";
 import { Combobox } from "@/design/components/combobox";
 import { IsoDatePicker } from "@/design/components/date-picker";
 import { Dialog, DialogContent } from "@/design/components/dialog";
@@ -111,7 +112,7 @@ export function CountsScreen() {
           {rows.length === 0 && (
             <TR>
               <TD colSpan={5} className="text-[var(--vinea-ink-muted)]">
-                {sessions.isLoading ? tc("loading") : t("empty")}
+                <QueryState query={sessions} isEmpty empty={t("empty")} testId="query" className="py-0 text-left" />
               </TD>
             </TR>
           )}

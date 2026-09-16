@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { ExternalLink } from "lucide-react";
 import { Button } from "@/design/components/button";
+import { QueryState } from "@/design/components/query-state";
 import { IsoDatePicker } from "@/design/components/date-picker";
 import { Dialog, DialogContent, DialogTrigger } from "@/design/components/dialog";
 import { Field, Input } from "@/design/components/input";
@@ -141,9 +142,7 @@ export function PartnerDocumentDetailScreen({
   if (!data) {
     return (
       <ReportPage title={t(role === "ar" ? "titleAr" : "titleAp")} companyName={company.data?.name}>
-        <p className="py-10 text-center text-sm text-[var(--vinea-ink-subtle)]">
-          {document.isLoading ? t("loading") : t("noRows")}
-        </p>
+        <QueryState query={document} isEmpty empty={t("noRows")} testId="query" />
       </ReportPage>
     );
   }

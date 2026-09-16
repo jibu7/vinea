@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { ExternalLink, Plus } from "lucide-react";
 import { Button } from "@/design/components/button";
+import { QueryState } from "@/design/components/query-state";
 import { IsoDatePicker } from "@/design/components/date-picker";
 import { Dialog, DialogContent } from "@/design/components/dialog";
 import { Field, Input } from "@/design/components/input";
@@ -161,7 +162,7 @@ export function TransfersScreen() {
           {rows.length === 0 && (
             <TR>
               <TD colSpan={8} className="text-[var(--vinea-ink-muted)]">
-                {transfers.isLoading ? tc("loading") : t("empty")}
+                <QueryState query={transfers} isEmpty empty={t("empty")} testId="query" className="py-0 text-left" />
               </TD>
             </TR>
           )}

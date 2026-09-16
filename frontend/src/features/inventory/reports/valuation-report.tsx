@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useTranslations } from "next-intl";
 import { Combobox } from "@/design/components/combobox";
+import { QueryState } from "@/design/components/query-state";
 import { IsoDatePicker } from "@/design/components/date-picker";
 import { Field } from "@/design/components/input";
 import {
@@ -200,9 +201,7 @@ export function ValuationReport() {
         <TabsContent value="locations">
           <ReportPanel>
             {rows.length === 0 ? (
-              <p className="py-8 text-center text-xs text-[var(--vinea-ink-subtle)]">
-                {report.isLoading ? t("loading") : t("noRows")}
-              </p>
+              <QueryState query={report} isEmpty empty={t("noRows")} testId="query" />
             ) : (
               <Table>
                 <THead>
@@ -255,9 +254,7 @@ export function ValuationReport() {
         <TabsContent value="items">
           <ReportPanel>
             {(data?.item_totals ?? []).length === 0 ? (
-              <p className="py-8 text-center text-xs text-[var(--vinea-ink-subtle)]">
-                {report.isLoading ? t("loading") : t("noRows")}
-              </p>
+              <QueryState query={report} isEmpty empty={t("noRows")} testId="query" />
             ) : (
               <Table>
                 <THead>
@@ -295,9 +292,7 @@ export function ValuationReport() {
         <TabsContent value="warehouses">
           <ReportPanel>
             {(data?.warehouse_totals ?? []).length === 0 ? (
-              <p className="py-8 text-center text-xs text-[var(--vinea-ink-subtle)]">
-                {report.isLoading ? t("loading") : t("noRows")}
-              </p>
+              <QueryState query={report} isEmpty empty={t("noRows")} testId="query" />
             ) : (
               <Table>
                 <THead>

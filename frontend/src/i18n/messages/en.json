@@ -34,7 +34,12 @@
     "ctrlK": "Ctrl K",
     "emDash": "—",
     "labelColon": "{label}:",
-    "parenthesised": "({text})"
+    "parenthesised": "({text})",
+    "queryState": {
+      "loading": "Loading…",
+      "noRows": "Nothing to report.",
+      "failed": "This could not be loaded. The server did not say why."
+    }
   },
   "design": {
     "title": "Design System",
@@ -586,6 +591,7 @@
     "numberOfPeriods": "Number of periods",
     "accountingPeriodsSubtitle": "Monthly posting control & audit checkpoints",
     "loadingPeriods": "Loading periods…",
+    "noPeriods": "No accounting periods. A company is set up with a financial year, so this is a company that has not finished setting up.",
     "periodNumber": "#",
     "periodName": "Period Name",
     "dateWindow": "Date Window",
@@ -1910,6 +1916,7 @@
       "description": "Description",
       "edit": "Edit",
       "editing": "Editing",
+      "orderNotFound": "This order could not be found.",
       "reference": "Reference",
       "warehouse": "Warehouse",
       "quantity": "Quantity",
@@ -1952,9 +1959,9 @@
       "number": "Number",
       "orderDate": "Order date",
       "expectedDate": "Expected",
-      "backordered": "Backordered",
+      "backorderedLines": "Lines short",
       "allStatuses": "Every status",
-      "backorderNote": "Backordered is the part of what is still owed that the order’s warehouses cannot currently cover. It moves when stock arrives or another order takes it — nothing is reserved. It is a sum across the order’s lines in their base units, so on an order that mixes units it spans them: 3 kg short and 2 crates short reads 5. Open the order for the shortfall per line, each in its own unit."
+      "backorderNote": "Lines short counts the order’s lines whose warehouses cannot currently cover what is still owed on them. It moves when stock arrives or another order takes it — nothing is reserved. Open the order for how much each line is short, in its own unit."
     },
     "salesOrderStatus": {
       "open": "Open",
@@ -2266,8 +2273,7 @@
       "kind": "Kind",
       "stockEntry": "Stock entry",
       "noDocuments": "Nothing has been raised against this order yet.",
-      "documentsNote": "A stock-bearing document posts two entries — the partner side and the companion stock entry — and both are linked here, because an enquiry offering only the receivable would drill past the cost of the sale. A reversed document stays in this list, struck through: what happened to this order includes the invoice that was raised and taken back, and its quantity is what that document keyed rather than a net contribution. The quantity column sums base units across the document's lines, so it is only meaningful where those lines share a unit; the per-line figures above are the ones to read.",
-      "enquiryFailed": "This enquiry could not be loaded. Nothing has been changed — try again, and report it if it keeps happening."
+      "documentsNote": "A stock-bearing document posts two entries — the partner side and the companion stock entry — and both are linked here, because an enquiry offering only the receivable would drill past the cost of the sale. A reversed document stays in this list, struck through: what happened to this order includes the invoice that was raised and taken back, and its quantity is what that document keyed rather than a net contribution. The quantity column sums base units across the document's lines, so it is only meaningful where those lines share a unit; the per-line figures above are the ones to read."
     },
     "orderReport": {
       "salesTitle": "Sales orders",
@@ -2291,8 +2297,7 @@
       "lineCount": "Lines",
       "remainingByUnit": "Remaining, by unit",
       "netByCurrency": "Net, by currency",
-      "totalsNote": "Deliberately subtotals rather than totals. Three kilograms and two crates do not add up to five of anything, and an order's exchange rate is display only — stock is never valued at it — so there is no rate here that could put two currencies on one line either. The count of lines is the total that always means something, and all three are taken over every line the filters select rather than over this page.",
-      "reportFailed": "This report could not be loaded. That is a failure, not an empty result — try again, and report it if it keeps happening."
+      "totalsNote": "Deliberately subtotals rather than totals. Three kilograms and two crates do not add up to five of anything, and an order's exchange rate is display only — stock is never valued at it — so there is no rate here that could put two currencies on one line either. The count of lines is the total that always means something, and all three are taken over every line the filters select rather than over this page."
     },
     "goodsReceivedReport": {
       "title": "Goods received",
@@ -2304,8 +2309,7 @@
       "toToday": "To today",
       "accrualAccount": "Goods received not invoiced",
       "accrualTie": "This total is the balance of account 2350 at the same date — Σ (received − relieved) over every receipt the filters select, which is what makes the control account provable from a screen rather than only from a test.",
-      "openTrialBalance": "Open the trial balance",
-      "reportFailed": "This report could not be loaded. That is a failure, not an empty result — try again, and report it if it keeps happening."
+      "openTrialBalance": "Open the trial balance"
     },
     "landedCostReport": {
       "title": "Landed cost",
@@ -2328,8 +2332,7 @@
       "clearingAccount": "Landed cost clearing",
       "clearingNote": "The clearing account holds what has been booked to it less what has been allocated out of it, so it reads zero once every cost booked there has been spread. Shares are base currency, which is the currency the account holds.",
       "grainNote": "One row per receipt line, not per allocation: a single freight bill routinely covers consignments from several suppliers, and only this grain answers what a given consignment cost.",
-      "noQuantityTotalNote": "Quantity then is what the location held when the share was struck, in each item's own base unit — rows across items are in different units, so the column is not totalled. A share that went to cost of sales moved no stock at all: the location held none of the item, and the share still had to leave the clearing account.",
-      "reportFailed": "This report could not be loaded. That is a failure, not an empty result — try again, and report it if it keeps happening."
+      "noQuantityTotalNote": "Quantity then is what the location held when the share was struck, in each item's own base unit — rows across items are in different units, so the column is not totalled. A share that went to cost of sales moved no stock at all: the location held none of the item, and the share still had to leave the clearing account."
     }
   }
 }

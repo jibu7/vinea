@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { ArrowRight, History, ShieldAlert, Tag } from "lucide-react";
 import { Button } from "@/design/components/button";
+import { QueryState } from "@/design/components/query-state";
 import { Combobox } from "@/design/components/combobox";
 import { Field, Input } from "@/design/components/input";
 import { MaintenanceCard, MaintenancePage } from "@/design/components/maintenance-page";
@@ -173,10 +174,15 @@ function RenamePartnerCodeView() {
 
       {current && (
         <MaintenanceCard icon={<History className="size-4" />} title={t("historyTitle")}>
-          {history.isLoading ? (
-            <p className="py-4 text-center text-xs text-[var(--vinea-ink-subtle)]">{t("loadingHistory")}</p>
-          ) : (history.data ?? []).length === 0 ? (
-            <p className="text-xs text-[var(--vinea-ink-subtle)]">{tr("noHistory")}</p>
+          {(history.data ?? []).length === 0 ? (
+            <QueryState
+              query={history}
+              isEmpty
+              loading={t("loadingHistory")}
+              empty={tr("noHistory")}
+              testId="query"
+              className="py-4"
+            />
           ) : (
             <Table>
               <THead>

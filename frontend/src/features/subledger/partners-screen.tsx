@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { Edit2, Plus, Search, Users } from "lucide-react";
 import { Button } from "@/design/components/button";
+import { QueryState } from "@/design/components/query-state";
 import { Combobox } from "@/design/components/combobox";
 import { Dialog, DialogContent } from "@/design/components/dialog";
 import { Drawer, DrawerContent } from "@/design/components/drawer";
@@ -203,9 +204,7 @@ export function PartnersScreen({ role }: { role: PartnerRole }) {
         }
       >
         {rows.length === 0 ? (
-          <p className="py-8 text-center text-xs text-[var(--vinea-ink-subtle)]">
-            {partners.isLoading ? tc("loading") : tr("noneMatch")}
-          </p>
+          <QueryState query={partners} isEmpty empty={tr("noneMatch")} testId="query" />
         ) : (
           <Table>
             <THead>

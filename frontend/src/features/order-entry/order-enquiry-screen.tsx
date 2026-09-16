@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { ExternalLink } from "lucide-react";
 import { Combobox } from "@/design/components/combobox";
+import { QueryState } from "@/design/components/query-state";
 import { Field } from "@/design/components/input";
 import { ReportPage, ReportPanel } from "@/design/components/report-page";
 import { StatusChip } from "@/design/components/status-chip";
@@ -164,21 +165,14 @@ export function OrderEnquiryScreen({ role }: { role: Role }) {
         <p className="py-10 text-center text-sm text-[var(--vinea-ink-subtle)]">
           {t("chooseFirst")}
         </p>
-      ) : enquiry.isError ? (
+      ) : !data ? (
         /* **An error is not an empty report.** Rendering "nothing to report" over a request
            that failed is the P4 defect rule 13 is written against, and it is exactly what hid
            this endpoint's 500 for three steps: the screen looked like an order nothing had
-           been raised against. Say what the service said, and say that it is a failure. */
-        <p
-          className="py-10 text-center text-sm text-[var(--vinea-danger)]"
-          data-testid="enquiry-error"
-        >
-          {(enquiry.error as { message?: string })?.message ?? t("enquiryFailed")}
-        </p>
-      ) : !data ? (
-        <p className="py-10 text-center text-sm text-[var(--vinea-ink-subtle)]">
-          {enquiry.isLoading ? tc("loading") : tr("noRows")}
-        </p>
+           been raised against. `QueryState` says what the service said, and says that it is a
+           failure — and it does it for every listing, report and enquiry in the product now
+           rather than for the two that had been caught (P6 step 9). */
+        <QueryState query={enquiry} isEmpty empty={tr("noRows")} testId="query" />
       ) : (
         <>
           <ReportPanel>

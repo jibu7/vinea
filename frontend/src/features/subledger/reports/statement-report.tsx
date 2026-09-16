@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useTranslations } from "next-intl";
 import { Download, FileText } from "lucide-react";
 import { Button } from "@/design/components/button";
+import { QueryState } from "@/design/components/query-state";
 import { IsoDatePicker } from "@/design/components/date-picker";
 import { Field } from "@/design/components/input";
 import { ReportPage, ReportPanel } from "@/design/components/report-page";
@@ -145,9 +146,7 @@ export function StatementReport({ role }: { role: PartnerRole }) {
 
       <ReportPanel>
         {(partners.data ?? []).length === 0 ? (
-          <p className="py-8 text-center text-xs text-[var(--vinea-ink-subtle)]">
-            {partners.isLoading ? t("loading") : t("noRows")}
-          </p>
+          <QueryState query={partners} isEmpty empty={t("noRows")} testId="query" />
         ) : (
           <Table>
             <THead>
