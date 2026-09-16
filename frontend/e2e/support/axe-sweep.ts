@@ -115,9 +115,17 @@ export function describeIntent(intentLabel: IntentLabel): void {
 
     for (const screen of screens) {
       test(`${screen.where} (${screen.href}) — light and dark`, async ({ page }) => {
-        // A full document load plus two axe passes; `next dev` compiles a route on its first
-        // hit, which CI front-loads with curl but a local run may not.
-        test.setTimeout(100_000);
+        // A full document load plus two axe passes — and, on a cold `next dev`, a webpack
+        // compile of the route itself. CI front-loads that with curl; a local run does not, and
+        // a single cold route on a loaded machine has been measured past 100 seconds.
+        //
+        // Worth stating because **the split made this tighter**, not looser: the old
+        // one-test-per-intent shape budgeted `screens.length * 40_000 + 60_000` for the whole
+        // sweep, so a single slow route borrowed slack from the thirty around it. A test per
+        // route has no one to borrow from, so it gets the whole allowance — still a fifth of
+        // what the Maintenance sweep used to hold, and the trade is worth it: the group now
+        // runs four routes at once instead of one.
+        test.setTimeout(240_000);
         await login(page, PRIMARY_EMAIL);
 
         const failures = await sweepScreen(page, screen);

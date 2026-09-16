@@ -409,6 +409,16 @@ test.describe("P5 acceptance", () => {
     // What the whole company's stock is worth, against what the account says it is worth.
     await page.goto("/inventory/reports/valuation");
     await page.waitForSelector("h1:has-text('Inventory valuation')");
+    // **Wait for the figure, not for the heading** (P6 step 9). `waitForSelector("h1")` above is
+    // the shell, and this read `valuation-total` while the query was still in flight: the total
+    // came back 0 and the tie rows beside it — read one statement later, after the response had
+    // landed — came back 26 880. The assertion then reported a 26 880 discrepancy on a screen
+    // that was, a moment afterwards, perfectly correct. Its own failure screenshot shows it.
+    //
+    // Same defect as the order workspace's (F-9.7) and the same lesson: a heading is not the
+    // data. This company holds stock, so a zero total is a screen that has not finished rather
+    // than an answer, and `not.toHaveText` retries until it is one.
+    await expect(page.getByTestId("valuation-total")).not.toHaveText("FRw 0");
     const total = parseMoney(await page.getByTestId("valuation-total").innerText());
     const tieValues = await page.getByTestId("valuation-gl-tie-value").allInnerTexts();
     expect(tieValues.length).toBeGreaterThan(0);
