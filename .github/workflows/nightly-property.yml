@@ -67,10 +67,15 @@ jobs:
               grep '\[property\]' deep.log
               echo '```'
               echo
-              echo 'Floors are enforced on the four refusals a single drawn operation can'
-              echo 'provoke. The other four are covered by construction in'
+              echo 'Floors are enforced on the three refusals a single drawn operation can'
+              echo 'provoke. The other five are covered by construction in'
               echo '`tests/order_entry/test_property_targeted_refusals.py` — if one of those'
               echo 'reads low here it is information, not a failure.'
+              echo
+              echo 'The `reach` lines are the ones to read on a green run. A refusal at zero'
+              echo 'whose matching reach counter is also at zero means the machine never asked'
+              echo 'for it, which is a coverage gap and not a regression — that is how'
+              echo '`receipt_exceeds_order` was diagnosed and moved.'
             else
               echo 'No census lines in the log: the property module did not run, or the run'
               echo 'degraded to a profile below 100 examples.'

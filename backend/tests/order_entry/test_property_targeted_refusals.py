@@ -1,4 +1,4 @@
-"""Four refusals, each proved by a property that **constructs its precondition**.
+"""Five refusals, each proved by a property that **constructs its precondition**.
 
 P6 handed P7 a question rather than an answer (final report, F-9.10). The deep census in
 `test_property_order.py` enforces a floor of three on eight refusals, and `main` at #45 failed
@@ -14,10 +14,15 @@ plan to stumble through that chain is the expensive way to cover a guard, and it
 unreliable way — the margin was 7–10 against a floor of 3, and `pytest-randomly` reseeds every
 run, so whether the gate passed was a coin weighted by the seed.
 
-So the four move here, where the chain is built rather than drawn, and out of
-`REQUIRED_REFUSALS` in the machine. They are still **properties**, not examples: the quantities,
-costs, baskets and dates vary, so what is proved is that the guard holds across the shape of the
-input rather than at one point in it. The machine still counts them in `_REFUSALS` — what it no
+So they move here, where the chain is built rather than drawn, and out of
+`REQUIRED_REFUSALS` in the machine. Four moved on that diagnosis; `receipt_exceeds_order`
+moved on a measurement — P7's first deep pass provoked it zero times with the guard in
+perfect health, because only 30 of 226 `receive_from_po` draws ever found an open purchase
+order to over-receive. The machine now counts that split, so the next zero names its cause.
+
+They are still **properties**, not examples: the quantities, costs, baskets and dates vary, so
+what is proved is that the guard holds across the shape of the input rather than at one point
+in it. The machine still counts them in `_REFUSALS` — what it no
 longer does is fail when a seed misses them.
 
 `max_examples` stays at 300. The reasoning is in `tests/conftest.py` beside the profile.
@@ -26,6 +31,7 @@ Each test below also says what *would* go wrong if the guard were absent, becaus
 test that only asserts an error code proves the code exists and not that it matters.
 """
 
+from dataclasses import replace
 from decimal import Decimal
 
 import pytest
@@ -38,9 +44,11 @@ from app.models.fiscal import PeriodStatus
 from app.models.order_entry import LandedCostBasis
 from app.models.partner import PartnerRole
 from app.models.subledger import DocumentKind
+from app.order_entry import flows as order_flows
 from app.order_entry import grn as grn_service
 from app.order_entry import landed_cost as landed_cost_service
 from app.order_entry import orders as orders_service
+from app.order_entry import quantities as order_quantities
 from app.subledger import documents as documents_service
 from tests.order_entry.conftest import APRIL, MARCH, OrderEntry
 
@@ -397,3 +405,139 @@ def fixture(db: Session, order_entry: OrderEntry) -> OrderEntry:
             period.status = PeriodStatus.CLOSED
     db.flush()
     return order_entry
+
+
+# --- receipt_exceeds_order -----------------------------------------------------------------
+
+
+@pytest.mark.slow
+@settings(max_examples=TARGETED_EXAMPLES)
+@given(
+    ordered=st.integers(min_value=2, max_value=200),
+    already_received_fraction=st.integers(0, 90),
+    overshoot=st.integers(min_value=1, max_value=500),
+)
+def test_a_receipt_beyond_what_the_order_has_left_is_refused(
+    db: Session,
+    fixture: OrderEntry,
+    ordered: int,
+    already_received_fraction: int,
+    overshoot: int,
+) -> None:
+    """`receipt_exceeds_order` — the purchase-side mirror of the property above, and the fifth
+    floor to move here.
+
+    It arrived differently from the other four. They were moved on a diagnosis; this one was
+    moved by a measurement. P7's first deep pass reported it provoked **zero** times, and a
+    direct probe — a purchase order for 5, received for 40, through
+    `prepare_receipt_from_purchase_order` exactly as the machine drives it — was refused
+    correctly. The machine had simply never asked: 226 `receive_from_po` draws found an open
+    purchase order under 30 of them, and a drawn quantity larger than what was left under none
+    of those.
+
+    What is constructed here is the *second* receipt, because that is the case a plausible bug
+    survives. "Received" is derived — a join over `stock_document_lines.purchase_order_line_id`,
+    not a column anybody maintains — so a guard that compared against the order's quantity
+    instead of against what is left would accept a delivery of the full order twice, and the
+    accrual would then carry value for goods nobody ordered. Decision 6 gives it no tolerance:
+    101 against an order for 100 is refused, not accrued.
+    """
+    order, _ = orders_service.create_purchase_order(
+        db,
+        fixture.company_id,
+        orders_service.PurchaseOrderInput(
+            partner_id=fixture.supplier.id,
+            order_date=MARCH,
+            description="Order",
+            warehouse_id=fixture.main.id,
+            lines=(
+                orders_service.OrderLineInput(
+                    item_id=fixture.stock_item.id,
+                    quantity=Decimal(ordered),
+                    unit_price=Decimal(1000),
+                ),
+            ),
+        ),
+        actor=fixture.owner,
+    )
+    db.flush()
+
+    # Strictly less than the order: a fully received order **closes**, and a further receipt is
+    # then refused `order_not_open` — a different guard, and the right one. The same boundary
+    # the invoice property found on its first deep run, at `ordered=2` where 90 % rounds to the
+    # whole order.
+    already = min(
+        (Decimal(ordered) * Decimal(already_received_fraction) / Decimal(100)).to_integral_value(),
+        Decimal(ordered) - Decimal(1),
+    )
+    if already > 0:
+        _receive_against(db, fixture, order, quantity=already)
+
+    with pytest.raises(LedgerStateError) as refused:
+        _receive_against(
+            db, fixture, order, quantity=Decimal(ordered) - already + Decimal(overshoot)
+        )
+
+    assert refused.value.code == "receipt_exceeds_order"
+
+
+@pytest.mark.slow
+@settings(max_examples=TARGETED_EXAMPLES)
+@given(ordered=st.integers(min_value=2, max_value=200), received_fraction=st.integers(1, 99))
+def test_a_receipt_within_what_the_order_has_left_is_accepted(
+    db: Session, fixture: OrderEntry, ordered: int, received_fraction: int
+) -> None:
+    """The anti-vacuity control for the property above.
+
+    A guard that refused every receipt keyed against a purchase order would satisfy
+    `test_a_receipt_beyond_what_the_order_has_left_is_refused` completely and make the product
+    useless. This asserts the other side: a receipt of what is left is accepted, and the
+    order's derived fulfilment moves by exactly that much.
+    """
+    order, _ = orders_service.create_purchase_order(
+        db,
+        fixture.company_id,
+        orders_service.PurchaseOrderInput(
+            partner_id=fixture.supplier.id,
+            order_date=MARCH,
+            description="Order",
+            warehouse_id=fixture.main.id,
+            lines=(
+                orders_service.OrderLineInput(
+                    item_id=fixture.stock_item.id,
+                    quantity=Decimal(ordered),
+                    unit_price=Decimal(1000),
+                ),
+            ),
+        ),
+        actor=fixture.owner,
+    )
+    db.flush()
+    wanted = max(
+        Decimal(1),
+        (Decimal(ordered) * Decimal(received_fraction) / Decimal(100)).to_integral_value(),
+    )
+
+    _receive_against(db, fixture, order, quantity=wanted)
+
+    line_id = order.lines[0].id
+    done = order_quantities.purchase_fulfilment(db, fixture.company_id, [line_id])[line_id]
+    assert done.fulfilled == wanted
+
+
+def _receive_against(db: Session, fixture: OrderEntry, order, quantity: Decimal):  # noqa: ANN001, ANN202
+    """A goods receipt keyed against the order, the way `prepare_receipt_from_purchase_order`
+    keys one — the quantity replaced, the `purchase_order_line_id` kept, which is what makes the
+    guard run at all."""
+    prepared = order_flows.prepare_receipt_from_purchase_order(db, fixture.company_id, order)
+    grn, _ = grn_service.post_grn(
+        db,
+        fixture.company_id,
+        replace(
+            prepared.grn,
+            lines=(replace(prepared.grn.lines[0], quantity=quantity, unit_cost=Decimal(1000)),),
+        ),
+        actor=fixture.owner,
+    )
+    db.flush()
+    return grn

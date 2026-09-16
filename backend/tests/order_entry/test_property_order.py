@@ -112,7 +112,7 @@ def _count(counter: dict[str, int], key: str) -> None:
 #: once in 300 examples is a boundary the next seed may well miss, and a guard "covered" by a
 #: single draw is covered by luck. Three is not a statistical claim — it is the smallest number
 #: that cannot be a single lucky plan.
-#: **Four of the eight moved out at P7**, and the reasoning is the point rather than the list.
+#: **Five of the eight moved out at P7**, and the reasoning is the point rather than the list.
 #:
 #: `grn_matched`, `weight_missing`, `period_not_open` and `invoice_exceeds_order` are
 #: *conjunctions* three and four operations deep in a 24-step plan, and this machine reached
@@ -121,18 +121,27 @@ def _count(counter: dict[str, int], key: str) -> None:
 #: question open (F-9.10) with `max_examples` 300 → 600 as the obvious lever — twice the nightly
 #: to buy reach.
 #:
-#: P7 took the other answer: each of the four now has a property in
-#: `test_property_targeted_refusals.py` that **constructs its precondition**, so it is reached
-#: on every one of fifty examples instead of on three of three hundred if the seed is kind.
-#: They are still counted in `_REFUSALS` below — what this machine no longer does is *fail* when
-#: a seed misses a chain it was never the right tool for.
+#: P7 took the other answer: each now has a property in `test_property_targeted_refusals.py`
+#: that **constructs its precondition**, so it is reached on every one of fifty examples instead
+#: of on three of three hundred if the seed is kind. They are still counted in `_REFUSALS`
+#: below — what this machine no longer does is *fail* when a seed misses a chain it was never
+#: the right tool for.
 #:
-#: The four that remain are the ones a single drawn operation can provoke, which is what a
+#: **`receipt_exceeds_order` is the fifth, and it was found by running the census rather than
+#: by reasoning about it.** The first deep pass of P7 came back `{'receipt_exceeds_order': 0}`
+#: with the guard itself in perfect health — a purchase order for 5 received for 40 is refused,
+#: on the same code path this machine drives. What the reach counters did not say, because they
+#: were not counting it, was how rarely the machine gets to *try*: 226 `receive_from_po` draws,
+#: an open purchase order under only 30 of them. It is the same conjunction shape as the other
+#: four — a `create_po`, then a later `receive_from_po` landing on that order, then a drawn
+#: quantity larger than what is left — and it belongs in the same place. The split below is the
+#: counter that would have said so on the first run, so the next zero here names its own cause.
+#:
+#: The three that remain are the ones a single drawn operation can provoke, which is what a
 #: machine like this is good at.
 REQUIRED_REFUSALS = (
     "grn_reversed",
     "match_exceeds_receipt",
-    "receipt_exceeds_order",
     "exceeds_available",
 )
 CENSUS_FLOOR = 3
@@ -910,6 +919,17 @@ def _step(  # noqa: PLR0913
         _count(_REACH, "receive_from_po: an open order to receive")
         order = orders[pick % len(orders)]
         prepared = order_flows.prepare_receipt_from_purchase_order(db, fixture.company_id, order)
+        # **Whether this draw is even asking for the refusal.** The quantity is drawn free of
+        # what the order has left (that is the point), so a zero in `receipt_exceeds_order` has
+        # two possible causes: the guard stopped refusing, or no draw ever asked it to. Only
+        # this counter tells them apart, and its absence is why P7's first deep pass reported a
+        # zero that took a probe to explain.
+        _count(
+            _REACH,
+            "receive_from_po: past what remains"
+            if quantity > prepared.grn.lines[0].quantity
+            else "receive_from_po: within what remains",
+        )
         grn_service.post_grn(
             db,
             fixture.company_id,
