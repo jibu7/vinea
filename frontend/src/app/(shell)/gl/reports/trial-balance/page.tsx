@@ -220,7 +220,15 @@ export default function TrialBalanceReportPage() {
                     const credit = Number(row.credit);
                     const net = Number(row.net);
                     return (
-                      <TR key={row.gl_account_id} className="break-inside-avoid">
+                      <TR
+                        key={row.gl_account_id}
+                        className="break-inside-avoid"
+                        // The account this row is for, so a test can ask for one by code rather
+                        // than by position — a trial balance's row order is the chart's, and a
+                        // test that counted rows would break on every account anybody adds.
+                        data-testid="tb-row"
+                        data-account={row.code}
+                      >
                         <TD className="font-mono text-xs font-medium text-[var(--vinea-brand)] print:text-black">
                           {row.code}
                         </TD>
