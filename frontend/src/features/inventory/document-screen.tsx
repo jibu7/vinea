@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { ExternalLink } from "lucide-react";
 import { Button } from "@/design/components/button";
+import { QueryState } from "@/design/components/query-state";
 import { IsoDatePicker } from "@/design/components/date-picker";
 import { Dialog, DialogContent, DialogTrigger } from "@/design/components/dialog";
 import { Field, Input } from "@/design/components/input";
@@ -92,9 +93,7 @@ export function InventoryDocumentScreen({ documentId }: { documentId: number }) 
   if (!data) {
     return (
       <ReportPage title={t("title")} companyName={company.data?.name}>
-        <p className="py-10 text-center text-sm text-[var(--vinea-ink-subtle)]">
-          {document.isLoading ? tr("loading") : tr("noRows")}
-        </p>
+        <QueryState query={document} isEmpty empty={tr("noRows")} testId="query" />
       </ReportPage>
     );
   }

@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useTranslations } from "next-intl";
 import { Boxes, Edit2, Package, Plus, ScanBarcode, Trash2 } from "lucide-react";
 import { Button } from "@/design/components/button";
+import { QueryState } from "@/design/components/query-state";
 import { Combobox } from "@/design/components/combobox";
 import { Dialog, DialogContent } from "@/design/components/dialog";
 import { Drawer, DrawerContent } from "@/design/components/drawer";
@@ -318,9 +319,7 @@ export default function InventoryItemsPage() {
         </div>
 
         {rows.length === 0 ? (
-          <p className="py-8 text-center text-xs text-[var(--vinea-ink-subtle)]">
-            {items.isLoading ? tc("loading") : t("empty")}
-          </p>
+          <QueryState query={items} isEmpty empty={t("empty")} testId="query" />
         ) : (
           <Table>
             <THead>
@@ -748,9 +747,7 @@ function BarcodePanel({ item, canEdit }: { item: Item; canEdit: boolean }) {
       </div>
 
       {rows.length === 0 ? (
-        <p className="py-6 text-center text-xs text-[var(--vinea-ink-subtle)]">
-          {barcodes.isLoading ? tc("loading") : tb("empty")}
-        </p>
+        <QueryState query={barcodes} isEmpty empty={tb("empty")} testId="query" />
       ) : (
         <Table>
           <THead>
@@ -898,12 +895,19 @@ function KitComponentsPanel({
     [items.data],
   );
 
-  /** A component is any active item that is not itself a kit and not this kit — kits do not
-   * nest (`nested_kit`) and a kit cannot contain itself (`kit_is_its_own_component`). */
+  /** A component is an active **stock or service** item that is not this kit. Decision 8: a kit
+   * explodes into things that can be delivered — stock, which moves and carries COGS, and
+   * service, which is billed and has no shelf. Kits do not nest (`nested_kit`), a kit cannot
+   * contain itself (`kit_is_its_own_component`), and a non-stock component is refused
+   * (`component_not_stock_or_service`); the picker offers none of the three rather than
+   * letting the operator choose a row the save will send back. */
   const choices = useMemo(
     () =>
       (items.data ?? []).filter(
-        (item) => item.is_active && item.item_type !== ItemType.KIT && item.id !== kit.id,
+        (item) =>
+          item.is_active &&
+          (item.item_type === ItemType.STOCK || item.item_type === ItemType.SERVICE) &&
+          item.id !== kit.id,
       ),
     [items.data, kit.id],
   );
@@ -1059,9 +1063,7 @@ function KitComponentsPanel({
           </Button>
         </div>
       ) : saved.length === 0 ? (
-        <p className="py-6 text-center text-xs text-[var(--vinea-ink-subtle)]">
-          {components.isLoading ? tc("loading") : tk("empty")}
-        </p>
+        <QueryState query={components} isEmpty empty={tk("empty")} testId="query" />
       ) : (
         <Table>
           <THead>

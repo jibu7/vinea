@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useTranslations } from "next-intl";
 import { BadgeCheck, Edit2, Plus } from "lucide-react";
 import { Button } from "@/design/components/button";
+import { QueryState } from "@/design/components/query-state";
 import { Dialog, DialogContent } from "@/design/components/dialog";
 import { Field, Input } from "@/design/components/input";
 import { MaintenanceCard, MaintenancePage } from "@/design/components/maintenance-page";
@@ -103,9 +104,7 @@ export default function SalesRepsPage() {
         }
       >
         {(reps.data ?? []).length === 0 ? (
-          <p className="py-8 text-center text-xs text-[var(--vinea-ink-subtle)]">
-            {reps.isLoading ? tc("loading") : t("empty")}
-          </p>
+          <QueryState query={reps} isEmpty empty={t("empty")} testId="query" />
         ) : (
           <Table>
             <THead>

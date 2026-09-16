@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { Plus } from "lucide-react";
 import { Button, buttonVariants } from "@/design/components/button";
+import { QueryState } from "@/design/components/query-state";
 import { MaintenancePage } from "@/design/components/maintenance-page";
 import { Select } from "@/design/components/select";
 import { StatusChip } from "@/design/components/status-chip";
@@ -14,7 +15,7 @@ import { usePartners } from "@/features/subledger/hooks";
 import { SalesOrderStatus } from "@/lib/api-enums";
 import { formatDate, formatMoney } from "@/lib/format";
 import { useSalesOrders } from "./hooks";
-import { formatOrderQuantity, useOrderLineSupport } from "./order-support";
+import { useOrderLineSupport } from "./order-support";
 
 export const SALES_ORDER_STATUS_TONE: Record<
   string,
@@ -32,9 +33,14 @@ export const SALES_ORDER_STATUS_TONE: Record<
  *
  * **The backorder column is the listing's half of decision 7** — the plan asks for it on the
  * order, the enquiry *and* the listing, and the endpoint computes it by the same rule the
- * enquiry uses per line so the two screens cannot disagree. It is a quantity, rendered to the
- * item's unit decimals like every other quantity in the product; the sign lives on
- * `available`, where the backend puts it, and this column is the shortfall the endpoint sums.
+ * enquiry uses per line, so the two screens cannot disagree about which lines are short.
+ *
+ * It is a **count of short lines**, not a quantity (step 9). It was a quantity: the sum of the
+ * per-line base quantities, each in its own item's unit, so an order 3 kg short of coffee and
+ * 2 crates short of wine read `5` — a number in no unit at all, and one this screen had to
+ * caption an apology under. There is no honest order-level backorder quantity, so the order
+ * level carries the count and the quantities stay where they have a unit: on the order, per
+ * line, where the enquiry shows them.
  *
  * An order posts nothing (decision 3), so there is no journal entry to drill to from here —
  * the documents raised against an order hang off the order itself.
@@ -96,9 +102,7 @@ export function SalesOrdersScreen() {
       }
     >
       {rows.length === 0 ? (
-        <p className="py-10 text-center text-xs text-[var(--vinea-ink-subtle)]">
-          {orders.isLoading ? tc("loading") : t("empty")}
-        </p>
+        <QueryState query={orders} isEmpty empty={t("empty")} testId="query" />
       ) : (
         <Table>
           <THead>
@@ -107,7 +111,7 @@ export function SalesOrdersScreen() {
               <TH>{tc("customer")}</TH>
               <TH className="w-28">{t("orderDate")}</TH>
               <TH className="w-28">{t("expectedDate")}</TH>
-              <TH className="w-28 text-right">{t("backordered")}</TH>
+              <TH className="w-32 text-right">{t("backorderedLines")}</TH>
               <TH className="w-36 text-right">{tc("total")}</TH>
               <TH className="w-40 text-right">{tc("status")}</TH>
             </TR>
@@ -135,9 +139,9 @@ export function SalesOrdersScreen() {
                 </TD>
                 <TD
                   className="text-right font-mono tabular-nums text-xs text-[var(--vinea-ink)]"
-                  data-testid="order-backordered"
+                  data-testid="order-backordered-lines"
                 >
-                  {formatOrderQuantity(order.backordered)}
+                  {order.backordered_lines}
                 </TD>
                 <TD
                   className="text-right font-mono tabular-nums text-xs text-[var(--vinea-ink)]"

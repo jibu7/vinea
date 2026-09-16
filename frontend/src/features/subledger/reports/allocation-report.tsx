@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { ExternalLink } from "lucide-react";
 import { Combobox } from "@/design/components/combobox";
+import { QueryState } from "@/design/components/query-state";
 import { Field } from "@/design/components/input";
 import { ReportPage, ReportPanel } from "@/design/components/report-page";
 import { TBody, TD, TH, THead, TR, Table } from "@/design/components/table";
@@ -95,9 +96,7 @@ export function AllocationReport({ role }: { role: PartnerRole }) {
     >
       <ReportPanel>
         {rows.length === 0 ? (
-          <p className="py-8 text-center text-xs text-[var(--vinea-ink-subtle)]">
-            {allocations.isLoading ? t("loading") : t("noRows")}
-          </p>
+          <QueryState query={allocations} isEmpty empty={t("noRows")} testId="query" />
         ) : (
           <Table>
             <THead>

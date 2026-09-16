@@ -7,6 +7,7 @@ import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { AlertTriangle, ExternalLink, RefreshCw } from "lucide-react";
 import { Button } from "@/design/components/button";
+import { QueryState } from "@/design/components/query-state";
 import { Combobox } from "@/design/components/combobox";
 import { Dialog, DialogContent } from "@/design/components/dialog";
 import { DocumentWorkspaceShell, useDocumentShortcuts } from "@/design/components/document-workspace";
@@ -300,7 +301,7 @@ export function CountSheetScreen({ sessionId }: { sessionId: number }) {
               {lines.length === 0 && (
                 <TR>
                   <TD colSpan={6} className="text-[var(--vinea-ink-muted)]">
-                    {session.isLoading ? tc("loading") : t("emptyLines")}
+                    <QueryState query={session} isEmpty empty={t("emptyLines")} testId="query" className="py-0 text-left" />
                   </TD>
                 </TR>
               )}
@@ -431,7 +432,7 @@ export function CountSheetScreen({ sessionId }: { sessionId: number }) {
               {(preview.data?.lines ?? []).filter((line) => line.counted && line.variance !== null && Number(line.variance) !== 0).length === 0 && (
                 <TR>
                   <TD colSpan={6} className="text-[var(--vinea-ink-muted)]">
-                    {preview.isLoading ? tc("loading") : t("previewEmpty")}
+                    <QueryState query={preview} isEmpty empty={t("previewEmpty")} testId="preview" className="py-0 text-left" />
                   </TD>
                 </TR>
               )}

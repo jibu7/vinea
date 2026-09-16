@@ -44,6 +44,7 @@ from hypothesis import strategies as st
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.inventory import masters as inventory_masters
 from app.kernel import posting
 from app.kernel.errors import LedgerStateError, PostingError
 from app.kernel.events import CashbookEntry, CashbookKind, CashbookLineSpec
@@ -89,6 +90,9 @@ _REFUSALS: dict[str, int] = {}
 #: "the guard held" from "the machine never got near it", which is what happened when step 3
 #: doubled the operation pool.
 _REACH: dict[str, int] = {}
+#: How many landed-cost reversals the machine has actually performed. Steers the closed-period
+#: alternation in `reverse_lca` — see the comment there for why a draw could not.
+_LCA_REVERSALS = 0
 
 
 def _count(counter: dict[str, int], key: str) -> None:
@@ -209,6 +213,28 @@ OPERATIONS = (
 #: land on and `reverse_lca` needs an allocation to take back out, so both are conjunctions of
 #: the same shape as `grn_matched`, and the same lever applies: draw them more often rather
 #: than hope. `_REACH` counts what each one actually found, so the claim stays measured.
+#: **Step 9's `kit` operation is not in here**, and the reasoning is worth writing down because
+#: the first version of it was wrong.
+#:
+#: It was in: one extra entry in a pool of 27, drawn once like the order operations. Two deep
+#: passes then came back with censused refusals at zero — `invoice_exceeds_order` and
+#: `period_not_open`, then `grn_matched` and `invoice_exceeds_order` — where `main` at #45
+#: reached them 25, 10 and 9 times. The obvious conclusion was dilution: the floors are
+#: conjunctions three and four deep in a 24-step plan, and a step that builds no state takes
+#: its draws out of exactly those chains.
+#:
+#: **That conclusion did not survive the control.** With the pool restored byte-for-byte to
+#: main's, a third deep pass still came back a floor short. The census is seed-dependent — the
+#: margins are 7–10 against a floor of 3, and `pytest-randomly` reseeds every run — and what
+#: the passes had actually found was the `pick % 2` correlation now fixed in `reverse_lca`.
+#:
+#: So the operation stays out on its own merits rather than on that diagnosis. The redefinition
+#: has its own plan and its own property
+#: (`test_a_kit_definition_moves_without_restating_the_orders_already_keyed`), which can assert
+#: the thing that makes it interesting — that every order taken earlier still holds the
+#: explosion it was keyed with — where an operation interleaved into this machine could only
+#: have asserted the shared invariants. Putting it back would be a fair experiment for a later
+#: step, on a census whose margins have been measured rather than guessed at.
 DRAW_POOL = (
     *OPERATIONS[:7],
     *OPERATIONS[:7],
@@ -746,7 +772,28 @@ def _step(  # noqa: PLR0913
         # quantity, so `block` has nothing to refuse and the goods having been sold since makes
         # no difference — step 4 asserted that as a negative finding. The period is what is
         # left, and without aiming at it `period_not_open` would sit at zero in the census.
-        into_a_closed_period = bool(pick % 2)
+        #
+        # **Alternated, not drawn** (step 9), and the reason is a property of Hypothesis rather
+        # than of this operation.
+        #
+        # It was `bool(pick % 2)`. Four deep passes counted the split as 10 closed of 24
+        # reaches, then 0 of 20, then 0 of 20, then — after moving it onto the independent
+        # `weighted` boolean — 0 of 21. Twenty consecutive draws landing the same way is not
+        # chance, and the second experiment is what named the mechanism: Hypothesis **shrinks
+        # every value toward its zero**, so in the examples a deep pass spends most of its
+        # budget near, `pick` is 0 and every boolean in the plan is False. Any draw from the
+        # plan tuple inherits that, so no choice of field could have fixed it.
+        #
+        # This branch is reached ~20 times in 300 examples, and `reverse_lca` is the only
+        # operation that can provoke `period_not_open` at all. So it alternates on a counter of
+        # the reversals that actually happened: half of a rare event, by construction, instead
+        # of half of it in expectation. The counter is module-level and therefore shared across
+        # examples, which is fine for what it steers — both dates are legal inputs and the
+        # invariants are asserted either way. What it must not do is pick the date by anything
+        # the *assertions* depend on, and it does not.
+        global _LCA_REVERSALS
+        _LCA_REVERSALS += 1
+        into_a_closed_period = _LCA_REVERSALS % 2 == 1
         _count(
             _REACH,
             "reverse_lca: into a closed period"
@@ -1069,6 +1116,123 @@ def test_the_invariants_hold_after_every_step_at_two_decimals(
     fixture = _machine_fixture(db, f"oe-usd-{next(_EXAMPLE)}")
     _use_a_two_decimal_base(db, fixture)
     _drive(db, fixture, plan)
+
+
+# --- The kit definition, and the orders it must not restate (P6 step 9) -----------------------
+#
+# Its own plan and its own property, rather than an operation in the machine above — see the
+# note beside `DRAW_POOL` for why, including the diagnosis that was wrong on the way there.
+#
+# What this proves is the half of decision 8 that no unit test can state as a property: a kit
+# definition is a **default**. Editing it changes what the *next* kit line explodes into and
+# restates nothing already keyed — which is what lets Breakup edit one order without the
+# catalogue moving under it, and what lets the catalogue move without rewriting orders already
+# taken.
+
+#: Components are drawn from **stock and service items only** (decision 8).
+#: `replace_kit_components` refuses anything else with `component_not_stock_or_service`, and a
+#: generator that drew a non-stock item or the kit itself would spend its draws on a refusal
+#: that already has a unit test instead of on the redefinition this property is about. The
+#: service item is deliberately in the pool: a kit whose explosion is half stock and half
+#: service is the shape that commits on one row and not on the other.
+COMPONENT_POOL = ("stock", "service", "weighted")
+
+KIT_PLAN = st.lists(
+    st.tuples(
+        # 1 or 2 components, and which.
+        st.lists(st.sampled_from(COMPONENT_POOL), min_size=1, max_size=2, unique=True),
+        # Per-kit quantities, one per component drawn above (extras are ignored).
+        st.lists(st.integers(min_value=1, max_value=4).map(Decimal), min_size=2, max_size=2),
+        # How many kits the order taken *after* this redefinition asks for.
+        st.integers(min_value=1, max_value=6).map(Decimal),
+    ),
+    min_size=2,
+    max_size=8,
+)
+
+
+@pytest.mark.slow
+@given(plan=KIT_PLAN)
+def test_a_kit_definition_moves_without_restating_the_orders_already_keyed(
+    db: Session, plan: list[tuple]
+) -> None:
+    """Redefine, order, redefine, order — and every order still holds what it was keyed with.
+
+    Each step of the plan replaces the kit's components and then takes a sales order for the
+    kit. After every step the invariants hold **and** every order taken earlier still explodes
+    into the definition that was in force when it was taken, at the per-kit quantities that
+    were in force then. A service that read the catalogue at query time rather than storing the
+    explosion would pass the invariants and fail this on the second step.
+    """
+    fixture = _machine_fixture(db, f"oe-kit-{next(_EXAMPLE)}")
+    pool = {
+        "stock": fixture.stock_item,
+        "service": fixture.service_item,
+        "weighted": fixture.weighted_item,
+    }
+    # (order id, {component item id: base quantity}) as it was keyed.
+    taken: list[tuple[int, dict[int, Decimal]]] = []
+
+    for names, quantities, kits in plan:
+        components = [pool[name] for name in names if pool[name] is not None]
+        if not components:
+            continue
+        per_kit = {
+            component.id: quantities[index] for index, component in enumerate(components)
+        }
+        inventory_masters.replace_kit_components(
+            db,
+            fixture.company_id,
+            fixture.kit_item,
+            [
+                {"component_item_id": component_id, "quantity_per_kit": quantity}
+                for component_id, quantity in per_kit.items()
+            ],
+            actor=fixture.owner,
+        )
+        db.flush()
+
+        order, _ = orders_service.create_sales_order(
+            db,
+            fixture.company_id,
+            orders_service.SalesOrderInput(
+                partner_id=fixture.customer.id,
+                order_date=MARCH,
+                description="Kit order",
+                warehouse_id=fixture.main.id,
+                lines=(
+                    orders_service.OrderLineInput(
+                        item_id=fixture.kit_item.id, quantity=kits, unit_price=Decimal(3500)
+                    ),
+                ),
+            ),
+            actor=fixture.owner,
+        )
+        db.flush()
+        _count(_REACH, f"kit: redefined to {len(components)} component(s)")
+
+        # What this order was keyed with: kit quantity x per-kit, in the component's base unit.
+        taken.append(
+            (order.id, {item_id: quantity * kits for item_id, quantity in per_kit.items()})
+        )
+
+        _assert_everything(db, fixture.company_id)
+
+        # **Every order, not just the last one.** The claim is that a redefinition restates
+        # nothing, and an assertion that only looked at the newest order could not tell a
+        # stored explosion from one recomputed against the current catalogue.
+        for order_id, expected in taken:
+            keyed = db.get(SalesOrder, order_id)
+            parent = next(line for line in keyed.lines if line.kit_parent_line_id is None)
+            explosion = {
+                line.item_id: line.base_quantity
+                for line in keyed.lines
+                if line.kit_parent_line_id == parent.id
+            }
+            assert explosion == expected, (
+                f"{keyed.number} was keyed with {expected} and now reads {explosion} — "
+                "a kit definition is a default, not a restatement"
+            )
 
 
 def _use_a_two_decimal_base(db: Session, fixture: OrderEntry) -> None:

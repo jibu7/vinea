@@ -565,13 +565,17 @@ def test_an_entry_resolves_its_document_even_with_no_source_link(
     `source_doc_id`" is no longer the reason, and saying so would be a docstring describing
     code that has moved.
 
-    What is asserted instead is what this test can actually see: an inventory adjustment
-    resolves to its own document, and to that document rather than to whatever its source link
-    might name. The ordering itself is **not observable from a test**, and the sensitivity pass
-    for step 8 records it as such: the two resolutions only disagree for an entry whose module
-    table has a row and whose source link points elsewhere, and no such entry can be created —
-    the one case the ordering protects is an entry with a null `source_doc_id`, which the
-    database will not let a test manufacture.
+    What is asserted here is what this test can see: an inventory adjustment resolves to its
+    own document, and to that document rather than to whatever its source link might name.
+
+    **The ordering itself is proven at step 9**, by
+    `test_the_module_table_is_asked_before_the_source_link`. Step 8 recorded it as not
+    observable, on the reasoning that the two resolutions only disagree for an entry whose
+    module table has a row and whose source link names something else, and that no service can
+    post one. True — but the state does not need a service, and it does not need the forbidden
+    UPDATE either: a goods receipt's entry has a source link and no `inventory_documents` row,
+    so inserting a bare header pointing at that entry makes the entry disagree with itself
+    without rewriting anything posted. The branch is reachable, so it is now covered.
     """
     company_id = _signup(client)
     posted = client.post(

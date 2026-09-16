@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { Combobox } from "@/design/components/combobox";
+import { QueryState } from "@/design/components/query-state";
 import { IsoDatePicker } from "@/design/components/date-picker";
 import { Field } from "@/design/components/input";
 import {
@@ -172,18 +173,8 @@ export function LandedCostReport() {
       </ReportPanel>
 
       <ReportPanel>
-        {listing.isError ? (
-          /* An error is not an empty report — see `order-enquiry-screen.tsx`. */
-          <p
-            className="py-8 text-center text-xs text-[var(--vinea-danger)]"
-            data-testid="report-error"
-          >
-            {(listing.error as { message?: string })?.message ?? t("reportFailed")}
-          </p>
-        ) : rows.length === 0 ? (
-          <p className="py-8 text-center text-xs text-[var(--vinea-ink-subtle)]">
-            {listing.isLoading ? tr("loading") : tr("noRows")}
-          </p>
+        {rows.length === 0 ? (
+          <QueryState query={listing} isEmpty empty={tr("noRows")} testId="query" />
         ) : (
           <>
             <Table>

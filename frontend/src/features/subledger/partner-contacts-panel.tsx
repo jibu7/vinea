@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useTranslations } from "next-intl";
 import { Edit2, Plus, Star } from "lucide-react";
 import { Button } from "@/design/components/button";
+import { QueryState } from "@/design/components/query-state";
 import { Field, Input } from "@/design/components/input";
 import { StatusChip } from "@/design/components/status-chip";
 import { TBody, TD, TH, THead, TR, Table } from "@/design/components/table";
@@ -90,7 +91,7 @@ export function PartnerContactsPanel({
       </div>
 
       {(contacts.data ?? []).length === 0 ? (
-        <p className="py-6 text-center text-xs text-[var(--vinea-ink-subtle)]">{t("empty")}</p>
+        <QueryState query={contacts} isEmpty empty={t("empty")} testId="query" className="py-6" />
       ) : (
         <Table>
           <THead>

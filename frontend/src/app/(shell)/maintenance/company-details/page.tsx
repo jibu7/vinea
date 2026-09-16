@@ -15,6 +15,7 @@ import {
   Unlock,
 } from "lucide-react";
 import { Button } from "@/design/components/button";
+import { QueryState } from "@/design/components/query-state";
 import { Combobox } from "@/design/components/combobox";
 import { DatePicker } from "@/design/components/date-picker";
 import { Dialog, DialogContent, DialogTrigger } from "@/design/components/dialog";
@@ -344,8 +345,18 @@ export default function CompanyDetailsPage() {
                   </div>
                 </div>
 
-                {periodsQuery.isLoading ? (
-                  <div className="p-8 text-center text-xs text-[var(--vinea-ink-subtle)]">{t("loadingPeriods")}</div>
+                {/* A failed periods query used to render the table with no rows in it — a
+                    company that looks as though it has no accounting periods, which is not a
+                    state that exists. The empty branch is new for the same reason. */}
+                {(periodsQuery.data ?? []).length === 0 ? (
+                  <QueryState
+                    query={periodsQuery}
+                    isEmpty
+                    loading={t("loadingPeriods")}
+                    empty={t("noPeriods")}
+                    testId="query"
+                    className="p-8"
+                  />
                 ) : (
                   <Table>
                     <THead>

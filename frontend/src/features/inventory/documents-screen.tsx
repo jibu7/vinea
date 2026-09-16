@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { ExternalLink } from "lucide-react";
 import { Combobox } from "@/design/components/combobox";
+import { QueryState } from "@/design/components/query-state";
 import { IsoDatePicker } from "@/design/components/date-picker";
 import { Field } from "@/design/components/input";
 import {
@@ -161,9 +162,7 @@ export function InventoryDocumentsScreen() {
     >
       <ReportPanel>
         {rows.length === 0 ? (
-          <p className="py-8 text-center text-xs text-[var(--vinea-ink-subtle)]">
-            {page.isLoading ? tr("loading") : tr("noRows")}
-          </p>
+          <QueryState query={page} isEmpty empty={tr("noRows")} testId="query" />
         ) : (
           <>
             <Table>

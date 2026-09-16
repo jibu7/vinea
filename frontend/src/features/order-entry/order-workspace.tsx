@@ -18,6 +18,7 @@ import {
   type LineErrors,
   type LineGridRow,
 } from "@/design/components/line-grid";
+import { QueryState } from "@/design/components/query-state";
 import { Select } from "@/design/components/select";
 import { StatusChip } from "@/design/components/status-chip";
 import { useToast } from "@/design/components/toast";
@@ -143,7 +144,12 @@ export function OrderWorkspace({ role, orderId }: { role: OrderRole; orderId?: n
   const [resetAsk, setResetAsk] = useState<{ labels: string[]; message: string } | null>(null);
   const seeded = useRef<Record<string, string>>({});
   const restored = useRef(false);
-  const loaded = useRef(false);
+  /** Whether an edit's form has been seeded from the saved order yet.
+   *
+   * **State, not a ref**, because the grid is not rendered until it is true — see the early
+   * return below. A ref would leave the decision invisible to React and the blank grid on the
+   * screen for exactly the window this exists to close. */
+  const [loaded, setLoaded] = useState(false);
 
   const support = useOrderLineSupport({ role });
   const partners = usePartners(isSales ? "ar" : "ap", {});
@@ -166,8 +172,8 @@ export function OrderWorkspace({ role, orderId }: { role: OrderRole; orderId?: n
 
   // --- seeding: a saved order once, or a restored draft once ------------------------------
   useEffect(() => {
-    if (!editing || loaded.current || !existing) return;
-    loaded.current = true;
+    if (!editing || loaded || !existing) return;
+    setLoaded(true);
     // Kit components are derived lines. They are shown on the detail screen and edited through
     // Breakup; offering them here as rows would invite an edit the service would only explode
     // away again.
@@ -206,7 +212,7 @@ export function OrderWorkspace({ role, orderId }: { role: OrderRole; orderId?: n
       taxMode: existing.tax_mode,
       rows,
     });
-  }, [editing, existing]);
+  }, [editing, existing, loaded]);
 
   useEffect(() => {
     if (editing || restored.current || !companyId || !userId) return;
@@ -372,6 +378,39 @@ export function OrderWorkspace({ role, orderId }: { role: OrderRole; orderId?: n
     onCancel: () => router.push(listHref),
     canPost: canSave,
   });
+
+  // **An edit does not open its grid until the order is on it.**
+  //
+  // `form` starts as `blankDraft()` — three empty, editable rows and an empty header — and the
+  // seeding effect above replaces it *wholesale* when the order query lands. Anything typed
+  // into those rows in between is thrown away without a word, and the screen then saves the
+  // order unchanged. It looked like a test problem (step 7's two e2e cycles were intermittent,
+  // recorded at step 8 as F-7 and blamed on timing), and the specs were waiting on the heading
+  // — which this shell renders before the order arrives, reading "Sales order" with no number
+  // in it. But the heading was never the thing they needed, and a person typing quickly loses
+  // their keystrokes the same way: the defect is here, not in the wait.
+  //
+  // So while the order is loading there is nothing to type into, and a *refused* load says so
+  // rather than presenting an empty order to edit — the same distinction `QueryState` makes
+  // everywhere else (step 9).
+  if (editing && !loaded) {
+    return (
+      <DocumentWorkspaceShell
+        backHref={listHref}
+        title={t("editTitle", { number: existing?.number ?? "" })}
+        subtitle={t("subtitle")}
+        statusChip={<StatusChip tone="neutral">{tc("editing")}</StatusChip>}
+        footer={null}
+      >
+        <QueryState
+          query={isSales ? salesOrder : purchaseOrder}
+          isEmpty
+          empty={tc("orderNotFound")}
+          testId="query"
+        />
+      </DocumentWorkspaceShell>
+    );
+  }
 
   return (
     <DocumentWorkspaceShell

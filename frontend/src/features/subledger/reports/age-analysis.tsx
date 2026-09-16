@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useTranslations } from "next-intl";
 import { Combobox } from "@/design/components/combobox";
+import { QueryState } from "@/design/components/query-state";
 import { IsoDatePicker } from "@/design/components/date-picker";
 import { Field } from "@/design/components/input";
 import { ReportPage, ReportPanel } from "@/design/components/report-page";
@@ -106,9 +107,7 @@ export function AgeAnalysisReport({ role }: { role: PartnerRole }) {
     >
       <ReportPanel>
         {!report || report.rows.length === 0 ? (
-          <p className="py-8 text-center text-xs text-[var(--vinea-ink-subtle)]">
-            {ageing.isLoading ? t("loading") : t("noRows")}
-          </p>
+          <QueryState query={ageing} isEmpty empty={t("noRows")} testId="query" />
         ) : (
           <Table>
             <THead>

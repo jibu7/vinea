@@ -50,6 +50,13 @@ jobs:
       #
       # Nothing is skipped, deselected or marked: the item count is identical to the serial
       # run's, which is the only thing that makes this a speed-up rather than a smaller suite.
+      #
+      # `auto` here and a **cap** in the Makefile (`PYTEST_WORKERS ?= 4`) is not an
+      # inconsistency: a GitHub-hosted runner has 4 cores, so the two are the same number, and
+      # the cap exists for developer machines with sixteen. If this job ever moves to a larger
+      # runner it will meet the same wall the cap was added for — every worker's migration run
+      # takes its locks from one cluster-wide table sized by `max_locks_per_transaction` — and
+      # the fix is to name a number here too, not to raise the limit.
       - run: uv run pytest -n auto -q
       # Named explicitly so the log shows the PDF path executing. `-p no:randomly` keeps the
       # node ids stable and `--no-header -rA` prints PASSED lines rather than dots, so a
@@ -66,8 +73,8 @@ jobs:
       - run: uv run alembic check          # models and migrations must not drift apart
 
   # The frontend's own checks, split out of the e2e job so that a lint error is reported in
-  # ninety seconds instead of behind a twenty-minute Playwright run, and so the e2e shards do
-  # not each repeat them.
+  # under two minutes instead of behind the e2e run, and so the e2e shards do not each repeat
+  # them.
   frontend-checks:
     runs-on: ubuntu-latest
     defaults: { run: { working-directory: frontend } }
@@ -103,25 +110,46 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # The two files that dominate the suite, each on its own runner. `--shard` splits by
-          # **test count**, and these two are 8.9 of the 21.0 minutes in 11 of the 97 tests —
-          # adjacent alphabetically, so every count-balanced split of three put both in shard 1
-          # and left it at ~14 minutes. Measured on #41's run; the numbers are in the PR body.
+          # The two heaviest parts of the suite, each on its own runner. `--shard` splits by
+          # **test count and not by time**, and these two are both slow and adjacent
+          # alphabetically — so every count-balanced split of three put them in the same shard
+          # and left it carrying most of the suite's wall clock while the other two idled.
+          # Naming them is what makes the remaining three shards mean anything.
+          #
+          # No timings here on purpose: a measurement in a comment is a measurement nobody
+          # re-takes, and this one was still quoting a run from three PRs back. They belong in
+          # the body of whichever PR moved them.
+          #
+          # The a11y group is **five files and `--workers=4`** (P6 step 9). It was one file
+          # holding one test per intent, each sweeping thirty-odd screens in sequence, and a
+          # loop inside a test is not something Playwright can spread: the group ran on one
+          # worker whatever the runner had. One test per route, in files that declare
+          # `mode: "parallel"`, is what lets the four cores do four screens at once. The
+          # workers flag is here rather than in `playwright.config.ts` because every other
+          # group's specs share seeded fixtures and are written for `workers: 1`; this is the
+          # one group whose tests touch nothing but the screen they open.
+          #
+          # Kept on **one line**, deliberately: `ci-e2e-groups.test.ts` reads these values with
+          # a line regex, and a YAML block scalar hands it `>-` instead of the file names. The
+          # five files would then look named by nobody and matched by the shard filter, which
+          # is the double-run this partition test exists to catch — and the test would have
+          # reported green over it.
           - group: a11y
-            args: e2e/accessibility.spec.ts
+            args: --workers=4 e2e/accessibility-dashboard.spec.ts e2e/accessibility-maintenance.spec.ts e2e/accessibility-transactions.spec.ts e2e/accessibility-enquiries.spec.ts e2e/accessibility-reports.spec.ts
           - group: tape
             args: e2e/ar-ap-acceptance.spec.ts
-          # Everything else, count-sharded three ways as intended — the two heavy files
-          # excluded by a path filter rather than by a list of the ones to include, so a new
-          # spec file joins a shard by existing. Nothing selects tests by title: the filter is
-          # on the path, and `--list` proves 5 + 6 + 29 + 31 + 26 = 97, the whole suite once.
+          # Everything else, count-sharded three ways as intended — the heavy files excluded by
+          # a path filter rather than by a list of the ones to include, so a new spec file joins
+          # a shard by existing. Nothing selects tests by title: the filter is on the path.
+          # `frontend/src/lib/ci-e2e-groups.test.ts` proves the partition — every spec file is
+          # named by a group or left in by this filter, exactly one of the two.
           - group: rest-1
-            args: --shard=1/3 "^(?!.*(?:accessibility|ar-ap-acceptance)\\.spec\\.ts).*$"
+            args: --shard=1/3 "^(?!.*(?:accessibility-\\w+|ar-ap-acceptance)\\.spec\\.ts).*$"
           - group: rest-2
-            args: --shard=2/3 "^(?!.*(?:accessibility|ar-ap-acceptance)\\.spec\\.ts).*$"
+            args: --shard=2/3 "^(?!.*(?:accessibility-\\w+|ar-ap-acceptance)\\.spec\\.ts).*$"
           # The extras ride here: `rest-3` is the lightest group, and they need a live stack.
           - group: rest-3
-            args: --shard=3/3 "^(?!.*(?:accessibility|ar-ap-acceptance)\\.spec\\.ts).*$"
+            args: --shard=3/3 "^(?!.*(?:accessibility-\\w+|ar-ap-acceptance)\\.spec\\.ts).*$"
             extras: "yes"
     defaults: { run: { working-directory: frontend } }
     env:
@@ -150,11 +178,11 @@ jobs:
       - name: start database
         run: docker compose up -d --wait db
         working-directory: .
-      # Not layer-cached. A `type=gha` cache needs the `docker-container` builder, and whether
+      # Not layer-cached, and that is the next lever if this job needs one. A `type=gha` cache
+      # would remove the build, but it needs the `docker-container` builder, and whether
       # `docker compose build` then loads the image into the engine for `up` is exactly the
-      # kind of thing that has to be watched on a real runner — which this branch could not
-      # do. The build is 51s of a job this change brings to about eight minutes, so it is the
-      # next lever if the measured numbers need one, not a bet taken on the required check.
+      # kind of thing that has to be watched on a real runner — which the branch that added
+      # this could not do. So it was not shipped unverified on a required check.
       - name: build backend and frontend images
         run: docker compose build backend frontend
         working-directory: .

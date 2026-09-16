@@ -6,6 +6,7 @@ import { useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { ArrowLeft, ArrowUpRight, ExternalLink } from "lucide-react";
 import { Button } from "@/design/components/button";
+import { QueryState, queryErrorMessage } from "@/design/components/query-state";
 import { Combobox } from "@/design/components/combobox";
 import { DatePicker } from "@/design/components/date-picker";
 import { Drawer, DrawerContent } from "@/design/components/drawer";
@@ -29,6 +30,7 @@ import { dotted, formatDate, toLocalIsoDate } from "@/lib/format";
 function AccountEnquiryView() {
   const t = useTranslations("gl");
   const tc = useTranslations("common");
+  const tq = useTranslations("common.queryState");
   const tEntryTitle = useTranslations("gl.entryTitle");
   const searchParams = useSearchParams();
   const initialAccountId = searchParams.get("accountId") ?? "";
@@ -62,6 +64,15 @@ function AccountEnquiryView() {
   const [nextCursor, setNextCursor] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
+  /** The last failure, kept rather than logged.
+   *
+   * This screen fetches by hand instead of through React Query, and its `.catch` used to end
+   * at `console.error`: a refused request left `items` empty and the table rendered "No
+   * transactions" — a full account behind a broken query, indistinguishable from an account
+   * with nothing on it. That is the P4 defect rule 13 is written against and the one P6 met
+   * twice (step 6's F5, step 8's F-3). Held in state so `QueryState` can say what the service
+   * said. */
+  const [loadFailure, setLoadFailure] = useState<unknown>(null);
 
   // Drawer state for clicked transaction
   const [selectedEntryId, setSelectedEntryId] = useState<number | null>(null);
@@ -73,11 +84,13 @@ function AccountEnquiryView() {
       setItems([]);
       setOpeningBase("0");
       setNextCursor(null);
+      setLoadFailure(null);
       return;
     }
 
     let active = true;
     setLoading(true);
+    setLoadFailure(null);
 
     const search = new URLSearchParams({
       date_from: toLocalIsoDate(dateFrom),
@@ -96,7 +109,9 @@ function AccountEnquiryView() {
         setNextCursor(res.next_cursor);
       })
       .catch((err) => {
-        console.error("Failed to load transactions", err);
+        if (!active) return;
+        setItems([]);
+        setLoadFailure(err);
       })
       .finally(() => {
         if (active) setLoading(false);
@@ -128,7 +143,9 @@ function AccountEnquiryView() {
         setNextCursor(res.next_cursor);
       })
       .catch((err) => {
-        console.error("Failed to load more transactions", err);
+        // A failed *next* page keeps the rows already on screen — throwing them away would
+        // punish the reader for the server's trouble — and says why the rest is missing.
+        setLoadFailure(err);
       })
       .finally(() => {
         setLoadingMore(false);
@@ -222,9 +239,13 @@ function AccountEnquiryView() {
 
               {/* Transactions Table */}
               {items.length === 0 ? (
-                <div className="rounded-[var(--radius-card)] border border-dashed border-[var(--vinea-border)] p-12 text-center text-sm text-[var(--vinea-ink-subtle)]">
-                  {t("noTransactions")}
-                </div>
+                <QueryState
+                  query={{ isError: loadFailure !== null, isLoading: loading, error: loadFailure }}
+                  isEmpty
+                  empty={t("noTransactions")}
+                  testId="query"
+                  className="rounded-[var(--radius-card)] border border-dashed border-[var(--vinea-border)] p-12 text-center text-sm"
+                />
               ) : (
                 <Table>
                   <THead>
@@ -284,6 +305,20 @@ function AccountEnquiryView() {
                     })}
                   </TBody>
                 </Table>
+              )}
+
+              {/* A failure with rows already on screen. The empty-state branch above cannot
+                  show it — there is nothing empty about the table — and silence here would be
+                  the same defect wearing a full table: the reader would read a partial account
+                  as a whole one. */}
+              {loadFailure !== null && items.length > 0 && (
+                <p
+                  className="pt-2 text-center text-xs text-[var(--vinea-danger)]"
+                  data-testid="query-error"
+                  role="status"
+                >
+                  {queryErrorMessage(loadFailure, tq("failed"))}
+                </p>
               )}
 
               {/* Streaming pagination button */}

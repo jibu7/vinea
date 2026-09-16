@@ -22,12 +22,14 @@ from decimal import Decimal
 from sqlalchemy.orm import Session
 
 from app.api.v1.gl import _module_document
+from app.models.inventory import InventoryDocument, InventoryDocumentStatus
 from app.models.journal import JournalEntry
 from app.models.order_entry import LandedCostBasis
 from app.models.partner import PartnerRole, TaxMode
 from app.models.subledger import DocumentKind
 from app.order_entry import grn as grn_service
 from app.order_entry import landed_cost as landed_cost_service
+from app.order_entry import sources as order_sources
 from app.subledger import documents as documents_service
 from tests.kernel.conftest import post_simple
 from tests.order_entry.conftest import MARCH, OrderEntry
@@ -221,3 +223,62 @@ def test_a_manual_journal_has_no_document_to_drill_to(
     )
     assert entry.module == "gl"
     assert _module_document(db, entry) == (None, None, None)
+
+
+def test_the_module_table_is_asked_before_the_source_link(
+    db: Session, order_entry: OrderEntry
+) -> None:
+    """The **ordering** in `_module_document`, proven rather than asserted in a docstring.
+
+    Two resolutions live in that function: the module's own table first, the entry's
+    `source_doc_type` / `source_doc_id` second. Every entry any service can post agrees with
+    itself, so the two answer the same thing and the order between them is invisible — step 8
+    recorded exactly that ("the ordering itself is not observable from a test") and left it
+    unproven, which is a branch nothing can see and therefore a branch nothing protects.
+
+    An entry that **disagrees with itself** is what makes it visible, and it does not need a
+    forbidden UPDATE to build. A goods receipt's entry is an `inv` entry whose source link
+    names the receipt and which has no `inventory_documents` row. Give it one — a bare header
+    inserted with the session, pointing at that same entry — and the entry now has a module-table
+    row saying "inventory document" and a source link saying "goods receipt". Nothing rewrites
+    a posted row: the receipt and its entry are untouched, and the only write is an INSERT into
+    a header table that has no append-only guard on it.
+
+    Module first means the answer is the inventory document. Swap the two blocks in
+    `_module_document` and this test reads `GRN-…` instead, which is what the step-8 note said
+    could not be demonstrated.
+    """
+    grn = _receive(db, order_entry)
+    entry = _entry(db, grn.journal_entry_id)
+    # The entry really is the disagreeing shape: its source link names the receipt, and that is
+    # what the second resolution would return.
+    assert (entry.source_doc_type, int(entry.source_doc_id)) == (
+        order_sources.GOODS_RECEIVED_NOTE,
+        grn.id,
+    )
+    assert entry.module == "inv"
+
+    impostor = InventoryDocument(
+        company_id=order_entry.company_id,
+        doc_type="INAJ",
+        number=f"INAJ-DRILL-{grn.id}",
+        document_date=MARCH,
+        description="A header claiming the receipt's entry",
+        journal_entry_id=entry.id,
+        status=InventoryDocumentStatus.POSTED,
+    )
+    db.add(impostor)
+    db.flush()
+
+    # The module table wins. Both resolutions can answer; the first one asked is the one that
+    # does, and it is the module table.
+    assert _module_document(db, entry) == (
+        impostor.id,
+        impostor.number,
+        "inventory_document",
+    )
+    # And the source link is still sitting there naming the receipt, so the assertion above is
+    # about which resolution ran and not about the second one having nothing to say.
+    ref = (order_sources.GOODS_RECEIVED_NOTE, grn.id)
+    resolved = order_sources.resolve(db, order_entry.company_id, [ref])[ref]
+    assert (resolved.source_doc_id, resolved.number) == (grn.id, grn.number)

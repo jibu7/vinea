@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { ExternalLink } from "lucide-react";
 import { Combobox } from "@/design/components/combobox";
+import { QueryState } from "@/design/components/query-state";
 import { IsoDatePicker } from "@/design/components/date-picker";
 import { Drawer, DrawerContent } from "@/design/components/drawer";
 import { Field } from "@/design/components/input";
@@ -200,9 +201,7 @@ export function ItemEnquiryScreen() {
       {!itemId ? (
         <p className="py-10 text-center text-sm text-[var(--vinea-ink-subtle)]">{t("selectItem")}</p>
       ) : !data ? (
-        <p className="py-10 text-center text-sm text-[var(--vinea-ink-subtle)]">
-          {enquiry.isLoading ? tr("loading") : tr("noRows")}
-        </p>
+        <QueryState query={enquiry} isEmpty empty={tr("noRows")} testId="query" />
       ) : (
         <>
           {/* The three figures the whole screen is about, before any table: what is held,

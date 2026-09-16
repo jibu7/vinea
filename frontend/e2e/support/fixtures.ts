@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import type { Locator, Page } from "@playwright/test";
 
@@ -14,18 +15,61 @@ export const READONLY_EMAIL = "e2e.readonly@vinea.example";
 /** Accountant role in PRIMARY_COMPANY: can post AR/AP, holds no `*:credit_limit_override`. */
 export const POSTER_EMAIL = "e2e.poster@vinea.example";
 
-/** The fixture password comes from the environment, and there is no literal to fall back to.
- * `seed_e2e.py` hashes whatever `E2E_PASSWORD` holds when it runs and these specs log in with
- * the same value, so one variable is the single source and CI can generate a fresh credential
- * per run (P4 step 9). Missing means the seed and the suite would disagree silently — a wall
- * of `invalid_credentials` — so fail here, naming the variable. */
+/** `E2E_PASSWORD` as the repo-root `.env` sets it, or "" if it is not set there.
+ *
+ * The same three-line parse `seed_e2e.py:password_from_dotenv` does, for the same reason and
+ * with the same quote-stripping: a value that works for `docker compose` has to work here. */
+function passwordFromDotenv(): string {
+  // The repo root, from wherever Playwright was launched — `frontend/` for `npm run e2e`, the
+  // repo root for `npx playwright test -c frontend`. Resolved by trying both rather than from
+  // `import.meta.url`, which Playwright's CJS transpile turns into a syntax error at load time
+  // (found by running the suite, which is the only place it shows).
+  const text = ["../.env", ".env"].reduce<string>((found, candidate) => {
+    if (found) return found;
+    try {
+      return readFileSync(join(process.cwd(), candidate), "utf8");
+    } catch {
+      return "";
+    }
+  }, "");
+  if (!text) return "";
+  for (const raw of text.split("\n")) {
+    const line = raw.trim();
+    if (!line.startsWith("E2E_PASSWORD=")) continue;
+    let value = line.slice("E2E_PASSWORD=".length).trim();
+    if (value.length >= 2 && value[0] === value[value.length - 1] && /["']/.test(value[0])) {
+      value = value.slice(1, -1);
+    }
+    return value;
+  }
+  return "";
+}
+
+/** The fixture password: the environment first, then the repo-root `.env`. There is no literal
+ * to fall back to.
+ *
+ * `seed_e2e.py` hashes whatever this resolves to when it runs and these specs log in with the
+ * same value, so one variable is the single source and CI can generate a fresh credential per
+ * run (P4 step 9).
+ *
+ * **The `.env` fallback is step 9's fix for a drift step 8 hit.** Both sides read the variable,
+ * but only one of them ever saw the file this project asks you to put it in: `.env` reached
+ * `docker compose` and nothing else, while `make db-reset` passed the *exported* value into
+ * the container. Set one and forget to export it and the seed hashes a password this suite
+ * does not type — a wall of `invalid_credentials` that reads exactly like a broken branch.
+ * Reading the same two places in the same order on both sides is what removes the gap; see
+ * `fixture_password()` in `seed_e2e.py`, which carries the rest of the reasoning. */
 export const PASSWORD = ((): string => {
-  const value = process.env.E2E_PASSWORD;
+  const value = process.env.E2E_PASSWORD || passwordFromDotenv();
   if (!value) {
     throw new Error(
-      "E2E_PASSWORD is not set. Seed and suite share it, e.g.\n" +
+      "E2E_PASSWORD is not set — not in the environment, and not in the repo-root .env.\n" +
+        "Either put it in .env (which docker compose and the seed both read):\n" +
+        '  E2E_PASSWORD="$(openssl rand -base64 24)"\n' +
+        "or export it and pass it into the container:\n" +
         '  export E2E_PASSWORD="$(openssl rand -base64 24)"\n' +
-        "  docker compose exec -e E2E_PASSWORD -T backend uv run python -m app.scripts.seed_e2e",
+        "  docker compose exec -e E2E_PASSWORD -T backend uv run python -m app.scripts.seed_e2e\n" +
+        "Whichever you choose, the seed resolves it the same way, so the two cannot disagree.",
     );
   }
   return value;
@@ -69,7 +113,28 @@ export async function login(
   await page.fill('input[type="email"]', email);
   await page.fill('input[type="password"]', password);
   await page.click('button[type="submit"]');
-  await page.waitForURL("/");
+  try {
+    await page.waitForURL("/");
+  } catch (err) {
+    // **The one drift the shared resolution cannot close**, named rather than left as a
+    // timeout. `E2E_PASSWORD` can be resolved consistently by both sides today and still be a
+    // different string from the one the database was seeded with *yesterday*, because the hash
+    // is already written. Nothing in a password can detect that, so say it here: a seeded
+    // fixture user being refused means the database was seeded with a different value, and
+    // `make db-reset` is what puts them back in step.
+    const refused = await page.getByText("Invalid email or password").count().catch(() => 0);
+    if (refused > 0) {
+      throw new Error(
+        `${email} was refused. That user is seeded by app.scripts.seed_e2e, so this is almost ` +
+          "always E2E_PASSWORD having changed since the database was seeded — the hash on disk " +
+          "is the old one. Re-seed with the value you are using now:\n" +
+          "  make db-reset\n" +
+          "(with E2E_PASSWORD exported, or set in the repo-root .env — the seed and this suite " +
+          "read both, in that order.)",
+      );
+    }
+    throw err;
+  }
   await page.waitForSelector("text=Good morning");
 }
 

@@ -6,6 +6,7 @@ import { useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { ArrowLeft, ArrowRight, History, ShieldAlert } from "lucide-react";
 import { Button } from "@/design/components/button";
+import { QueryState } from "@/design/components/query-state";
 import { Combobox } from "@/design/components/combobox";
 import { Field, Input } from "@/design/components/input";
 import { StatusChip } from "@/design/components/status-chip";
@@ -148,10 +149,15 @@ function RenameAccountView() {
                 <h2 className="font-display text-sm font-semibold">{t("renameHistory")}</h2>
               </div>
 
-              {history.isLoading ? (
-                <div className="p-4 text-center text-xs text-[var(--vinea-ink-subtle)]">{t("loadingHistory")}</div>
-              ) : !history.data || history.data.length === 0 ? (
-                <p className="text-xs text-[var(--vinea-ink-subtle)]">{t("noChangeEvents")}</p>
+              {!history.data || history.data.length === 0 ? (
+                <QueryState
+                  query={history}
+                  isEmpty
+                  loading={t("loadingHistory")}
+                  empty={t("noChangeEvents")}
+                  testId="query"
+                  className="p-4"
+                />
               ) : (
                 <Table>
                   <THead>

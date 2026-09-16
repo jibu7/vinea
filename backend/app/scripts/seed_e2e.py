@@ -26,6 +26,7 @@ import json
 import os
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
 
 from sqlalchemy import select
 
@@ -39,23 +40,86 @@ from app.services.provisioning import ProvisionedTenant, provision_tenant
 
 PASSWORD_ENV = "E2E_PASSWORD"
 
+# `REPO_ROOT` first, then the path relative to this file — the same convention
+# `export_api_enums.py` and `tests/test_schema_invariants.py` use. `parents[3]` is the repo
+# root on a host checkout and `/` inside the backend container, where the tree is `/app` and
+# the repo is bind-mounted read-only at `/repo`.
+REPO_ROOT = Path(os.environ.get("REPO_ROOT") or Path(__file__).resolve().parents[3])
+DOTENV = REPO_ROOT / ".env"
+
+
+def password_from_dotenv() -> str:
+    """`E2E_PASSWORD` as the repo-root `.env` sets it, or "" if it is not set there.
+
+    Deliberately a **three-line parser** rather than a dependency: this reads one key out of a
+    file that `docker compose` already reads, and `python-dotenv` in the production image to
+    do it would be a strange trade. Quotes are stripped because `.env` files are commonly
+    written with them and `docker compose` strips them too, so a value that works for compose
+    has to work here.
+    """
+    try:
+        text = DOTENV.read_text()
+    except OSError:
+        return ""
+    for line in text.splitlines():
+        line = line.strip()
+        if not line.startswith(f"{PASSWORD_ENV}="):
+            continue
+        value = line.split("=", 1)[1].strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        return value
+    return ""
+
+
+def password_source() -> str:
+    """Which of the two places the credential came from, for the seed's summary line."""
+    if os.environ.get(PASSWORD_ENV):
+        return f"${PASSWORD_ENV}"
+    return str(DOTENV) if password_from_dotenv() else "nowhere"
+
 
 def fixture_password() -> str:
-    """The fixture password, from the environment — never written down here.
+    """The fixture password: the environment first, then the repo-root `.env`.
 
     One value seeds these users *and* drives the Playwright login, so there is a single place
-    it exists and no literal in the tree for it to drift from (P4 step 9). CI generates a
-    fresh one per run; locally, export it (see `.env.example`) before `make db-reset`.
+    it exists and no literal in the tree for it to drift from (P4 step 9).
+
+    **The `.env` fallback is step 9's fix for a drift step 8 hit.** The two sides resolved the
+    variable in the same way but not from the same place: `make db-reset` passes the *exported*
+    value into the container with `-e E2E_PASSWORD`, while `.env` — which is what the file this
+    project asks you to fill in actually is — reached `docker compose` and nothing else. Set
+    one and forget to export it, or export one and edit the other, and the seed hashes a
+    password the suite does not type. The symptom is a wall of `invalid_credentials` on every
+    spec, which reads exactly like a broken branch and is in fact two different strings.
+
+    So both sides now read the environment first and the same `.env` second
+    (`frontend/e2e/support/fixtures.ts` does the identical two-step), which makes these the
+    supported paths and all three consistent:
+
+      * export `E2E_PASSWORD` and run `make db-reset` — the export wins on both sides;
+      * set it in `.env` and run `make db-reset` — the file wins on both sides;
+      * CI, which exports a fresh value per run and has no `.env` at all.
+
+    What remains possible is seeding with one value and running the suite *later* against a
+    different one, because the database has already been written. That cannot be detected from
+    a password, so it is not guessed at: `login()` in the suite names it as the likely cause
+    when a seeded fixture user is refused.
+
     Resolved when the script runs, not at import, so importing this module never explodes.
     """
-    password = os.environ.get(PASSWORD_ENV, "")
+    password = os.environ.get(PASSWORD_ENV) or password_from_dotenv()
     if not password:
         raise SystemExit(
-            f"{PASSWORD_ENV} is not set. Export it before seeding, e.g.\n"
+            f"{PASSWORD_ENV} is not set — not in the environment, and not in {DOTENV}.\n"
+            "Either put it in .env (which `docker compose` and this script both read):\n"
+            f'  {PASSWORD_ENV}="$(openssl rand -base64 24)"\n'
+            "or export it and pass it into the container:\n"
             f'  export {PASSWORD_ENV}="$(openssl rand -base64 24)"\n'
-            "and pass it into the container:\n"
             f"  docker compose exec -e {PASSWORD_ENV} -T backend "
-            "uv run python -m app.scripts.seed_e2e"
+            "uv run python -m app.scripts.seed_e2e\n"
+            "Whichever you choose, the Playwright suite resolves it the same way, so the two "
+            "cannot disagree."
         )
     return password
 
@@ -481,9 +545,12 @@ def main() -> None:
                     "poster_role": POSTER_ROLE_NAME,
                     "supplier_code": supplier_code,
                     "aged_customer_code": aged_customer_code,
-                    # The value itself stays out of the log — it came from the environment
-                    # and the reader already has it there.
-                    "password_from": PASSWORD_ENV,
+                    # **Which of the two sources it came from**, never the value itself: the
+                    # reader already has that wherever it lives, and a credential in a log is a
+                    # credential in a CI artefact. Saying which one is what makes a wrong
+                    # password diagnosable — "it read .env" when you thought you had exported
+                    # one is the whole of step 8's drift, in a line.
+                    "password_from": password_source(),
                     "closed_period": closed_period,
                 },
                 indent=2,

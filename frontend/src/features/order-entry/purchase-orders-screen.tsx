@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { Plus } from "lucide-react";
 import { Button, buttonVariants } from "@/design/components/button";
+import { QueryState } from "@/design/components/query-state";
 import { MaintenancePage } from "@/design/components/maintenance-page";
 import { Select } from "@/design/components/select";
 import { StatusChip } from "@/design/components/status-chip";
@@ -89,9 +90,7 @@ export function PurchaseOrdersScreen() {
       }
     >
       {rows.length === 0 ? (
-        <p className="py-10 text-center text-xs text-[var(--vinea-ink-subtle)]">
-          {orders.isLoading ? tc("loading") : t("empty")}
-        </p>
+        <QueryState query={orders} isEmpty empty={t("empty")} testId="query" />
       ) : (
         <Table>
           <THead>

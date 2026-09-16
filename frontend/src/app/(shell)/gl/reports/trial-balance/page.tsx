@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { ArrowLeft, CheckCircle2, Download, Printer } from "lucide-react";
 import { Button } from "@/design/components/button";
+import { QueryState } from "@/design/components/query-state";
 import { DatePicker } from "@/design/components/date-picker";
 import { Field } from "@/design/components/input";
 import { Money } from "@/design/components/money";
@@ -32,11 +33,12 @@ export default function TrialBalanceReportPage() {
   const baseCurrency = useMemo(() => currencies.data?.find((c) => c.is_base), [currencies.data]);
 
   const asOfStr = toLocalIsoDate(asOfDate);
-  const { data: tb, isLoading } = useTrialBalance({
+  const trialBalance = useTrialBalance({
     as_of: asOfStr,
     branch_id: branchId ? Number(branchId) : null,
     project_id: projectId ? Number(projectId) : null,
   });
+  const tb = trialBalance.data;
 
   const currencyLike = baseCurrency
     ? { code: baseCurrency.code, decimalPlaces: baseCurrency.decimal_places, symbol: baseCurrency.symbol }
@@ -190,14 +192,15 @@ export default function TrialBalanceReportPage() {
           </div>
 
           {/* Table */}
-          {isLoading ? (
-            <div className="flex h-48 items-center justify-center text-sm text-[var(--vinea-ink-subtle)]">
-              {t("loadingReportData")}
-            </div>
-          ) : !tb || tb.rows.length === 0 ? (
-            <div className="rounded-[var(--radius-card)] border border-dashed border-[var(--vinea-border)] p-12 text-center text-sm text-[var(--vinea-ink-subtle)]">
-              {t("noBalancesAsOf", { date: formatDate(asOfDate) })}
-            </div>
+          {!tb || tb.rows.length === 0 ? (
+            <QueryState
+              query={trialBalance}
+              isEmpty
+              loading={t("loadingReportData")}
+              empty={t("noBalancesAsOf", { date: formatDate(asOfDate) })}
+              testId="query"
+              className="rounded-[var(--radius-card)] border border-dashed border-[var(--vinea-border)] p-12 text-center text-sm"
+            />
           ) : (
             <div className="overflow-auto rounded-[var(--radius-card)] border border-[var(--vinea-border)] bg-[var(--vinea-surface-raised)] print:border print:border-gray-300">
               <Table>
@@ -217,7 +220,15 @@ export default function TrialBalanceReportPage() {
                     const credit = Number(row.credit);
                     const net = Number(row.net);
                     return (
-                      <TR key={row.gl_account_id} className="break-inside-avoid">
+                      <TR
+                        key={row.gl_account_id}
+                        className="break-inside-avoid"
+                        // The account this row is for, so a test can ask for one by code rather
+                        // than by position — a trial balance's row order is the chart's, and a
+                        // test that counted rows would break on every account anybody adds.
+                        data-testid="tb-row"
+                        data-account={row.code}
+                      >
                         <TD className="font-mono text-xs font-medium text-[var(--vinea-brand)] print:text-black">
                           {row.code}
                         </TD>

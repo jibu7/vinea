@@ -238,16 +238,16 @@ def list_sales_orders(
         cursor=cursor,
         limit=limit,
     )
-    backordered = oe_enquiries.backordered_by_order(db, auth.company_id, rows)
+    backordered = oe_enquiries.backordered_lines_by_order(db, auth.company_id, rows)
     return Page(
         items=[
             SalesOrderSummary(
                 **{
                     field: getattr(row, field)
                     for field in SalesOrderSummary.model_fields
-                    if field != "backordered"
+                    if field != "backordered_lines"
                 },
-                backordered=backordered.get(row.id, Decimal(0)),
+                backordered_lines=backordered.get(row.id, 0),
             )
             for row in rows
         ],
@@ -992,11 +992,11 @@ def _enquiry_read(enquiry: oe_enquiries.OrderEnquiry) -> OrderEnquiryRead:
         **{
             field: getattr(enquiry, field)
             for field in OrderEnquiryRead.model_fields
-            if field not in ("lines", "documents", "total_backordered")
+            if field not in ("lines", "documents", "backordered_lines")
         },
         lines=[EnquiryLineRead.model_validate(line) for line in enquiry.lines],
         documents=[LinkedDocumentRead.model_validate(row) for row in enquiry.documents],
-        total_backordered=enquiry.total_backordered,
+        backordered_lines=enquiry.backordered_lines,
     )
 
 

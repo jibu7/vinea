@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { ArrowLeft, Download, Printer, Search } from "lucide-react";
 import { Button } from "@/design/components/button";
+import { QueryState } from "@/design/components/query-state";
 import { Table, THead, TBody, TR, TH, TD } from "@/design/components/table";
 import { ThemeToggle } from "@/design/components/theme-toggle";
 import { useMe } from "@/features/auth/hooks";
@@ -18,7 +19,8 @@ export default function ChartOfAccountsReportPage() {
   const tc = useTranslations("common");
   const tApp = useTranslations("app");
   const { data: me } = useMe();
-  const { data: accounts, isLoading } = useAccounts();
+  const accountsQuery = useAccounts();
+  const accounts = accountsQuery.data;
 
   const [query, setQuery] = useState("");
   const [classFilter, setClassFilter] = useState<string>("all");
@@ -160,14 +162,15 @@ export default function ChartOfAccountsReportPage() {
           </div>
 
           {/* Listing Table */}
-          {isLoading ? (
-            <div className="flex h-48 items-center justify-center text-sm text-[var(--vinea-ink-subtle)]">
-              {t("loadingChartOfAccounts")}
-            </div>
-          ) : filtered.length === 0 ? (
-            <div className="rounded-[var(--radius-card)] border border-dashed border-[var(--vinea-border)] p-12 text-center text-sm text-[var(--vinea-ink-subtle)]">
-              {t("noAccountsMatch")}
-            </div>
+          {filtered.length === 0 ? (
+            <QueryState
+              query={accountsQuery}
+              isEmpty
+              loading={t("loadingChartOfAccounts")}
+              empty={t("noAccountsMatch")}
+              testId="query"
+              className="rounded-[var(--radius-card)] border border-dashed border-[var(--vinea-border)] p-12 text-center text-sm"
+            />
           ) : (
             <div className="overflow-auto rounded-[var(--radius-card)] border border-[var(--vinea-border)] bg-[var(--vinea-surface-raised)] print:border print:border-gray-300">
               <Table>

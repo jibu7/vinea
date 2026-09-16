@@ -211,11 +211,16 @@ class SalesOrderSummary(ApiModel):
     currency_id: int
     status: SalesOrderStatus
     total_amount: Decimal
-    #: Total quantity this order has promised that its warehouses cannot currently cover.
-    #: Decision 7 asks for the backorder on the order, the enquiry **and** the listing; this
-    #: is the listing's. It is the sum of the per-line figures the enquiry shows, computed by
-    #: the same rule so the two screens cannot disagree.
-    backordered: Decimal = Decimal(0)
+    #: **How many of this order's lines its warehouses cannot currently cover.** Decision 7
+    #: asks for the backorder on the order, the enquiry **and** the listing; this is the
+    #: listing's, computed by the same rule the enquiry applies per line so the two screens
+    #: cannot disagree about which lines are short.
+    #:
+    #: A count rather than a quantity (step 9). It was `backordered: Decimal`, the sum of the
+    #: per-line base quantities — each in its own item's unit, so an order three kilograms
+    #: short of coffee and two crates short of wine listed `5`. The per-line quantities, each
+    #: with its unit, are on the order itself.
+    backordered_lines: int = 0
 
 
 class PurchaseOrderSummary(ApiModel):
@@ -565,7 +570,9 @@ class OrderEnquiryRead(ApiModel):
     cancelled_on: date | None
     lines: list[EnquiryLineRead]
     documents: list[LinkedDocumentRead]
-    total_backordered: Decimal
+    #: How many lines are short, matching the listing's column. It was `total_backordered`, a
+    #: sum of the per-line base quantities across units (step 9).
+    backordered_lines: int
 
 
 class GrnListRowRead(ApiModel):

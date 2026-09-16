@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { useTranslations } from "next-intl";
 import { Edit2, Layers, Plus } from "lucide-react";
 import { Button } from "@/design/components/button";
+import { QueryState } from "@/design/components/query-state";
 import { Combobox } from "@/design/components/combobox";
 import { Dialog, DialogContent } from "@/design/components/dialog";
 import { Field, Input } from "@/design/components/input";
@@ -147,9 +148,7 @@ export function TransactionTypesScreen({
     >
       <MaintenanceCard icon={<Layers className="size-4" />} title={title}>
         {(txTypesQuery.data ?? []).length === 0 ? (
-          <p className="py-8 text-center text-xs text-[var(--vinea-ink-subtle)]">
-            {txTypesQuery.isLoading ? t("loading") : t("transactionTypesEmpty")}
-          </p>
+          <QueryState query={txTypesQuery} isEmpty empty={t("transactionTypesEmpty")} testId="query" />
         ) : (
           <Table>
             <THead>

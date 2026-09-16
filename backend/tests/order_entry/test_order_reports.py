@@ -8,11 +8,13 @@ make that happen — the order leaves the open statuses and the row stops being 
 (decision 3) — so the test closes an order and asks the report again rather than asserting a
 column changed.
 
-**No total sums across units or currencies.** `SalesOrderSummary.backordered` adds base
-quantities over lines counted in different units, which is a recorded step-9 finding; step 8
-must not add a second one. So the report's totals are subtotalled by unit and by currency, and
-the tests below put two units and two currencies behind one filter to prove the split is real
-rather than a single number wearing a list's clothes.
+**No total sums across units or currencies.** `SalesOrderSummary` used to add base quantities
+over lines counted in different units — three kilograms short and two crates short read five —
+which step 8 recorded and step 9 settled by making the listing's column a **count** of short
+lines. Step 8's rule here was that the reports must not add a second one, so their totals are
+subtotalled by unit and by currency, and the tests below put two units and two currencies
+behind one filter to prove the split is real rather than a single number wearing a list's
+clothes.
 """
 
 from decimal import Decimal
@@ -397,11 +399,11 @@ def test_the_enquiry_serialises_a_line_that_was_given_no_description(
         **{
             field: getattr(enquiry, field)
             for field in OrderEnquiryRead.model_fields
-            if field not in ("lines", "documents", "total_backordered")
+            if field not in ("lines", "documents", "backordered_lines")
         },
         lines=[EnquiryLineRead.model_validate(line) for line in enquiry.lines],
         documents=[],
-        total_backordered=enquiry.total_backordered,
+        backordered_lines=enquiry.backordered_lines,
     )
     assert read.lines[0].description is None
     assert read.lines[0].remaining == D(4)

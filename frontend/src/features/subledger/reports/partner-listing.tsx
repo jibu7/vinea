@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useTranslations } from "next-intl";
 import { ReportPage, ReportPanel } from "@/design/components/report-page";
+import { QueryState } from "@/design/components/query-state";
 import { StatusChip } from "@/design/components/status-chip";
 import { TBody, TD, TH, THead, TR, Table } from "@/design/components/table";
 import { useCompanyDetails } from "@/features/gl/hooks";
@@ -69,9 +70,7 @@ export function PartnerListingReport({ role }: { role: PartnerRole }) {
     >
       <ReportPanel>
         {rows.length === 0 ? (
-          <p className="py-8 text-center text-xs text-[var(--vinea-ink-subtle)]">
-            {partners.isLoading ? t("loading") : t("noRows")}
-          </p>
+          <QueryState query={partners} isEmpty empty={t("noRows")} testId="query" />
         ) : (
           <Table>
             <THead>

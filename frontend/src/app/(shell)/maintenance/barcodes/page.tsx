@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useTranslations } from "next-intl";
 import { ScanBarcode } from "lucide-react";
 import { Field, Input } from "@/design/components/input";
+import { QueryState } from "@/design/components/query-state";
 import { MaintenanceCard, MaintenancePage } from "@/design/components/maintenance-page";
 import { StatusChip } from "@/design/components/status-chip";
 import { TBody, TD, TH, THead, TR, Table } from "@/design/components/table";
@@ -64,9 +65,7 @@ export default function BarcodesPage() {
         </div>
 
         {rows.length === 0 ? (
-          <p className="py-8 text-center text-xs text-[var(--vinea-ink-subtle)]">
-            {barcodes.isLoading ? tc("loading") : t("empty")}
-          </p>
+          <QueryState query={barcodes} isEmpty empty={t("empty")} testId="query" />
         ) : (
           <Table>
             <THead>
