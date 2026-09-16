@@ -216,6 +216,54 @@ Items (stock/service/non-stock), UoM + conversions, barcodes, warehouses, item-l
 SO (commit stock, → AR invoice with COGS event), PO (on-order qty), GRN (→ stock receipt against **GRN accrual/clearing account**), supplier-invoice **matching** against GRN with qty/price variance posting, backorder handling, document flows & statuses, OE listings, and **landed cost (Importation Split)**: allocate freight/insurance/duty cost documents across GRV lines (by value, qty or weight) into item cost via a landed-cost clearing account. "Breakup" (kit explosion at order time — the item left dangling in v4) lands here as SO-line kit expansion.
 **DoD:** procure-to-pay leaves the accrual account at zero when fully matched; an import GRV with allocated landed costs values stock at true landed cost and clears the allocation account; order-to-cash moves stock, COGS and AR correctly; partial receipt/partial invoice paths tested.
 
+#### P6 as built *(written at step 9; the phase's own record is `docs/p6-final-report.md`)*
+
+The fourteen decisions the phase prompt locks were built as written, with the shapes below worth
+restating in the plan because later phases will read them rather than the prompt.
+
+* **Item lines coexist with GL lines** on `partner_documents`, and a stock-bearing document posts
+  **two entries in one transaction** — the partner side and a companion `inv` entry drawing from
+  its own `STK-` run. The stock side posts first, so its value is known to the partner side. A
+  document with no valued stock line has no companion and claims no number.
+* **Orders post nothing.** Every quantity an order holds — invoiced, received, remaining,
+  backordered — is a query over its lines, never a column, and the workflow status columns are
+  written only by the order service and checked against the derived state by
+  `verify_order_statuses()`.
+* **The GRN accrual (`2350`) is a control account**; the landed-cost clearing account (`1370`) is
+  deliberately a plain one, because freight arrives as a line on a forwarder's invoice and duty
+  as a cashbook payment, and a control account would refuse both.
+* **The match relieves the accrual at the GRN line's frozen base value** × (matched ÷ received),
+  the last match of a line taking the remainder, and posts the difference to PPV. Price *and*
+  rate movements are PPV; FX on the payable itself stays with P4's allocation.
+* **A kit is a virtual bundle** (decision 8): never a move, never received, exploded into
+  component lines at entry and stored there, so an order keeps what it was keyed with while the
+  catalogue moves. Components are **stock or service items only**, enforced from step 9.
+* **Landed cost** spreads a base-currency amount over GRN lines by value, quantity or weight, the
+  residue on the last target so the shares sum exactly; a target whose location holds none of the
+  item takes its share to COGS, so the clearing account clears whether or not the goods are still
+  there.
+
+**Deviations from the phase prompt**, each with its reason:
+
+1. **Reports → Order Entry and Enquiries → Order Entry are additions to the owner's tree**, not
+   rows it already had — recorded as Appendix C.1.8. The appendix's Enquiries and Reports
+   sections carry no Order Entry at all, while the phase's own step list names six screens.
+2. **Transactions → OE is Sales order, Breakup and Landed cost**, not "Purchase order, Breakup"
+   — Appendix C.1.9. The purchase order lives in the owner's AP block, where the tree puts it,
+   and Landed cost is a row decision 9 needed that the appendix never had.
+3. **The sales-order listing's backorder column is a count of short lines, not a quantity**
+   (step 9). Base quantities across lines in different units are not addable; the per-line
+   figures, each in its own unit, are on the order.
+4. **`inventory_documents` carries a second resolution** in the GL entry page's module link:
+   three of the four `inv` document kinds P6 adds are not rows in that table, so the entry's own
+   source link answers for them.
+
+**Deferred out of P6**, with where each landed: assembly of a kit into stock and nested kits are
+**P12** (decision 8 says a kit is a bundle, not a manufactured thing); tolerance on
+`receipt_exceeds_order` is **not in v1** and has no home yet; the reservation semantics a
+backorder is *not* — nothing in the system holds stock for an order — remain out of scope, and
+the figure is documented on every screen that shows it as a snapshot rather than a promise.
+
 ### P7 — Fiscalization (Rwanda VSDC) & VAT returns *(≈2–3 wk + RRA certification calendar)*
 `RwandaVSDCAdapter` per the current CIS4VSDC spec: item registration/classification, invoice & refund fiscalization, purchase acceptance, stock reporting endpoints as required; durable outbox + retry + queue dashboard; fiscal blocks on invoice/receipt templates (SDC ID, signature, QR); **VAT return report** (output vs input, exempt/zero-rated split) derived from journal tax dimensions; unrealized-FX revaluation job (it's a compliance-adjacent period-end routine, so it lives here).
 **DoD:** end-to-end fiscalization against RRA's test environment passes their checkpoint sheet; a queued invoice survives simulated RRA downtime and completes; certification application submitted.
@@ -365,16 +413,18 @@ The owner's original menu ordering (software_interface docx) is **adopted as the
 | Maintenance → General Ledger | COA, Branches, Transaction types, Defaults, Rename Accounts | P2 · P3 |
 | Maintenance → AR / AP | Customers, Sales reps, Suppliers, Transaction types, Defaults, Rename | P4 |
 | Maintenance → Inventory | Items, Warehouses, Trans types, Variable barcodes, UoM categories, Defaults, Rename Item Code | P5 |
-| Maintenance → Order entry / BOM / POS | Order defaults / BOM items+defaults / Tills+types+defaults | P6 / P12 / P11 |
+| Maintenance → Order entry / BOM / POS | **Order defaults** / BOM items+defaults / Tills+types+defaults | P6 (live, `/maintenance/order-defaults`) / P12 / P11 |
 | Transactions → GL | Cashbook batches, Journal batches | P2 (banking depth P8) |
 | Transactions → AR | Credit note, Invoice, Receipt (C.1.5), AR batches, Documents (C.1.7); Sales order | P4; SO in P6 |
-| Transactions → AP *(mislabeled "Account Receivable" in spec — see C.1)* | GRV, Purchase order (both P6 — see C.1.5), Supplier invoice, Return to supplier, Payment, AP batches, Documents (C.1.7) | P4 · P6 |
+| Transactions → AP *(mislabeled "Account Receivable" in spec — see C.1)* | **GRV** (`/oe/goods-received`), **Purchase order** (`/oe/purchase-orders`) — both P6, see C.1.5 — Supplier invoice, Return to supplier, Payment, Allocate (C.1.3), Post-dated payments (C.1.6), AP batches, Documents (C.1.7) | P4 · P6 |
 | Transactions → Inventory | Journal batches, Transfers, Adjustments, Counts, Documents (C.1.7) (+ CN/GRV/Invoice/RTS stock impacts) | P5 (impacts via P4/P6 events) |
-| Transactions → OE | Purchase order, **Breakup** | P6 (breakup = kit explosion) |
+| Transactions → OE | **Sales order** (`/oe/sales-orders`), **Breakup** (`/oe/breakup`), **Landed cost** (`/oe/landed-costs`) | P6 — all three live |
 | Transactions → BOM / POS | Manufacture process, Breakup / Sales, Returns, Transaction | P12 / P11 |
 | Reports → GL | Account transaction (P2), Trial Balance (P2), Chart of account (P3), **Bank reconciliation (P8)**, **Cashbooks (P8)**, Balance sheet (P10), Income statement (P10) | as noted |
 | Reports → AR / AP | Age analyses, Allocation, Listings, Statements, Transaction listing (C.1.4) — each for both modules | P4 |
 | Reports → Inventory | Movement, Count, Transaction, Valuation (P5); Sales analyses, Slow movers (P10) | as noted |
+| Reports → OE *(C.1.8 — not in the owner's tree)* | **Sales orders**, **Purchase orders**, **Goods received**, **Landed cost** | P6 — all four live |
+| Enquiries → OE *(C.1.8 — not in the owner's tree)* | **Sales order enquiry**, **Purchase order enquiry** | P6 — both live |
 | Reports → BOM / POS | Manufacture process, MRP / Cashier sales, Inventory sales | P12 / P11 |
 
 **Coverage: 100%** — the six items v4 had orphaned (bank rec, cashbooks, breakup ×2, sales analyses, slow movers, POS transaction) all have phase homes.
@@ -400,6 +450,14 @@ The owner's original menu ordering (software_interface docx) is **adopted as the
    **The same hole was open in AR and AP, one phase older and twice over**, and closing it was the first work after P5 rather than a backlog line. `POST /subledger/{role}/documents/{id}/reverse` and `POST /subledger/{role}/allocations/{id}/unallocate` both existed and neither had a caller anywhere in the frontend, and there was no `/ar/documents/{id}` route to put one on — P4 shipped capture screens, an enquiry and the reports, and no document detail. An invoice posted in error, or an allocation made against the wrong invoice, was uncorrectable by anybody using the product.
 
    **Closed before P6 step 1.** The nav adds **"Documents"** under Transactions → AR and → AP, last in each module's block, in the position its inventory counterpart holds. `/ar/documents` and `/ap/documents` list every posted partner document — type, account, total, open amount and status, with type and status filters — and `/{role}/documents/{id}` carries the header, the lines, the allocations against the document and both corrections: **Reverse** under `ar:transactions_post` / `ap:transactions_post`, and **Unallocate** on each allocation row. The allocations section is where Unallocate landed rather than the capture screen at `/{role}/allocations/new`: that screen builds a *new* allocation and has no posted one in front of it, whereas the question "this receipt went against the wrong invoice" is asked while looking at the document. Each row reports whether it has already been unallocated or is itself an unallocation, because the service refuses both and a button whose only outcome is an error is the dead end rule 13 is about. The GL entry page's module link, which had been hardcoded to `/inventory/documents`, now resolves per module and lands AR and AP entries on their own detail. Both `NO_UI` exemptions are gone, so `test_api_has_a_caller.py` is what holds these callers in place.
+
+8. **The owner's tree has no Order Entry under Enquiries or Reports** — it carries Order Entry only under Maintenance and Transactions, so the six screens P6's own step list names had no row to stand on: "Sales order enquiry and Purchase order enquiry under Enquiries (module Order Entry)", and "Reports → Order Entry: Sales orders, Purchase orders, Goods received, Landed cost". The nav adds both blocks (P6 step 8), each last in its intent, after Inventory.
+
+   The **Goods received** report is the one worth naming twice. Its unmatched total is Σ (received − relieved) over every receipt the filters select, which is what decision 5 makes the GRN accrual account's balance — so it is where an operator watches the accrual prove itself against the trial balance rather than taking the invariant suite's word for it.
+
+   Same footing as C.1.5's additions: a change to the contract belongs in the document the contract lives in, not only in the code that happens to satisfy it. `frontend/src/design/components/appendix-c-order.test.tsx` pins the tree row by row and has carried these blocks since step 8; this entry is the document catching up (P6 step 9).
+
+9. **Transactions → OE is Sales order, Breakup and Landed cost** — the appendix read "Purchase order, Breakup", which put the purchase order in two places at once: the owner's AP block already lists GRV and Purchase order, and that is where the tree puts them. What the Order Entry block holds is the sales side and the two screens that hang off it. **Landed cost** is the row P6 decision 8's Importation Split needed and the appendix never had; it sits after Breakup. Corrected here at P6 step 9, against `nav-tree.ts`.
 
 ### C.2 Additions layered onto the owner's tree (post-spec decisions)
 
