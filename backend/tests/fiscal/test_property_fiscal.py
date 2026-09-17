@@ -36,7 +36,7 @@ import pytest
 from fastapi.testclient import TestClient
 from hypothesis import given, settings
 from hypothesis import strategies as st
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.fiscal import drainer
@@ -46,8 +46,10 @@ from app.kernel.errors import LedgerStateError, PostingError
 from app.kernel.money import base_currency
 from app.models.currency import Currency
 from app.models.fiscalization import FiscalOutboxKind, FiscalOutboxRow, FiscalOutboxStatus
+from app.models.journal import JournalLine
 from app.models.partner import TaxMode
 from app.models.subledger import DocumentKind, DocumentStatus, PartnerDocument
+from app.models.tax import TaxCode
 from app.subledger import documents as documents_service
 from tests.fiscal.conftest import SANDBOX_URL, FiscalPosting, fiscalize
 from tests.fiscal.helpers import APRIL, MARCH, PURCHASE_CODE, REFUND_REASON
@@ -99,6 +101,12 @@ PLAN = st.lists(
         st.sampled_from(("VAT-OUT-18", "VAT-OUT-18", "VAT-EXEMPT", "VAT-ZERO")),
         st.sampled_from((TaxMode.EXCLUSIVE, TaxMode.INCLUSIVE)),
         st.booleans(),
+        # **How many lines the invoice carries.** One-line invoices are the only ones the first
+        # version of this machine produced, and a per-line census on one-line documents says
+        # nothing about the figure a customer actually compares: the foot of the receipt
+        # against the foot of the invoice. A residue of under a franc per line is up to twenty
+        # francs on a twenty-line invoice, and only a document-level census can see that.
+        st.integers(min_value=1, max_value=4),
     ),
     min_size=3,
     max_size=14,
@@ -139,6 +147,53 @@ def _item(fixture: FiscalPosting, which: str):  # noqa: ANN202
 
 def _partner_id(fixture: FiscalPosting, which: str) -> int:
     return (fixture.customer if which == "tin" else fixture.walk_in).id
+
+
+#: The pool a second, third and fourth line rotate through. Deliberately mixed: a document
+#: whose lines are all one tax class exercises one bucket, and the header buckets are the thing
+#: a multi-line payload can most easily get wrong.
+_ROTATION = ("VAT-OUT-18", "VAT-ZERO", "VAT-OUT-18", "VAT-EXEMPT")
+
+
+def _lines(
+    fixture: FiscalPosting,
+    *,
+    count: int,
+    quantity: Decimal,
+    price: Decimal,
+    discount: Decimal,
+    which_item: str,
+    tax_code: str,
+) -> tuple:
+    """`count` lines, perturbed off the drawn ones rather than drawn independently.
+
+    Independent draws per line would need a nested strategy and would shrink badly; what the
+    document-level census needs is only that the lines *differ* — in quantity, in price, in tax
+    class and in whether they are discounted — so that their residues do not all round the same
+    way and cancel. `+ 7` on the price keeps the extra lines off the round values Hypothesis
+    favours, which is the bias the per-line census was blind to.
+    """
+    first = documents_service.LineInput(
+        item_id=_item(fixture, which_item).id,
+        quantity=quantity,
+        unit_price=price,
+        discount_percent=discount,
+        tax_code_id=fixture.tax_codes[tax_code].id,
+    )
+    extra = [
+        documents_service.LineInput(
+            # The extra lines are the **stock** item whatever the first one was: a kit explodes
+            # into components and a second kit line would spend the draw on the explosion
+            # rather than on the arithmetic this census is about.
+            item_id=fixture.stock_item.id,
+            quantity=quantity + index,
+            unit_price=price + 7 * index,
+            discount_percent=discount if index % 2 else ZERO,
+            tax_code_id=fixture.tax_codes[_ROTATION[index % len(_ROTATION)]].id,
+        )
+        for index in range(1, count)
+    ]
+    return (first, *extra)
 
 
 def _assert_everything(db: Session, fixture: FiscalPosting) -> None:
@@ -190,6 +245,7 @@ def _drive(  # noqa: C901 - one dispatch per operation reads better than six hel
         tax_code,
         tax_mode,
         foreign,
+        line_count,
     ) in plan:
         client.post("/_sandbox/mode", json={"mode": mode})
         # **A savepoint per step**, so a refused step leaves nothing behind whatever the
@@ -236,14 +292,14 @@ def _drive(  # noqa: C901 - one dispatch per operation reads better than six hel
                             fixture.order.ledger.cur("USD") if foreign else None
                         ),
                         exchange_rate=USD_RATE if foreign else None,
-                        lines=(
-                            documents_service.LineInput(
-                                item_id=_item(fixture, which_item).id,
-                                quantity=quantity,
-                                unit_price=price,
-                                discount_percent=discount,
-                                tax_code_id=fixture.tax_codes[tax_code].id,
-                            ),
+                        lines=_lines(
+                            fixture,
+                            count=line_count,
+                            quantity=quantity,
+                            price=price,
+                            discount=discount,
+                            which_item=which_item,
+                            tax_code=tax_code,
                         ),
                     ),
                     actor=fixture.owner,
@@ -415,7 +471,17 @@ _FLOORS_FROM_EXAMPLES = 100
 def _report_residue():  # noqa: ANN202
     yield
     if _RESIDUE:
-        print("\n[decision 6] residue census (wire taxable - posted gross):", dict(_RESIDUE))
+        print("\n[decision 6] per-line census (wire taxable - posted gross):", dict(_RESIDUE))
+    if _DOCUMENT_RESIDUE:
+        print(
+            "[decision 6] per-document census (wire foot - posted foot):",
+            dict(sorted(_DOCUMENT_RESIDUE.items())),
+        )
+    if _WORST:
+        print(
+            "[decision 6] worst document residue:",
+            {key: str(value) for key, value in sorted(_WORST.items())},
+        )
     if _REACH:
         print("[decision 6] reach:", dict(sorted(_REACH.items())))
     if settings.default.max_examples < _FLOORS_FROM_EXAMPLES:
@@ -436,6 +502,9 @@ def _report_residue():  # noqa: ANN202
         "census lines 0dp taxed": TAXED_FLOOR,
         "census lines 2dp taxed": TAXED_FLOOR,
         "awkward lines": CENSUS_FLOOR,
+        "documents 0dp base": CENSUS_FLOOR,
+        "documents 0dp fx": CENSUS_FLOOR,
+        "multi-line documents 0dp base": CENSUS_FLOOR,
     }
     assert any(_REACH.get(name) for name in floors), (
         "a deep pass reached none of the census families. Whatever ran, it measured nothing."
@@ -451,6 +520,38 @@ def _report_residue():  # noqa: ANN202
     for scale in ("0dp", "2dp"):
         if _REACH.get(f"census lines {scale}") and not _REACH.get(f"census lines {scale} taxed"):
             short[f"census lines {scale} taxed"] = 0
+    # **No document may exceed one unit per line.** The per-line census bounds each line; this
+    # is the claim that they do not compound past their own count, and it is the number a
+    # customer comparing a receipt with an invoice actually sees.
+    over = {
+        key: count
+        for key, count in _DOCUMENT_RESIDUE.items()
+        if key.endswith("OVER one unit per line")
+    }
+    assert not over, (
+        f"documents whose foot is further from the ledger than one unit per line: {over}. The "
+        "per-line residue is bounded; if a document exceeds the sum of its lines' bounds then "
+        "something other than rounding is happening.\n"
+        f"worst: {dict(sorted((k, str(v)) for k, v in _WORST.items()))}"
+    )
+    # **And the measured bound, which is tighter than the structural one.** Four lines each up
+    # to a unit out *could* sum to four units; over 511 documents none exceeded one, because
+    # the wire and the ledger round the same underlying figures and their errors are correlated
+    # rather than independent. Asserted because a regression that made them compound would
+    # still satisfy the structural bound above and would be invisible.
+    #
+    # If this ever fires: look at the document it names before loosening the number. A genuine
+    # compounding case is a finding about the payload map, not an untidy threshold.
+    compounding = {
+        key: str(value)
+        for key, value in _WORST.items()
+        if key.endswith("in units") and abs(value) > 1
+    }
+    assert not compounding, (
+        f"a document's foot drifted more than one minor unit of its own currency: "
+        f"{compounding}. Measured over every document the deep pass produced, the residue has "
+        "never exceeded one — read the document before changing this."
+    )
     assert not short, (
         f"the deep pass under-reached {short}. A census that measured almost nothing is green "
         "for a reason that has nothing to do with what it is measuring — read the reach "
@@ -458,6 +559,97 @@ def _report_residue():  # noqa: ANN202
         "targeted property that constructs the precondition, not a bigger max_examples.\n"
         f"{dict(sorted(_REACH.items()))}"
     )
+
+
+#: The **document-level** residue: the foot of the receipt against the foot of the invoice.
+#:
+#: This is the number a customer compares and the number step 4's VAT return reconciles against
+#: — the per-line census answers a different question. A line under a franc is under a franc;
+#: twenty of them on one invoice is up to twenty francs at the foot, and nothing in a per-line
+#: census can see that.
+#:
+#: It also covers the **FX path**, which the per-line census cannot: a line's `gross_amount` is
+#: in the document's own currency, so a USD invoice could only be compared by converting it
+#: back — but a document's `base_total_amount` is already in base, and so is the payload. And
+#: FX is where fractional unit prices actually come from: `_price_in_base` multiplies an
+#: inclusive price by the booking rate, so `prc` on a USD line is very rarely a round figure,
+#: which is exactly the case the awkward-price property constructs by hand on the base side.
+_DOCUMENT_RESIDUE: Counter[str] = Counter()
+#: key → the largest absolute residue seen. A distribution says how often; this says how bad.
+_WORST: dict[str, Decimal] = {}
+
+
+def _worst(key: str, value: Decimal) -> None:
+    if abs(value) > abs(_WORST.get(key, ZERO)):
+        _WORST[key] = value
+
+
+def _posted_tax_in_base(db: Session, document: PartnerDocument) -> Decimal:
+    """The document's tax, in base, **read off the ledger**.
+
+    The tax-account lines are the ones carrying a `tax_code_id` with `tax_amount` zero — the
+    shape P2 fixed and the VAT return reads. Taken from the journal rather than recomputed from
+    `partner_documents.tax_amount`, which is in the document's own currency: converting it here
+    would be this census agreeing with the code it is measuring.
+    """
+    total = db.scalar(
+        select(func.coalesce(func.sum(func.abs(JournalLine.base_amount)), 0))
+        .join(
+            TaxCode,
+            (TaxCode.id == JournalLine.tax_code_id)
+            & (TaxCode.company_id == JournalLine.company_id),
+        )
+        .where(
+            JournalLine.company_id == document.company_id,
+            JournalLine.entry_id == document.journal_entry_id,
+            # **The line posted to the tax code's own account.** Not "carries a tax code and
+            # zero tax": an exempt or zero-rated *revenue* line is exactly that, and the first
+            # version of this query counted whole revenue lines as tax — which is how it
+            # reported a document 17 472 francs out and was wrong rather than alarming.
+            JournalLine.gl_account_id == TaxCode.gl_account_id,
+        )
+    )
+    return Decimal(str(total or 0))
+
+
+def _census_document(
+    db: Session, document: PartnerDocument, payload: dict, *, places: int, foreign: bool
+) -> None:
+    """One document's two residues: the total, and the tax.
+
+    **The unit is the document's own, converted.** On a base-currency document the ledger
+    rounded each line to the franc, so a franc per line is the bound. On a USD document at
+    1 300.5 it rounded to the *cent* — and a cent is thirteen francs, so the same rounding
+    step lands thirteen times larger in base. Measuring an FX document against the franc would
+    report a correct build as six francs out and call it a defect; measuring it against its own
+    minor unit says what it actually is.
+    """
+    currency = db.get(Currency, document.currency_id)
+    # The smallest amount the ledger could have rounded to, expressed in base.
+    unit = Decimal(1).scaleb(-currency.decimal_places) * document.exchange_rate
+    scale = f"{places}dp {'fx' if foreign else 'base'}"
+    lines = len([line for line in document.lines if line.kit_parent_line_id is None])
+    _REACH[f"documents {scale}"] += 1
+    if lines > 1:
+        _REACH[f"multi-line documents {scale}"] += 1
+
+    for field, wire, posted in (
+        ("total", Decimal(str(payload["totAmt"])), document.base_total_amount),
+        ("tax", Decimal(str(payload["totTaxAmt"])), _posted_tax_in_base(db, document)),
+    ):
+        residue = wire - posted
+        _worst(f"{scale} {field}", residue)
+        _worst(f"{scale} {field} in units", residue / unit)
+        if residue == ZERO:
+            _DOCUMENT_RESIDUE[f"{scale} {field} exact"] += 1
+        elif abs(residue) <= unit:
+            _DOCUMENT_RESIDUE[f"{scale} {field} one unit"] += 1
+        elif abs(residue) <= unit * lines:
+            # Bounded by the line count, which is the shape the per-line census predicts: each
+            # line may be up to one unit out and they do not have to cancel.
+            _DOCUMENT_RESIDUE[f"{scale} {field} within one unit per line"] += 1
+        else:
+            _DOCUMENT_RESIDUE[f"{scale} {field} OVER one unit per line"] += 1
 
 
 def _census_line(
@@ -536,7 +728,18 @@ def test_the_payload_agrees_with_itself_and_the_residue_is_measured(
             # nothing at all. The residue decision 6 names is the wire's two decimals against
             # the ledger's; a foreign document's own conversion rounding is a different
             # question, and one the ledger already owns.
-            if document is None or document.currency_id != base_id:
+            if document is None:
+                continue
+            # **Every document**, foreign included: `base_total_amount` and the payload are
+            # both in base, so the comparison is sound where the per-line one is not.
+            _census_document(
+                db,
+                document,
+                row.payload,
+                places=places,
+                foreign=document.currency_id != base_id,
+            )
+            if document.currency_id != base_id:
                 continue
             posted_lines = [
                 line for line in document.lines if line.kit_parent_line_id is None
@@ -665,13 +868,17 @@ def test_the_residue_is_under_one_unit_on_every_price_that_cannot_come_out_even(
         fixture = fiscalize(
             db, build_order_entry(db, f"fis-odd-{next(_EXAMPLE)}"), client, tag="odd"
         )
+        # One line per invoice, deliberately: this property is about the **per-line** bound, and
+        # a second line whose price `_lines` nudges by seven could land on a round value and
+        # dilute the "every line has a residue" that makes the census here mean something. The
+        # document-level census gets its multi-line coverage from the machine above.
         steps = [
             ("receive", "up", Decimal(8), Decimal(1000), ZERO, "stock", "tin",
-             "VAT-OUT-18", TaxMode.EXCLUSIVE, False)
+             "VAT-OUT-18", TaxMode.EXCLUSIVE, False, 1)
         ]
         steps += [
             ("sell", "up", quantity, price, ZERO, "stock", "tin",
-             "VAT-OUT-18", TaxMode.EXCLUSIVE, False)
+             "VAT-OUT-18", TaxMode.EXCLUSIVE, False, 1)
             for quantity, price in plan
         ]
         _drive(db, fixture, client, steps)
