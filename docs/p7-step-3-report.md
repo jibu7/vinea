@@ -360,6 +360,12 @@ issued before this commit and retried after it answers `409 idempotency_key_reus
 replaying. Keys are per-request and short-lived, the failure is a client asked to use a new key
 rather than a wrong posting, and the alternative was keeping a shape nobody would choose.
 
+Both digests are **persisted**, so both have a deploy-time knock-on:
+`fiscal_items.last_payload_hash` is the stored item hash and `idempotency_hash` is a column on
+twelve document tables, and every value either one holds was written by the old function. Neither
+is a repair job and neither gets a back-fill migration — see
+**Deploy-time knock-ons of `e99b191`** below, which is the section to point a runbook at.
+
 **9. `spplrInvcNo` is `partner_documents.reference`.** It is the field a person keys the
 supplier's own invoice number into, and RRA types the field as a number — so a reference like
 `INV/2026/0042` goes as null rather than as a mangled integer, and stays on the Vinea document
@@ -496,6 +502,71 @@ Also worth checking on the live run: the document's own stock sample carries
 `35 000 × 18/118` (5 338.98). The build derives the second, the same relation every other payload
 in this phase uses; the sample suggests the field is not validated on this endpoint, and the live
 run is where that stops being a guess.
+
+## Deploy-time knock-ons of `e99b191`
+
+**For a deploy runbook.** One commit changed what two hashes compute, and both of them are
+stored in the database rather than recomputed from scratch on every read. Nothing is live on
+this build yet, so this is the record of what a first deploy carrying `e99b191` does to a
+database written by the code before it, not an incident. **No back-fill migration, for either
+one.** A stored digest is not wrong data — it is a true record of what the old function computed
+— and the behaviour that follows from a mismatch is in both cases the behaviour the build wants.
+
+### The staleness is unconditional, and it is not about trailing zeros
+
+Worth stating precisely, because the obvious reading is wrong in a way that would make a runbook
+under-predict. `fingerprint_material` serialises with compact separators (`(",", ":")`) where
+both previous versions took `json.dumps`'s defaults (`(", ", ": ")`), so the digest changes for
+**every** registration and every request body, including ones holding no Decimal whose exponent
+differs and indeed no Decimal at all. Measured across the three versions on one registration:
+
+| price | main (step 2, `str()`) | `600048f` (local canonicaliser) | after `e99b191` |
+|---|---|---|---|
+| `2360.000000` | `73b17041d0c2` | `d7c37e76fa6b` | `e70ee4ee14a4` |
+| `2360` | `f963bacc247e` | `d7c37e76fa6b` | `e70ee4ee14a4` |
+| `2360.123456` | `27f0c369aa85` | `27f0c369aa85` | `838312f23ab8` |
+
+Row 2 is the defect being fixed: `2360` and `2360.000000` are one amount and step 2 gave them
+two digests, which is the re-registration this step paid for. Row 3 is the point of this
+section — a price with no trailing zeros, where step 2 and `600048f` agree exactly, and the
+digest still moves. So expect the knock-ons below to touch **everything**, not a subset.
+
+### 1. `fiscal_items.last_payload_hash` — every item re-registers once, on next touch
+
+`items.ensure_registered` re-registers when the stored hash differs from the one it just
+computed, so the first document, stock report or catalogue edit that touches an item after the
+deploy sends one `saveItems` for it. That is the whole effect: **one** redundant registration per
+item, once, spread across whenever each item is next touched rather than as a single sweep.
+
+It is harmless because `/items/saveItems` is an upsert keyed on `itemCd`, and because
+re-registration is not an error path here — it is the mechanism decision 8's remainder is built
+on (a rename or a deactivation re-registers deliberately), so a second identical call tells RRA
+what it already knows and it says so. The queue shape is one already exercised too: the item row
+rides ahead of the document that triggered it, exactly as a first registration does.
+
+**Not a repair.** Re-registering is the correct behaviour for an item whose stored hash does not
+match what the authority should hold — that is what the field is for. A migration that recomputed
+the column with the new function would be asserting that RRA holds the new payload without
+anybody having sent it, which is a lie written into a cache, and it would suppress the one
+harmless call that makes the record true.
+
+### 2. `idempotency_hash` on twelve document tables — a replay across the deploy refuses
+
+`_replay` finds the document by `idempotency_key` and compares its stored `idempotency_hash`
+against the freshly computed fingerprint. Three cases, and only the middle one changes:
+
+* a key never seen before — no row, posts normally, unaffected;
+* a key issued before the deploy and retried after it — the row is found, the stored digest can
+  no longer match, and the caller gets `409 idempotency_key_reused` naming the document instead
+  of a replay of it;
+* the same key with a genuinely different body — still refused, which is what the check is for.
+
+The direction of that failure is the part a runbook wants: the comparison **fails closed**. A
+stale stored hash can turn a replay into a refusal; it can never turn a retry into a second
+posting, because a mismatch raises rather than falling through to `create`. Keys are per-request
+and short-lived, so the window is a request in flight across the restart, and the remedy is a new
+key.
+
 
 ## Two things the suite itself needed
 
