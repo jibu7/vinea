@@ -1,12 +1,11 @@
 """`Idempotency-Key` handling shared by every posting endpoint (ADR-11)."""
 
-import json
-from datetime import date
-from decimal import Decimal
 from hashlib import sha256
 
 from fastapi import Header
 from pydantic import BaseModel
+
+from app.kernel.money import fingerprint_material
 
 IdempotencyKey = Header(
     alias="Idempotency-Key",
@@ -16,20 +15,21 @@ IdempotencyKey = Header(
 )
 
 
-def canonical(value: object) -> str:
-    """Cosmetic differences must not look like a different request: `1000` and `1000.00`
-    are the same amount, and `2026-03-15` the same date, however the client spelled them."""
-    if isinstance(value, Decimal):
-        return str(value.normalize())
-    if isinstance(value, date):
-        return value.isoformat()
-    raise TypeError(f"no canonical form for {type(value).__name__}")
-
-
 def fingerprint(kind: str, payload: BaseModel) -> str:
     """Identifies the *request*, so the same key sent with a different body is caught.
-    Key order (in the body or in the schema) is not part of the identity."""
-    body = json.dumps(
-        payload.model_dump(), sort_keys=True, separators=(",", ":"), default=canonical
-    )
-    return sha256(f"{kind}:{body}".encode()).hexdigest()
+    Key order (in the body or in the schema) is not part of the identity.
+
+    The canonical form of a value lives in `app.kernel.money` — one implementation, shared with
+    P7's item-registration hash, because "`1000` and `1000.00` are one amount" is a money rule
+    and two copies of it is how one of them comes to be wrong.
+
+    `kind` is a **value in the material** rather than a prefix glued to it, so this function
+    assembles no text at all. That is what `tests/test_fingerprints.py` requires of a
+    fingerprint, and it is the stricter rule for the same reason the canonicaliser is strict:
+    text assembled beside a hash is where a representation gets in. The scoping is unchanged —
+    two endpoints given one key still disagree — because the kind is still part of what is
+    hashed.
+    """
+    return sha256(
+        fingerprint_material({"kind": kind, "body": payload.model_dump()}).encode()
+    ).hexdigest()

@@ -331,6 +331,7 @@ def _leg_document(
     *,
     on: date,
     transaction_type_id: int,
+    counterpart_branch_id: int | None = None,
     idempotency_key: str | None = None,
     idempotency_hash: str | None = None,
 ) -> stock_service.StockDocument:
@@ -341,9 +342,25 @@ def _leg_document(
         reference=reference,
         transaction_type_id=transaction_type_id,
         source_doc_type=SOURCE_DOC_TYPE,
+        counterpart_branch_id=counterpart_branch_id,
         idempotency_key=idempotency_key,
         idempotency_hash=idempotency_hash,
     )
+
+
+def _branch_of(db: Session, company_id: int, warehouse_id: int) -> int | None:
+    """The branch a physical warehouse sits in.
+
+    Carried onto both legs as the *other* end's branch (P7 decision 10): a leg in transit
+    cannot see where the stock came from or is going, and a revenue authority is told about a
+    movement between branches and told nothing about a movement between two shelves of one.
+    """
+    warehouse = db.scalar(
+        select(Warehouse).where(
+            Warehouse.company_id == company_id, Warehouse.id == warehouse_id
+        )
+    )
+    return warehouse.branch_id if warehouse is not None else None
 
 
 def post_transfer(
@@ -398,6 +415,7 @@ def post_transfer(
             data.reference,
             on=data.transfer_date,
             transaction_type_id=txn_type.id,
+            counterpart_branch_id=destination.branch_id,
             idempotency_key=idempotency_key,
             idempotency_hash=idempotency_hash,
         ),
@@ -552,6 +570,7 @@ def receive_transfer(
             transfer.reference,
             on=arrival,
             transaction_type_id=transfer.transaction_type_id,
+            counterpart_branch_id=_branch_of(db, company_id, transfer.from_warehouse_id),
             idempotency_key=idempotency_key,
             idempotency_hash=idempotency_hash,
         ),
@@ -604,6 +623,7 @@ def _mirror_leg(
     on_date: date,
     reason: str,
     actor: User,
+    counterpart_branch_id: int | None = None,
     idempotency_key: str | None = None,
     idempotency_hash: str | None = None,
 ) -> stock_service.StockPosting:
@@ -619,7 +639,12 @@ def _mirror_leg(
     """
     if entry_id is None:
         return stock_service.reverse_unvalued_moves(
-            db, company_id, originals=list(moves), on_date=on_date, actor=actor
+            db,
+            company_id,
+            originals=list(moves),
+            on_date=on_date,
+            actor=actor,
+            counterpart_branch_id=counterpart_branch_id,
         )
     return stock_service.reverse_stock_posting(
         db,
@@ -630,6 +655,7 @@ def _mirror_leg(
         actor=actor,
         idempotency_key=idempotency_key,
         idempotency_hash=idempotency_hash,
+        counterpart_branch_id=counterpart_branch_id,
     )
 
 
@@ -721,6 +747,7 @@ def cancel_transfer(
         on_date=on,
         reason=reason,
         actor=actor,
+        counterpart_branch_id=_branch_of(db, company_id, transfer.to_warehouse_id),
         idempotency_key=idempotency_key,
         idempotency_hash=idempotency_hash,
     )
@@ -790,6 +817,7 @@ def reverse_transfer(
         on_date=on,
         reason=reason,
         actor=actor,
+        counterpart_branch_id=_branch_of(db, company_id, transfer.from_warehouse_id),
         idempotency_key=idempotency_key,
         idempotency_hash=idempotency_hash,
     )
@@ -801,6 +829,7 @@ def reverse_transfer(
         on_date=on,
         reason=reason,
         actor=actor,
+        counterpart_branch_id=_branch_of(db, company_id, transfer.to_warehouse_id),
         # The key belongs to the request, and the request is one reversal of one transfer; the
         # kernel would resolve a second posting under the same key to the first entry and hand
         # back moves that are not this leg's. The transfer's own status is what makes a retry

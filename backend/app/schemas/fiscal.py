@@ -10,13 +10,16 @@ output, so a second endpoint serialising a device cannot reintroduce it.
 without going near the values.
 """
 
-from datetime import datetime
+from datetime import date, datetime
+from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.fiscalization import (
     FiscalDeviceStatus,
     FiscalEnvironment,
+    FiscalFeedDecision,
+    FiscalImportStatus,
     FiscalProfile,
 )
 
@@ -94,3 +97,91 @@ class DrainResult(BaseModel):
     rows: int
     sent: int
     outcomes: list[dict] = []
+
+
+# --- The purchase feed and the import register (P7 step 3) ----------------------------------
+
+
+class FeedRowRead(BaseModel):
+    """One purchase the authority holds against this taxpayer.
+
+    `payload` is not here and will not be: it is RRA's own record, and the queue-row detail
+    screen is where a person reads a payload (redacted, beside the response). What a feed
+    listing needs is who, how much, and what was decided.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    device_id: int
+    spplr_tin: str
+    spplr_nm: str | None
+    spplr_bhf_id: str | None
+    spplr_invc_no: int
+    sales_dt: date | None
+    total_taxable_amount: Decimal
+    total_tax_amount: Decimal
+    total_amount: Decimal
+    fetched_at: datetime
+    decision: FiscalFeedDecision
+    decided_at: datetime | None
+    ap_document_id: int | None
+
+
+class FeedAccept(BaseModel):
+    """`ap_document_id` is optional and is the whole of the no-double-registration rule: a
+    purchase this company also keyed is linked, and the link decides which of the two
+    registrations RRA keeps (`app/fiscal/feed.accept`)."""
+
+    ap_document_id: int | None = None
+
+
+class FeedDecisionRead(BaseModel):
+    """What a decision did — including the one case where it deliberately queued nothing."""
+
+    row: FeedRowRead
+    #: The confirmation's queue row, or `None` when the linked document's registration is
+    #: already with RRA and confirming would register the same invoice twice.
+    confirmation_row_id: int | None = None
+    #: The document's own registration, when the decision cancelled it in favour of this one.
+    cancelled_row_id: int | None = None
+    note: str = ""
+
+
+class ImportDeclarationRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    device_id: int
+    task_cd: str
+    dcl_no: str
+    dcl_de: date | None
+    item_seq: int
+    hs_cd: str | None
+    item_nm: str | None
+    orgn_nat_cd: str | None
+    pkg: Decimal | None
+    pkg_unit_cd: str | None
+    qty: Decimal | None
+    qty_unit_cd: str | None
+    spplr_nm: str | None
+    agnt_nm: str | None
+    invc_fcur_amt: Decimal | None
+    invc_fcur_cd: str | None
+    invc_fcur_exc_rt: Decimal | None
+    fetched_at: datetime
+    status: FiscalImportStatus
+    item_id: int | None
+    decided_at: datetime | None
+
+
+class ImportApprove(BaseModel):
+    """The item the declared line became. Required — it is the whole content of the
+    acknowledgment RRA is asking for."""
+
+    item_id: int
+    note: str | None = Field(default=None, max_length=400)
+
+
+class ImportReject(BaseModel):
+    note: str | None = Field(default=None, max_length=400)

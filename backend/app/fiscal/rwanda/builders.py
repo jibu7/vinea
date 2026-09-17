@@ -43,13 +43,16 @@ from decimal import ROUND_HALF_UP, Decimal
 from zoneinfo import ZoneInfo
 
 from app.fiscal.mapping import (
+    FiscalImportDecision,
     FiscalItemRegistration,
     FiscalLine,
     FiscalPurchase,
+    FiscalPurchaseConfirmation,
     FiscalRefund,
     FiscalSale,
     FiscalStockIO,
     FiscalStockMaster,
+    StockMovementFacing,
 )
 from app.fiscal.rwanda import codes
 from app.fiscal.rwanda.payloads import (
@@ -62,6 +65,7 @@ from app.fiscal.rwanda.payloads import (
     SaveStockIoRequest,
     SaveStockMasterRequest,
     StockItem,
+    UpdateImportItemRequest,
 )
 from app.models.fiscalization import FiscalDevice, FiscalTaxType, PaymentMethod
 
@@ -375,15 +379,15 @@ def build_purchase_request(
         spplrTin=purchase.supplier.tin,
         spplrBhfId=purchase.supplier_branch_id,
         spplrNm=purchase.supplier.name[:CUSTOMER_NAME_LIMIT],
-        # Numeric when it is: RRA types this as a number, and a supplier reference like
-        # "INV/2026/0042" has no numeric form — so it goes as null rather than as a mangled
-        # integer, and the reference stays on the Vinea document where a human can read it.
-        spplrInvcNo=_numeric_or_none(purchase.supplier_invoice_no),
-        regTyCd=(
-            codes.RegistrationType.AUTOMATIC
-            if purchase.confirming
-            else codes.RegistrationType.MANUAL
-        ),
+        # Already a number or already `None`: RRA types this field as a number, and which
+        # references have a numeric form is decided once, above this boundary, because
+        # `feed.accept` has to recognise the same invoice by the same rule.
+        spplrInvcNo=purchase.supplier_invoice_no,
+        # `M`, always: this builder renders a purchase **Vinea originated**, and a
+        # confirmation of one the authority already holds is `build_purchase_confirmation_
+        # request` with its own `A`. One builder that chose between them would make the
+        # difference a field on a DTO rather than two named calls.
+        regTyCd=codes.RegistrationType.MANUAL,
         pchsTyCd=codes.SalesType.NORMAL,
         rcptTyCd=(
             codes.PurchaseReceiptType.RETURN
@@ -391,11 +395,7 @@ def build_purchase_request(
             else codes.PurchaseReceiptType.PURCHASE
         ),
         pmtTyCd=_payment_type(purchase.payment_method),
-        pchsSttsCd=(
-            codes.TransactionProgress.APPROVED
-            if purchase.accepted
-            else codes.TransactionProgress.CANCELLED
-        ),
+        pchsSttsCd=codes.TransactionProgress.APPROVED,
         cfmDt=_stamp(purchase.posted_at),
         pchsDt=_day(purchase.document_date),
         totItemCnt=len(purchase.lines),
@@ -409,19 +409,172 @@ def build_purchase_request(
     )
 
 
+#: Decision 10's table, as (facing, outgoing) → `sarTyCd` (§4.15).
+#:
+#: **Keyed on the direction rather than on the document kind**, which is what lets one row
+#: serve a movement and its reversal: reversing a sale is a customer return (`03`), reversing a
+#: goods receipt is a return to the supplier (`12`), and neither needs a case of its own.
+#:
+#: A transfer is `MOVEMENT_OUT` at dispatch and `MOVEMENT_IN` at receipt, and only **between
+#: branches** — a movement inside one branch never reaches this table, because the caller does
+#: not report it at all. An import (`01`), processing (`05`/`14`) and discarding (`15`) have no
+#: Vinea document: goods arrive through a goods receipt whatever the customs paperwork says
+#: (decision 9 — an import declaration moves no stock), assembly is P12, and a write-off is an
+#: adjustment out, because a second code for one movement would split one figure across two
+#: lines of RRA's stock report.
+STOCK_IO_TYPE: dict[tuple[StockMovementFacing, bool], str] = {
+    (StockMovementFacing.CUSTOMER, True): codes.StockIoType.SALE_OUT,
+    (StockMovementFacing.CUSTOMER, False): codes.StockIoType.RETURN_IN,
+    (StockMovementFacing.SUPPLIER, False): codes.StockIoType.PURCHASE_IN,
+    (StockMovementFacing.SUPPLIER, True): codes.StockIoType.RETURN_OUT,
+    (StockMovementFacing.INTERNAL, False): codes.StockIoType.ADJUSTMENT_IN,
+    (StockMovementFacing.INTERNAL, True): codes.StockIoType.ADJUSTMENT_OUT,
+    (StockMovementFacing.TRANSFER, True): codes.StockIoType.MOVEMENT_OUT,
+    (StockMovementFacing.TRANSFER, False): codes.StockIoType.MOVEMENT_IN,
+}
+
+
+def stock_io_type(facing: StockMovementFacing, *, outgoing: bool) -> str:
+    """The authority's in/out code for one movement. A total map: a facing with no code is a
+    `KeyError` here rather than a `sarTyCd` guessed at the call site."""
+    return STOCK_IO_TYPE[(facing, outgoing)]
+
+
+def _stock_item_amounts(line) -> tuple[Decimal, Decimal]:  # noqa: ANN001 - FiscalStockLine
+    """`(taxblAmt, taxAmt)` for one stock line — the same relation every other payload uses.
+
+    The movement reports a **cost**, and the authority's stock report carries a taxable amount
+    and a tax amount beside it. Both are derived here rather than passed in, exactly as
+    `line_tax` derives a sale's: `taxblAmt` is the value that moved and `taxAmt` is
+    `taxblAmt × r / (100 + r)` at the class's programmed rate. Deriving it the other way —
+    grossing the cost up — would make `splyAmt ≠ taxblAmt` on a line nobody discounted, which
+    is the phantom-discount failure `_line_amounts` exists to avoid.
+    """
+    taxable = wire(line.value)
+    rate = line.tax_rate_pct
+    if rate == ZERO:
+        return taxable, ZERO
+    return taxable, (taxable * rate / (HUNDRED + rate)).quantize(
+        WIRE_EXPONENT, rounding=ROUND_HALF_UP
+    )
+
+
+def build_purchase_confirmation_request(
+    device: FiscalDevice, confirmation: FiscalPurchaseConfirmation
+) -> SavePurchaseRequest:
+    """Accept or decline a purchase RRA is already holding (decision 9).
+
+    The **same endpoint** as a registration — what differs is `regTyCd A`, which says "this is
+    a confirmation", and `pchsSttsCd`, which says which way the operator decided. Every figure
+    comes from the authority's own record rather than from anything Vinea computed: a
+    confirmation that disagreed with the record it confirms would be a third opinion about
+    somebody else's sale.
+
+    This is the only builder that reads an authority payload as *input*, which is exactly why
+    it is here: the field names below never appear above this package.
+    """
+    record = confirmation.source
+    actor_id = (confirmation.actor_id or "vinea")[:ACTOR_ID_LIMIT]
+    actor_name = (confirmation.actor_name or "Vinea")[:ACTOR_NAME_LIMIT]
+    items = record.get("itemList") or []
+    return SavePurchaseRequest(
+        tin=device.tin or "",
+        bhfId=device.bhf_id,
+        invcNo=confirmation.invoice_no,
+        spplrTin=record.get("spplrTin"),
+        spplrBhfId=record.get("spplrBhfId"),
+        spplrNm=(record.get("spplrNm") or "")[:CUSTOMER_NAME_LIMIT] or None,
+        spplrInvcNo=record.get("spplrInvcNo"),
+        regTyCd=codes.RegistrationType.AUTOMATIC,
+        pchsTyCd=codes.SalesType.NORMAL,
+        rcptTyCd=record.get("rcptTyCd") or codes.PurchaseReceiptType.PURCHASE,
+        pmtTyCd=record.get("pmtTyCd") or codes.PaymentType.CASH,
+        pchsSttsCd=(
+            codes.TransactionProgress.APPROVED
+            if confirmation.accepted
+            else codes.TransactionProgress.CANCELLED
+        ),
+        cfmDt=record.get("cfmDt") or _stamp(datetime.now(KIGALI)),
+        pchsDt=record.get("salesDt") or _day(datetime.now(KIGALI).date()),
+        totItemCnt=record.get("totItemCnt") or len(items),
+        remark=None,
+        regrId=actor_id,
+        regrNm=actor_name,
+        modrId=actor_id,
+        modrNm=actor_name,
+        itemList=[PurchaseItem.model_validate(item) for item in items],
+        **{
+            field: _money(record.get(field))
+            for field in (
+                "taxblAmtA", "taxblAmtB", "taxblAmtC", "taxblAmtD",
+                "taxAmtA", "taxAmtB", "taxAmtC", "taxAmtD",
+                "totTaxblAmt", "totTaxAmt", "totAmt",
+            )
+        },
+        **{
+            f"taxRt{tax_class}": Decimal(codes.PROGRAMMED_RATES[tax_class])
+            for tax_class in ("A", "B", "C", "D")
+        },
+    )
+
+
+def build_import_decision_request(
+    device: FiscalDevice, decision: FiscalImportDecision
+) -> UpdateImportItemRequest:
+    """Approve (`imptItemSttsCd 3`) or decline (`4`) one customs line (§4.18).
+
+    The three keys that identify the line — task, declaration date and sequence — come back off
+    the authority's own record, because they are the authority's keys and nothing Vinea holds
+    reproduces them.
+    """
+    record = decision.source
+    actor_id = (decision.actor_id or "vinea")[:ACTOR_ID_LIMIT]
+    actor_name = (decision.actor_name or "Vinea")[:ACTOR_NAME_LIMIT]
+    return UpdateImportItemRequest(
+        tin=device.tin or "",
+        bhfId=device.bhf_id,
+        taskCd=record.get("taskCd") or "",
+        dclDe=record.get("dclDe") or "",
+        itemSeq=int(record.get("itemSeq") or 0),
+        hsCd=record.get("hsCd"),
+        itemClsCd=decision.item_class_code,
+        itemCd=decision.item_code,
+        imptItemSttsCd=(
+            codes.ImportItemStatus.APPROVED
+            if decision.approved
+            else codes.ImportItemStatus.CANCELLED
+        ),
+        remark=(decision.note or "")[:REMARK_LIMIT] or None,
+        modrId=actor_id,
+        modrNm=actor_name,
+    )
+
+
+def _money(value: object) -> Decimal:
+    """A `NUMBER 18,2` field off an authority record, at the wire's two decimals."""
+    return wire(Decimal(str(value))) if value is not None else ZERO
+
+
 def build_stock_io_request(
     device: FiscalDevice, movement: FiscalStockIO
 ) -> SaveStockIoRequest:
     actor_id, actor_name = _actor(movement)
-    taxable = sum((wire(line.taxable_amount) for line in movement.lines), ZERO)
-    tax = sum((wire(line.tax_amount) for line in movement.lines), ZERO)
+    amounts = [_stock_item_amounts(line) for line in movement.lines]
+    taxable = sum((pair[0] for pair in amounts), ZERO)
+    tax = sum((pair[1] for pair in amounts), ZERO)
     return SaveStockIoRequest(
         tin=device.tin or "",
         bhfId=device.bhf_id,
         sarNo=movement.stock_no,
-        orgSarNo=movement.source_invoice_no or 0,
+        # **`orgSarNo` is this movement's own number.** The field reads as "the movement this
+        # one corrects", the documents neither say so nor show one, and the only sample
+        # §3.3.8.2 gives is a plain sale-out movement with `sarNo` and `orgSarNo` both `2`
+        # (`tests/fiscal/samples/save_stock_io_request.json`). Nothing in this phase corrects a
+        # movement by stock number, so the sample's reading is the only value there is — and
+        # the step-3 report carries it as a question for the live run.
+        orgSarNo=movement.stock_no,
         regTyCd=codes.RegistrationType.MANUAL,
-        sarTyCd=movement.movement_type,
+        sarTyCd=stock_io_type(movement.facing, outgoing=movement.outgoing),
         ocrnDt=_day(movement.occurred_on),
         totItemCnt=len(movement.lines),
         totTaxblAmt=taxable,
@@ -446,12 +599,14 @@ def build_stock_io_request(
                 prc=wire(line.unit_cost),
                 splyAmt=wire(line.value),
                 totDcAmt=ZERO,
-                taxblAmt=wire(line.taxable_amount),
+                taxblAmt=item_taxable,
                 taxTyCd=line.tax_class,
-                taxAmt=wire(line.tax_amount),
-                totAmt=wire(line.taxable_amount),
+                taxAmt=item_tax,
+                totAmt=item_taxable,
             )
-            for line in movement.lines
+            for line, (item_taxable, item_tax) in zip(
+                movement.lines, amounts, strict=True
+            )
         ],
     )
 
@@ -472,13 +627,6 @@ def build_stock_master_request(
         modrId=actor_id,
         modrNm=actor_name,
     )
-
-
-def _numeric_or_none(reference: str | None) -> int | None:
-    if reference is None:
-        return None
-    digits = reference.strip()
-    return int(digits) if digits.isdigit() else None
 
 
 def inclusive_unit_price(exclusive_price: Decimal, rate_pct: Decimal) -> Decimal:

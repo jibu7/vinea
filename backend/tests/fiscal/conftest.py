@@ -25,6 +25,7 @@ from app.fiscal import devices as device_service
 from app.fiscal.rwanda.sandbox import SandboxState, create_sandbox_app
 from app.models.company import Branch, Company
 from app.models.fiscalization import FiscalDevice, FiscalEnvironment, FiscalProfile
+from app.models.gl import GLSettings
 from app.models.inventory import Item
 from app.models.membership import CompanyMembership
 from app.models.partner import Partner
@@ -190,6 +191,10 @@ def fiscalize(
         partner_masters.PartnerInput(name="Walk-in customer", customer_code=f"WALKIN{tag}"),
         actor=order.owner,
     )
+    # The supplier gets a TIN too: `spplrTin` is what RRA reconciles a purchase declaration
+    # against its supplier's own sale, and a supplier without one would make the whole
+    # purchase side of decision 9 testable only in its degenerate case.
+    order.supplier.tin = "100000002"
     main_branch = db.scalars(
         select(Branch).where(Branch.company_id == order.company_id, Branch.is_main.is_(True))
     ).one()
@@ -216,3 +221,55 @@ def fiscalize(
 @pytest.fixture
 def fiscal_posting(db: Session, sandbox_client: httpx.Client) -> FiscalPosting:
     return fiscalize(db, build_order_entry(db, "fiscal"), sandbox_client)
+
+
+def activate_depot_device(
+    db: Session, fixture: FiscalPosting, sandbox_client: httpx.Client, *, tag: str = "depot"
+) -> FiscalDevice:
+    """A **second** device, on the depot's branch — what a cross-branch transfer needs.
+
+    The authority holds one stock figure per (taxpayer, branch) and a device belongs to one
+    branch, so a movement between branches is two reports on two devices. A company with one
+    device can never exercise that: every movement lands on the same device and a rule that
+    reported to the wrong one would look perfectly correct. The order-entry fixture already
+    puts the depot in a branch of its own for the same reason on the accrual side.
+    """
+    device = device_service.register_device(
+        db,
+        fixture.company_id,
+        branch_id=fixture.order.depot_branch_id,
+        profile=FiscalProfile.VSDC,
+        environment=FiscalEnvironment.TEST,
+        base_url=SANDBOX_URL,
+        dvc_srl_no=f"SDC-SERIAL-{tag}",
+        bhf_id="01",
+        actor=fixture.owner,
+    )
+    device_service.initialize_device(
+        db, fixture.company_id, device, actor=fixture.owner, client=sandbox_client
+    )
+    db.flush()
+    return device
+
+
+@pytest.fixture
+def fiscal_defaults(db: Session, fiscal_posting: FiscalPosting) -> FiscalPosting:
+    """The same tenant with the **default purchase class** set.
+
+    Decision 9 gives a purchase line with no item — rent, freight — the company's default
+    purchase class, and decision 14 lists the key without seeding a value for it: what a
+    company buys is not something a seed can know. Setting it is what step 6's Defaults screen
+    does, and doing it in a fixture is how the purchase report is testable before that screen
+    exists.
+    """
+    settings_row = db.scalar(
+        select(GLSettings).where(GLSettings.company_id == fiscal_posting.company_id)
+    )
+    settings_row.fiscal_default_purchase_class_code = DEFAULT_PURCHASE_CLASS
+    db.flush()
+    return fiscal_posting
+
+
+#: A class from the synced §3.3.2.2 list the sandbox serves — "General services", which is what
+#: rent and freight are.
+DEFAULT_PURCHASE_CLASS = "8514900000"

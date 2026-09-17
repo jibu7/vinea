@@ -33,7 +33,13 @@ from app.models.fiscalization import (
 from app.models.subledger import DocumentStatus
 from app.subledger import documents as documents_service
 from tests.fiscal.conftest import FiscalPosting
-from tests.fiscal.helpers import APRIL, REFUND_REASON, invoice, receive
+from tests.fiscal.helpers import (
+    APRIL,
+    REFUND_REASON,
+    drain_to_the_sale,
+    invoice,
+    receive,
+)
 from tests.fiscal.invariants import assert_fiscal_invariants
 
 
@@ -210,12 +216,9 @@ def test_a_document_whose_row_is_unknown_cannot_be_reversed(
     refund against it — so the row is resolved first, and then the reversal goes through."""
     receive(fiscal_posting, db)
     document = invoice(fiscal_posting, db)
-    drainer.drain_company(
-        db,
-        fiscal_posting.company_id,
-        client=sandbox_client,
-        max_rows_per_device=1,
-    )
+    # Everything the FIFO holds in front of the sale — the item registration and the receipt of
+    # stock that opened the shelf (P7 step 3) — so the row the device times out on is the sale.
+    drain_to_the_sale(fiscal_posting, db, sandbox_client)
     _mode(sandbox_client, "timeout")
     _drain(db, fiscal_posting, sandbox_client)
     sale = next(

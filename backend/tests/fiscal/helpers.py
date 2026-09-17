@@ -9,8 +9,11 @@ send them and the refusal tests take them away one at a time.
 from datetime import date
 from decimal import Decimal
 
+import httpx
 from sqlalchemy.orm import Session
 
+from app.fiscal import drainer, outbox
+from app.models.fiscalization import FiscalOutboxKind
 from app.models.partner import PartnerRole
 from app.models.subledger import DocumentKind, PartnerDocument
 from app.order_entry import grn as grn_service
@@ -126,3 +129,96 @@ def credit_note(
 
 def line_of(document: PartnerDocument, line_no: int = 1) -> object:
     return next(line for line in document.lines if line.line_no == line_no)
+
+
+def drain_to_the_sale(
+    fixture: FiscalPosting, db: Session, client: httpx.Client
+) -> None:
+    """Send everything the device is holding **ahead of** the sale, and stop there.
+
+    The queue in front of a sale is not one row. P7 step 3 reports the receipt of stock that
+    opened the shelf, so the head is the item registration, then that receipt's movement, then
+    its on-hand snapshot — and a test that wants the *sale* at the head counts none of that.
+    Draining until the head is the sale says what the test means; a fixed `max_rows` said it
+    only while nothing else was ever in front.
+    """
+    for _ in range(50):
+        head = outbox.head_row(db, fixture.company_id, fixture.device.id)
+        if head is None or head.kind == FiscalOutboxKind.SALE:
+            return
+        drainer.drain_company(
+            db, fixture.company_id, client=client, max_rows_per_device=1
+        )
+    raise AssertionError("the queue never reached the sale")
+
+
+def supplier_invoice(
+    fixture: FiscalPosting,
+    db: Session,
+    *,
+    lines: tuple[documents_service.LineInput, ...] | None = None,
+    partner_id: int | None = None,
+    document_date: date = MARCH,
+    reference: str | None = "77",
+    **overrides: object,
+) -> PartnerDocument:
+    """An AP invoice — a purchase, in the authority's vocabulary (decision 9).
+
+    Unmatched by default: no `grn_line_id`, so the goods arrive on the invoice itself and the
+    companion receives them. That is the case the stock report has something to say about.
+
+    `reference` is the **supplier's own invoice number**, which is what RRA reconciles a
+    declaration against the supplier's own sale by — so it is a named parameter rather than a
+    literal, because the feed's duplicate rule turns on it.
+    """
+    document, _ = documents_service.post_document(
+        db,
+        fixture.company_id,
+        PartnerRole.AP,
+        documents_service.DocumentInput(
+            kind=DocumentKind.INVOICE,
+            partner_id=partner_id or fixture.order.supplier.id,
+            document_date=document_date,
+            description="Glass",
+            reference=reference,
+            lines=lines
+            or (
+                documents_service.LineInput(
+                    item_id=fixture.stock_item.id,
+                    quantity=Decimal(50),
+                    unit_price=Decimal(1000),
+                    tax_code_id=fixture.tax_codes["VAT-IN-18"].id,
+                ),
+            ),
+            **overrides,  # type: ignore[arg-type]
+        ),
+        actor=fixture.owner,
+    )
+    return document
+
+
+def return_to_supplier(
+    fixture: FiscalPosting,
+    db: Session,
+    *,
+    lines: tuple[documents_service.LineInput, ...],
+    partner_id: int | None = None,
+    document_date: date = MARCH,
+    **overrides: object,
+) -> PartnerDocument:
+    """An AP credit note — a purchase return (`rcptTyCd R`)."""
+    document, _ = documents_service.post_document(
+        db,
+        fixture.company_id,
+        PartnerRole.AP,
+        documents_service.DocumentInput(
+            kind=DocumentKind.CREDIT_NOTE,
+            partner_id=partner_id or fixture.order.supplier.id,
+            document_date=document_date,
+            description="Broken glass back",
+            lines=lines,
+            **overrides,  # type: ignore[arg-type]
+        ),
+        actor=fixture.owner,
+    )
+    return document

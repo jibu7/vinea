@@ -20,7 +20,6 @@ account change does not, because the authority was never told the account.
 """
 
 import hashlib
-import json
 from dataclasses import asdict
 from decimal import Decimal
 
@@ -30,16 +29,24 @@ from sqlalchemy.orm import Session
 from app.fiscal import outbox
 from app.fiscal.mapping import FiscalItemRegistration
 from app.fiscal.protocol import FiscalizationAdapter
+from app.kernel.errors import PostingError
+from app.kernel.money import fingerprint_material
 from app.kernel.sequences import DocType, claim_number
 from app.models.fiscalization import (
     FiscalDevice,
     FiscalItem,
     FiscalItemTypeCode,
     FiscalOutboxKind,
+    FiscalOutboxRow,
+    FiscalOutboxStatus,
     FiscalTaxType,
 )
-from app.models.inventory import Item, ItemBarcode, ItemType
+from app.models.inventory import Item, ItemBarcode, ItemType, Uom
+from app.models.tax import TaxCode
 from app.models.user import User
+
+ZERO = Decimal(0)
+HUNDRED = Decimal(100)
 
 #: What an item registers as when nothing on the catalogue row says otherwise. Defaults rather
 #: than required fields: a Rwandan company selling finished goods out of an unpackaged bin is
@@ -67,13 +74,22 @@ def registration_hash(registration: FiscalItemRegistration) -> str:
     The actor is excluded on purpose: who keyed the change is not part of what RRA knows about
     the item, and including it would re-register every item whenever a different person touched
     one.
+
+    **Over values, not representations**, which is `fingerprint_material`'s whole job and the
+    one thing this hash got wrong. Decimals reach it by two routes that agree about the number
+    and disagree about its exponent: computed from the catalogue (`2000.000000 × 1.18` → ten
+    decimals) or read back off the `NUMERIC(20,6)` column that stored it (six). A `str()` of
+    each tells them apart, so the hash did — and an item was re-registered on the next document
+    that happened to arrive by the other route, telling RRA nothing it did not already know.
+    Found by the step-3 stock report, which reads the stored row on purpose
+    (`ensure_registered_for_report`), and guarded by `tests/test_fingerprints.py`.
     """
     fields = {
-        key: str(value)
-        for key, value in sorted(asdict(registration).items())
+        key: value
+        for key, value in asdict(registration).items()
         if key not in {"actor_id", "actor_name"}
     }
-    return hashlib.sha256(json.dumps(fields, sort_keys=True).encode()).hexdigest()
+    return hashlib.sha256(fingerprint_material(fields).encode()).hexdigest()
 
 
 def first_barcode(db: Session, company_id: int, item_id: int) -> str | None:
@@ -128,6 +144,65 @@ def get_fiscal_item(db: Session, company_id: int, item_id: int) -> FiscalItem | 
         select(FiscalItem).where(
             FiscalItem.company_id == company_id, FiscalItem.item_id == item_id
         )
+    )
+
+
+def catalogue_price_inclusive(item: Item, rate_pct: Decimal) -> Decimal:
+    """What the authority lists the item at — the **catalogue** price, VAT-inclusive, in base.
+
+    Not the price a line happened to be sold at, and the difference is not cosmetic: the
+    registered price is part of the hash that decides whether an item is re-registered, so a
+    line price would queue an `item` row on every sale at a new figure. A shop that negotiates
+    would spend its queue telling RRA about its own discounts.
+
+    `items.selling_price` is kept in base currency and `price_includes_tax` says which side of
+    the tax it is on, so the conversion is the programmed rate applied once.
+    """
+    if item.price_includes_tax or rate_pct == ZERO:
+        return item.selling_price
+    return item.selling_price * (HUNDRED + rate_pct) / HUNDRED
+
+
+def registration_tax_code(db: Session, company_id: int, item: Item) -> TaxCode | None:
+    """The tax code an item is *registered* under, when no line supplies one.
+
+    Sales first, purchases second. The authority holds one tax class per item and it is a
+    claim about how the thing is sold — so a raw material that is only ever bought falls back
+    to its purchase code rather than being refused, and an item with both registers under the
+    one a receipt would print.
+    """
+    for tax_code_id in (item.default_sales_tax_code_id, item.default_purchase_tax_code_id):
+        if tax_code_id is None:
+            continue
+        tax_code = db.get(TaxCode, tax_code_id)
+        if tax_code is not None and tax_code.company_id == company_id:
+            return tax_code
+    return None
+
+
+def told_about(db: Session, company_id: int, device_id: int, item_id: int) -> bool:
+    """Has **this device** been told about this item?
+
+    Read off the outbox, which is the durable record of the conversation, rather than from a
+    column: the authority holds items per (taxpayer, branch) — `saveItems` carries `bhfId` —
+    while `fiscal_items` holds one registration per *company*, because the item code is
+    company-wide and a second code would orphan every receipt issued against the first.
+
+    Without this, a second branch's device would report a stock movement for an item RRA has
+    never heard of at that branch, and RRA would refuse the movement. Cancelled rows do not
+    count: a cancelled row is one the authority never received.
+    """
+    return (
+        db.scalar(
+            select(FiscalOutboxRow.id).where(
+                FiscalOutboxRow.company_id == company_id,
+                FiscalOutboxRow.device_id == device_id,
+                FiscalOutboxRow.kind == FiscalOutboxKind.ITEM,
+                FiscalOutboxRow.source_doc_id == item_id,
+                FiscalOutboxRow.status != FiscalOutboxStatus.CANCELLED,
+            )
+        )
+        is not None
     )
 
 
@@ -188,7 +263,7 @@ def ensure_registered(
         actor=actor,
     )
     current = registration_hash(registration)
-    if row.last_payload_hash == current:
+    if row.last_payload_hash == current and told_about(db, company_id, device.id, item.id):
         return row
 
     # The stored row follows the registration, not the other way round: what is queued is what
@@ -215,3 +290,121 @@ def ensure_registered(
         source_doc_id=item.id,
     )
     return row
+
+
+def ensure_registered_for_report(
+    db: Session,
+    company_id: int,
+    *,
+    device: FiscalDevice,
+    adapter: FiscalizationAdapter,
+    item: Item,
+    actor: User | None = None,
+) -> FiscalItem:
+    """Register an item the authority has never been told about — and never *re*-register one.
+
+    Used by the purchase and stock reports, which both need an `itemCd` for a line and neither
+    of which is a statement about how the item is sold. A **sale** is what changes what the
+    authority holds about an item (decision 8's hash is over the registered fields, and the
+    price in it is the catalogue price); a stock movement that rewrote the registration would
+    put an *input* tax class and a purchase-side price on a catalogue row, and two paths
+    disagreeing about what an item is would re-register it on every second document.
+
+    So: if the item already has a `fiscal_items` row, it is returned exactly as it stands —
+    except that a device which has never been told about it gets a row, because RRA holds
+    items per branch (see `told_about`).
+    """
+    row = get_fiscal_item(db, company_id, item.id)
+    if row is not None:
+        # The row's **own stored values**, so this path cannot change what the authority holds:
+        # what it can do is queue a registration for a device that has never been told, which
+        # is what `told_about` inside `ensure_registered` decides.
+        return ensure_registered(
+            db,
+            company_id,
+            device=device,
+            adapter=adapter,
+            item=item,
+            quantity_unit=row.qty_unit_cd,
+            tax_class=row.tax_ty_cd,
+            price_inclusive=row.dft_prc,
+            actor=actor,
+        )
+
+    tax_code = registration_tax_code(db, company_id, item)
+    if tax_code is None or tax_code.fiscal_tax_type is None:
+        raise PostingError(
+            f"{item.code} has no tax code with an EBM tax class, so RRA has nothing to hold "
+            "it under. Set a default sales or purchase tax code on the item, and an EBM class "
+            "(A, B, C or D) on that tax code.",
+            code="tax_class_unmapped",
+            field_errors={"item_id": ["the item has no tax code with an EBM tax class"]},
+        )
+    if not item.fiscal_class_code:
+        raise PostingError(
+            f"{item.code} has no EBM item class. Choose one on the item — RRA holds one item "
+            "record per class, and a stock movement is reported against it.",
+            code="fiscal_class_missing",
+            field_errors={"item_id": ["the item has no EBM item class"]},
+        )
+    base_uom = db.get(Uom, item.base_uom_id)
+    if base_uom is None or not base_uom.fiscal_quantity_unit:
+        raise PostingError(
+            f"{item.code}'s base unit has no EBM quantity unit. Map the unit on the Units of "
+            "measure screen — the authority holds one quantity per item, in the unit it was "
+            "registered with.",
+            code="fiscal_uom_unmapped",
+            field_errors={"uom_id": ["the base unit has no EBM quantity unit"]},
+        )
+    return ensure_registered(
+        db,
+        company_id,
+        device=device,
+        adapter=adapter,
+        item=item,
+        quantity_unit=base_uom.fiscal_quantity_unit,
+        tax_class=tax_code.fiscal_tax_type,
+        price_inclusive=catalogue_price_inclusive(item, tax_code.rate_pct),
+        actor=actor,
+    )
+
+
+def resync(
+    db: Session,
+    company_id: int,
+    *,
+    device: FiscalDevice,
+    adapter: FiscalizationAdapter,
+    item: Item,
+    actor: User | None = None,
+) -> FiscalItem | None:
+    """Re-register an item the authority already holds, when its registered fields changed.
+
+    This is the other half of decision 8 — "whenever the registered fields change (hash
+    differs)" — reached from the Items screen rather than from a sale. **Deactivating an item
+    is the case that matters**: `useYn` is a registered field, so switching an item off tells
+    the authority to stop accepting it, and an item nobody can sell that RRA still lists is
+    exactly the drift the hash exists to prevent.
+
+    `None` when the item was never registered: there is nothing to re-register, and minting a
+    code for an item on the way *out* of the catalogue would be the wrong moment to start.
+    """
+    row = get_fiscal_item(db, company_id, item.id)
+    if row is None:
+        return None
+    tax_code = registration_tax_code(db, company_id, item)
+    rate_pct = tax_code.rate_pct if tax_code is not None else ZERO
+    return ensure_registered(
+        db,
+        company_id,
+        device=device,
+        adapter=adapter,
+        item=item,
+        # The registration's own stored values, not a re-derivation: what may have changed is
+        # what the screen edited, and re-resolving the unit or the class from scratch would
+        # let an unrelated master edit re-register the item as a side effect.
+        quantity_unit=row.qty_unit_cd,
+        tax_class=row.tax_ty_cd,
+        price_inclusive=catalogue_price_inclusive(item, rate_pct),
+        actor=actor,
+    )

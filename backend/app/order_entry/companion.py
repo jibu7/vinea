@@ -50,6 +50,13 @@ class CompanionResult:
     #: Index into the document's computed lines → the base-currency value that line moved.
     #: Positive is value *into* stock, negative is value out of it.
     values: dict[int, Decimal]
+    #: The moves this companion wrote, in posting order.
+    #:
+    #: Carried out so the **fiscal stock report** can be queued behind the document's own sale
+    #: or purchase row (P7 decision 10). The stock service reports every other posting itself;
+    #: a partner document's cannot be reported from there, because the companion posts before
+    #: the partner side and a revenue authority requires the sale first (VSDC §3.1).
+    moves: tuple[StockMove, ...] = ()
 
 
 def _issued_unit_cost(db: Session, company_id: int, returns_line_id: int) -> Decimal | None:
@@ -211,5 +218,7 @@ def post_companion(
     for (index, _line), move in zip(movers, posting.keyed_moves, strict=True):
         values[index] = move.value
     return CompanionResult(
-        entry_id=posting.entry.id if posting.entry is not None else None, values=values
+        entry_id=posting.entry.id if posting.entry is not None else None,
+        values=values,
+        moves=tuple(posting.moves),
     )
