@@ -125,38 +125,48 @@ def _actor(sale_or_purchase: FiscalSale | FiscalPurchase | FiscalStockIO) -> tup
 
 
 def _line_amounts(line: FiscalLine) -> tuple[Decimal, Decimal, Decimal, Decimal]:
-    """`(prc, splyAmt, taxblAmt, dcAmt)` for one line, satisfying `splyAmt - dcAmt == taxblAmt`.
+    """`(prc, splyAmt, taxblAmt, dcAmt)` — RRA's own relations, all the way down from `prc`.
 
-    On an **undiscounted** line the supply amount is the posted gross and the discount is zero:
-    the inclusive unit price times the quantity need not land on the posted figure once it has
-    been rounded to two decimals over a zero-decimal base, and putting that residue into
-    `dcAmt` invents a discount the VSDC engine rejects.
+        prc      = the VAT-inclusive unit price, two decimals
+        splyAmt  = prc x qty
+        dcAmt    = splyAmt x dcRt / 100
+        taxblAmt = splyAmt - dcAmt
+        totAmt   = taxblAmt
 
-    On a **discounted** line the supply amount is the inclusive-price extension and `dcAmt` is
-    what the discount came to, so the same relation holds and `dcRt` carries the percentage
-    somebody actually keyed.
+    Nothing here reads the posted gross, and that is the point. The build used to set
+    `taxblAmt` to the posted figure and let the difference from `prc x qty` fall into `dcAmt`,
+    which invents a discount on a line nobody discounted — and an undiscounted line carrying a
+    discount amount is a payload validation failure, not a tolerance.
+
+    **The ledger stays as posted.** The wire is derived from the inclusive price, the ledger
+    from the posting, and the two can differ by a rounding step per line. That difference is
+    not hidden: it is what the step-2 residue census measures, line by line, as `wire - ledger`.
     """
     price = wire(line.unit_price_inclusive)
-    taxable = wire(line.taxable_amount)
-    if line.discount_percent == ZERO:
-        return price, taxable, taxable, ZERO
     supply = wire(price * line.quantity)
-    return price, supply, taxable, supply - taxable
+    discount = wire(supply * line.discount_percent / HUNDRED)
+    return price, supply, supply - discount, discount
 
 
 def line_tax(line: FiscalLine) -> Decimal:
-    """`taxblAmt × r / (100 + r)`, half-up to two decimals — the RRA split on the inclusive
-    amount, which is what the authority recomputes and therefore what it must be sent.
+    """`taxblAmt x r / (100 + r)`, half-up to two decimals — the authority's own split, applied
+    to the taxable amount the relations above produce.
 
-    Public because `bucket_totals` has to sum exactly these values: a header computed from the
-    posted tax while the lines carried the derived tax would be a payload disagreeing with
-    itself, which is the defect `bucket_totals` exists to make impossible.
+    Public because `bucket_totals` must sum exactly these values. A header computed any other
+    way would be a payload disagreeing with its own lines, and the per-line rounding is not a
+    detail: TESKO's live receipt 10057 prints a header tax that only the sum of rounded lines
+    reproduces — splitting the invoice total once is a centime short.
     """
     rate = line.tax_rate_pct
     if rate == ZERO:
         return ZERO
-    taxable = wire(line.taxable_amount)
+    _, _, taxable, _ = _line_amounts(line)
     return (taxable * rate / (HUNDRED + rate)).quantize(WIRE_EXPONENT, rounding=ROUND_HALF_UP)
+
+
+def line_taxable(line: FiscalLine) -> Decimal:
+    """The wire's taxable amount for one line — `splyAmt - dcAmt`, not the posted gross."""
+    return _line_amounts(line)[2]
 
 
 def _sales_item(line: FiscalLine) -> SalesItem:
@@ -223,7 +233,7 @@ def bucket_totals(lines: Sequence[FiscalLine]) -> dict[str, Decimal]:
     taxable = {tax_class: ZERO for tax_class in FiscalTaxType}
     tax = {tax_class: ZERO for tax_class in FiscalTaxType}
     for line in lines:
-        taxable[line.tax_class] += wire(line.taxable_amount)
+        taxable[line.tax_class] += line_taxable(line)
         tax[line.tax_class] += line_tax(line)
     totals: dict[str, Decimal] = {}
     for tax_class in FiscalTaxType:

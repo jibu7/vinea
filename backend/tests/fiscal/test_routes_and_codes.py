@@ -116,7 +116,7 @@ def test_the_item_code_is_built_to_the_documents_sample() -> None:
 #: is nowhere in prose: the examples *are* the specification, and a rule is only as good as the
 #: examples it reproduces.
 #:
-#: Five of the six come out of real VSDC/EBM systems and agree. The sixth is §4.17's
+#: Sixteen come out of real VSDC/EBM systems and agree. The outliers are §4.17's
 #: hand-written worked example, whose own prose breaks it down with no `X` at all — so it is
 #: carried here as a **known outlier** rather than quietly dropped, because a reader who finds
 #: it in the document deserves to find it here too.
@@ -126,6 +126,34 @@ MACHINE_GENERATED_ITEM_CODES = (
     ("RW", "2", "NT", "U", 2, "RW2NTXU0000002", "live EBM receipt, invoice 1"),
     ("RW", "2", "NT", "NO", 14, "RW2NTXNOX0000014", "live EBM receipt, invoice 22"),
     ("RW", "2", "NT", "NO", 11, "RW2NTXNOX0000011", "live EBM receipt, CONTACTEUR"),
+    # TESKO 10057 — eight codes on one receipt, and the widest spread of units anywhere:
+    # one-, two- and three-character segments in both positions.
+    ("CN", "2", "CT", "U", 62, "CN2CTXU0000062", "live EBM receipt, TESKO 10057"),
+    ("RW", "2", "NT", "U", 254, "RW2NTXU0000254", "live EBM receipt, TESKO 10057"),
+    ("RW", "2", "NT", "NO", 86, "RW2NTXNOX0000086", "live EBM receipt, TESKO 10057"),
+    ("AE", "2", "BG", "U", 23, "AE2BGXU0000023", "live EBM receipt, TESKO 10057"),
+    ("CN", "2", "NT", "NO", 13, "CN2NTXNOX0000013", "live EBM receipt, TESKO 10057"),
+    # `M` is one character and stands, where `PA` two lines down gains its terminator. The
+    # two of them together are the rule stated from both sides on one piece of paper.
+    ("AE", "2", "RO", "M", 1, "AE2ROXM0000001", "live EBM receipt, TESKO 10057"),
+    ("CN", "2", "NT", "PA", 14, "CN2NTXPAX0000014", "live EBM receipt, TESKO 10057"),
+    ("RW", "2", "NT", "NO", 1366, "RW2NTXNOX0001366", "live EBM receipt, RWANLY 57"),
+    ("CN", "2", "RO", "M", 34, "CN2ROXM0000034", "live EBM receipt, HUSSEIN 9434"),
+    ("CN", "2", "BX", "M", 1, "CN2BXXM0000001", "live EBM receipt, HUSSEIN 9434"),
+    # The strongest single case: a **two-character quantity unit** terminated, next to a
+    # two-character packaging unit also terminated. No padding reading produces `AMXM2X`.
+    ("CN", "2", "AM", "M2", 1, "CN2AMXM2X0000001", "live EBM receipt, HUSSEIN 9434"),
+)
+
+#: The other convention, and the reason the rule above is described as "what most devices do"
+#: rather than "the format".
+#:
+#: M TOOLS' receipt 7329 (EnvyERP v2.1) carries `RW2OUNO0002141` — packaging `OU`, quantity
+#: `NO`, **neither terminated** — which is the shape §4.17's prose describes and the shape no
+#: other device in this evidence emits. Both forms are in production and both passed RRA
+#: certification, so `itemCd` is a key the authority stores rather than a format it validates.
+UNTERMINATED_CONVENTION = (
+    ("RW", "2", "OU", "NO", 2141, "RW2OUNO0002141", "live EBM receipt, M TOOLS 7329"),
 )
 
 #: §4.17's prose example, and what the rule above actually builds for it.
@@ -166,10 +194,40 @@ def test_no_case_above_feeds_a_quantity_unit_the_authority_does_not_publish() ->
     fed above is now required to be a code RRA publishes; `NOX` is not one, `NO` (31, Number)
     is.
     """
-    fed = {case[3] for case in (*MACHINE_GENERATED_ITEM_CODES, PROSE_OUTLIER)}
+    fed = {
+        case[3]
+        for case in (*MACHINE_GENERATED_ITEM_CODES, *UNTERMINATED_CONVENTION, PROSE_OUTLIER)
+    }
 
     unknown = sorted(unit for unit in fed if unit not in codes.QUANTITY_UNITS)
     assert unknown == [], f"not §4.6 quantity units: {unknown}"
+
+
+def test_the_other_production_convention_is_recorded_and_not_reproduced() -> None:
+    """One vendor builds item codes the way §4.17's prose describes — no terminator on either
+    segment — and RRA certified it.
+
+    That is the finding, and it is bigger than which rule this build follows: **the authority
+    accepts both forms**, so `itemCd` is a key it stores rather than a format it validates. The
+    build follows the sixteen codes over the four, because a convention shared by four
+    independent vendors is the one a Rwandan accountant will recognise — but nothing here
+    depends on RRA enforcing it, and step 5's live run does not need to settle it.
+    """
+    origin, product_type, packaging, unit, sequence_no, their_code, source = (
+        UNTERMINATED_CONVENTION[0]
+    )
+
+    built = codes.build_item_code(
+        origin_country=origin,
+        product_type=product_type,
+        packaging_unit=packaging,
+        quantity_unit=unit,
+        sequence_no=sequence_no,
+    )
+
+    assert built == "RW2OUXNOX0002141", "what this build sends for the same item"
+    assert built != their_code, f"{source} sends the un-terminated form, and RRA accepts it"
+    assert unit in codes.QUANTITY_UNITS, "NO (31, Number) — a real unit either way"
 
 
 def test_the_prose_worked_example_is_the_one_the_rule_does_not_reproduce() -> None:

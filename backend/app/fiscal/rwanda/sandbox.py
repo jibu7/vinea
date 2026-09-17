@@ -214,7 +214,26 @@ def _validate_sale(payload: dict[str, Any]) -> tuple[str, str] | None:
         supply = _decimal(item.get("splyAmt"))
         discount = _decimal(item.get("dcAmt"))
         taxable = _decimal(item.get("taxblAmt"))
-        if _decimal(item.get("dcRt")) == 0 and discount != 0:
+        discount_rate = _decimal(item.get("dcRt"))
+        expected_supply = (_decimal(item.get("prc")) * _decimal(item.get("qty"))).quantize(
+            PENNY, rounding=ROUND_HALF_UP
+        )
+        if supply != expected_supply:
+            return (
+                "804",
+                f"item {item.get('itemSeq')}: splyAmt {supply} is not prc x qty = "
+                f"{expected_supply}",
+            )
+        expected_discount = (supply * discount_rate / HUNDRED).quantize(
+            PENNY, rounding=ROUND_HALF_UP
+        )
+        if discount != expected_discount:
+            return (
+                "804",
+                f"item {item.get('itemSeq')}: dcAmt {discount} is not splyAmt x dcRt/100 = "
+                f"{expected_discount}",
+            )
+        if discount_rate == 0 and discount != 0:
             return (
                 "804",
                 f"item {item.get('itemSeq')}: dcAmt {item.get('dcAmt')} on a line with dcRt 0",

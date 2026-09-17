@@ -32,33 +32,36 @@ hash is updated.
 
 ### The live receipts, and why they are not here
 
-Five live EBM 2.1 receipts from one Rwandan vendor were held here while the adapter was
-written against them. **They have been removed**: they are real tax documents carrying real
-taxpayers' TINs, trading names, addresses and telephone numbers, this repository is public, and
-their use case is finished — everything they settled is written down below and in
-`contract-notes.md`, which is the durable form of the evidence.
+Nine live EBM 2.1 receipts, from six Rwandan vendors, were read while this adapter was written.
+**None is committed.** They are real tax documents carrying real taxpayers' TINs, trading
+names, addresses and telephone numbers, this repository is public, and the evidence outlives
+the file: everything they settled is below, in `contract-notes.md` §7 and §8, and in tests that
+name each receipt by invoice number.
 
-What they were, and what each proved:
-
-| Receipt | What it showed |
+| Receipt | What it settled |
 |---|---|
-| `CONTACTEUR.pdf` | Normal sale, four standard-rated lines. `Total Tax B Rwf 9,152.54` on a `Total B-18%` of 60 000 — two decimals on the printed tax. Item code `RW2NTXNOX0000011`. |
-| `desktop iyaga transport 2.pdf` | Normal sale with one exempt line — the `A-EX` bucket in the totals block. |
-| `12.pdf` | A **copy** (`CS`), which is what CIS §7.18's reprint rule looks like in practice. |
-| Invoice 1 (screenshot) | A copy (`1/1CS`), one exempt line, `Total A-EX Rwf 510,000.00` with tax `0.00`. Item code `RW2NTXU0000002`. |
-| Invoice 22 (screenshot) | `22/22NS`, one standard-rated line of 168 000 with tax 25 627.12 — the second two-decimal data point. Item code `RW2NTXNOX0000014`. |
+| `CONTACTEUR.pdf` (removed from the tree) | Two decimals on the printed tax (60 000 → 9 152.54). Item code `RW2NTXNOX0000011`. |
+| `desktop iyaga transport 2.pdf` (removed from the tree) | One exempt line — the `A-EX` bucket in the totals block. |
+| `12.pdf` (removed from the tree) | A **copy** (`CS`), which is CIS §7.18's reprint rule in practice. |
+| RWANLY invoice 1 (removed from the tree) | A copy (`1/1CS`), one exempt line, tax `0.00`. Item code `RW2NTXU0000002`. |
+| RWANLY invoice 22 (removed from the tree) | `22/22NS`, 168 000 → 25 627.12. Item code `RW2NTXNOX0000014`. |
+| RWANLY invoice 57 | An exempt-only sale. Item code `RW2NTXNOX0001366`. |
+| **TESKO invoice 10057** | **The decisive one.** Eight lines, `Total Tax B 18,122.04` — which only the per-line rounding reproduces. Eight item codes spanning one-, two- and three-character segments. |
+| HUSSEIN invoice 9434 | Three lines, 282 240 → 43 053.56. `CN2AMXM2X0000001`, the strongest single item-code case. |
+| MTN NSIN000032912 | A different POS stack (Ishyiga middleware: `ISH:` on the receipt number). 95 000 → 14 491.53. |
+| M TOOLS invoice 7329 | **The dissenter.** `EnvyERP v2.1`, item codes `RW2OUNO…` with no terminators — the other production convention (§8). |
 
-Two findings came out of them and are pinned by tests rather than by the files:
+Three findings came out of them, all pinned by tests rather than by the files:
 
-* **The rounding question gained two data points**, both on the two-decimal side
-  (`contract-notes.md` §7).
-* **The item-code rule was wrong**, and five machine-generated codes — three from the
-  specification, two from these receipts — settle it (`contract-notes.md` §8,
-  `backend/tests/fiscal/test_routes_and_codes.py`).
+* **Rounding is per line, then summed** — TESKO 10057 is the only receipt where the two
+  candidate methods differ, and it comes down on the per-line side (`contract-notes.md` §7).
+* **The item-code rule**, from sixteen machine-generated codes — and the discovery that RRA
+  accepts a second convention too (§8).
+* **Two decimals on the printed tax**, on every receipt that prints one.
 
-Note that `git rm` removes them going forward and **does not scrub them from history**: they
-entered on `main` via PR #48 and remain in that history until somebody rewrites it, which is a
-separate and destructive operation nobody has asked for.
+Note that `git rm` removed the five that had been committed and **does not scrub them from
+history**: they entered on `main` via PR #48 and remain in that history until somebody rewrites
+it, which is a separate and destructive operation nobody has asked for.
 
 ## What the documents settled
 
@@ -74,23 +77,40 @@ Read `contract-notes.md` for the contract itself. The findings that changed code
 * **Transaction progress (§4.11) has six codes, not seven**, and stock in/out (§4.15) has a
   `15 Discarding` the build had missed.
 
-## Still open
+## Still open — what step 5's sandbox run is for
 
-The rounding, refund-sign and copy-counter questions are **closed**, on the Sage 200 Evolution
-standard — the certified Rwandan integration this build takes its conventions from. See
-`contract-notes.md` §7, §7a and §7b. What remains:
+The line-arithmetic, refund-sign and copy-label rules in `contract-notes.md` §7, §7a and §7b
+are **working assumptions** taken from the owner's description of the Sage 200 Evolution
+(Ishyiga VSDC driver) integration, not from a pinned document. The pinned RRA PDFs win where
+they say otherwise. The live run is what tests them, and it should come back with an answer to
+each of these:
 
-1. **Test-environment access.** Step 5's live run against `https://sdcsandbox.rra.gov.rw` needs
-   a TIN, branch id and device serial approved on `https://myrratest.rra.gov.rw`. Not a blocker
-   for steps 1–4. **Status: still unstated** — the answer came back as an unfilled blank
-   (`not held / applied on <date>`), so nobody has recorded which it is.
-2. **The item-code segment rule.** `contract-notes.md` §8. The build terminates a
-   two-character packaging or quantity segment with `X`, following five machine-generated codes
-   against §4.17's one hand-written example, which it therefore does not reproduce. The live
-   run should register an item with a two-character quantity unit and one with a
-   three-character unit, and read back what the authority accepts.
-3. **The QR payload.** CIS §7.24.7 gives a format; none of the five live receipts exposed its
-   QR content as text, so the format is unconfirmed.
+1. **The line relations.** `splyAmt = prc x qty`, `dcAmt = splyAmt x dcRt / 100`,
+   `taxblAmt = splyAmt - dcAmt`, `taxAmt = taxblAmt x r/(100+r)` at two decimals, per line and
+   summed into the header. Register a sale with a discounted line and an undiscounted one and
+   confirm the engine accepts both. Read the wire-vs-ledger census beside it.
+2. **The refund sign.** A credit note with positive amounts under `rcptTyCd R` and a live
+   `orgInvcNo`.
+3. **The copy label.** That a reprint needs no call, and that the relabel to `n/nCS` is the
+   whole of what changes.
+4. **The item-code segment rule.** The build terminates a two-character packaging or quantity
+   segment with `X`. Sixteen machine-generated codes from five vendors do this; four codes from
+   a sixth (`EnvyERP`) do not, and **RRA certified both** — so this is likely not enforced at
+   all. Register an item with a two-character quantity unit and one with a three-character unit
+   and record what comes back, so the question is closed by evidence rather than by inference
+   (`contract-notes.md` §8).
+5. **The QR payload.** CIS §7.24.7 gives a format. Two of the nine live receipts print a
+   scannable QR and both were photographed folded, at a resolution no decoder will read —
+   `cv2.QRCodeDetector` fails on every crop and scale tried. **A flat scan of any fiscalized
+   receipt, or one line of its QR text, closes this**; until then step 8 builds to §7.24.7 as
+   written.
+
+And one precondition, still unanswered:
+
+6. **Test-environment access.** The live run needs a TIN, branch id and device serial approved
+   on `https://myrratest.rra.gov.rw`. **Status: unstated** — the answer came back as an
+   unfilled blank (`not held / applied on <date>`), so nobody has recorded which it is. Not a
+   blocker for steps 1–4; it is the blocker for step 5.
 
 ## Precondition (b), confirmed
 

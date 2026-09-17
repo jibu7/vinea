@@ -174,9 +174,18 @@ this phase builds:
   certification cannot complete on P7 alone; recorded for `docs/rra/certification.md` at step 9.
 * **24** — a PLU report (CIS §21) is required and is not in this phase's scope either.
 
-## 7. How a line's tax is rounded — settled on the Sage Evolution standard
+## 7. Line arithmetic — working assumptions, not pinned contract
 
-Four pieces of evidence, and they pulled two ways until a fifth settled it.
+**Provenance, stated first because it governs how much these are worth.** The three rules in
+§7, §7a and §7b come from the owner's description of how Sage 200 Evolution (the Ishyiga VSDC
+driver) does it. That is a certified-in-Rwanda integration and therefore the best evidence
+available short of the authority itself — but it is **not a pinned document**. Where the pinned
+RRA PDFs say otherwise, the PDFs win. Step 5's sandbox run against `sdcsandbox.rra.gov.rw` is
+still the test, and these are what it is testing.
+
+### How a line's tax is rounded
+
+Five pieces of evidence. They pulled two ways until the last two settled it.
 
 * **RRA's own Rwandan API sample** sends whole francs: `taxblAmt: 200000` with `taxAmt: 30508`,
   where 200 000 × 18/118 is 30 508.47. Its Korean samples send two decimals
@@ -189,38 +198,49 @@ Four pieces of evidence, and they pulled two ways until a fifth settled it.
   the line tax **directly from the inclusive taxable amount** using the standard split,
   `taxblAmt × r / (100 + r)`, and treats that as how a base-currency ledger is reconciled
   against a two-decimal wire.
+* **A live receipt settles the remaining ambiguity: each line is rounded, then the lines are
+  added.** TESKO's receipt 10057 prints `Total Tax B 18,122.04` over eight standard-rated
+  lines totalling 118 800. Splitting the invoice total once gives 18 122.03; rounding each of
+  the eight lines to two decimals and adding gives 18 122.04. Three other receipts — M TOOLS
+  7329, HUSSEIN 9434, MTN NSIN000032912 — agree with the printed figure under *either* method,
+  so this one receipt carries the whole distinction. All four are pinned as acceptance data in
+  `backend/tests/fiscal/test_builders.py`.
 
 ### What the build does
 
-`taxAmt` is `taxblAmt × r / (100 + r)`, half-up to two decimals. Not the posted tax.
+Every wire figure on a sales line is derived from the inclusive unit price, using RRA's own
+relations, and nothing reads the posted gross:
 
-An earlier version sent the posted franc figure on the reasoning that the ledger is the truth
-and the receipt derives from it. That reasoning is still right about *direction* and was wrong
-about *which field carries the residue*: the authority recomputes this number, so a payload
-that disagrees is a payload arguing with the engine that validates it.
+    prc      = the VAT-inclusive unit price, two decimals
+    splyAmt  = prc x qty
+    dcAmt    = splyAmt x dcRt / 100
+    taxblAmt = splyAmt - dcAmt
+    taxAmt   = taxblAmt x r / (100 + r), half-up to two decimals
+    totAmt   = taxblAmt
 
-**The consequence, stated rather than buried:** a receipt's tax can differ from the posted tax
-by under a franc per line, so the VAT return — a query over the ledger — **reconciles to** the
-receipts rather than equalling them. Step 4's tie report shows that difference as a line rather
-than asserting equality, and step 5's live run is what confirms the authority accepts the
-derived figure.
+**This replaces the earlier rule of "send the ledger's franc figure".** That rule set
+`taxblAmt` to the posted gross and let the difference from `prc x qty` fall into `dcAmt`, on
+the reasoning that the ledger is the truth and the receipt derives from it. The reasoning is
+still right about direction and was wrong about the mechanism: the authority recomputes these
+fields from `prc`, so the payload has to be internally consistent on its own terms.
+
+**The ledger stays exactly as posted.** The wire and the ledger can therefore differ by a
+rounding step per line, and that difference is measured rather than hidden: the step-2 residue
+census counts `wire - ledger` per line for both the taxable amount and the tax. On a
+two-decimal base currency it is zero; on RWF it is non-zero on a minority of lines. That is the
+figure step 4's VAT return reconciles, and the reason its tie report shows a reconciling line
+rather than asserting equality.
 
 ### The discount field, and the phantom discount
 
-Sage sends `dcRt: 0` **and** `dcAmt: 0` on an undiscounted line, and records that a non-zero
-`dcAmt` against `dcRt: 0` is a payload validation failure — the VSDC engine validates line
-arithmetic strictly.
+An undiscounted line carries `dcRt: 0` **and** `dcAmt: 0`. A non-zero `dcAmt` against `dcRt: 0`
+is a payload validation failure — the VSDC engine validates line arithmetic strictly — and it
+is exactly what the old rule produced on a zero-decimal base: a discount on a line nobody
+discounted, in a measurable fraction of cases.
 
-This build used to do exactly the rejected thing. It multiplied the VAT-inclusive unit price by
-the quantity and put the difference from the posted gross into `dcAmt`, because the discount
-amount is the one field the documents do not derive from another. On a zero-decimal base that
-produced a discount on a line nobody discounted, in a measurable fraction of cases.
-
-Now: an undiscounted line has `splyAmt = taxblAmt` and `dcAmt = 0`; a discounted line has
-`splyAmt` as the inclusive-price extension, `dcRt` the keyed percentage and `dcAmt` the money
-it came to. `splyAmt − dcAmt == taxblAmt` holds exactly either way, the in-repo sandbox
-enforces both rules, and the property census in `backend/tests/fiscal/test_builders.py` now
-reports every draw exact where it used to report residues.
+The in-repo sandbox now validates the whole chain — `splyAmt == prc x qty`,
+`dcAmt == splyAmt x dcRt / 100`, `dcRt == 0` implying `dcAmt == 0`, and
+`splyAmt - dcAmt == taxblAmt` — so the build cannot drift back into it unnoticed.
 
 ## 7a. Refunds are positive on the wire
 
@@ -228,22 +248,21 @@ Sage transmits every refund quantity, price and amount as a **positive** number.
 is the header's business: `rcptTyCd: "R"` and `orgInvcNo` naming the sale being reversed.
 Negative numbers are rejected by the VSDC schema as negative quantities or invalid decimals.
 
-Minus signs and the REFUND label belong to the printed document (CIS §14, and checkpoint 56,
-which requires a refund to print with a minus in front of each amount) — never to the payload.
+Minus signs and the REFUND label belong to the printed document — checkpoint 56 requires a
+refund to print with a minus in front of each amount — never to the payload.
 `test_a_refund_carries_no_negative_number` walks the whole payload recursively.
 
 ## 7b. A copy is a print, not a call
 
-Sage does not contact the VSDC API when reprinting. A reprint retrieves the **stored** fiscal
-block — signature, QR payload, SDC timestamp and the original `rcptNo`/`totRcptNo` — and
-re-renders it. The ERP increments its own print counter and stamps the layout with `COPY` and
-`THIS IS NOT AN OFFICIAL RECEIPT` (CIS §7.18, §15).
+No call to RRA on a reprint. The stored fiscal block is reused verbatim — signature, QR
+payload, SDC timestamp and the original counters — and only three things change: the receipt
+label is relabelled from `n/nNS` to **`n/nCS`**, as the live copy receipt shows; `copy_count`
+increments; and the layout gains the `COPY` watermark and the CIS §7.18 / §15 wording, whose
+exact text step 8 takes from the pinned CIS document rather than from here.
 
-This settles the copy-counter question decision 11 left open: **the `CS` counter belonged to
-older physical EBM hardware with a copy button, and a software CIS integration does not request
-a separate counter from the server.** Vinea's `fiscal_receipts.copy_count` is therefore local
-and is the one column the row's immutability trigger excludes — which is now a decision with a
-reason behind it rather than a convenience.
+This settles decision 11's copy-counter question: the ERP does not request a counter from the
+server for a copy. `fiscal_receipts.copy_count` is local, which is why it is the one column the
+row's immutability trigger excludes — now a decision with a reason rather than a convenience.
 
 ## 8. The item code, and what the receipts settled about it
 
@@ -251,7 +270,11 @@ reason behind it rather than a convenience.
 sequence — and then gives worked examples rather than a rule for the two code segments. The
 examples are therefore the specification, and there are five.
 
-**Five come out of real VSDC/EBM systems and agree with each other:**
+**Sixteen come out of real VSDC/EBM systems and agree with each other.** The clinching pair
+is on TESKO 10057, which carries `AE2ROXM0000001` and `CN2NTXPAX0000014` on the same piece of
+paper: a one-character quantity unit standing alone and a two-character one terminated. No
+padding reading produces both, and none produces `CN2AMXM2X0000001` at all.
+
 
 | Code | Source | Packaging | Quantity unit | Segments |
 |---|---|---|---|---|
@@ -260,6 +283,17 @@ examples are therefore the specification, and there are five.
 | `RW2NTXU0000002` | Live receipt, invoice 1 | `NT` | `U` (42) | `NTX` + `U` |
 | `RW2NTXNOX0000014` | Live receipt, invoice 22 | `NT` | `NO` (31) | `NTX` + `NOX` |
 | `RW2NTXNOX0000011` | Live receipt, `CONTACTEUR.pdf` | `NT` | `NO` (31) | `NTX` + `NOX` |
+| `RW2NTXNOX0001366` | Live receipt, RWANLY 57 | `NT` | `NO` (31) | `NTX` + `NOX` |
+| `CN2CTXU0000062` | Live receipt, TESKO 10057 | `CT` | `U` (42) | `CTX` + `U` |
+| `RW2NTXU0000254` | Live receipt, TESKO 10057 | `NT` | `U` (42) | `NTX` + `U` |
+| `RW2NTXNOX0000086` | Live receipt, TESKO 10057 | `NT` | `NO` (31) | `NTX` + `NOX` |
+| `AE2BGXU0000023` | Live receipt, TESKO 10057 | `BG` | `U` (42) | `BGX` + `U` |
+| `CN2NTXNOX0000013` | Live receipt, TESKO 10057 | `NT` | `NO` (31) | `NTX` + `NOX` |
+| `AE2ROXM0000001` | Live receipt, TESKO 10057 | `RO` | `M` (25) | `ROX` + `M` |
+| `CN2NTXPAX0000014` | Live receipt, TESKO 10057 | `NT` | `PA` (33) | `NTX` + `PAX` |
+| `CN2ROXM0000034` | Live receipt, HUSSEIN 9434 | `RO` | `M` (25) | `ROX` + `M` |
+| `CN2BXXM0000001` | Live receipt, HUSSEIN 9434 | `BX` | `M` (25) | `BXX` + `M` |
+| `CN2AMXM2X0000001` | Live receipt, HUSSEIN 9434 | `AM` | `M2` (26) | `AMX` + `M2X` |
 
 **The rule they share: `X` terminates a two-character segment.** Both segments take it —
 packaging unit and quantity unit alike — and one- and three-character codes are left exactly as
@@ -268,15 +302,27 @@ three characters, so a reader needs to know where a segment ends.
 
 **The fifth is the outlier, and it is the one in prose.** §4.17's hand-written worked example
 is `RW2NTBA0000012`, and the document's own breakdown reads "NT: Packaging Unit (NET) / BA:
-Quantity Unity (Barrel)" — no terminator on either segment. The build follows the five machines
+Quantity Unity (Barrel)" — no terminator on either segment. The build follows the machines
 over the one sentence, and produces `RW2NTXBAX0000012` where the document writes
 `RW2NTBA0000012`. `test_the_prose_worked_example_is_the_one_the_rule_does_not_reproduce` pins
 that disagreement so it stays visible.
 
-**This is a sandbox question, not a settled fact** — see the list in `README.md`. Both readings
-are inferences about a format RRA has not written down. Step 5's live run registers an item
-whose quantity unit is two characters and one whose unit is three, and reads back what the
-authority accepts.
+### A second convention, in production, that RRA also accepts
+
+M TOOLS' receipt 7329 — a different ERP (`EnvyERP v2.1`) — carries `RW2OUNO0002141`: packaging
+`OU` (Non-Exterior Packaging Unit), quantity `NO`, **neither terminated**. That is exactly the
+shape §4.17's prose describes, and no other device in this evidence emits it.
+
+So the prose example is not a typo, and the terminator is not a rule the authority enforces:
+**both forms are in production and both passed RRA certification.** `itemCd` is `CHAR(20)`, and
+what the authority needs is a key it can store and report on, not a parse.
+
+That reframes the question rather than answering it. The build follows the sixteen terminated
+codes over the four un-terminated ones — four independent vendors against one, and it is the
+form a Rwandan accountant comparing an EBM report with a Vinea item will recognise — but
+nothing in the build depends on RRA enforcing either shape, and step 5's live run no longer has
+to settle it. `test_the_other_production_convention_is_recorded_and_not_reproduced` keeps the
+disagreement visible.
 
 ### The near-miss worth recording
 

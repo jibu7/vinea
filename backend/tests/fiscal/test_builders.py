@@ -358,8 +358,11 @@ def test_the_header_is_the_sum_of_the_lines_and_the_tax_is_the_inclusive_rate(
 
     # 1. Every bucket is the sum of its own lines.
     for tax_class in FiscalTaxType:
+        # The **wire's** taxable amount, not the posted one: `taxblAmt` is `splyAmt - dcAmt`
+        # derived from the inclusive price, and a header summing the postings would be a header
+        # disagreeing with its own lines — which is the defect this clause exists to catch.
         expected_taxable = sum(
-            (builders.wire(item.taxable_amount) for item in lines if item.tax_class == tax_class),
+            (builders.line_taxable(item) for item in lines if item.tax_class == tax_class),
             ZERO,
         )
         # The **derived** tax, not the posted one: since the build follows Sage's convention
@@ -383,40 +386,53 @@ def test_the_header_is_the_sum_of_the_lines_and_the_tax_is_the_inclusive_rate(
     assert emitted_amount(emitted["totAmt"]) == emitted_amount(emitted["totTaxblAmt"])
     assert emitted["totItemCnt"] == len(lines)
 
-    # 3. Every line's tax is its taxable amount at the programmed rate, VAT-inclusive, at two
-    # decimals — which is what the authority recomputes and therefore what must be sent.
+    # 3. RRA's own relations, all the way down from `prc`. These are what the VSDC engine
+    # validates, and the build derives every one of them rather than reading the posting.
     for item, source in zip(emitted["itemList"], lines, strict=True):
         rate = Decimal(codes.PROGRAMMED_RATES[source.tax_class.value])
-        expected = (emitted_amount(item["taxblAmt"]) * rate / (HUNDRED + rate)).quantize(PENNY)
-        assert emitted_amount(item["taxAmt"]) == expected
-
-        # 4. The line's own arithmetic, which the VSDC engine validates: an undiscounted line
-        # carries no discount amount, and `splyAmt - dcAmt` is the taxable amount exactly.
+        price = emitted_amount(item["prc"])
         supply = emitted_amount(item["splyAmt"])
         discount = emitted_amount(item["dcAmt"])
         taxable = emitted_amount(item["taxblAmt"])
-        assert supply - discount == taxable, (
-            f"splyAmt {supply} - dcAmt {discount} is not taxblAmt {taxable}"
+        quantity = emitted_amount(item["qty"])
+
+        assert supply == (price * quantity).quantize(PENNY), "splyAmt is prc x qty"
+        assert discount == (supply * emitted_amount(item["dcRt"]) / HUNDRED).quantize(PENNY), (
+            "dcAmt is splyAmt x dcRt / 100"
         )
+        assert taxable == supply - discount, "taxblAmt is splyAmt - dcAmt"
+        assert emitted_amount(item["totAmt"]) == taxable, "totAmt is taxblAmt"
+        assert emitted_amount(item["taxAmt"]) == (taxable * rate / (HUNDRED + rate)).quantize(
+            PENNY
+        ), "taxAmt is taxblAmt x r/(100+r)"
         if emitted_amount(item["dcRt"]) == ZERO:
             assert discount == ZERO, (
                 "a line nobody discounted may not carry a discount amount: that is the phantom "
                 "discount the VSDC engine rejects"
             )
 
-        # 5. The census stays, because it is what would show the above quietly stopping being
-        # true. Both counters should now read exact on every draw; a residue line reappearing
-        # means the inclusive-price grounding has been lost somewhere.
+        # 4. The census, rewritten to measure the thing that now actually varies.
+        #
+        # It used to count how often the residue landed in `dcAmt`. There is no such residue
+        # any more — the wire derives from `prc` and the ledger stays as posted — so what is
+        # worth counting is the **gap between them**: how far the wire's taxable amount and tax
+        # sit from the figures the posting holds, per line. That is the number step 4's VAT
+        # return has to reconcile, and the number step 5's live run should be read against.
+        taxable_gap = taxable - builders.wire(source.taxable_amount)
+        tax_gap = emitted_amount(item["taxAmt"]) - builders.wire(source.tax_amount)
         _count(
-            f"{base_decimals}dp: dcAmt residue on an undiscounted line"
-            if discount != ZERO and emitted_amount(item["dcRt"]) == ZERO
-            else f"{base_decimals}dp: dcAmt exact"
+            f"{base_decimals}dp: taxblAmt equals the ledger"
+            if taxable_gap == ZERO
+            else f"{base_decimals}dp: taxblAmt differs from the ledger"
         )
-        two_dp = (taxable * rate / (HUNDRED + rate)).quantize(PENNY)
         _count(
-            f"{base_decimals}dp: taxAmt equals the 2dp recomputation"
-            if emitted_amount(item["taxAmt"]) == two_dp
-            else f"{base_decimals}dp: taxAmt differs from the 2dp recomputation"
+            f"{base_decimals}dp: taxAmt equals the ledger"
+            if tax_gap == ZERO
+            else f"{base_decimals}dp: taxAmt differs from the ledger"
+        )
+        assert abs(taxable_gap) <= quantity, (
+            "the wire's taxable amount may differ from the ledger's by at most the rounding of "
+            f"the unit price, once per unit: {taxable} against {source.taxable_amount}"
         )
 
 
@@ -492,3 +508,68 @@ def test_a_refund_carries_no_negative_number() -> None:
     assert negatives == [], f"a refund payload must be positive throughout: {negatives}"
     assert refund["rcptTyCd"] == "R", "the direction is the receipt type"
     assert refund["orgInvcNo"] == 7, "and the original it reverses"
+
+
+#: Four live EBM 2.1 receipts, as (label, line gross amounts, the printed `Total Tax B`).
+#:
+#: These are the acceptance data for the rounding rule, and they are *literals worked from
+#: paper* rather than anything this code produced. The receipts themselves are deliberately not
+#: in the repository (`docs/rra/README.md` says why); they are cited by invoice number so the
+#: figures can be checked against the originals.
+#:
+#: **TESKO 10057 is the one that matters.** On the other three the two candidate methods agree
+#: by luck. On that one they differ by a centime, and the printed figure is the per-line sum:
+#: that single receipt is the whole evidence for rounding each line before adding, rather than
+#: splitting the invoice total.
+LIVE_RECEIPT_TAX = (
+    ("TESKO 10057", (15000, 27500, 5000, 24000, 2800, 22500, 16000, 6000), "18122.04"),
+    ("M TOOLS 7329", (2000, 3500, 9500, 29000), "6711.86"),
+    ("HUSSEIN 9434", (70560, 47040, 164640), "43053.56"),
+    ("MTN NSIN000032912", (95000,), "14491.53"),
+)
+
+
+@pytest.mark.parametrize(
+    ("label", "grosses", "printed_tax"),
+    LIVE_RECEIPT_TAX,
+    ids=[case[0] for case in LIVE_RECEIPT_TAX],
+)
+def test_the_header_tax_matches_what_a_live_device_printed(
+    label: str, grosses: tuple[int, ...], printed_tax: str
+) -> None:
+    lines = tuple(
+        line(
+            sequence=index,
+            quantity=Decimal(1),
+            inclusive_price=Decimal(gross),
+            taxable=Decimal(gross),
+            tax=ZERO,  # unused: the wire tax is derived, which is the point of this test
+        )
+        for index, gross in enumerate(grosses, start=1)
+    )
+
+    emitted = builders.build_sale_request(device(), sale(lines)).model_dump(mode="json")
+
+    assert emitted_amount(emitted["taxAmtB"]) == Decimal(printed_tax), label
+    assert emitted_amount(emitted["totTaxAmt"]) == Decimal(printed_tax), label
+
+
+def test_splitting_the_invoice_total_would_disagree_with_the_receipt_that_proves_it() -> None:
+    """Anti-vacuity, and the reason the parametrised case above is not just four green ticks.
+
+    Three of those four receipts pass under either rounding method. If somebody "simplifies"
+    `bucket_totals` to split the invoice total once, three of them stay green and only TESKO
+    10057 goes red — so this states outright that the two methods differ there, and by how
+    much. Without it, a reader has no way to tell which of the four is doing the work.
+    """
+    grosses = LIVE_RECEIPT_TAX[0][1]
+    rate = Decimal(codes.PROGRAMMED_RATES[FiscalTaxType.B.value])
+
+    per_line = sum(
+        ((Decimal(g) * rate / (HUNDRED + rate)).quantize(PENNY) for g in grosses), ZERO
+    )
+    whole_total = (Decimal(sum(grosses)) * rate / (HUNDRED + rate)).quantize(PENNY)
+
+    assert per_line == Decimal("18122.04"), "what the device printed"
+    assert whole_total == Decimal("18122.03"), "what splitting the total once would send"
+    assert per_line - whole_total == Decimal("0.01")
