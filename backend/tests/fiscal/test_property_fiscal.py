@@ -419,7 +419,8 @@ def test_the_payload_agrees_with_itself_and_the_residue_is_measured(
         fixture = fiscalize(
             db, build_order_entry(db, f"fis-map-{next(_EXAMPLE)}"), client, tag="map"
         )
-        places = base_currency(db, fixture.company_id).decimal_places
+        base = base_currency(db, fixture.company_id)
+        places, base_id = base.decimal_places, base.id
         _drive(db, fixture, client, [step for step in plan if step[0] != "drain"])
 
         rows = db.scalars(
@@ -436,7 +437,13 @@ def test_the_payload_agrees_with_itself_and_the_residue_is_measured(
             _assert_no_negative_amount(row.payload)
             checked += 1
             document = db.get(PartnerDocument, row.source_doc_id)
-            if document is None or places != 0:
+            # **Base-currency documents only.** `gross_amount` is in the *document's* currency
+            # and the wire is in base, so a USD invoice would be comparing dollars with francs
+            # — which is how this census first read 218 lines "a unit or more" apart and meant
+            # nothing at all. The residue decision 6 names is the two-decimal wire against a
+            # zero-decimal ledger; a foreign document's own conversion rounding is a different
+            # question, and one the ledger already owns.
+            if document is None or places != 0 or document.currency_id != base_id:
                 continue
             for line, item in zip(
                 [line for line in document.lines if line.kit_parent_line_id is None],

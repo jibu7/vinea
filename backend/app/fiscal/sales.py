@@ -487,9 +487,7 @@ def enqueue(
             item=planned.item,
             quantity_unit=planned.quantity_unit,
             tax_class=planned.tax_class,
-            price_inclusive=_price_in_base(
-                planned.unit_price_inclusive, currency, document
-            ),
+            price_inclusive=_catalogue_price_inclusive(planned),
             actor=actor,
         )
         for planned in plan.lines
@@ -580,8 +578,13 @@ def _fiscal_line(
         unit_price_inclusive=_price_in_base(
             planned.unit_price_inclusive, currency, document
         ),
-        taxable_amount=_posted_base(
-            db, planned.net + planned.tax, currency, base, document
+        # **Converted the way the ledger converted them** — net and tax separately, because
+        # that is how they were posted: two journal lines, each rounded to the base currency on
+        # its own. Converting the sum once would differ from the pair by a franc on a
+        # foreign-currency document, and the receipt would disagree with the entry behind it.
+        taxable_amount=(
+            _posted_base(db, planned.net, currency, base, document)
+            + _posted_base(db, planned.tax, currency, base, document)
         ),
         tax_amount=_posted_base(db, planned.tax, currency, base, document),
         tax_class=planned.tax_class,
@@ -617,6 +620,23 @@ def _posted_base(
         base=base,
         rate=document.exchange_rate,
     ).base_amount
+
+
+def _catalogue_price_inclusive(planned: PlannedLine) -> Decimal:
+    """What the authority lists the item at — the **catalogue** price, VAT-inclusive, in base.
+
+    Not the price this line happened to be sold at, and the difference is not cosmetic: the
+    registered price is part of the hash that decides whether an item is re-registered, so a
+    line price would queue an `item` row on every sale at a new figure. A shop that negotiates
+    would spend its queue telling RRA about its own discounts.
+
+    `items.selling_price` is kept in base currency and `price_includes_tax` says which side of
+    the tax it is on, so the conversion is the line's own programmed rate applied once.
+    """
+    price = planned.item.selling_price
+    if planned.item.price_includes_tax or planned.tax_rate_pct == ZERO:
+        return price
+    return price * (HUNDRED + planned.tax_rate_pct) / HUNDRED
 
 
 def _price_in_base(price: Decimal, currency: Currency, document: PartnerDocument) -> Decimal:

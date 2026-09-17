@@ -24,6 +24,7 @@ from app.models.fiscalization import (
     FiscalOutboxKind,
     FiscalOutboxRow,
     FiscalOutboxStatus,
+    FiscalTaxType,
     PaymentMethod,
 )
 from app.models.partner import PartnerRole
@@ -113,6 +114,39 @@ def test_a_second_sale_of_the_same_item_registers_it_again_only_if_it_changed(
         row for row in _rows(db, fiscal_posting.company_id) if row.kind == FiscalOutboxKind.ITEM
     ]
     assert len(item_rows) == 2, "a rename changes what RRA holds, so it is re-registered"
+
+
+def test_selling_the_same_item_at_a_different_price_does_not_re_register_it(
+    db: Session, fiscal_posting: FiscalPosting
+) -> None:
+    """What RRA holds is the item's **catalogue** price, not what one line was sold at.
+
+    The registered price is part of the hash, so a line price here would queue an `item` row
+    on every sale at a new figure — a shop that negotiates would spend its queue telling RRA
+    about its own discounts. Found by reading the map against decision 8 rather than by a
+    failing test, which is why it has one now.
+    """
+    receive(fiscal_posting, db, quantity="300")
+    invoice(fiscal_posting, db)
+    invoice(
+        fiscal_posting,
+        db,
+        lines=(
+            documents_service.LineInput(
+                item_id=fiscal_posting.stock_item.id,
+                quantity=Decimal(10),
+                unit_price=Decimal(1750),
+                tax_code_id=fiscal_posting.tax_codes["VAT-OUT-18"].id,
+            ),
+        ),
+    )
+
+    item_rows = [
+        row for row in _rows(db, fiscal_posting.company_id) if row.kind == FiscalOutboxKind.ITEM
+    ]
+    assert len(item_rows) == 1
+    # 2 000 catalogue, exclusive, standard-rated: 2 000 x 1.18 = 2 360.
+    assert item_rows[0].payload["dftPrc"] == 2360
 
 
 def test_the_frozen_payload_carries_the_posted_figures(
@@ -329,6 +363,10 @@ def test_a_tax_code_with_no_ebm_class_is_refused(
 
     assert refusal.value.code == "tax_class_unmapped"
     assert "lines.0.tax_code_id" in refusal.value.field_errors
+
+    fiscal_posting.tax_codes["VAT-OUT-18"].fiscal_tax_type = FiscalTaxType.B
+    db.flush()
+    assert invoice(fiscal_posting, db) is not None
 
 
 def test_a_sale_to_a_customer_with_a_tin_needs_a_purchase_code(
