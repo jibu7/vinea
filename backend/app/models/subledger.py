@@ -30,6 +30,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
+from app.models.fiscalization import PaymentMethod, payment_method_type
 from app.models.mixins import AuditedMixin, CompanyScopedMixin, pg_enum
 from app.models.partner import PartnerRole, TaxMode, partner_role_type, tax_mode_type
 
@@ -153,6 +154,24 @@ class PartnerDocument(AuditedMixin, CompanyScopedMixin, Base):
             name="fk_partner_documents_sales_rep",
             ondelete="RESTRICT",
         ),
+        # P7 decision 7 — the credit note's original, and the receipt the authority signed.
+        ForeignKeyConstraint(
+            ["company_id", "refund_of_document_id"],
+            ["partner_documents.company_id", "partner_documents.id"],
+            name="fk_partner_documents_refund_of_document",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "fiscal_receipt_id"],
+            ["fiscal_receipts.company_id", "fiscal_receipts.id"],
+            name="fk_partner_documents_fiscal_receipt",
+            ondelete="RESTRICT",
+            # The two tables point at each other: a receipt names the document it belongs to
+            # and the document names the receipt it was issued. `use_alter` is what lets
+            # `create_all` order that cycle; the data order is never circular, because the
+            # receipt is written first and the document updated to point at it.
+            use_alter=True,
+        ),
         CheckConstraint("direction IN (-1, 1)", name="direction_sign"),
         CheckConstraint("total_amount > 0", name="total_positive"),
         CheckConstraint(
@@ -224,6 +243,23 @@ class PartnerDocument(AuditedMixin, CompanyScopedMixin, Base):
     reversed_on: Mapped[date | None] = mapped_column(Date)
     idempotency_key: Mapped[str | None] = mapped_column(String(64))
     idempotency_hash: Mapped[str | None] = mapped_column(String(64))
+    # --- P7 fiscalization (decision 7) ----------------------------------------------------
+    #: How the document is paid. Defaulted at post — `credit` when it carries payment terms,
+    #: `cash` otherwise — because it is a required field on a fiscal receipt and a required
+    #: field nobody knows the answer to is a field that gets the wrong answer.
+    payment_method: Mapped[PaymentMethod | None] = mapped_column(payment_method_type)
+    #: The customer's purchase code. Required on a fiscalized company when the partner has a
+    #: TIN: the authority refuses a business sale without one.
+    purchase_code: Mapped[str | None] = mapped_column(String(6))
+    #: The invoice a credit note refunds, when its lines do not say. A refund must resolve to
+    #: exactly one original — the authority's vocabulary has no refund spanning two sales.
+    refund_of_document_id: Mapped[int | None] = mapped_column(BigInteger)
+    #: The authority's reason code for the refund. A bare code rather than an enum on this
+    #: table: the list is published and synced, so it is data.
+    refund_reason: Mapped[str | None] = mapped_column(String(2))
+    #: The receipt the authority signed for this document, once it has one. NULL while the
+    #: outbox row is still queued — which is exactly when printing is refused.
+    fiscal_receipt_id: Mapped[int | None] = mapped_column(BigInteger)
 
     lines: Mapped[list["PartnerDocumentLine"]] = relationship(
         back_populates="document",

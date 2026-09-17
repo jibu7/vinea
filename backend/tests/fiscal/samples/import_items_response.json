@@ -1,0 +1,31 @@
+{
+  "resultCd": "000",
+  "resultMsg": "It is succeeded",
+  "resultDt": "20200226194118",
+  "data": {
+    "itemList": [
+      {
+        "taskCd": "2239078",
+        "dclDe": " -1      ",
+        "itemSeq": 1,
+        "dclNo": "C3460-2019-TZDL",
+        "hsCd": "20055900000",
+        "itemNm": "BAKED BEANS",
+        "imptItemsttsCd": "2",
+        "orgnNatCd": "BR",
+        "exptNatCd": "BR",
+        "pkg": 2922,
+        "pkgUnitCd": null,
+        "qty": 19946,
+        "qtyUnitCd": "KGM",
+        "totWt": 19945.57,
+        "netWt": 19945.57,
+        "spplrNm": "ODERICH CONSER VA QUALIDADE\nBRASIL",
+        "agntNm": "BN METRO Ltd",
+        "invcFcurAmt": 296865.6,
+        "invcFcurCd": "USD",
+        "invcFcurExcrt": 929.79
+      }
+    ]
+  }
+}

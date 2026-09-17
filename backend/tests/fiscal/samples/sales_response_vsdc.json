@@ -1,0 +1,14 @@
+{
+  "resultCd": "000",
+  "resultMsg": "It is succeeded",
+  "resultDt": "20200226194328",
+  "data": {
+    "rcptNo": 27,
+    "intrlData": "GZGGIZL YTJSSD7YL YLGIIG6FCY",
+    "rcptSign": "TQZMKL57AGBMSTPO",
+    "totRcptNo": 32,
+    "vsdcRcptPbctDate": "20211027162114",
+    "sdcId": "SDC010000005",
+    "mrcNo": "WIS01006230"
+  }
+}

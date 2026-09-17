@@ -1,0 +1,77 @@
+{
+  "resultCd": "000",
+  "resultMsg": "It is succeeded",
+  "resultDt": "20200226195420",
+  "data": {
+    "saleList": [
+      {
+        "spplrTin": "999991111",
+        "spplrNm": "Taxpayer1111",
+        "spplrBhfId": "00",
+        "spplrInvcNo": 2,
+        "rcptTyCd": "S",
+        "pmtTyCd": "01",
+        "cfmDt": "2020-01-27 21:03:00",
+        "salesDt": "20200127",
+        "stockRlsDt": "2020-01-27 21:03:00",
+        "totItemCnt": 2,
+        "taxblAmtA": 0,
+        "taxblAmtB": 10500,
+        "taxblAmtC": 0,
+        "taxblAmtD": 0,
+        "taxRtA": 0,
+        "taxRtB": 18,
+        "taxRtC": 0,
+        "taxRtD": 0,
+        "taxAmtA": 0,
+        "taxAmtB": 1602,
+        "taxAmtC": 0,
+        "taxAmtD": 0,
+        "totTaxblAmt": 10500,
+        "totTaxAmt": 1602,
+        "totAmt": 10500,
+        "remark": null,
+        "itemList": [
+          {
+            "itemSeq": 1,
+            "itemCd": "RW1NTXU0000001",
+            "itemClsCd": "5059690800",
+            "itemNm": "test item 1",
+            "bcd": null,
+            "pkgUnitCd": "NT",
+            "pkg": 2,
+            "qtyUnitCd": "U",
+            "qty": 2,
+            "prc": 3500,
+            "splyAmt": 7000,
+            "dcRt": 0,
+            "dcAmt": 0,
+            "taxTyCd": "B",
+            "taxblAmt": 7000,
+            "taxAmt": 1068,
+            "totAmt": 7000
+          },
+          {
+            "itemSeq": 2,
+            "itemCd": "RW1NTXU0000002",
+            "itemClsCd": "5022110801",
+            "itemNm": "test item 2",
+            "bcd": null,
+            "pkgUnitCd": "NT",
+            "pkg": 1,
+            "qtyUnitCd": "U",
+            "qty": 1,
+            "prc": 3500,
+            "splyAmt": 3500,
+            "dcRt": 0,
+            "dcAmt": 0,
+            "taxTyCd": "B",
+            "taxblAmt": 3500,
+            "taxAmt": 534,
+            "totAmt": 3500
+          }
+        ]
+      }
+    ]
+  }
+}

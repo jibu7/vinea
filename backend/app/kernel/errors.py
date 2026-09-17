@@ -22,6 +22,10 @@ SQLSTATE_CONTROL_PARTNER = "VN008"
 # P5: the stock ledger has the journal's two rules of its own — one writer, and no edits.
 SQLSTATE_STOCK_WRITER = "VN009"
 SQLSTATE_STOCK_IMMUTABLE = "VN010"
+# P7: the fiscal record has the same rule for the same reason. A fiscal receipt is the
+# revenue authority's signature over a sale and a filed VAT return is a declaration; neither
+# is a row anybody gets to edit, and a convention that says so is not an enforcement.
+SQLSTATE_FISCAL_IMMUTABLE = "VN011"
 
 _SQLSTATE_CODES = {
     SQLSTATE_IMMUTABLE: "posted_entry_immutable",
@@ -34,6 +38,7 @@ _SQLSTATE_CODES = {
     SQLSTATE_CONTROL_PARTNER: "dimension_required",
     SQLSTATE_STOCK_WRITER: "stock_write_forbidden",
     SQLSTATE_STOCK_IMMUTABLE: "stock_move_immutable",
+    SQLSTATE_FISCAL_IMMUTABLE: "fiscal_record_immutable",
 }
 
 

@@ -1,0 +1,27 @@
+{
+  "resultCd": "000",
+  "resultMsg": "It is succeeded",
+  "resultDt": "20200226143124",
+  "data": {
+    "info": {
+      "tin": "999991130",
+      "taxprNm": "Taxpayer1130",
+      "bsnsActv": "business",
+      "bhfId": "00",
+      "bhfNm": "Headquater",
+      "bhfOpenDt": "20200226",
+      "prvncNm": "KIGALI CITY",
+      "dstrtNm": "GASABO",
+      "sctrNm": "KACYIRU",
+      "locDesc": null,
+      "hqYn": "Y",
+      "mgrNm": "manage1130_00",
+      "mgrTelNo": "0789001130",
+      "mgrEmail": "manage113000@test.com",
+      "dvcId": "9999911300000001",
+      "sdcId": "SDC013000001",
+      "mrcNo": "WIS01000150",
+      "cmcKey": "f0b9831bd2334874b7ec815e40347bc4"
+    }
+  }
+}

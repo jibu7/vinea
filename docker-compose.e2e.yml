@@ -7,15 +7,23 @@
 #
 #     export COMPOSE_FILE=docker-compose.yml:docker-compose.e2e.yml
 #
-# It exists for one setting. Playwright has to read one-time tokens — a password-reset link, an
-# invitation link — and those live only in the backend process's in-memory outbox: the database
-# stores them hashed, and an endpoint that handed them out would turn a mailed secret into an
-# API affordance. So the non-production mail stub also appends every message to a file, and the
+# It exists for two things.
+#
+# **One setting.** Playwright has to read one-time tokens — a password-reset link, an invitation
+# link — and those live only in the backend process's in-memory outbox: the database stores them
+# hashed, and an endpoint that handed them out would turn a mailed secret into an API
+# affordance. So the non-production mail stub also appends every message to a file, and the
 # suite reads it. A local mail catcher, with no surface added to the product.
 #
-# **Not in the default compose, and not in `.env.example` beyond a commented line.** Bringing
-# the dev stack up the ordinary way writes no tokens anywhere, and production refuses to boot
-# at all if this is ever set (`Settings._harden_production`).
+# **One service.** The EBM sandbox (P7 decision 16): a server that answers as the revenue
+# authority would, so an end-to-end run can register a device, fiscalize an invoice and read the
+# receipt back without touching Kigali. It is the same app the backend suite mounts in process,
+# run here as a service because Playwright is a different process on a different machine.
+#
+# **Neither is in the default compose**, and neither is in `.env.example` beyond a commented
+# line. Bringing the dev stack up the ordinary way writes no tokens anywhere and answers no
+# `saveSales`, and production refuses to boot if either is ever set
+# (`Settings._harden_production`).
 services:
   backend:
     environment:
@@ -23,3 +31,20 @@ services:
       # `backend/.e2e-outbox.jsonl` on the host — readable by the suite without a shell-out,
       # and gitignored.
       EMAIL_OUTBOX_FILE: /app/.e2e-outbox.jsonl
+    depends_on:
+      db: { condition: service_healthy }
+      ebm-sandbox: { condition: service_started }
+
+  # The in-repo EBM server. Built from the backend image — it *is* backend code
+  # (`app/fiscal/rwanda/sandbox.py`), and a second image would be a second thing to keep in
+  # step with the payload models it validates.
+  ebm-sandbox:
+    build: ./backend
+    command: >-
+      uv run uvicorn app.fiscal.rwanda.sandbox:app --host 0.0.0.0 --port 8100
+    environment:
+      APP_ENV: test
+      FISCAL_SANDBOX_ENABLED: "true"
+    volumes:
+      - ./backend:/app
+    ports: ["8100:8100"]

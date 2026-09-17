@@ -35,6 +35,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
+from app.models.fiscalization import FiscalItemTypeCode, fiscal_item_type_code_type
 from app.models.mixins import AuditedMixin, CompanyScopedMixin, pg_enum
 
 MONEY = Numeric(20, 6)
@@ -163,6 +164,11 @@ class Uom(AuditedMixin, CompanyScopedMixin, Base):
     factor_to_base: Mapped[Decimal] = mapped_column(FACTOR, nullable=False, default=Decimal(1))
     # How many decimals this unit is entered and displayed with — "each" is 0, "kg" is 3.
     decimal_places: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0)
+    #: P7 — the revenue authority's quantity-unit code for this unit. Nullable because most
+    #: companies never fiscalize; required for any unit that appears on a fiscalized line, and
+    #: refused at post (`fiscal_uom_unmapped`) rather than guessed at, because a wrong unit on
+    #: a receipt is a wrong receipt.
+    fiscal_quantity_unit: Mapped[str | None] = mapped_column(String(5))
     is_base: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
@@ -262,6 +268,21 @@ class Item(AuditedMixin, CompanyScopedMixin, Base):
     #: refuses a target whose item has none (`weight_missing`) rather than treating it as zero
     #: and quietly giving that line no share of the freight (P6 decision 9).
     weight_per_base_unit: Mapped[Decimal | None] = mapped_column(QUANTITY)
+    # --- P7 fiscalization (decision 8) -----------------------------------------------------
+    #: The revenue authority's item class, chosen from the synced classification. Required on
+    #: a fiscalized company for anything that is sold (`fiscal_class_missing`), because a
+    #: receipt line is an item with a code *and* a class.
+    fiscal_class_code: Mapped[str | None] = mapped_column(String(20))
+    #: Country of origin, ISO-3166-1 alpha-2. Part of the registered item code.
+    fiscal_origin_country: Mapped[str | None] = mapped_column(String(2))
+    #: Packaging unit code — `NT` (unpackaged) unless the item ships in something.
+    fiscal_package_unit: Mapped[str | None] = mapped_column(String(5))
+    #: Raw material / finished product / service, in the authority's vocabulary. Defaulted
+    #: from `item_type` at registration and editable: a distributor's "finished product" and a
+    #: manufacturer's "raw material" can be the same catalogue row.
+    fiscal_item_type: Mapped[FiscalItemTypeCode | None] = mapped_column(
+        fiscal_item_type_code_type
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
     @property

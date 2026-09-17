@@ -21,6 +21,23 @@ from pathlib import Path
 
 from app.models.company import CompanyStatus
 from app.models.fiscal import PeriodStatus
+from app.models.fiscalization import (
+    FiscalDeviceStatus,
+    FiscalEnvironment,
+    FiscalFeedDecision,
+    FiscalImportStatus,
+    FiscalItemTypeCode,
+    FiscalOutboxKind,
+    FiscalOutboxStatus,
+    FiscalProfile,
+    FiscalReceiptType,
+    FiscalSyncKind,
+    FiscalTaxType,
+    FxRevaluationRole,
+    FxRevaluationStatus,
+    PaymentMethod,
+    VatReturnStatus,
+)
 from app.models.gl import AccountClass, BackorderPolicy, ControlType
 from app.models.inventory import (
     GrnStatus,
@@ -80,6 +97,25 @@ EXPORTED: tuple[type[enum.StrEnum], ...] = (
     InventoryDocumentStatus,
     StockTransferStatus,
     StockCountStatus,
+    # Fiscalization (P7). Every one of these is rendered as a chip, a filter or a picker on
+    # the EBM screens, and every one is a value the server decides — which is the whole test
+    # for belonging here.
+    FiscalProfile,
+    FiscalEnvironment,
+    FiscalDeviceStatus,
+    FiscalSyncKind,
+    FiscalOutboxKind,
+    FiscalOutboxStatus,
+    FiscalReceiptType,
+    FiscalTaxType,
+    FiscalItemTypeCode,
+    PaymentMethod,
+    FiscalFeedDecision,
+    FiscalImportStatus,
+    # Tax and revaluation
+    VatReturnStatus,
+    FxRevaluationStatus,
+    FxRevaluationRole,
 )
 
 # `REPO_ROOT` first, then the path relative to this file — the same convention

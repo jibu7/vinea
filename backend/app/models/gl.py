@@ -159,6 +159,12 @@ SETTINGS_ACCOUNT_FIELDS = (
     "grn_accrual_account_id",
     "purchase_price_variance_account_id",
     "landed_cost_clearing_account_id",
+    # P7 tax and revaluation defaults.
+    "vat_settlement_account_id",
+    "ar_revaluation_account_id",
+    "ap_revaluation_account_id",
+    "unrealized_fx_gain_account_id",
+    "unrealized_fx_loss_account_id",
 )
 
 
@@ -238,6 +244,25 @@ class GLSettings(AuditedMixin, CompanyScopedMixin, Base):
         server_default=NegativeStockPolicy.BLOCK.value,
     )
     default_warehouse_id: Mapped[int | None] = mapped_column(BigInteger)
+    # --- P7 tax and revaluation defaults ---------------------------------------------------
+    #: Where a filed VAT return settles. One account, one balance: a net payable sits as a
+    #: credit and a net credit position as a debit on the same account, which is the shape an
+    #: accountant recognises and reconciles against the authority's own statement.
+    vat_settlement_account_id: Mapped[int | None] = mapped_column(BigInteger)
+    #: The contra side of an unrealized revaluation of open partner items (P7 decision 13).
+    #: **Not** the AR/AP control accounts: those are subledger-only and their balance is the
+    #: sum of open items at booking rates, which a revaluation would break.
+    ar_revaluation_account_id: Mapped[int | None] = mapped_column(BigInteger)
+    ap_revaluation_account_id: Mapped[int | None] = mapped_column(BigInteger)
+    #: Unrealized, and deliberately separate from P4's realized pair: a gain that exists only
+    #: because a rate moved on a balance-sheet date is not the same fact as one crystallised
+    #: by a payment, and an accountant reads the two apart.
+    unrealized_fx_gain_account_id: Mapped[int | None] = mapped_column(BigInteger)
+    unrealized_fx_loss_account_id: Mapped[int | None] = mapped_column(BigInteger)
+    #: The item class a purchase line with no item is registered under — rent, freight, a
+    #: consultant's fee. The authority requires a class on every line; Vinea does not require
+    #: an item on an AP line, so one default bridges the two (decision 9).
+    fiscal_default_purchase_class_code: Mapped[str | None] = mapped_column(String(20))
 
 
 class Project(AuditedMixin, CompanyScopedMixin, Base):

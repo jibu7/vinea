@@ -86,6 +86,29 @@ OE_REPORTS_VIEW = "oe:reports_view"
 # because receiving goods and revaluing them are different authorities.
 OE_LANDED_COST_POST = "oe:landed_cost_post"
 
+# Fiscalization (P7) — the EBM device, its queue, and what they produce.
+#
+# Three rather than one, because they are three different jobs. Setting a device up and
+# mapping the masters onto the authority's code tables is an administrator's act, done once.
+# Working the queue — retrying, verifying against the device, attaching a receipt read off the
+# portal, accepting a purchase the authority is holding — is a daily operational authority
+# over what the business has told a revenue authority, and it is the one that most needs to be
+# grantable on its own. Reading the queue, the receipts and the daily reports is neither.
+FISCAL_SETUP_MANAGE = "fiscal:setup_manage"
+FISCAL_QUEUE_MANAGE = "fiscal:queue_manage"
+FISCAL_REPORTS_VIEW = "fiscal:reports_view"
+
+# Tax returns (P7). Viewing a return is an ordinary accounting enquiry; **filing** one posts a
+# settlement entry and freezes the figures against a high-water mark, and is irreversible
+# except through the return itself — so it is separated the way the AR write-off approval is.
+TAX_VAT_RETURN_VIEW = "tax:vat_return_view"
+TAX_VAT_RETURN_FILE = "tax:vat_return_file"
+
+# Unrealized FX revaluation (P7 decision 13). Its own permission under `gl` rather than
+# `gl:journal_post`: a revaluation restates the base value of every open foreign-currency item
+# on the balance sheet at a date, which is a month-end authority and not a keying one.
+GL_FX_REVALUE = "gl:fx_revalue"
+
 # Reporting & analytics
 REPORTING_FINANCIAL_STATEMENTS_VIEW = "reporting:financial_statements_view"
 REPORTING_FINANCIAL_STATEMENTS_GENERATE = "reporting:financial_statements_generate"
@@ -162,6 +185,12 @@ ALL_PERMISSIONS: tuple[str, ...] = (
     OE_GRV_PROCESS,
     OE_REPORTS_VIEW,
     OE_LANDED_COST_POST,
+    FISCAL_SETUP_MANAGE,
+    FISCAL_QUEUE_MANAGE,
+    FISCAL_REPORTS_VIEW,
+    TAX_VAT_RETURN_VIEW,
+    TAX_VAT_RETURN_FILE,
+    GL_FX_REVALUE,
     REPORTING_FINANCIAL_STATEMENTS_VIEW,
     REPORTING_FINANCIAL_STATEMENTS_GENERATE,
     REPORTING_TEMPLATES_MANAGE,
@@ -212,6 +241,13 @@ SYSTEM_ROLES: tuple[dict[str, object], ...] = (
             AR_REPORTS_VIEW,
             AP_TRANSACTIONS_POST,
             AP_REPORTS_VIEW,
+            # P7: the VAT return and the month-end revaluation are an accountant's work, and
+            # so is reading what the EBM queue has done. Managing devices and working the
+            # queue by hand are not — those stay with the administrator.
+            FISCAL_REPORTS_VIEW,
+            TAX_VAT_RETURN_VIEW,
+            TAX_VAT_RETURN_FILE,
+            GL_FX_REVALUE,
             REPORTING_FINANCIAL_STATEMENTS_VIEW,
             REPORTING_TRIAL_BALANCE_VIEW,
         ],

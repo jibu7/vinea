@@ -140,4 +140,4 @@ def test_seeded_rows_are_visible_once_a_tenant_is_bound(db: Session, two_tenants
     first, _ = two_tenants
     set_tenant(db, first.company.id)
     assert db.execute(text("SELECT count(*) FROM branches")).scalar_one() == 1
-    assert db.execute(text("SELECT count(*) FROM tax_codes")).scalar_one() == 4
+    assert db.execute(text("SELECT count(*) FROM tax_codes")).scalar_one() == 5

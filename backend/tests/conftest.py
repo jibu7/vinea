@@ -9,8 +9,52 @@ import os
 from collections.abc import Iterator
 
 import pytest
+from hypothesis import HealthCheck, settings
 from sqlalchemy import URL, create_engine, make_url, text
 from sqlalchemy.orm import Session, sessionmaker
+
+# --- Hypothesis profiles ------------------------------------------------------------------
+#
+# Here, at the root, so **every** suite gets them. They used to live in `tests/kernel/conftest.py`
+# and reach the others as a side effect of importing that module for its `ledger` fixture — which
+# worked only while every property suite happened to want one. P7's fiscal suite does not, and
+# its first property ran under Hypothesis' defaults: 100 examples, a deadline, and the
+# function-scoped-fixture health check these profiles exist to suppress.
+#
+# `function_scoped_fixture` is suppressed because a property test that wants a *fresh* tenant per
+# example has to re-enter the fixture, and Hypothesis rightly warns about that being unusual. It
+# is the design here: a suite asserted after every step would otherwise re-examine an
+# ever-growing history and cost time quadratic in the example count.
+settings.register_profile(
+    "ci",
+    max_examples=2,
+    deadline=None,
+    suppress_health_check=[HealthCheck.function_scoped_fixture, HealthCheck.too_slow],
+)
+settings.register_profile(
+    "dev",
+    max_examples=1,
+    deadline=None,
+    suppress_health_check=[HealthCheck.function_scoped_fixture, HealthCheck.too_slow],
+)
+#: The nightly profile (`.github/workflows/nightly-property.yml`, and by hand when a property is
+#: being trusted with something new). Per-commit CI keeps the fast profile so the suite stays
+#: short; depth is what the nightly buys.
+#:
+#: **300, and P7 keeps it there deliberately.** P6 handed over the question (see its final
+#: report, F-9.10): the deep census was failing more often than it passed, and the obvious
+#: lever was to raise this number at the price of roughly doubling the nightly. P7's answer is
+#: that the failures were a coverage problem rather than a depth problem — the floors that
+#: failed were conjunctions three and four operations deep, and those now have targeted
+#: properties that construct their preconditions instead of waiting for a random plan to
+#: stumble into them. Buying reach with examples is the expensive way to fix a generator.
+settings.register_profile(
+    "deep",
+    max_examples=300,
+    deadline=None,
+    suppress_health_check=[HealthCheck.function_scoped_fixture, HealthCheck.too_slow],
+)
+settings.load_profile(os.environ.get("HYPOTHESIS_PROFILE", "ci"))
 
 # Admin operations here — CREATE DATABASE, creating the app role, running migrations — need
 # the superuser, which is what MIGRATION_DATABASE_URL names. This used to read DATABASE_URL,
@@ -57,6 +101,22 @@ from app.services.provisioning import ProvisionedTenant, provision_tenant  # noq
 
 TABLES_IN_TRUNCATION_ORDER = (
     "jobs",
+    # P7 first: every one of these points at something later in the list, and the fiscal
+    # receipt / partner document pair points *both* ways. `CASCADE` would sort it out, but
+    # naming them keeps the list an inventory of what a tenant owns rather than a list of
+    # whatever happened to need saying.
+    "fx_revaluation_lines",
+    "fx_revaluations",
+    "vat_returns",
+    "fiscal_import_declarations",
+    "fiscal_purchase_feed",
+    "fiscal_daily_reports",
+    "fiscal_receipts",
+    "fiscal_outbox",
+    "fiscal_items",
+    "fiscal_item_classes",
+    "fiscal_codes",
+    "fiscal_devices",
     "stock_moves",
     "stock_balances",
     "item_cost_state",

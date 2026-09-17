@@ -1,0 +1,60 @@
+{
+  "resultCd": "000",
+  "resultMsg": "It is succeeded",
+  "resultDt": "20200226143506",
+  "data": {
+    "clsList": [
+      {
+        "cdCls": "04",
+        "cdClsNm": "Tax Type",
+        "cdClsDesc": null,
+        "useYn": "Y",
+        "userDfnNm1": "Tax Rate",
+        "userDfnNm2": null,
+        "userDfnNm3": null,
+        "dtlList": [
+          {
+            "cd": "A",
+            "cdNm": "A-EX",
+            "cdDesc": "...",
+            "useYn": "Y",
+            "srtOrd": 1,
+            "userDfnCd1": "0",
+            "userDfnCd2": null,
+            "userDfnCd3": null
+          },
+          {
+            "cd": "B",
+            "cdNm": "B-18.00%",
+            "cdDesc": "B-18.00%",
+            "useYn": "Y",
+            "srtOrd": 2,
+            "userDfnCd1": "18",
+            "userDfnCd2": null,
+            "userDfnCd3": null
+          },
+          {
+            "cd": "C",
+            "cdNm": "C",
+            "cdDesc": "C",
+            "useYn": "Y",
+            "srtOrd": 3,
+            "userDfnCd1": "0",
+            "userDfnCd2": null,
+            "userDfnCd3": null
+          },
+          {
+            "cd": "D",
+            "cdNm": "D",
+            "cdDesc": "D",
+            "useYn": "Y",
+            "srtOrd": 4,
+            "userDfnCd1": "0",
+            "userDfnCd2": null,
+            "userDfnCd3": null
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -22,7 +22,19 @@ from app.db import Base
 
 config = context.config
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # `disable_existing_loggers=False`, and it matters outside migrations.
+    #
+    # `fileConfig` defaults to True, which **disables every logger that already exists** at the
+    # moment it runs. Alembic runs inside the test suite (`tests/conftest.py` migrates a fresh
+    # database per process) and inside `make migrate-check`, so every application logger created
+    # at import time was switched off for the rest of the process — silently, since a disabled
+    # logger raises nothing and simply emits nothing.
+    #
+    # P7 found it: `app.fiscal.rwanda`'s adapter logs the device, path, result code and elapsed
+    # time of every EBM call, and the test asserting it logs *something* failed with an empty
+    # capture — but only when the adapter happened to be imported before the migration ran.
+    # A logging guarantee that depends on import order is not one.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 ALLOW_DESTRUCTIVE_ENV = "ALEMBIC_ALLOW_DESTRUCTIVE"
 

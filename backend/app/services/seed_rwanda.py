@@ -18,6 +18,7 @@ from app.kernel.sequences import DEFAULT_PREFIXES, ensure_sequence
 from app.models.company import Branch, Company
 from app.models.currency import Currency
 from app.models.fiscal import FiscalYear
+from app.models.fiscalization import FiscalTaxType
 from app.models.gl import (
     AccountClass,
     BackorderPolicy,
@@ -94,6 +95,23 @@ ACCOUNT_GRN_ACCRUAL = "2350"
 ACCOUNT_LANDED_COST_CLEARING = "1370"
 ACCOUNT_PURCHASE_PRICE_VARIANCE = "5300"
 
+# --- P7 fiscalization and VAT returns ---------------------------------------------------------
+#: Where a filed VAT return settles: output VAT debited, input VAT credited, the net here.
+#: **One** account for both directions — a net payable sits as a credit and a net credit
+#: position as a debit — because that is the single balance an accountant reconciles against
+#: the authority's statement, and two accounts would need a rule for which one a refund lands in.
+ACCOUNT_VAT_SETTLEMENT = "2250"
+#: The contra side of an unrealized revaluation of open AR / AP items (decision 13). Never the
+#: control accounts: `1200` and `2100` are subledger-only and their balance is Σ open items at
+#: booking rates, which is P4's invariant and not a thing a month-end job may move.
+ACCOUNT_AR_REVALUATION = "1290"
+ACCOUNT_AP_REVALUATION = "2190"
+#: Unrealized, and separate from the realized pair above: a gain that exists only because a
+#: rate moved on a reporting date is a different fact from one a payment crystallised, and it
+#: is reversed the next day rather than kept.
+ACCOUNT_UNREALIZED_FX_GAIN = "4410"
+ACCOUNT_UNREALIZED_FX_LOSS = "6955"
+
 RWANDA_TAX_CODES = [
     {
         "code": "VAT-OUT-18",
@@ -101,6 +119,10 @@ RWANDA_TAX_CODES = [
         "nature": TaxNature.OUTPUT,
         "rate_pct": Decimal("18"),
         "account_code": ACCOUNT_VAT_OUTPUT,
+        # The authority's standard-rate class. Seeded rather than inferred from `rate_pct`:
+        # the class is what it computes the tax from, and inferring it would make a rate
+        # change a silent reclassification.
+        "fiscal_tax_type": FiscalTaxType.B,
     },
     {
         "code": "VAT-IN-18",
@@ -108,6 +130,7 @@ RWANDA_TAX_CODES = [
         "nature": TaxNature.INPUT,
         "rate_pct": Decimal("18"),
         "account_code": ACCOUNT_VAT_INPUT,
+        "fiscal_tax_type": FiscalTaxType.B,
     },
     {
         "code": "VAT-EXEMPT",
@@ -115,6 +138,7 @@ RWANDA_TAX_CODES = [
         "nature": TaxNature.EXEMPT,
         "rate_pct": Decimal("0"),
         "account_code": None,
+        "fiscal_tax_type": FiscalTaxType.A,
     },
     {
         "code": "VAT-ZERO",
@@ -122,6 +146,18 @@ RWANDA_TAX_CODES = [
         "nature": TaxNature.ZERO_RATED,
         "rate_pct": Decimal("0"),
         "account_code": None,
+        "fiscal_tax_type": FiscalTaxType.C,
+    },
+    # P7. Import VAT is its own code because the VAT return reports it on its own line: it is
+    # input VAT the taxpayer paid at the border rather than to a supplier, and an accountant
+    # filing a return has to be able to see the two apart without reading the journal.
+    {
+        "code": "VAT-IN-IMP",
+        "name": "Input VAT 18% (Imports)",
+        "nature": TaxNature.INPUT,
+        "rate_pct": Decimal("18"),
+        "account_code": ACCOUNT_VAT_INPUT,
+        "fiscal_tax_type": FiscalTaxType.B,
     },
 ]
 
@@ -152,6 +188,10 @@ RW_SME_V1_ACCOUNTS: tuple[
     # Freight and duty land here on the way to the goods; cleared to zero by the allocation.
     (ACCOUNT_LANDED_COST_CLEARING, "Landed Cost Clearing", _A, "1100", True, None),
     (ACCOUNT_VAT_INPUT, "VAT Input (Receivable)", _A, "1100", True, None),
+    # P7 decision 13 — the asset side of an AR revaluation. A plain account beside the
+    # control one, so the balance sheet reads 1200 + 1290 and the control account keeps the
+    # balance P4 promised it would.
+    (ACCOUNT_AR_REVALUATION, "AR Revaluation", _A, "1100", True, None),
     ("1500", "Prepayments & Deposits", _A, "1100", True, None),
     ("1600", "Non-current Assets", _A, "1000", False, None),
     ("1610", "Property, Plant & Equipment", _A, "1600", True, None),
@@ -160,6 +200,9 @@ RW_SME_V1_ACCOUNTS: tuple[
     ("2100", "Accounts Payable", _L, "2000", True, ControlType.AP),
     ("2150", "Post-dated Payables", _L, "2000", True, None),
     (ACCOUNT_VAT_OUTPUT, "VAT Output (Payable)", _L, "2000", True, None),
+    # P7 — where a filed return settles, and the AP side of the revaluation.
+    (ACCOUNT_VAT_SETTLEMENT, "VAT Payable (RRA)", _L, "2000", True, None),
+    (ACCOUNT_AP_REVALUATION, "AP Revaluation", _L, "2000", True, None),
     ("2300", "Accrued Expenses", _L, "2000", True, None),
     # The GRV two-step in one account: credited by the receipt, debited by the invoice that
     # matches it, and zero on any line that has been fully matched.
@@ -184,6 +227,7 @@ RW_SME_V1_ACCOUNTS: tuple[
     ("4300", "Other Income", _I, "4000", True, None),
     ("4350", "Settlement Discount Received", _I, "4000", True, None),
     ("4400", "Foreign Exchange Gain", _I, "4000", True, None),
+    (ACCOUNT_UNREALIZED_FX_GAIN, "Unrealized Foreign Exchange Gain", _I, "4000", True, None),
     ("5000", "Cost of Sales", _X, None, False, None),
     ("5100", "Cost of Goods Sold", _X, "5000", True, None),
     ("5200", "Inventory Adjustments", _X, "5000", True, None),
@@ -199,6 +243,7 @@ RW_SME_V1_ACCOUNTS: tuple[
     ("6800", "Depreciation", _X, "6000", True, None),
     ("6900", "Professional Fees", _X, "6000", True, None),
     ("6950", "Foreign Exchange Loss", _X, "6000", True, None),
+    (ACCOUNT_UNREALIZED_FX_LOSS, "Unrealized Foreign Exchange Loss", _X, "6000", True, None),
     ("6960", "Settlement Discount Granted", _X, "6000", True, None),
     ("6970", "Rounding Difference", _X, "6000", True, None),
     ("6990", "Sundry Expenses", _X, "6000", True, None),
@@ -323,6 +368,11 @@ def seed_chart_of_accounts(db: Session, company: Company) -> dict[str, GLAccount
             # Commitments are advisory; a sales order may promise what is not on the shelf
             # and the shortfall shows as a backorder (decision 7).
             backorder_policy=BackorderPolicy.ALLOW,
+            vat_settlement_account_id=accounts[ACCOUNT_VAT_SETTLEMENT].id,
+            ar_revaluation_account_id=accounts[ACCOUNT_AR_REVALUATION].id,
+            ap_revaluation_account_id=accounts[ACCOUNT_AP_REVALUATION].id,
+            unrealized_fx_gain_account_id=accounts[ACCOUNT_UNREALIZED_FX_GAIN].id,
+            unrealized_fx_loss_account_id=accounts[ACCOUNT_UNREALIZED_FX_LOSS].id,
         )
     )
     db.flush()
@@ -494,6 +544,7 @@ def seed_tax_codes(
                 gl_account_id=account.id if account is not None else None,
                 valid_from=valid_from,
                 is_active=True,
+                fiscal_tax_type=spec.get("fiscal_tax_type"),
             )
         )
     db.add_all(codes)

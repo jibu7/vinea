@@ -1,13 +1,11 @@
 """Kernel fixtures: one provisioned tenant with the Rwanda seed pack, a third currency (EUR),
 dated rates, a second branch, two projects and every period of the current year open."""
 
-import os
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 
 import pytest
-from hypothesis import HealthCheck, settings
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -23,28 +21,12 @@ from app.models.tax import TaxCode
 from app.models.user import User
 from tests.conftest import make_tenant
 
-settings.register_profile(
-    "ci",
-    max_examples=2,
-    deadline=None,
-    suppress_health_check=[HealthCheck.function_scoped_fixture, HealthCheck.too_slow],
-)
-settings.register_profile(
-    "dev",
-    max_examples=1,
-    deadline=None,
-    suppress_health_check=[HealthCheck.function_scoped_fixture, HealthCheck.too_slow],
-)
-# The nightly profile (`.github/workflows/nightly-property.yml`, and by hand when a property
-# is being trusted with something new). Per-commit CI keeps the fast profile so the suite
-# stays under a minute; depth is what the nightly buys.
-settings.register_profile(
-    "deep",
-    max_examples=300,
-    deadline=None,
-    suppress_health_check=[HealthCheck.function_scoped_fixture, HealthCheck.too_slow],
-)
-settings.load_profile(os.environ.get("HYPOTHESIS_PROFILE", "ci"))
+# The Hypothesis profiles live in `tests/conftest.py` since P7. They were here, and every
+# other suite picked them up as a **side effect of importing this module for its fixtures** —
+# which held only while every property suite happened to want a `ledger`. P7's fiscal suite
+# does not, so its first property test ran under Hypothesis' defaults and failed the
+# function-scoped-fixture health check that the profiles exist to suppress. A profile that
+# applies to some suites depending on the import graph is not a profile.
 
 YEAR = date.today().year
 USD_RATE = Decimal("1300.5")
