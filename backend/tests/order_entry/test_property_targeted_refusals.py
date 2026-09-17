@@ -10,7 +10,7 @@ longer nightly.
 *conjunction* three or four operations deep in the plan: `grn_matched` needs a receipt, then a
 match against that receipt, then a `reverse_grn` that lands on it. Waiting for a random plan to
 stumble through that chain is the expensive way to cover a guard, and it is also the unreliable
-way — the margins sat a few hits above the floor and `pytest-randomly` reseeds every run, so
+way — the margins sat a few hits above the floor and Hypothesis draws a fresh seed every run, so
 whether the gate passed was a coin weighted by the seed.
 
 So they move here, where the chain is built rather than drawn, and out of

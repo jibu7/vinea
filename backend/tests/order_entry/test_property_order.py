@@ -116,7 +116,7 @@ def _count(counter: dict[str, int], key: str) -> None:
 #:
 #: `grn_matched`, `weight_missing`, `period_not_open` and `invoice_exceeds_order` are
 #: *conjunctions* three and four operations deep in the plan, and this machine reached them by
-#: hoping to: the margins sat a few hits above the floor, `pytest-randomly` reseeds every run,
+#: hoping to: the margins sat a few hits above the floor, Hypothesis draws a fresh seed every run,
 #: and the nightly on `main` failed more often than it passed on exactly those four. P6 left the
 #: question open (F-9.10) with a larger `max_examples` as the obvious lever — a much longer
 #: nightly, to buy reach.
@@ -250,7 +250,7 @@ OPERATIONS = (
 #:
 #: **That conclusion did not survive the control.** With the pool restored byte-for-byte to
 #: main's, a third deep pass still came back a floor short. The census is seed-dependent — the
-#: margins are a few hits above the floor, and `pytest-randomly` reseeds every run — and what
+#: margins are a few hits above the floor, and Hypothesis draws a fresh seed every run — and what
 #: the passes had actually found was the `pick % 2` correlation now fixed in `reverse_lca`.
 #:
 #: So the operation stays out on its own merits rather than on that diagnosis. The redefinition
