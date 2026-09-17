@@ -32,7 +32,7 @@ from app.models.gl import GLSettings
 from app.models.inventory import INVENTORY_MODULE, InventoryDocument
 from app.models.journal import JournalEntry
 from app.models.order_entry import LandedCostDocument
-from app.models.partner import PartnerRole
+from app.models.partner import Partner, PartnerRole
 from app.models.subledger import PartnerDocument
 from app.order_entry import sources as order_sources
 from app.schemas.common import Page
@@ -1277,14 +1277,24 @@ def read_fx_revaluation(
             select(Currency).where(Currency.company_id == auth.company_id)
         )
     }
-    detail = FxRevaluationDetail.model_validate(run)
-    detail.lines = [
+    # Decision 13: the lines carry the partner **so the report drills**. Loading the documents
+    # and leaving the name blank would render a screen of empty cells and satisfy nothing.
+    partners = {
+        partner.id: partner
+        for partner in db.scalars(
+            select(Partner).where(
+                Partner.company_id == auth.company_id,
+                Partner.id.in_([document.partner_id for document in documents.values()] or [0]),
+            )
+        )
+    }
+    lines = [
         FxRevaluationLineRead(
             document_id=line.document_id,
             document_number=documents[line.document_id].number,
             role=str(documents[line.document_id].role),
             partner_id=documents[line.document_id].partner_id,
-            partner_name="",
+            partner_name=partners[documents[line.document_id].partner_id].name,
             currency_id=line.currency_id,
             currency_code=currencies[line.currency_id].code,
             open_amount=line.open_amount,
@@ -1296,7 +1306,10 @@ def read_fx_revaluation(
         )
         for line in stored
     ]
-    return detail
+    # Built with its lines rather than validated and then filled: `lines` is required, so
+    # `model_validate(run)` on the ORM row alone raises — which is what every call to this
+    # endpoint did until a test opened it.
+    return FxRevaluationDetail(**FxRevaluationRead.model_validate(run).model_dump(), lines=lines)
 
 
 @router.post("/fx-revaluations", status_code=status.HTTP_201_CREATED)

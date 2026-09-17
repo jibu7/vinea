@@ -535,7 +535,7 @@ def list_z_reports(
 def close_day(
     device_id: int,
     request: Request,
-    auth: AuthContext = permissions.require(permissions.FISCAL_QUEUE_MANAGE),
+    auth: AuthContext = permissions.require(permissions.FISCAL_CLOSE_DAY),
     db: Session = Depends(get_db),
     idempotency_key: str = IdempotencyKey,
 ) -> DailyReportRead:

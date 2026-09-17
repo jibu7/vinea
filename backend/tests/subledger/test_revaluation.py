@@ -392,3 +392,64 @@ def test_the_gain_is_the_rate_movement_times_what_is_open(
 
     for line in view.lines:
         assert line.difference == line.open_amount * (line.rate_at_date - line.booking_rate)
+
+
+def test_each_currency_gets_its_own_pair_of_lines(db: Session, subledger: Subledger) -> None:
+    """Decision 13 posts the gain or loss **per (role, currency)**.
+
+    The posting map is role-agnostic, which is a statement about the *rule* and not about the
+    grouping: two foreign currencies moving in opposite directions must not net into one pair
+    of lines, because the gain on one and the loss on the other are different facts and a
+    revaluation that showed their difference would report neither.
+
+    USD rises 1 320 → 1 350 on 47.20 open: **+1 416**, a gain.
+    EUR falls 1 400 → 1 380 on 100 open:   **−2 000**, a loss.
+    Netted, they would be a single −584 that is true of nothing.
+    """
+    post_invoice(
+        db, subledger, amount=Decimal("47.20"), currency="USD", exchange_rate=BOOKING_RATE
+    )
+    post_invoice(
+        db, subledger, amount=Decimal(100), currency="EUR", exchange_rate=Decimal(1400)
+    )
+    _set_rate(db, subledger, MARCH_END, MONTH_END_RATE)
+    db.add(
+        ExchangeRate(
+            company_id=subledger.company_id,
+            currency_id=subledger.ledger.cur("EUR"),
+            valid_from=MARCH_END,
+            rate=Decimal(1380),
+        )
+    )
+    db.flush()
+
+    view = revaluation.preview(
+        db, subledger.company_id, revaluation_date=MARCH_END, role=FxRevaluationRole.AR
+    )
+    groups = view.by_group()
+    assert len(groups) == 2, "one group per (role, currency), not one per role"
+    assert set(groups.values()) == {Decimal(1416), Decimal(-2000)}
+
+    run = revaluation.post_revaluation(
+        db,
+        subledger.company_id,
+        revaluation_date=MARCH_END,
+        role=FxRevaluationRole.AR,
+        actor=subledger.owner,
+    )
+    db.flush()
+
+    # Four lines, not two: the gain and the loss reach different P&L accounts, and `1290`
+    # carries both movements rather than their difference.
+    posted = _entry_map(db, subledger, run.journal_entry_id)
+    assert posted["4410"] == Decimal(-1416)
+    assert posted["6955"] == Decimal(2000)
+    assert posted["1290"] == Decimal(1416) + Decimal(-2000)
+
+    lines = db.execute(
+        select(JournalLine.gl_account_id).where(
+            JournalLine.company_id == subledger.company_id,
+            JournalLine.entry_id == run.journal_entry_id,
+        )
+    ).all()
+    assert len(lines) == 4
