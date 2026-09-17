@@ -44,6 +44,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from app.core.errors import AppError, NotFoundError
+from app.fiscal import stock as fiscal_stock
 from app.inventory.costing import (
     ItemState,
     LocationState,
@@ -112,6 +113,15 @@ class StockDocument:
     source_doc_id: int | None = None
     idempotency_key: str | None = None
     idempotency_hash: str | None = None
+    #: The branch at the **other end** of a movement that travels in two legs (P7 decision 10).
+    #:
+    #: A transfer dispatches into the in-transit warehouse and receives out of it, so neither
+    #: leg can see where the stock came from or is going. A fiscal stock report needs that,
+    #: because a move between two branches changes both branches' positions and a move between
+    #: two shelves of one branch changes nothing — and the two legs are indistinguishable
+    #: without it. Set by the transfer service on both legs; `None` everywhere else, which is
+    #: correct for every posting that is not a leg of anything.
+    counterpart_branch_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -972,6 +982,7 @@ def post_stock_moves(
     )
     written = _write_moves(db, ctx, document, planned, entry=entry, period_id=period.id)
     _apply_caches(db, ctx)
+    _report_to_authority(db, company_id, document, written, actor=actor)
     return StockPosting(
         entry=entry,
         # `moves` is what was actually written, so a stockless share is not in it — it moved
@@ -1036,6 +1047,82 @@ def _write_moves(
     finally:
         _stock_service(db, on=False)
     return moves
+
+
+def _report_to_authority(
+    db: Session,
+    company_id: int,
+    document: StockDocument,
+    written: Sequence[StockMove | None],
+    *,
+    actor: User,
+) -> None:
+    """Queue the fiscal stock report for this posting, **after the caches are written**.
+
+    Here rather than at each caller, so a stock posting a later phase adds reports itself
+    rather than being remembered about. After `_apply_caches` because the report carries the
+    on-hand *after* the movement (P7 decision 10), and the caches are what it reads.
+
+    One source type is deliberately excluded and reports itself: a **partner document**. Its
+    movement must reach the authority *behind* the sale or purchase that caused it (VSDC §3.1)
+    and its companion stock entry posts first, so `post_document` reports it once its own
+    queue row is in — `app/fiscal/stock.report_partner_document`.
+    """
+    facing = fiscal_stock.facing_for(document.source_doc_type)
+    if facing is None:
+        return
+    fiscal_stock.report_moves(
+        db,
+        company_id,
+        moves=[move for move in written if move is not None],
+        facing=facing,
+        occurred_on=document.move_date,
+        description=document.description,
+        source_doc_type=document.source_doc_type,
+        source_doc_id=document.source_doc_id,
+        counterpart_branch_id=document.counterpart_branch_id,
+        actor=actor,
+    )
+
+
+def _report_reversal_to_authority(
+    db: Session,
+    company_id: int,
+    originals: Sequence[StockMove],
+    written: Sequence[StockMove],
+    *,
+    on_date: date,
+    reason: str | None,
+    counterpart_branch_id: int | None,
+    actor: User,
+) -> None:
+    """The fiscal report for a mirror, read off the moves it mirrors.
+
+    A reversal builds no `StockDocument`, so the source type comes from the originals — every
+    mirroring move copies it — and the facing follows from that. A **partner document** is
+    excluded here for the reason it is excluded from the forward path: the refund or the
+    opposite declaration has to reach the authority first, so `reverse_document` reports the
+    mirror once its own queue row is in.
+    """
+    sources = {move.source_doc_type for move in originals}
+    facing = (
+        fiscal_stock.facing_for(next(iter(sources))) if len(sources) == 1 else None
+    )
+    if facing is None:
+        return
+    original = originals[0]
+    fiscal_stock.report_moves(
+        db,
+        company_id,
+        moves=list(written),
+        facing=facing,
+        occurred_on=on_date,
+        description=reason,
+        source_doc_type=original.source_doc_type,
+        source_doc_id=original.source_doc_id,
+        counterpart_branch_id=counterpart_branch_id,
+        actor=actor,
+    )
 
 
 def _apply_caches(db: Session, ctx: _Context) -> None:
@@ -1284,6 +1371,7 @@ def reverse_stock_posting(
     actor: User,
     idempotency_key: str | None = None,
     idempotency_hash: str | None = None,
+    counterpart_branch_id: int | None = None,
 ) -> StockPosting:
     """Decision 11: the kernel reversal, plus reversing moves at the original values.
 
@@ -1395,6 +1483,20 @@ def reverse_stock_posting(
         written.extend(
             _expel_reversal_residues(db, ctx, residues, on_date=on_date, reversal=reversal)
         )
+    # The mirror is a movement of its own as far as a revenue authority is concerned, under the
+    # **same facing and the opposite direction** — reversing a goods receipt is a return to the
+    # supplier, reversing a sale's issue is a customer return. That is the whole reason the
+    # facing is a side of the business rather than a document kind.
+    _report_reversal_to_authority(
+        db,
+        company_id,
+        originals,
+        written,
+        on_date=on_date,
+        reason=reason,
+        counterpart_branch_id=counterpart_branch_id,
+        actor=actor,
+    )
     return StockPosting(entry=reversal, moves=written, keyed_moves=mirrored_moves)
 
 
@@ -1405,6 +1507,7 @@ def reverse_unvalued_moves(
     originals: Sequence[StockMove],
     on_date: date,
     actor: User,
+    counterpart_branch_id: int | None = None,
 ) -> StockPosting:
     """Mirror moves that carry no value — the reversal of a posting the ledger never saw.
 
@@ -1491,6 +1594,16 @@ def reverse_unvalued_moves(
     finally:
         _stock_service(db, on=False)
     _apply_caches(db, ctx)
+    _report_reversal_to_authority(
+        db,
+        company_id,
+        originals,
+        written,
+        on_date=on_date,
+        reason=None,
+        counterpart_branch_id=counterpart_branch_id,
+        actor=actor,
+    )
     return StockPosting(entry=None, moves=written, keyed_moves=written)
 
 

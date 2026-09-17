@@ -124,6 +124,27 @@ def active_device_for_branch(
     return device if device is not None and device.is_active else None
 
 
+def any_active_device(db: Session, company_id: int) -> FiscalDevice | None:
+    """One active device, lowest branch first — what a company-wide fiscal act reports to.
+
+    Item registration is the one such act: the item code is company-wide (decision 5), so a
+    catalogue edit is a fact about the taxpayer rather than about a shop. The authority holds
+    items per (taxpayer, branch) though, so the row is queued on *a* device and the others
+    learn about the item when they first need it (`items.told_about`). The alternative —
+    queueing on every active device on every catalogue edit — would multiply a rename by the
+    branch count for no gain, since a branch that never sells the item never needs to know.
+    """
+    return db.scalar(
+        select(FiscalDevice)
+        .where(
+            FiscalDevice.company_id == company_id,
+            FiscalDevice.status == FiscalDeviceStatus.ACTIVE,
+        )
+        .order_by(FiscalDevice.branch_id)
+        .limit(1)
+    )
+
+
 def is_fiscalized(db: Session, company_id: int) -> bool:
     """A company is fiscalized when it holds at least one **active** device.
 
@@ -420,7 +441,7 @@ def sync_codes(
     company = db.get(Company, company_id)
     adapter = adapter_for(company.fiscal_country if company else None, client=client)
     since = device.watermarks.get(FiscalSyncKind.CODES)
-    result, synced = _call_sync(adapter.sync_codes, device, since=since)
+    result, synced = call_sync(adapter.sync_codes, device, since=since)
     if not result.ok:
         _record_failure(device, result)
         raise FiscalUpstreamError(
@@ -428,7 +449,7 @@ def sync_codes(
             code="fiscal_sync_refused",
         )
     count = _store_codes(db, company_id, synced.codes)
-    _record_success(device, FiscalSyncKind.CODES, synced.watermark)
+    record_watermark(device, FiscalSyncKind.CODES, synced.watermark)
     record_audit(
         db,
         company_id=company_id,
@@ -455,7 +476,7 @@ def sync_item_classes(
     company = db.get(Company, company_id)
     adapter = adapter_for(company.fiscal_country if company else None, client=client)
     since = device.watermarks.get(FiscalSyncKind.ITEM_CLASSES)
-    result, synced = _call_sync(adapter.sync_item_classes, device, since=since)
+    result, synced = call_sync(adapter.sync_item_classes, device, since=since)
     if not result.ok:
         _record_failure(device, result)
         raise FiscalUpstreamError(
@@ -463,7 +484,7 @@ def sync_item_classes(
             code="fiscal_sync_refused",
         )
     count = _store_item_classes(db, company_id, synced.item_classes)
-    _record_success(device, FiscalSyncKind.ITEM_CLASSES, synced.watermark)
+    record_watermark(device, FiscalSyncKind.ITEM_CLASSES, synced.watermark)
     record_audit(
         db,
         company_id=company_id,
@@ -478,7 +499,7 @@ def sync_item_classes(
     return count
 
 
-def _call_sync(method, device: FiscalDevice, *, since: str | None):  # noqa: ANN001, ANN202
+def call_sync(method, device: FiscalDevice, *, since: str | None):  # noqa: ANN001, ANN202
     """One watermarked read, turning an unreachable device into the API's own error.
 
     The `FiscalTransportError` → `FiscalUpstreamError` translation happens here rather than at
@@ -549,7 +570,9 @@ def _store_item_classes(
     return len(entries)
 
 
-def _record_success(device: FiscalDevice, kind: FiscalSyncKind, watermark: str | None) -> None:
+def record_watermark(
+    device: FiscalDevice, kind: FiscalSyncKind, watermark: str | None
+) -> None:
     """Store the watermark **only here** — after a success, beside the rows it brought, and
     only when it moves forward.
 

@@ -17,10 +17,12 @@ from starlette.requests import Request
 
 from app.core.errors import ConflictError, NotFoundError
 from app.fiscal import devices as fiscal_devices
+from app.fiscal import items as fiscal_items
+from app.fiscal.registry import adapter_for
 from app.kernel.accounts import get_account
 from app.kernel.errors import LedgerStateError
 from app.kernel.posting import gl_settings_for
-from app.models.company import Branch
+from app.models.company import Branch, Company
 from app.models.gl import ControlType, GLAccount, GLSettings
 from app.models.inventory import (
     UOM_CONVERSION_SCALE,
@@ -731,7 +733,35 @@ def update_item(
             after=after,
             request=request,
         )
+    _re_register_with_the_authority(db, item, actor=actor)
     return item
+
+
+def _re_register_with_the_authority(db: Session, item: Item, *, actor: User) -> None:
+    """Tell the revenue authority about a catalogue edit it holds a copy of (P7 decision 8).
+
+    **Deactivation is the case this exists for.** `useYn` is one of the fields the authority
+    holds, so switching an item off has to reach it — an item nobody in Vinea can sell that RRA
+    still lists is precisely the drift the registration hash exists to catch. A rename is the
+    same shape; an account change is not, because the authority was never told the account, and
+    the hash is what knows the difference.
+
+    Queued, never called: it goes into the device's outbox in this transaction, like every other
+    fiscal fact. An item the authority has never been told about is left alone — minting a code
+    for something on its way *out* of the catalogue would be the wrong moment to start.
+    """
+    device = fiscal_devices.any_active_device(db, item.company_id)
+    if device is None:
+        return
+    company = db.get(Company, item.company_id)
+    fiscal_items.resync(
+        db,
+        item.company_id,
+        device=device,
+        adapter=adapter_for(company.fiscal_country if company else None),
+        item=item,
+        actor=actor,
+    )
 
 
 # --- Barcodes ----------------------------------------------------------------------------------

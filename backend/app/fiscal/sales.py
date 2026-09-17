@@ -34,6 +34,7 @@ from sqlalchemy.orm import Session
 from app.fiscal import devices as device_service
 from app.fiscal import items as item_service
 from app.fiscal import outbox
+from app.fiscal import stock as fiscal_stock
 from app.fiscal.mapping import FiscalLine, FiscalParty, FiscalRefund, FiscalSale
 from app.fiscal.protocol import FiscalizationAdapter
 from app.fiscal.registry import adapter_for
@@ -487,7 +488,9 @@ def enqueue(
             item=planned.item,
             quantity_unit=planned.quantity_unit,
             tax_class=planned.tax_class,
-            price_inclusive=_catalogue_price_inclusive(planned),
+            price_inclusive=item_service.catalogue_price_inclusive(
+                planned.item, planned.tax_rate_pct
+            ),
             actor=actor,
         )
         for planned in plan.lines
@@ -622,23 +625,6 @@ def _posted_base(
     ).base_amount
 
 
-def _catalogue_price_inclusive(planned: PlannedLine) -> Decimal:
-    """What the authority lists the item at — the **catalogue** price, VAT-inclusive, in base.
-
-    Not the price this line happened to be sold at, and the difference is not cosmetic: the
-    registered price is part of the hash that decides whether an item is re-registered, so a
-    line price would queue an `item` row on every sale at a new figure. A shop that negotiates
-    would spend its queue telling RRA about its own discounts.
-
-    `items.selling_price` is kept in base currency and `price_includes_tax` says which side of
-    the tax it is on, so the conversion is the line's own programmed rate applied once.
-    """
-    price = planned.item.selling_price
-    if planned.item.price_includes_tax or planned.tax_rate_pct == ZERO:
-        return price
-    return price * (HUNDRED + planned.tax_rate_pct) / HUNDRED
-
-
 def _price_in_base(price: Decimal, currency: Currency, document: PartnerDocument) -> Decimal:
     """A **unit price** in base currency, unrounded.
 
@@ -703,12 +689,19 @@ def on_reverse(db: Session, company_id: int, document: PartnerDocument, *, reaso
         # queues it once the ledger half has gone through — `plan_reversal_refund` below.
         return []
     row.status = FiscalOutboxStatus.CANCELLED
-    row.resolution_note = (
+    note = (
         f"cancelled by the reversal of {document.number}"
         f"{f': {reason}' if reason else ''}"
     )
+    row.resolution_note = note
     db.flush()
-    return [row]
+    # **And the movement behind it.** A document's stock report sits *after* its sale in the
+    # device's FIFO (decision 10), so cancelling only the sale would leave the movement at the
+    # head of the queue to be sent to an authority with no document to attach it to — which is
+    # the `921`/`922` refusal the FIFO exists to avoid.
+    return [row, *fiscal_stock.cancel_unsent_movements(
+        db, company_id, document_id=document.id, note=note
+    )]
 
 
 def needs_reversal_refund(db: Session, company_id: int, document: PartnerDocument) -> bool:

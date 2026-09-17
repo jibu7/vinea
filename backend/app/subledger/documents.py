@@ -16,7 +16,10 @@ from starlette.requests import Request
 
 from app.core.errors import ConflictError, NotFoundError
 from app.core.permissions import AP_CREDIT_LIMIT_OVERRIDE, AR_CREDIT_LIMIT_OVERRIDE
+from app.fiscal import purchases as fiscal_purchases
 from app.fiscal import sales as fiscal_sales
+from app.fiscal import stock as fiscal_stock
+from app.fiscal.mapping import StockMovementFacing
 from app.inventory import masters as inventory_masters
 from app.inventory import stock as stock_service
 from app.kernel import posting
@@ -449,6 +452,21 @@ def post_document(
         refund_reason=data.refund_reason,
         payment_method=payment_method,
     )
+    # The other side of decision 9: an AP invoice or return declares a **purchase**. Planned
+    # beside the sale rather than after it, because a purchase declaration's refusals are
+    # refusals about the document too and belong before the first write.
+    purchase_plan = fiscal_purchases.plan(
+        db,
+        company_id,
+        role=role,
+        kind=data.kind,
+        is_journal=spec.transaction_type == JOURNAL_TRANSACTION_TYPE,
+        partner=partner,
+        computed=computed,
+        branch_id=branch_id,
+        tax_mode=tax_mode,
+        payment_method=payment_method,
+    )
 
     _check_credit_limit(
         db,
@@ -867,8 +885,9 @@ def post_document(
     # **In the posting transaction, before this function returns** (decision 4). The row and
     # the document commit together or neither does, which is the whole guarantee: nothing
     # posted is ever lost and nothing unposted is ever sent.
+    fiscal_row = None
     if fiscal_plan is not None:
-        fiscal_sales.enqueue(
+        fiscal_row = fiscal_sales.enqueue(
             db,
             company_id,
             plan=fiscal_plan,
@@ -878,6 +897,46 @@ def post_document(
             base=base,
             posted_at=entry.posted_at,
             actor=actor,
+        )
+    elif purchase_plan is not None:
+        fiscal_row = fiscal_purchases.enqueue(
+            db,
+            company_id,
+            plan=purchase_plan,
+            document=document,
+            partner=partner,
+            currency=currency,
+            base=base,
+            posted_at=entry.posted_at,
+            actor=actor,
+        )
+    # **And the companion's stock movement behind it** (decision 10). Behind, not beside: the
+    # authority requires the sale or the purchase before the movement it caused (VSDC §3.1,
+    # `921`/`922`), and the companion stock entry posted *first* — so the stock service
+    # deliberately does not report a partner document's moves and this is where they go.
+    #
+    # **A journal batch moves stock without being a sale.** Decision 3 keeps `ARJN`/`APJN` out
+    # of the sales register — an opening balance is not a sale — so there is no document row
+    # for a movement to sit behind. The goods still left the shelf, though, and a shelf that
+    # moved without the authority hearing about it is the drift decision 10 exists to stop. So
+    # it is reported as an **adjustment**, which is exactly what a movement with no fiscal
+    # document is, and never as a sale RRA has no invoice for (`921`/`922`).
+    if companion.moves:
+        fiscal_stock.report_partner_document(
+            db,
+            company_id,
+            document_id=document.id,
+            facing=(
+                StockMovementFacing.INTERNAL
+                if fiscal_row is None
+                else StockMovementFacing.CUSTOMER
+                if role == PartnerRole.AR
+                else StockMovementFacing.SUPPLIER
+            ),
+            occurred_on=data.document_date,
+            description=data.description,
+            actor=actor,
+            moves=companion.moves,
         )
     _refresh_matched_receipts(db, computed)
     _refresh_fulfilled_orders(db, company_id, computed)
@@ -1553,7 +1612,13 @@ def reverse_document(
     fiscal_refund = fiscal_sales.plan_reversal_refund(
         db, document.company_id, document, refund_reason=refund_reason
     )
+    # The purchase side's own half of the same decision: a declaration RRA acknowledged is
+    # undone by declaring the opposite, and an unresolved row refuses the reversal here too.
+    fiscal_declaration = fiscal_purchases.plan_reversal_purchase(
+        db, document.company_id, document
+    )
     fiscal_sales.on_reverse(db, document.company_id, document, reason=reason)
+    fiscal_purchases.on_reverse(db, document.company_id, document, reason=reason)
     # **The companion goes first, and that ordering is the whole of whether this function can
     # be trusted to refuse before it writes.**
     #
@@ -1573,8 +1638,9 @@ def reverse_document(
     # The window is the inventory service's own, opened by it — and the reversing moves are at
     # the original values, so the two sides cancel exactly rather than re-costing at today's
     # average and leaving a difference behind.
+    mirrored_moves: tuple = ()
     if document.stock_entry_id is not None:
-        stock_service.reverse_stock_posting(
+        mirrored = stock_service.reverse_stock_posting(
             db,
             document.company_id,
             entry_id=document.stock_entry_id,
@@ -1582,6 +1648,7 @@ def reverse_document(
             reason=reason,
             actor=actor,
         )
+        mirrored_moves = tuple(mirrored.moves)
     # The module's own reversal window: this is the half of the reversal the kernel cannot do,
     # so the kernel only lets the ledger half through from here.
     with posting.module_reversal(document.role.value):
@@ -1614,6 +1681,49 @@ def reverse_document(
             posted_at=reversal.posted_at,
             actor=actor,
             source_doc_type=fiscal_sales.REVERSAL_SOURCE,
+        )
+    elif fiscal_declaration is not None:
+        fiscal_purchases.enqueue(
+            db,
+            document.company_id,
+            plan=fiscal_declaration,
+            document=document,
+            partner=masters.get_partner(db, document.company_id, document.partner_id),
+            currency=_resolve_currency(db, document.company_id, document.currency_id),
+            base=base_currency(db, document.company_id),
+            posted_at=reversal.posted_at,
+            actor=actor,
+            source_doc_type=fiscal_sales.REVERSAL_SOURCE,
+        )
+    # And the mirror of the companion's movement behind it, for the ordering reason the
+    # posting path gives. `mirrored.moves` and not the document's whole history: reversing a
+    # sale reports the goods coming *back*, and a query by source link would report the
+    # original issue a second time.
+    # **Only when the original movement reached RRA.** `on_reverse` cancels a document's
+    # movement rows along with the row RRA never received, and a mirror of a movement that was
+    # never reported would be a receipt with no issue behind it — RRA's own stock figure would
+    # then be wrong in the direction the correction was meant to fix.
+    #
+    # The facing is the **document's**, not the reversal's: a journal batch's movement was
+    # reported as an adjustment because it is not a sale, and its mirror is one too.
+    if mirrored_moves and fiscal_stock.was_reported(
+        db, document.company_id, document_id=document.id
+    ):
+        fiscal_stock.report_partner_document(
+            db,
+            document.company_id,
+            document_id=document.id,
+            facing=(
+                StockMovementFacing.INTERNAL
+                if document.doc_type in JOURNAL_DOC_TYPE.values()
+                else StockMovementFacing.CUSTOMER
+                if document.role == PartnerRole.AR
+                else StockMovementFacing.SUPPLIER
+            ),
+            occurred_on=on_date,
+            description=reason,
+            actor=actor,
+            moves=mirrored_moves,
         )
     # `matched`, `invoiced` and `received` are queries over posted, unreversed lines, so
     # reversing this document has already changed all three. The stored status on every receipt
