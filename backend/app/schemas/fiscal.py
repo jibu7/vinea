@@ -85,3 +85,12 @@ def device_read(device) -> DeviceRead:  # noqa: ANN001 - a FiscalDevice; typing 
     payload = DeviceRead.model_validate(device)
     payload.has_keys = bool(device.cmc_key or device.intrl_key or device.sign_key)
     return payload
+
+
+class DrainResult(BaseModel):
+    """What one drain pass did. `rows` counts attempts, `sent` the ones RRA signed — the two
+    differ exactly when a device is stuck, which is the number an operator wants."""
+
+    rows: int
+    sent: int
+    outcomes: list[dict] = []
