@@ -5,6 +5,7 @@ currency's `decimal_places`** (RWF → 0, USD → 2). Document totals are sums o
 Base-currency amounts are frozen on each journal line at posting time.
 """
 
+import json
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date
@@ -143,6 +144,51 @@ def split_tax(
             return TaxSplit(net=amount - tax, tax=tax)
         tax = round_amount(amount * rate_pct / Decimal(100), decimal_places)
         return TaxSplit(net=amount, tax=tax)
+
+
+# --- Fingerprints -----------------------------------------------------------------------------
+#
+# **One string per value, not one per representation.** Two things in this build identify
+# something by hashing a set of values — ADR-11's `Idempotency-Key` fingerprint, and P7's
+# item-registration hash — and both are wrong the moment a Decimal reaches them through
+# `str()`: `NUMERIC(20,6)` hands back `2360.000000` where the arithmetic that produced it
+# yielded `2360.0000000000`, the two are `==` as numbers and differ as text, and a fingerprint
+# over the text calls one amount two.
+#
+# It lives here rather than beside either caller because it is a **money** rule (rule 6): the
+# amounts are `NUMERIC(20,6)` and the rates `NUMERIC(20,10)`, so a value's exponent depends on
+# which column it came out of and which multiplication produced it, and nothing about that is
+# an identity. P7 step 3 found this the expensive way — `app/fiscal/items.py` grew a second
+# canonicaliser rather than using the one ADR-11 had had since P2, and the stock report, which
+# reads stored rows on purpose, re-registered every item it touched.
+
+
+def canonical(value: object) -> str:
+    """The canonical string for one value. The `json.dumps(default=…)` hook both hashes use.
+
+    Cosmetic differences must not look like a different request or a different item: `1000` and
+    `1000.00` are the same amount and `2026-03-15` the same date, however they were spelled.
+
+    **Strict on purpose.** A type with no canonical form raises rather than falling back to
+    `str()`, because a silent fallback is the defect this function exists to prevent — the next
+    unserialisable type to reach a fingerprint should stop the build, not be hashed by its
+    `repr`.
+    """
+    if isinstance(value, Decimal):
+        return str(value.normalize())
+    if isinstance(value, date):
+        return value.isoformat()
+    raise TypeError(f"no canonical form for {type(value).__name__}")
+
+
+def fingerprint_material(values: object) -> str:
+    """The bytes a fingerprint hashes: JSON, keys sorted, Decimals and dates canonicalised.
+
+    The single place either hash turns values into text, so that `tests/test_fingerprints.py`
+    has one thing to point at — and so that a caller cannot reach a hash through a `str()` of
+    its own without that test noticing.
+    """
+    return json.dumps(values, sort_keys=True, separators=(",", ":"), default=canonical)
 
 
 def resolve_tax_code(db: Session, company_id: int, tax_code_id: int, on_date: date) -> TaxCode:

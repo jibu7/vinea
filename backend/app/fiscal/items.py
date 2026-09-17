@@ -20,7 +20,6 @@ account change does not, because the authority was never told the account.
 """
 
 import hashlib
-import json
 from dataclasses import asdict
 from decimal import Decimal
 
@@ -31,6 +30,7 @@ from app.fiscal import outbox
 from app.fiscal.mapping import FiscalItemRegistration
 from app.fiscal.protocol import FiscalizationAdapter
 from app.kernel.errors import PostingError
+from app.kernel.money import fingerprint_material
 from app.kernel.sequences import DocType, claim_number
 from app.models.fiscalization import (
     FiscalDevice,
@@ -74,28 +74,22 @@ def registration_hash(registration: FiscalItemRegistration) -> str:
     The actor is excluded on purpose: who keyed the change is not part of what RRA knows about
     the item, and including it would re-register every item whenever a different person touched
     one.
+
+    **Over values, not representations**, which is `fingerprint_material`'s whole job and the
+    one thing this hash got wrong. Decimals reach it by two routes that agree about the number
+    and disagree about its exponent: computed from the catalogue (`2000.000000 × 1.18` → ten
+    decimals) or read back off the `NUMERIC(20,6)` column that stored it (six). A `str()` of
+    each tells them apart, so the hash did — and an item was re-registered on the next document
+    that happened to arrive by the other route, telling RRA nothing it did not already know.
+    Found by the step-3 stock report, which reads the stored row on purpose
+    (`ensure_registered_for_report`), and guarded by `tests/test_fingerprints.py`.
     """
     fields = {
-        key: _canonical(value)
-        for key, value in sorted(asdict(registration).items())
+        key: value
+        for key, value in asdict(registration).items()
         if key not in {"actor_id", "actor_name"}
     }
-    return hashlib.sha256(json.dumps(fields, sort_keys=True).encode()).hexdigest()
-
-
-def _canonical(value: object) -> str:
-    """One string per *value*, not per representation.
-
-    Decimals reach this hash by two routes that agree about the number and disagree about its
-    exponent: computed from the catalogue (`2000.000000 × 1.18` → ten decimals) or read back
-    off the `NUMERIC(20,6)` column that stored it (six). `str()` tells those apart, so the hash
-    did — and an item would be re-registered on the next document that happened to arrive by
-    the other route, telling RRA nothing it did not already know. Found by the step-3 stock
-    report, which reads the stored row on purpose (`ensure_registered_for_report`).
-    """
-    if isinstance(value, Decimal):
-        return format(value.normalize(), "f")
-    return str(value)
+    return hashlib.sha256(fingerprint_material(fields).encode()).hexdigest()
 
 
 def first_barcode(db: Session, company_id: int, item_id: int) -> str | None:

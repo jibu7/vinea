@@ -185,7 +185,9 @@ def test_a_stock_report_never_changes_what_the_authority_holds(
     The regression this pins: the first version of the hash read Decimals through `str()`, and
     the same price arrived as `2360.0000000000` when computed and `2360.000000` when read back
     off the `NUMERIC(20,6)` column — so a movement re-registered the item on every second
-    document. `_canonical` is the fix.
+    document. `kernel.money.fingerprint_material` is the fix, shared with ADR-11's own
+    fingerprint, and `tests/test_fingerprints.py` is what keeps it there: this test is the
+    behaviour at the fiscal end, that one is the rule.
     """
     receive(fiscal_posting, db)
     receive(fiscal_posting, db, quantity="50")
