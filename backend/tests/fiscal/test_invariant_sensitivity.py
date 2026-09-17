@@ -16,8 +16,10 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.fiscal import devices as device_service
 from app.fiscal import drainer
 from app.fiscal import outbox as outbox_service
+from app.fiscal import sales as fiscal_sales
 from app.models.fiscalization import (
     FiscalOutboxKind,
     FiscalOutboxRow,
@@ -48,6 +50,66 @@ def drained(db: Session, fiscal_posting: FiscalPosting, sandbox_client: httpx.Cl
     drainer.drain_company(db, fiscal_posting.company_id, client=sandbox_client)
     assert_fiscal_invariants(db, fiscal_posting.company_id)
     return fiscal_posting
+
+
+def test_a_sale_that_reached_the_ledger_and_never_reached_rra_is_caught(
+    db: Session,
+    fiscal_posting: FiscalPosting,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The clause the whole phase exists for, and the one that was vacuous.
+
+    The hook is suppressed — `post_document` runs its refusals, posts the ledger and the
+    companion stock entry, and enqueues **nothing** — which is precisely what a broken hook
+    would do. The document is posted, the branch's device is live, and there is no row.
+
+    Until `fiscal_devices.activated_at` existed the checker could not tell that apart from an
+    invoice raised before the company ever fiscalized, so it skipped both and the assertion
+    beneath the skip was unreachable. This test is what makes the discriminator load-bearing:
+    revert 0024's column, or put the blanket skip back, and it goes green over a lost sale.
+    """
+    receive(fiscal_posting, db, quantity="200")
+
+    # The sensitivity half first: the same invoice, the same device, the hook working. If the
+    # checker could only ever fail, this is what says so.
+    invoice(fiscal_posting, db)
+    assert_fiscal_invariants(db, fiscal_posting.company_id)
+
+    monkeypatch.setattr(fiscal_sales, "enqueue", lambda *args, **kwargs: None)
+    lost = invoice(fiscal_posting, db)
+
+    rows = _rows(db, fiscal_posting.company_id)
+    assert not [
+        row
+        for row in rows
+        if row.kind == FiscalOutboxKind.SALE and row.source_doc_id == lost.id
+    ]
+    with pytest.raises(AssertionError, match="never reached RRA"):
+        assert_fiscal_invariants(db, fiscal_posting.company_id)
+
+
+def test_an_invoice_posted_before_the_device_went_live_is_not_a_hole(
+    db: Session, fiscal_posting: FiscalPosting
+) -> None:
+    """The other side of the discriminator, which is why it is a discriminator and not a
+    licence to skip: a company that turned a device on halfway through its life is not told
+    that everything before it was a lost sale."""
+    device_service.suspend(
+        db,
+        fiscal_posting.company_id,
+        fiscal_posting.device,
+        reason="not fiscalizing yet",
+        actor=fiscal_posting.owner,
+    )
+    receive(fiscal_posting, db)
+    invoice(fiscal_posting, db, purchase_code=None)
+    assert _rows(db, fiscal_posting.company_id) == []
+
+    device_service.activate(
+        db, fiscal_posting.company_id, fiscal_posting.device, actor=fiscal_posting.owner
+    )
+
+    assert_fiscal_invariants(db, fiscal_posting.company_id)
 
 
 def test_a_second_live_row_for_one_document_is_caught(

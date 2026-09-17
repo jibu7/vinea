@@ -304,6 +304,14 @@ class FiscalDevice(AuditedMixin, CompanyScopedMixin, Base):
     )
     last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_error: Mapped[str | None] = mapped_column(Text)
+    #: When this device was last made live (0024). Set on **every** activation, because a
+    #: device that was suspended and brought back starts a new continuous period.
+    #:
+    #: It exists for `assert_fiscal_invariants` clause 1, which has to tell "this document was
+    #: posted before anything was fiscalizing" apart from "this document should have been
+    #: fiscalized and was not". Without it the check had to skip every row-less document, which
+    #: is the shape of the failure it is for.
+    activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     @property
     def is_active(self) -> bool:

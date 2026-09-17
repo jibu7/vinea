@@ -4,9 +4,19 @@ drain.
 Six of them, and each exists because the opposite is a thing that could go unnoticed for a
 month and then be a conversation with a revenue authority.
 
-1. **One document, one row.** A posted fiscalized AR document has exactly one non-cancelled
-   `sale`/`refund` row, and every row names exactly one document. A document with two rows is
-   a sale RRA would register twice; one with none is a sale RRA never heard about.
+1. **One document, one row.** A posted AR document whose branch had a **live device when it
+   posted** has exactly one non-cancelled `sale`/`refund` row, and every row names exactly one
+   document. A document with two rows is a sale RRA would register twice; one with none is a
+   sale RRA never heard about.
+
+   The "when it posted" is the whole of the second half, and the first version of this file
+   did not have it. It skipped any posted document with no row *and* no receipt, so that a
+   company which turned a device on halfway through its life would not be told its earlier
+   invoices were holes — and "no row and no receipt" is exactly the shape of the failure the
+   clause exists for. The assertion under that skip was reachable only in a state that cannot
+   occur, and none of the sensitivity tests covered it, which is how it survived review.
+   `fiscal_devices.activated_at` (0024) is the discriminator: within the device's current
+   continuous active period, a row is not optional.
 2. **`sent` means signed.** Every `sent` sale or refund has exactly one receipt, and no row in
    any other state has one. A `sent` row without a receipt is a sale registered with nothing to
    print; a receipt on a `queued` row is a receipt nobody issued.
@@ -24,6 +34,7 @@ month and then be a conversation with a revenue authority.
 
 import json
 from collections import defaultdict
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -32,12 +43,17 @@ from app.fiscal import outbox as outbox_service
 from app.fiscal.keys import decrypt_key
 from app.models.fiscalization import (
     FiscalDevice,
+    FiscalDeviceStatus,
     FiscalOutboxKind,
     FiscalOutboxRow,
     FiscalOutboxStatus,
     FiscalReceipt,
 )
+from app.models.journal import JournalEntry
 from app.models.subledger import DocumentKind, DocumentStatus, PartnerDocument, PartnerRole
+
+#: The runs a journal batch posts under. Not sales, so not rows — decision 3.
+JOURNAL_DOC_TYPES = frozenset({"ARJN", "APJN"})
 
 SALE_KINDS = (FiscalOutboxKind.SALE, FiscalOutboxKind.REFUND)
 
@@ -84,7 +100,9 @@ def _assert_one_document_one_row(
             "register the same sale twice"
         )
 
-    fiscalized = db.scalars(
+    live_since = _device_live_since(db, company_id)
+    posted_at = _posting_moments(db, company_id)
+    candidates = db.scalars(
         select(PartnerDocument).where(
             PartnerDocument.company_id == company_id,
             PartnerDocument.role == PartnerRole.AR,
@@ -92,17 +110,55 @@ def _assert_one_document_one_row(
             PartnerDocument.status == DocumentStatus.POSTED,
         )
     )
-    for document in fiscalized:
-        # Only documents this company fiscalized: a tenant that turned a device on halfway
-        # through its life has invoices before it that were never RRA's to see, and they are
-        # not a hole in anything.
-        group = by_document.get((outbox_service.DOCUMENT_SOURCE, document.id))
-        if group is None and document.fiscal_receipt_id is None:
+    for document in candidates:
+        # **A journal batch is not a sale** (decision 3): `ARJN` documents are opening balances
+        # and corrections keyed under the `JNL` transaction type, and the posting hook skips
+        # them, so they are legitimately row-less however live the device was.
+        if document.doc_type in JOURNAL_DOC_TYPES:
             continue
-        assert group, (
-            f"{document.number} is a posted fiscal document with no live queue row — a sale "
-            "that reached the ledger and never reached RRA"
+        since = live_since.get(document.branch_id)
+        moment = posted_at.get(document.journal_entry_id)
+        if since is None or moment is None or moment < since:
+            # Nothing was fiscalizing on this branch when this posted. Not a hole: the company
+            # had no device, or it was suspended, and `post_document` never reached the hook.
+            continue
+        assert by_document.get((outbox_service.DOCUMENT_SOURCE, document.id)), (
+            f"{document.number} posted at {moment} on a branch whose device has been live "
+            f"since {since}, and it has no queue row — a sale that reached the ledger and "
+            "never reached RRA, which is the failure this whole phase exists to prevent"
         )
+
+
+def _device_live_since(db: Session, company_id: int) -> dict[int, datetime]:
+    """branch → when its device was last made live, for the devices that are live now.
+
+    A suspended device is absent, deliberately: it makes the company unfiscalized, the hook is
+    never reached, and a document posted in that window has no row and should not.
+    """
+    return {
+        device.branch_id: _aware(device.activated_at)
+        for device in db.scalars(
+            select(FiscalDevice).where(FiscalDevice.company_id == company_id)
+        )
+        if device.status == FiscalDeviceStatus.ACTIVE and device.activated_at is not None
+    }
+
+
+def _posting_moments(db: Session, company_id: int) -> dict[int, datetime]:
+    """entry id → when it was posted. The document's own `document_date` is a *date the user
+    chose*; what decides whether a device was live is when the posting actually happened."""
+    rows = db.execute(
+        select(JournalEntry.id, JournalEntry.posted_at).where(
+            JournalEntry.company_id == company_id, JournalEntry.posted_at.is_not(None)
+        )
+    ).all()
+    return {entry_id: _aware(moment) for entry_id, moment in rows}
+
+
+def _aware(moment: datetime | None) -> datetime | None:
+    if moment is not None and moment.tzinfo is None:
+        return moment.replace(tzinfo=UTC)
+    return moment
 
 
 def _assert_sent_means_signed(
