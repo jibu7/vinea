@@ -464,7 +464,10 @@ class FiscalOutboxRow(AuditedMixin, CompanyScopedMixin, Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     device_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     kind: Mapped[FiscalOutboxKind] = mapped_column(fiscal_outbox_kind_type, nullable=False)
-    source_doc_type: Mapped[str | None] = mapped_column(String(10))
+    #: What produced this row, named the way every other `source_doc_type` in the schema is —
+    #: `partner_document`, `item`, and at step 3 the stock postings. Fifty characters, as
+    #: `journal_lines` and `stock_moves` carry (0023).
+    source_doc_type: Mapped[str | None] = mapped_column(String(50))
     source_doc_id: Mapped[int | None] = mapped_column(BigInteger)
     #: FIFO position within the device. Set from the row id at enqueue, so it is the order the
     #: postings committed in and nothing can renumber it.
@@ -504,7 +507,17 @@ class FiscalReceipt(AuditedMixin, CompanyScopedMixin, Base):
     __tablename__ = "fiscal_receipts"
     __table_args__ = (
         UniqueConstraint("company_id", "id", name="uq_fiscal_receipts_company_id_id"),
-        UniqueConstraint("company_id", "document_id", name="uq_fiscal_receipts_company_document"),
+        # One receipt per document **per type** (0023). A document holds its `NS`, and — when
+        # a signed sale is reversed — the `NR` that reversed it: RRA cannot un-sign a sale, so
+        # the reversal is a second receipt about the same invoice. It is stored rather than
+        # left in the queue row, because the Z report counts receipts and a refund RRA signed
+        # that the Z could not see would make the close disagree with the authority.
+        UniqueConstraint(
+            "company_id",
+            "document_id",
+            "receipt_type",
+            name="uq_fiscal_receipts_company_document_type",
+        ),
         UniqueConstraint("company_id", "outbox_id", name="uq_fiscal_receipts_company_outbox"),
         ForeignKeyConstraint(
             ["company_id", "document_id"],
