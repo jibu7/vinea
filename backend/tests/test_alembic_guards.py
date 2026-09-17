@@ -19,7 +19,13 @@ from sqlalchemy.engine import Engine
 from alembic import command
 from tests.conftest import ADMIN_TEST_URL, ADMIN_URL
 
-GUARD_DB = f"{ADMIN_URL.database}_guard"
+#: Per process, as every other throwaway database in the suite is (`TEST_DB_NAME`, the four
+#: `*_backfill` ones). CI runs `pytest -n auto` and the three tests below each drop and recreate
+#: this database, so on one shared name two workers scheduled together both clear the
+#: `DROP … IF EXISTS` and then both `CREATE`: the loser dies in fixture setup with a
+#: `UniqueViolation` on `pg_database_datname_index`. `-n 3` on this file alone reproduced it on
+#: three runs out of three, on a different one of the three tests each time.
+GUARD_DB = f"{ADMIN_URL.database}_guard_{os.getpid()}"
 GUARD_URL = ADMIN_URL.set(database=GUARD_DB)
 
 

@@ -406,28 +406,6 @@ about **order**, which the FIFO answers. What the documents do show is one sampl
 `sarNo` and `orgSarNo` are both `2` on a sale-out movement. The DTO field is gone rather than
 left unset, so there is nothing carrying a value nobody reads. See the open question below.
 
-## Plan deviations
-
-**One, and it is the ordering.** Decision 10 says `stock_io` and `stock_master` come "from the
-stock service on every posting". They do for every posting except a **partner document's
-companion**, which the stock service deliberately skips and `post_document` /
-`reverse_document` report instead.
-
-The reason is decision 10's own last sentence — "stock rows follow their sale in the FIFO by
-construction" — which is false if the report comes from the stock service, because the companion
-stock entry posts *before* the partner side (P6 decision 2: a return to supplier and an
-unmatched purchase both need the value the stock ledger moved before their partner side can be
-built at all). A movement enqueued from inside the stock service would carry a lower
-`sequence_no` than the sale that caused it, and RRA answers `921`/`922` to a stock report that
-arrives before its invoice. The two options were to report from the document, or to reserve the
-sale's queue position before the companion posts — which means reserving a block of positions,
-because the item registrations have to precede the sale too, and the count of those is not known
-until the plan is built. The first is one exception with a comment at both ends; the second is
-machinery.
-
-`app/fiscal/stock.FACING_BY_SOURCE` has no `partner_document` entry and says why; invariant 11
-is what keeps the exception honest.
-
 **15. Two guards on the fingerprint rule, because one shape cannot see both halves.** The ask
 was an AST test forbidding equality, hashing or set membership over a stringified Decimal. Half
 of that is decidable and half of it is not, and the measurement is in
@@ -452,6 +430,28 @@ of that is decidable and half of it is not, and the measurement is in
   is the part an exemption register could never have promised. With the sharpness half beside
   it (`2360` and `2360.01` must differ) and the strictness half (a type with no canonical form
   raises rather than falling back to `str()`).
+
+## Plan deviations
+
+**One, and it is the ordering.** Decision 10 says `stock_io` and `stock_master` come "from the
+stock service on every posting". They do for every posting except a **partner document's
+companion**, which the stock service deliberately skips and `post_document` /
+`reverse_document` report instead.
+
+The reason is decision 10's own last sentence — "stock rows follow their sale in the FIFO by
+construction" — which is false if the report comes from the stock service, because the companion
+stock entry posts *before* the partner side (P6 decision 2: a return to supplier and an
+unmatched purchase both need the value the stock ledger moved before their partner side can be
+built at all). A movement enqueued from inside the stock service would carry a lower
+`sequence_no` than the sale that caused it, and RRA answers `921`/`922` to a stock report that
+arrives before its invoice. The two options were to report from the document, or to reserve the
+sale's queue position before the companion posts — which means reserving a block of positions,
+because the item registrations have to precede the sale too, and the count of those is not known
+until the plan is built. The first is one exception with a comment at both ends; the second is
+machinery.
+
+`app/fiscal/stock.FACING_BY_SOURCE` has no `partner_document` entry and says why; invariant 11
+is what keeps the exception honest.
 
 ## Sensitivity pass
 
@@ -497,16 +497,54 @@ Also worth checking on the live run: the document's own stock sample carries
 in this phase uses; the sample suggests the field is not validated on this endpoint, and the live
 run is where that stops being a guess.
 
+## Two things the suite itself needed
+
+**The three new properties were invisible to the nightly deep run.**
+`tests/test_property_markers.py` is a collect-time guard: every `@given` test must carry
+`@pytest.mark.slow`, because `nightly-property.yml` selects with `pytest -m slow` and the
+`deep` profile at 300 examples is the only place a property is driven hard. The three
+fingerprint properties went in without it, and the guard failed the run — which is the whole
+reason it exists, since a missing marker is invisible at the call site of the thing it
+protects. Marked.
+
+**`tests/test_alembic_guards.py` had a race under `pytest -n`.** Its throwaway database was
+`vinea_guard`, the one such name in the suite with no `os.getpid()` suffix — `TEST_DB_NAME` and
+the four `*_backfill` databases all have one. Three tests in that file drop and recreate it, CI
+runs `pytest -n auto`, and on a shared name two workers scheduled together both clear the
+`DROP DATABASE IF EXISTS` and then both `CREATE`: the loser dies in fixture setup with a
+`UniqueViolation` on `pg_database_datname_index`. That is where the single ERROR in the run
+before this one came from.
+
+It is worth saying how that was established, because "probably a flake from my own database
+housekeeping" was the cheaper answer and it was wrong. The file passes alone, so the shared
+name was reverted and the file run at `-n 3` three times: three runs, two errors each, on a
+*different* one of the three tests each time — which is also why a full run shows only one of
+them. With the pid suffix, three runs of the same command, five passed. Pre-existing, not
+step 3's: it predates this branch and would have surfaced on any `-n auto` run whose scheduler
+happened to pair those tests.
+
 ## Checks at submission
 
 ```
 uv run ruff check .            All checks passed!
-uv run pytest -n 4 -q          1255 passed, 7 warnings in 331.86s (0:05:31)
+uv run pytest -n 4 -q          1268 passed, 7 warnings in 318.69s (0:05:18)
+uv run pytest -q               1268 passed, 2 warnings in 788.35s (0:13:08)*
 git status --short             (empty)
 git log @{u}..                 (empty)
 ```
 
-Step 2 closed at 1 200; the 55 new ones are the movement sequence and its eight negative
-controls, the purchase declaration and its refusals, the feed's four accept paths, the import
-register, and item registration's two missing cases. No migration: step 1's schema already
-holds every table and column this step writes, so `alembic check` has nothing new to say.
+Both, because the two configurations prove different things. `-n 4` is what CI runs and is where
+the guard-database race above lives; serial is where a test that only passes because another one
+happened to run first has nowhere to hide. *The serial wall time is not comparable — that run had
+other pytest processes of this session competing for the same Postgres; the earlier clean serial
+run was 331s. Only the counts are being claimed.
+
+Step 2 closed at 1 200. 55 of the 68 new ones are step 3 itself — the movement sequence and its
+eight negative controls, the purchase declaration and its refusals, the feed's accept paths, the
+import register, and item registration's two missing cases. The other 13 are the follow-ups: the
+`purchase_already_declared` refusal with its sensitivity revert, invariant 7's feed-row half, and
+`tests/test_fingerprints.py`'s nine — the AST guard, its own sensitivity test, the three
+properties, and the sharpness, strictness and one-canonicaliser assertions beside them.
+
+No migration: step 1's schema already holds every table and column this step writes, so
+`alembic check` has nothing new to say.

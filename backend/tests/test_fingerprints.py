@@ -212,6 +212,7 @@ EQUAL_PAIRS = st.tuples(
 )
 
 
+@pytest.mark.slow
 @given(EQUAL_PAIRS)
 def test_two_spellings_of_one_amount_canonicalise_the_same(pair) -> None:  # noqa: ANN001
     left, right = pair
@@ -219,12 +220,14 @@ def test_two_spellings_of_one_amount_canonicalise_the_same(pair) -> None:  # noq
     assert canonical(left) == canonical(right)
 
 
+@pytest.mark.slow
 @given(EQUAL_PAIRS)
 def test_two_spellings_of_one_amount_fingerprint_the_same(pair) -> None:  # noqa: ANN001
     left, right = pair
     assert fingerprint_material({"amount": left}) == fingerprint_material({"amount": right})
 
 
+@pytest.mark.slow
 @given(EQUAL_PAIRS)
 def test_an_item_registered_twice_at_two_exponents_hashes_once(pair) -> None:  # noqa: ANN001
     """The defect itself, as a property over the registration rather than over one price.
