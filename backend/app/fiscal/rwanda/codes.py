@@ -249,29 +249,42 @@ def is_retryable(result_code: str) -> bool:
 
 # --- §4.17, the item code -----------------------------------------------------------------
 
-#: The quantity-unit segment: the code itself when it is exactly two characters, and `X` +
-#: the code when it is not. Never truncated.
+#: §4.6's own list, seeded from the pinned document and refreshed by `sync_codes` like the
+#: other code tables. It is here so that nothing — production or test — can compose an item
+#: code out of a unit RRA does not publish: the first version of this file was pinned against
+#: a `NOX` that does not exist in §4.6, which made a wrong padding rule look right.
+QUANTITY_UNITS: tuple[str, ...] = (
+    "4B", "AV", "BA", "BE", "BG", "BL", "BLL", "BX", "CA", "CEL", "CMT", "CR", "DR", "DZ",
+    "GLL", "GRM", "GRO", "KG", "KTM", "KWT", "L", "LBR", "LK", "LTR", "M", "M2", "M3", "MGM",
+    "MTR", "MWT", "NO", "NX", "PA", "PG", "PR", "RL", "RO", "SET", "ST", "TNE", "TU", "U",
+    "YRD",
+)
+
+#: **`X` terminates a two-character segment.** Both segments — packaging unit and quantity
+#: unit — get it, and one- and three-character codes are left exactly as they are.
 #:
-#: The rule is nowhere in prose — §4.17 gives a format and some examples, and the examples are
-#: the specification. Four codes pin it, and the first version of this got the third and fourth
-#: wrong by reading only the first two:
+#: The rule is nowhere in prose. §4.17 gives a format and some worked examples, so the examples
+#: are the specification, and there are five of them. Four come out of real VSDC/EBM systems
+#: and agree with each other:
 #:
-#: * `RW2NTBA0000012` — §4.17's worked example. `BA` is two characters and stands alone.
-#: * `RW1NTXU0000006` — same document, whose item carries `qtyUnitCd: "U"` in the same request
-#:   body. One character, prefixed with `X`.
-#: * `KR2AMXBLL0000001` — same document. `BLL` is three characters and is **also** prefixed
-#:   with `X`, which is what a "left-pad to a minimum of two" rule gets wrong: it would leave
-#:   `BLL` alone and build `KR2AMBLL0000001`.
-#: * `RW2NTXNOX0000014` — a live EBM 2.1 receipt (`docs/rra/`, invoice 22). `NOX`, three
-#:   characters, prefixed with `X`. Independent confirmation from outside the document.
+#: * `RW1NTXU0000006` — VSDC, whose item carries `qtyUnitCd: "U"`. `NT`→`NTX`, `U` stands.
+#: * `KR2AMXBLL0000001` — VSDC's Korean sample. `AM`→`AMX`, `BLL` stands.
+#: * `RW2NTXU0000002` — a live EBM 2.1 receipt. `NT`→`NTX`, `U` stands.
+#: * `RW2NTXNOX0000014` — a live EBM 2.1 receipt. `NT`→`NTX`, `NO`→`NOX`.
 #:
-#: So `X` is not padding to a width; it is a marker that the segment is not a two-character
-#: code, and the reader takes the rest of the segment up to the seven-digit sequence. Under
-#: that reading all four reproduce exactly, and a three-character code is never cut down to
-#: two — which would silently collide with a different unit and mis-register the item.
-#: `itemCd` is `CHAR(20)`, so the longer form fits.
-QUANTITY_UNIT_EXACT_WIDTH = 2
-QUANTITY_UNIT_PAD = "X"
+#: The fifth, §4.17's hand-written worked example `RW2NTBA0000012`, is the **outlier**: its
+#: own prose breaks it down as `NT` packaging + `BA` quantity with no `X` anywhere, which no
+#: machine-generated code does. It is prose in a specification, not output from a device, and
+#: it is the only one of the five that a rule fitting the other four gets wrong.
+#:
+#: Why a terminator rather than padding: the segments are variable width (§4.5 and §4.6 both
+#: publish one-, two- and three-character codes), so a reader needs to know where one ends.
+#: Reading `X` as *padding to two characters* — which is what this file did first — fits only
+#: the two shortest examples and mangles every three-character unit. Both readings are still
+#: guesses about a format RRA has not written down, which is why the live run at step 5 carries
+#: it as a question.
+SEGMENT_TERMINATED_WIDTH = 2
+SEGMENT_TERMINATOR = "X"
 ITEM_SEQUENCE_WIDTH = 7
 
 
@@ -290,12 +303,16 @@ def build_item_code(
     The sequence is claimed from the `FITM` run, so it is gapless per taxpayer — which is
     what makes the code itself a usable audit key rather than an opaque string.
     """
-    unit = quantity_unit.upper()
-    padded_unit = unit if len(unit) == QUANTITY_UNIT_EXACT_WIDTH else f"{QUANTITY_UNIT_PAD}{unit}"
     return (
         f"{origin_country.upper()}"
         f"{product_type}"
-        f"{packaging_unit.upper()}"
-        f"{padded_unit.upper()}"
+        f"{_terminated(packaging_unit)}"
+        f"{_terminated(quantity_unit)}"
         f"{sequence_no:0{ITEM_SEQUENCE_WIDTH}d}"
     )
+
+
+def _terminated(code: str) -> str:
+    """A code-table segment of an item code: `X`-terminated when it is two characters wide."""
+    upper = code.upper()
+    return f"{upper}{SEGMENT_TERMINATOR}" if len(upper) == SEGMENT_TERMINATED_WIDTH else upper

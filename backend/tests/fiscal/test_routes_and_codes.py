@@ -112,39 +112,32 @@ def test_the_item_code_is_built_to_the_documents_sample() -> None:
     assert built == "RW1NTXU0000006"
 
 
-def test_a_two_character_quantity_unit_is_not_padded() -> None:
-    assert codes.build_item_code(
-        origin_country="rw",
-        product_type=codes.ProductType.FINISHED_PRODUCT,
-        packaging_unit="bx",
-        quantity_unit="kg",
-        sequence_no=42,
-    ) == "RW2BXKG0000042"
-
-
-#: Every item code anyone has published, and the reason there is a table rather than an
-#: assertion: the rule is not written down in prose anywhere, so the examples *are* the
-#: specification and a rule is only as good as the examples it reproduces.
+#: Every item code anyone has published, and a table rather than an assertion because the rule
+#: is nowhere in prose: the examples *are* the specification, and a rule is only as good as the
+#: examples it reproduces.
 #:
-#: The first two were all this test had, and a rule that fit them both — "left-pad the quantity
-#: unit to two characters with `X`" — got the other three wrong. §4.6 publishes three-character
-#: codes, and all three three-character codes below carry an `X` the padding reading would not
-#: have produced.
-PUBLISHED_ITEM_CODES = (
-    ("RW", "2", "NT", "BA", 12, "RW2NTBA0000012", "§4.17's worked example; BA needs no marker"),
-    ("RW", "1", "NT", "U", 6, "RW1NTXU0000006", "same document; qtyUnitCd 'U' in the body"),
-    ("KR", "2", "AM", "BLL", 1, "KR2AMXBLL0000001", "same document; BLL keeps its X"),
-    ("RW", "2", "NT", "U", 2, "RW2NTXU0000002", "live receipt, invoice 1 (docs/rra/)"),
-    ("RW", "2", "NT", "NOX", 14, "RW2NTXNOX0000014", "live receipt, invoice 22 (docs/rra/)"),
+#: Five of the six come out of real VSDC/EBM systems and agree. The sixth is §4.17's
+#: hand-written worked example, whose own prose breaks it down with no `X` at all — so it is
+#: carried here as a **known outlier** rather than quietly dropped, because a reader who finds
+#: it in the document deserves to find it here too.
+MACHINE_GENERATED_ITEM_CODES = (
+    ("RW", "1", "NT", "U", 6, "RW1NTXU0000006", "VSDC: qtyUnitCd 'U' in the same request body"),
+    ("KR", "2", "AM", "BLL", 1, "KR2AMXBLL0000001", "VSDC: the Korean sample"),
+    ("RW", "2", "NT", "U", 2, "RW2NTXU0000002", "live EBM receipt, invoice 1"),
+    ("RW", "2", "NT", "NO", 14, "RW2NTXNOX0000014", "live EBM receipt, invoice 22"),
+    ("RW", "2", "NT", "NO", 11, "RW2NTXNOX0000011", "live EBM receipt, CONTACTEUR"),
 )
+
+#: §4.17's prose example, and what the rule above actually builds for it.
+PROSE_OUTLIER = ("RW", "2", "NT", "BA", 12, "RW2NTBA0000012", "RW2NTXBAX0000012")
 
 
 @pytest.mark.parametrize(
     ("origin", "product_type", "packaging", "quantity_unit", "sequence_no", "expected", "source"),
-    PUBLISHED_ITEM_CODES,
-    ids=[case[5] for case in PUBLISHED_ITEM_CODES],
+    MACHINE_GENERATED_ITEM_CODES,
+    ids=[case[5] for case in MACHINE_GENERATED_ITEM_CODES],
 )
-def test_every_published_item_code_is_reproduced(
+def test_every_machine_generated_item_code_is_reproduced(
     origin: str,
     product_type: str,
     packaging: str,
@@ -164,14 +157,75 @@ def test_every_published_item_code_is_reproduced(
     assert built == expected, f"{source}: built {built}"
 
 
+def test_no_case_above_feeds_a_quantity_unit_the_authority_does_not_publish() -> None:
+    """The guard that keeps this table honest.
+
+    The first version of this file pinned `RW2NTXNOX0000014` by feeding the builder a quantity
+    unit of `NOX` — which is not in §4.6 at all. A wrong rule and a wrong input cancelled out
+    and the test passed, which is the worst way for a table like this to be green. Every unit
+    fed above is now required to be a code RRA publishes; `NOX` is not one, `NO` (31, Number)
+    is.
+    """
+    fed = {case[3] for case in (*MACHINE_GENERATED_ITEM_CODES, PROSE_OUTLIER)}
+
+    unknown = sorted(unit for unit in fed if unit not in codes.QUANTITY_UNITS)
+    assert unknown == [], f"not §4.6 quantity units: {unknown}"
+
+
+def test_the_prose_worked_example_is_the_one_the_rule_does_not_reproduce() -> None:
+    """§4.17 writes `RW2NTBA0000012` and breaks it down as `NT` + `BA` with no terminator.
+
+    Every machine-generated code disagrees with it, so the build follows the machines and this
+    test pins the disagreement rather than hiding it. If a later document, or the live run,
+    shows a device emitting the un-terminated form, **this** is the test that should fail and
+    send somebody back to the rule.
+    """
+    origin, product_type, packaging, unit, sequence_no, documented, built_instead = PROSE_OUTLIER
+
+    built = codes.build_item_code(
+        origin_country=origin,
+        product_type=product_type,
+        packaging_unit=packaging,
+        quantity_unit=unit,
+        sequence_no=sequence_no,
+    )
+
+    assert built == built_instead
+    assert built != documented, (
+        "the prose example now reproduces — if a device really emits this form, the rule in "
+        "codes.py is wrong for the other four and contract-notes §8 needs rewriting"
+    )
+
+
+def test_a_two_character_segment_is_terminated_and_a_longer_one_is_not() -> None:
+    """The rule stated directly, on both segments, so a reader does not have to infer it from
+    the table above."""
+    assert codes.build_item_code(
+        origin_country="rw",
+        product_type=codes.ProductType.FINISHED_PRODUCT,
+        packaging_unit="bx",
+        quantity_unit="kg",
+        sequence_no=42,
+    ) == "RW2BXXKGX0000042"
+    assert codes.build_item_code(
+        origin_country="rw",
+        product_type=codes.ProductType.FINISHED_PRODUCT,
+        packaging_unit="bx",
+        quantity_unit="BLL",
+        sequence_no=42,
+    ) == "RW2BXXBLL0000042"
+
+
 def test_the_sequence_is_always_the_last_seven_digits() -> None:
-    """The length is **not** fixed — a three-character quantity unit makes a sixteen-character
-    code, which is why the old "always fourteen" assertion here was hiding a bug rather than
-    catching one. What is fixed is the tail: a revenue authority keys on the sequence, and a
-    code whose sequence width moved with the number could not be keyed on.
+    """The length is **not** fixed — the segments are one to three characters and only the
+    two-character ones gain a terminator — which is why the old "always fourteen" assertion
+    here was hiding a bug rather than catching one. What is fixed is the tail: a revenue
+    authority keys on the sequence.
     """
     for sequence_no in (1, 999, 1_000_000, 9_999_999):
-        for quantity_unit, width in (("U", 14), ("KG", 14), ("BLL", 16)):
+        # `U` is one character and stands; `KG` gains a terminator and `BLL` does not, so
+        # the two-character unit and the three-character one come out the same width.
+        for quantity_unit, width in (("U", 14), ("KG", 16), ("BLL", 16)):
             built = codes.build_item_code(
                 origin_country="RW",
                 product_type=codes.ProductType.SERVICE,
