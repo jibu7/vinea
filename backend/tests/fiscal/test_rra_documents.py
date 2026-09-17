@@ -28,17 +28,23 @@ SPECIFICATIONS = {
     ),
 }
 
-#: The owner-supplied material beside them: the certification checkpoint sheet, the logo CIS
-#: §7.29 requires on every receipt, and five live EBM receipts.
+#: The owner-supplied material beside them: the certification checkpoint sheet and the logo CIS
+#: §7.29 requires on every receipt.
+#:
+#: Five live EBM receipts were here while the adapter was written against them and have been
+#: **withdrawn** — real taxpayers' TINs, trading names and telephone numbers do not belong in a
+#: public repository once the evidence is recorded. What they proved is in `README.md` and
+#: `contract-notes.md` §7 and §8, and is pinned by tests rather than by the files;
+#: `test_no_live_receipt_is_committed` below keeps them from coming back.
 SUPPORTING = {
     "EXCEL_SHEET_application_form_RRA_VSDC_okay(Compliance table).csv",
     "Rwanda-Revenue-Authority-logo.png",
-    "CONTACTEUR.pdf",
-    "desktop iyaga transport 2.pdf",
-    "12.pdf",
-    "Screenshot 2026-09-16 142523.png",
-    "Screenshot 2026-09-16 142549.png",
 }
+
+#: A receipt is a PDF or an image that is not one of the files above. Named by shape rather
+#: than by the five filenames, because the next one somebody drops in will have a different
+#: name — a screenshot from a phone, a scan, a second vendor's sample.
+RECEIPT_SUFFIXES = {".pdf", ".png", ".jpg", ".jpeg", ".webp"}
 
 #: Everything the register has to account for, and the prose files that are the register.
 PROSE = {"README.md", "contract-notes.md"}
@@ -142,3 +148,29 @@ def test_the_checkpoint_sheet_still_says_what_the_build_relies_on() -> None:
     assert "round values of tax on two decimals" in text
     assert "The Refund receipt has always to be printed with a negative" in text
     assert "must not be able to issue receipt of any type if not connected" in text
+
+
+def test_no_live_receipt_is_committed() -> None:
+    """The withdrawal, kept withdrawn.
+
+    Live receipts are how several of this phase's questions were settled, so the temptation to
+    drop another one in here is real and reasonable. It is still a real taxpayer's TIN, trading
+    name, address and telephone number in a public repository, and the evidence survives the
+    file: every finding they produced is written into `README.md` and `contract-notes.md` and
+    pinned by a test over `build_item_code` or the payload models.
+
+    So: read the receipt, record what it shows, cite it by invoice number, and do not commit
+    it. A specification or the RRA logo is a different thing and is listed above.
+    """
+    allowed = set(SPECIFICATIONS) | SUPPORTING
+    stray = sorted(
+        path.name
+        for path in RRA_DIR.iterdir()
+        if path.is_file() and path.suffix.lower() in RECEIPT_SUFFIXES and path.name not in allowed
+    )
+
+    assert stray == [], (
+        "these look like live receipts or unregistered binaries in a public repository: "
+        f"{stray}. Record what the receipt shows in contract-notes.md and cite it by invoice "
+        "number; do not commit the document itself."
+    )
