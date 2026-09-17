@@ -160,8 +160,10 @@ class FiscalPurchase:
     supplier: FiscalParty
     lines: tuple[FiscalLine, ...]
     payment_method: PaymentMethod
-    #: The supplier's own reference for this invoice.
-    supplier_invoice_no: str | None = None
+    #: The supplier's own invoice number, **when the reference is a number**. The authority
+    #: keys the pair by it, and a reference with no numeric form has none —
+    #: `purchases.supplier_reference_number` is the one place that decides.
+    supplier_invoice_no: int | None = None
     is_return: bool = False
     supplier_branch_id: str | None = None
     actor_id: str = ""

@@ -1,6 +1,6 @@
 """`assert_fiscal_invariants` is only worth running if it fails when it should.
 
-Six invariants, six deliberate breakages, each a single edit to a row the ordinary path
+Ten invariants and a breakage each, most of them a single edit to a row the ordinary path
 produced. The pattern P5 established in `tests/inventory/test_checker_sensitivity.py`, and it
 exists because an invariant suite that cannot fail is the most expensive kind of green: every
 property test in the phase asserts these after every step, so a checker that had quietly
@@ -27,7 +27,7 @@ from app.models.fiscalization import (
     FiscalReceipt,
 )
 from tests.fiscal.conftest import FiscalPosting
-from tests.fiscal.helpers import invoice, receive
+from tests.fiscal.helpers import invoice, receive, supplier_invoice
 from tests.fiscal.invariants import assert_fiscal_invariants
 
 
@@ -225,3 +225,52 @@ def test_a_key_in_a_stored_payload_is_caught(db: Session, drained: FiscalPosting
 
     with pytest.raises(AssertionError, match="device key is stored in"):
         assert_fiscal_invariants(db, drained.company_id)
+
+
+def test_one_supplier_invoice_declared_twice_is_caught_as_a_state(
+    db: Session, fiscal_posting: FiscalPosting, sandbox_client: httpx.Client, monkeypatch
+) -> None:
+    """Invariant 10a, and the reason it exists rather than the refusal alone.
+
+    `feed.accept` refuses an unlinked confirmation of an invoice Vinea has already declared
+    (`purchase_already_declared`). A refusal at one door is a good thing and not the same as
+    the state being unreachable: this test **walks through the door** — the refusal patched to
+    a no-op, which is exactly what a missing check would do — and asserts the invariant catches
+    the state it leaves behind.
+
+    Breaking it the other way round is what makes the pair honest. Delete invariant 10a and
+    this test goes green over one supplier invoice reaching RRA twice, with the input VAT
+    doubled; delete the refusal and `test_an_unlinked_accept_of_an_invoice_already_declared_
+    is_refused` goes red. Neither alone covers both.
+    """
+    from app.fiscal import feed as feed_service
+    from app.subledger import masters as partner_masters
+
+    supplier = partner_masters.create_partner(
+        db,
+        fiscal_posting.company_id,
+        partner_masters.PartnerInput(
+            name="Feed Supplier Ltd", supplier_code="FEEDSUP", tin="100000003"
+        ),
+        actor=fiscal_posting.owner,
+    )
+    db.flush()
+    supplier_invoice(fiscal_posting, db, partner_id=supplier.id, reference="77")
+    feed_service.fetch(
+        db,
+        fiscal_posting.company_id,
+        fiscal_posting.device,
+        actor=fiscal_posting.owner,
+        client=sandbox_client,
+    )
+    row = feed_service.list_rows(db, fiscal_posting.company_id)[0]
+
+    monkeypatch.setattr(
+        feed_service, "_refuse_a_duplicate_of_an_undeclared_link", lambda *args, **kwargs: None
+    )
+    feed_service.accept(
+        db, fiscal_posting.company_id, row, actor=fiscal_posting.owner
+    )
+
+    with pytest.raises(AssertionError, match="reaches RRA twice"):
+        assert_fiscal_invariants(db, fiscal_posting.company_id)

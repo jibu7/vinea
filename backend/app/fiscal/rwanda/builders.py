@@ -379,10 +379,10 @@ def build_purchase_request(
         spplrTin=purchase.supplier.tin,
         spplrBhfId=purchase.supplier_branch_id,
         spplrNm=purchase.supplier.name[:CUSTOMER_NAME_LIMIT],
-        # Numeric when it is: RRA types this as a number, and a supplier reference like
-        # "INV/2026/0042" has no numeric form — so it goes as null rather than as a mangled
-        # integer, and the reference stays on the Vinea document where a human can read it.
-        spplrInvcNo=_numeric_or_none(purchase.supplier_invoice_no),
+        # Already a number or already `None`: RRA types this field as a number, and which
+        # references have a numeric form is decided once, above this boundary, because
+        # `feed.accept` has to recognise the same invoice by the same rule.
+        spplrInvcNo=purchase.supplier_invoice_no,
         # `M`, always: this builder renders a purchase **Vinea originated**, and a
         # confirmation of one the authority already holds is `build_purchase_confirmation_
         # request` with its own `A`. One builder that chose between them would make the
@@ -627,13 +627,6 @@ def build_stock_master_request(
         modrId=actor_id,
         modrNm=actor_name,
     )
-
-
-def _numeric_or_none(reference: str | None) -> int | None:
-    if reference is None:
-        return None
-    digits = reference.strip()
-    return int(digits) if digits.isdigit() else None
 
 
 def inclusive_unit_price(exclusive_price: Decimal, rate_pct: Decimal) -> Decimal:

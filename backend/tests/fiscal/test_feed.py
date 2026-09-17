@@ -29,8 +29,11 @@ from app.models.fiscalization import (
     FiscalPurchaseFeedRow,
     FiscalSyncKind,
 )
+from app.models.partner import Partner
+from app.subledger import documents as documents_service
+from app.subledger import masters as partner_masters
 from tests.fiscal.conftest import FiscalPosting
-from tests.fiscal.helpers import supplier_invoice
+from tests.fiscal.helpers import APRIL, supplier_invoice
 from tests.fiscal.invariants import assert_fiscal_invariants
 
 D = Decimal
@@ -326,4 +329,140 @@ def test_a_confirmation_is_acknowledged_and_carries_no_receipt(
     confirmation = _confirmations(db, fiscal_posting.company_id)[0]
     assert confirmation.status == FiscalOutboxStatus.SENT
     assert confirmation.last_result_cd == "000"
+    assert_fiscal_invariants(db, fiscal_posting.company_id)
+
+
+def test_an_unlinked_accept_of_an_invoice_already_declared_is_refused(
+    db: Session, fiscal_posting: FiscalPosting, sandbox_client: httpx.Client
+) -> None:
+    """The route the link was supposed to close, and did not.
+
+    The link is optional and the **coincidence** is not: a posted AP document for the same
+    supplier carrying the same supplier invoice number, with a live registration, is the
+    purchase this feed row is the other side of whether or not anybody said so. Accepting
+    without the link would register it twice by exactly the route the link exists to prevent —
+    the three linked cases were each covered and this one was not.
+
+    The refusal names the document, because the operator's next move depends on which it is:
+    link it (and replace the registration with the confirmation), or correct one of the two
+    references because they really are different invoices.
+
+    Proven sensitive by deleting the `_refuse_a_duplicate_of_an_undeclared_link` call, which
+    makes this test's first half `DID NOT RAISE`. That the *state* is unreachable rather than merely
+    refused here is a separate proof, and it is
+    `test_one_supplier_invoice_declared_twice_is_caught_as_a_state`: it patches the refusal out,
+    walks through the door, and asserts invariant 10a catches what is left behind.
+    """
+    document = supplier_invoice(
+        fiscal_posting,
+        db,
+        partner_id=_feed_supplier(db, fiscal_posting).id,
+        reference=str(FEED_INVOICE_NO),
+    )
+    _fetch(db, fiscal_posting, sandbox_client)
+    row = feed_service.list_rows(db, fiscal_posting.company_id)[0]
+
+    with pytest.raises(FiscalSetupError) as refusal:
+        feed_service.accept(db, fiscal_posting.company_id, row, actor=fiscal_posting.owner)
+    assert refusal.value.code == "purchase_already_declared"
+    assert document.number in str(refusal.value)
+    assert "ap_document_id" in refusal.value.field_errors
+    assert row.decision == FiscalFeedDecision.PENDING
+    assert _confirmations(db, fiscal_posting.company_id) == []
+
+    # Proven sensitive the other way: **linked**, the same accept goes through and cancels the
+    # document's own registration in favour of the confirmation.
+    decided = feed_service.accept(
+        db,
+        fiscal_posting.company_id,
+        row,
+        ap_document_id=document.id,
+        actor=fiscal_posting.owner,
+    )
+    assert decided.cancelled is not None
+    assert decided.confirmation is not None
+    assert_fiscal_invariants(db, fiscal_posting.company_id)
+
+
+def test_a_reference_with_no_numeric_form_is_not_a_duplicate(
+    db: Session, fiscal_posting: FiscalPosting, sandbox_client: httpx.Client
+) -> None:
+    """`INV/2026/0042` is not a number the authority can key by, so there is nothing for this
+    build to match on either — and refusing on a reference RRA never received would block an
+    accept over a coincidence that is not one.
+
+    The pair is reconciled by hand in that case, which is what the step-3 report says the
+    Supplier invoice screen should tell the person keying it.
+    """
+    supplier_invoice(
+        fiscal_posting,
+        db,
+        partner_id=_feed_supplier(db, fiscal_posting).id,
+        reference="INV/2026/0077",
+    )
+    _fetch(db, fiscal_posting, sandbox_client)
+    row = feed_service.list_rows(db, fiscal_posting.company_id)[0]
+
+    decided = feed_service.accept(
+        db, fiscal_posting.company_id, row, actor=fiscal_posting.owner
+    )
+
+    assert decided.confirmation is not None
+    assert row.decision == FiscalFeedDecision.ACCEPTED
+    assert_fiscal_invariants(db, fiscal_posting.company_id)
+
+
+def _feed_supplier(db: Session, fixture: FiscalPosting) -> Partner:
+    """A supplier carrying the feed fixture's own TIN.
+
+    The fixture's supplier is `100000002` and the sandbox's feed row comes from `100000003`, so
+    a duplicate can only be built by giving Vinea a supplier the feed row is actually about —
+    which is the realistic case: the invoice was keyed *and* the supplier's device registered it.
+    """
+    supplier = partner_masters.create_partner(
+        db,
+        fixture.company_id,
+        partner_masters.PartnerInput(
+            name="Feed Supplier Ltd",
+            supplier_code="FEEDSUP",
+            tin=FEED_SUPPLIER_TIN,
+        ),
+        actor=fixture.owner,
+    )
+    db.flush()
+    return supplier
+
+
+def test_a_reversed_declaration_leaves_the_invoice_free_to_confirm(
+    db: Session, fiscal_posting: FiscalPosting, sandbox_client: httpx.Client
+) -> None:
+    """A reversed document declares nothing, so its invoice is not a duplicate.
+
+    Reversing a declared purchase declares the **opposite** (decision 6), so RRA holds a `P`
+    and an `R` for the same invoice and they net to nothing held. Confirming it from the
+    supplier's side is then exactly right, and refusing would block an accept over a
+    registration that was already undone.
+
+    Proven sensitive by dropping the `status == POSTED` clause in `declared_documents`: this
+    accept is refused `purchase_already_declared` over an invoice RRA is no longer holding.
+    """
+    document = supplier_invoice(
+        fiscal_posting,
+        db,
+        partner_id=_feed_supplier(db, fiscal_posting).id,
+        reference=str(FEED_INVOICE_NO),
+    )
+    drainer.drain_company(db, fiscal_posting.company_id, client=sandbox_client)
+    documents_service.reverse_document(
+        db, document, on_date=APRIL, reason="keyed twice", actor=fiscal_posting.owner
+    )
+    _fetch(db, fiscal_posting, sandbox_client)
+    row = feed_service.list_rows(db, fiscal_posting.company_id)[0]
+
+    decided = feed_service.accept(
+        db, fiscal_posting.company_id, row, actor=fiscal_posting.owner
+    )
+
+    assert decided.confirmation is not None
+    assert row.decision == FiscalFeedDecision.ACCEPTED
     assert_fiscal_invariants(db, fiscal_posting.company_id)

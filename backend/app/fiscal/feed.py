@@ -50,6 +50,7 @@ from app.models.fiscalization import (
     FiscalPurchaseFeedRow,
     FiscalSyncKind,
 )
+from app.models.partner import Partner
 from app.models.subledger import DocumentStatus, PartnerDocument, PartnerRole
 from app.models.user import User
 from app.services.audit import record_audit
@@ -223,6 +224,14 @@ def accept(
 
     * **no link** — the purchase has no AP document (a supplier's invoice this company has not
       keyed, or never will). The confirmation is all RRA gets, and it is queued.
+    * **no link, but Vinea has already declared this invoice** — refused,
+      `purchase_already_declared`, naming the document. The link is optional and the
+      *coincidence* is not: a posted AP document for the same supplier carrying the same
+      supplier invoice number, with a live registration, is the purchase this feed row is the
+      other side of, whether or not anybody said so. Confirming without the link would
+      register it twice by exactly the route the link exists to prevent. The refusal names the
+      document so the operator can link it — which is the case above — or say explicitly that
+      it is a different invoice by correcting one of the two references.
     * **linked, and the document's own `purchase` row is `queued` or `failed`** — RRA never
       received it, so the row is **cancelled in favour of the confirmation** and the
       confirmation is queued. The confirmation is the better of the two: it carries RRA's own
@@ -239,6 +248,8 @@ def accept(
     """
     _assert_pending(row)
     document = _linked_document(db, company_id, ap_document_id)
+    if document is None:
+        _refuse_a_duplicate_of_an_undeclared_link(db, company_id, row)
     cancelled: FiscalOutboxRow | None = None
     note = ""
     queue_confirmation = True
@@ -323,6 +334,86 @@ def reject(
         cancelled=None,
     )
     return FeedDecision(row=row, confirmation=confirmation)
+
+
+def declared_documents(
+    db: Session, company_id: int
+) -> dict[tuple[str, int], PartnerDocument]:
+    """(supplier TIN, supplier invoice number) → the AP document declaring it.
+
+    Only documents holding a **live** registration, because that is what "already declared"
+    means: a cancelled row is one RRA never received. Read by `accept` to refuse the
+    coincidence and by `assert_fiscal_invariants` to prove the state unreachable — one
+    query, so the refusal and the invariant cannot disagree about what a duplicate is.
+
+    Keyed on the pair RRA itself reconciles by, which is why a reference with no numeric form
+    is absent: there is nothing for the authority or for this build to match on.
+    """
+    declared: dict[tuple[str, int], PartnerDocument] = {}
+    rows = db.scalars(
+        select(FiscalOutboxRow).where(
+            FiscalOutboxRow.company_id == company_id,
+            FiscalOutboxRow.kind.in_(
+                (FiscalOutboxKind.PURCHASE, FiscalOutboxKind.PURCHASE_CONFIRM)
+            ),
+            FiscalOutboxRow.source_doc_type != FEED_SOURCE,
+            FiscalOutboxRow.status != FiscalOutboxStatus.CANCELLED,
+            FiscalOutboxRow.source_doc_id.is_not(None),
+        )
+    )
+    for outbox_row in rows:
+        document = db.scalar(
+            select(PartnerDocument).where(
+                PartnerDocument.company_id == company_id,
+                PartnerDocument.id == outbox_row.source_doc_id,
+                # **A reversed document declares nothing.** Reversing a declared purchase
+                # declares the opposite (decision 6), so RRA holds a `P` and an `R` for the
+                # same invoice and they net to nothing held. The invoice is then free to be
+                # confirmed from the supplier's side, and treating it as still declared would
+                # refuse an accept over a registration that was already undone.
+                PartnerDocument.status == DocumentStatus.POSTED,
+            )
+        )
+        if document is None:
+            continue
+        number = purchase_service.supplier_reference_number(document.reference)
+        if number is None:
+            continue
+        partner = db.scalar(
+            select(Partner).where(
+                Partner.company_id == company_id, Partner.id == document.partner_id
+            )
+        )
+        if partner is None or not partner.tin:
+            continue
+        declared[(partner.tin, number)] = document
+    return declared
+
+
+def _refuse_a_duplicate_of_an_undeclared_link(
+    db: Session, company_id: int, row: FiscalPurchaseFeedRow
+) -> None:
+    """Refuse an unlinked accept whose invoice Vinea has already declared.
+
+    Raises or returns; it never hands back a document, because the operator has not said this
+    feed row *is* that document — that is the link, and the point of the refusal is to ask for
+    it rather than to assume it.
+    """
+    document = declared_documents(db, company_id).get(
+        (row.spplr_tin, row.spplr_invc_no)
+    )
+    if document is None:
+        return None
+    raise FiscalSetupError(
+        f"{document.number} already declares supplier invoice {row.spplr_invc_no} from this "
+        "supplier to RRA. Confirming this feed row as well would register one purchase twice. "
+        f"Link it to {document.number} to replace that registration with this confirmation, or "
+        "correct one of the two references if they are different invoices.",
+        code="purchase_already_declared",
+        field_errors={
+            "ap_document_id": [f"already declared by {document.number}"],
+        },
+    )
 
 
 def _assert_pending(row: FiscalPurchaseFeedRow) -> None:

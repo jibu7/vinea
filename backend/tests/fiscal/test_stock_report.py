@@ -377,7 +377,7 @@ def test_a_movement_is_queued_behind_the_sale_that_caused_it(
     The companion stock entry posts **before** the partner side (P6 decision 2), so a movement
     reported from inside the stock service would sit ahead of the sale in the device's FIFO and
     RRA would answer `921`/`922`. Proven sensitive by moving the report back into the stock
-    service: the assertion below fails, and so does invariant 10.
+    service: the assertion below fails, and so does invariant 11.
     """
     receive(fiscal_posting, db)
     invoice(fiscal_posting, db)

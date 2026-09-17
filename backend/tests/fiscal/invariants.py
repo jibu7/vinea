@@ -43,7 +43,16 @@ Step 3 adds four, for the purchase and stock reports:
    reconciles it the same way it reconciles the sales run.
 9. **`sar_no` is gapless per device.** The stock run, same argument: a hole in it is a question
    from Kigali about a movement nobody can produce.
-10. **A movement never overtakes its document.** Every `stock_io` or `stock_master` row raised
+10a. **One supplier invoice, one registration — quantified over the feed rather than over
+   documents.** No accepted feed row with a live confirmation shares its (supplier TIN,
+   supplier invoice number) with a live registration of Vinea's own. Invariant 7 asks the
+   question from the document's side and only sees the pair the operator *linked*; this one
+   asks it from the authority's side, where the pair is the identity RRA reconciles by, so an
+   unlinked confirmation of an invoice already declared is caught as a **state** rather than
+   refused at one entry point. `feed.accept` refuses it too, and both read
+   `feed.declared_documents` so they cannot disagree about what a duplicate is.
+
+11. **A movement never overtakes its document.** Every `stock_io` or `stock_master` row raised
    by a partner document **that has one** sits *behind* that document's own sale, refund or
    purchase row on the same device. A journal batch has none — it moves stock and is not a
    sale — and its movement is reported as an adjustment for that reason.
@@ -60,6 +69,7 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.fiscal import feed as feed_service
 from app.fiscal import outbox as outbox_service
 from app.fiscal.keys import decrypt_key
 from app.models.fiscalization import (
@@ -112,6 +122,7 @@ def assert_fiscal_invariants(db: Session, company_id: int) -> None:
     _assert_fifo(rows)
     _assert_no_key_leaked(devices, rows, receipts)
     _assert_one_document_one_purchase_row(db, company_id, rows)
+    _assert_one_registration_per_supplier_invoice(db, company_id, rows)
     _assert_purchase_numbers_gapless(rows)
     _assert_stock_numbers_gapless(rows)
     _assert_movements_follow_their_document(rows)
@@ -443,7 +454,7 @@ def _assert_gapless(
 
 
 def _assert_movements_follow_their_document(rows: list[FiscalOutboxRow]) -> None:
-    """Invariant 10. A partner document's movement is behind the document's own row.
+    """Invariant 11. A partner document's movement is behind the document's own row.
 
     The one ordering that is *not* automatic. Everything else in the queue is in creation order
     and creation order is the right order — but the companion stock entry posts **before** the
@@ -481,4 +492,42 @@ def _assert_movements_follow_their_document(rows: list[FiscalOutboxRow]) -> None
             f"queue row {row.id} reports a movement of document {row.source_doc_id} on device "
             f"{row.device_id} with no sale, refund or purchase of that document ahead of it — "
             "RRA needs the invoice information first and answers 921/922 without it"
+        )
+
+
+def _assert_one_registration_per_supplier_invoice(
+    db: Session, company_id: int, rows: list[FiscalOutboxRow]
+) -> None:
+    """Invariant 10a. Quantified over **feed rows**, not over documents.
+
+    Invariant 7 asks "does this document have one registration", which can only see the pair
+    the operator linked. RRA reconciles a purchase by (supplier TIN, supplier invoice number),
+    so the state that must be unreachable is *that pair* reaching the authority twice — once as
+    Vinea's own `regTyCd M` registration and once as a `regTyCd A` confirmation of the
+    supplier's own sale. An unlinked accept is the route, and `feed.accept` refuses it; this is
+    what makes the refusal a property of the data rather than a check at one door.
+    """
+    live_confirmations = {
+        row.source_doc_id
+        for row in rows
+        if row.kind == FiscalOutboxKind.PURCHASE_CONFIRM
+        and row.source_doc_type == FEED_SOURCE
+        and row.status != FiscalOutboxStatus.CANCELLED
+    }
+    if not live_confirmations:
+        return
+    declared = feed_service.declared_documents(db, company_id)
+    for feed_row in db.scalars(
+        select(FiscalPurchaseFeedRow).where(
+            FiscalPurchaseFeedRow.company_id == company_id,
+            FiscalPurchaseFeedRow.decision == FiscalFeedDecision.ACCEPTED,
+        )
+    ):
+        if feed_row.id not in live_confirmations:
+            continue
+        clash = declared.get((feed_row.spplr_tin, feed_row.spplr_invc_no))
+        assert clash is None, (
+            f"supplier invoice {feed_row.spplr_invc_no} from TIN {feed_row.spplr_tin} reaches "
+            f"RRA twice: as {clash.number}'s own registration and as the confirmation of feed "
+            f"row {feed_row.id}. One purchase, registered twice, and the input VAT with it"
         )

@@ -81,6 +81,21 @@ DECLARES_A_RETURN: dict[DocumentKind, bool] = {
     DocumentKind.CREDIT_NOTE: True,
 }
 
+def supplier_reference_number(reference: str | None) -> int | None:
+    """The supplier's own invoice number, when the reference **is** a number.
+
+    The one implementation, because two things need it and they must agree: the declaration
+    carries it to the authority, and `feed.accept` uses it to recognise the purchase a feed row
+    is the other side of. A reference like `INV/2026/0042` has no numeric form, so it is not a
+    number the authority can key by and not one this build can match on — it stays on the Vinea
+    document where a person can read it, and the pair is reconciled by hand.
+    """
+    if reference is None:
+        return None
+    digits = reference.strip()
+    return int(digits) if digits.isdigit() else None
+
+
 #: What a purchase line with no unit of measure is measured in. A rent charge has no UoM in
 #: Vinea and the authority's item object requires one, so the declaration says "one of it" —
 #: §4.6's `U`, which is the code for a piece. Named here, as `items.DEFAULT_PACKAGE_UNIT` is,
@@ -403,7 +418,7 @@ def enqueue(
         ),
         lines=lines,
         payment_method=plan.payment_method,
-        supplier_invoice_no=document.reference,
+        supplier_invoice_no=supplier_reference_number(document.reference),
         is_return=plan.is_return,
         actor_id=str(actor.id),
         actor_name=actor.email,

@@ -159,12 +159,17 @@ def supplier_invoice(
     lines: tuple[documents_service.LineInput, ...] | None = None,
     partner_id: int | None = None,
     document_date: date = MARCH,
+    reference: str | None = "77",
     **overrides: object,
 ) -> PartnerDocument:
     """An AP invoice — a purchase, in the authority's vocabulary (decision 9).
 
     Unmatched by default: no `grn_line_id`, so the goods arrive on the invoice itself and the
     companion receives them. That is the case the stock report has something to say about.
+
+    `reference` is the **supplier's own invoice number**, which is what RRA reconciles a
+    declaration against the supplier's own sale by — so it is a named parameter rather than a
+    literal, because the feed's duplicate rule turns on it.
     """
     document, _ = documents_service.post_document(
         db,
@@ -175,7 +180,7 @@ def supplier_invoice(
             partner_id=partner_id or fixture.order.supplier.id,
             document_date=document_date,
             description="Glass",
-            reference="77",
+            reference=reference,
             lines=lines
             or (
                 documents_service.LineInput(
