@@ -89,7 +89,14 @@ PLAN = st.lists(
         st.sampled_from((Decimal(0), Decimal(0), Decimal(10), Decimal("12.5"))),
         st.sampled_from(("stock", "service", "kit")),
         st.sampled_from(("tin", "walk_in")),
-        st.sampled_from(("VAT-OUT-18", "VAT-EXEMPT", "VAT-ZERO")),
+        # **Weighted toward the standard rate**, because the residue only exists where there
+        # is tax: an exempt or zero-rated line has `prc` equal to the keyed price and its wire
+        # amount equals the posted gross by construction. A uniform draw spent two thirds of
+        # the census on lines that are exact for a reason that has nothing to do with decision
+        # 6 — and the first deep pass duly reported no plain zero-decimal residue at all,
+        # while `test_the_decision_6_residue_worked_by_hand` shows one of 0.30 on a line the
+        # generator could have drawn.
+        st.sampled_from(("VAT-OUT-18", "VAT-OUT-18", "VAT-EXEMPT", "VAT-ZERO")),
         st.sampled_from((TaxMode.EXCLUSIVE, TaxMode.INCLUSIVE)),
         st.booleans(),
     ),
@@ -350,35 +357,58 @@ def test_the_invariants_hold_after_every_step_at_zero_decimals(
         _drive(db, fixture, client, plan)
 
 
+def _use_a_two_decimal_base(db: Session, fixture: FiscalPosting) -> None:
+    base = db.scalar(
+        select(Currency).where(
+            Currency.company_id == fixture.company_id, Currency.is_base.is_(True)
+        )
+    )
+    base.decimal_places = 2
+    db.flush()
+
+
 @pytest.mark.slow
 @given(plan=PLAN)
 def test_the_invariants_hold_after_every_step_at_two_decimals(
     db: Session, plan: list[tuple], sandbox_state
 ) -> None:  # noqa: ANN001
     """The same machine against a base currency with a minor unit, where the ledger and the
-    wire round to the same place and the residue should vanish."""
+    wire round to the same place."""
     with _sandbox(sandbox_state) as client:
         fixture = fiscalize(
             db, build_order_entry(db, f"fis-usd-{next(_EXAMPLE)}"), client, tag="usd"
         )
-        base = db.scalar(
-            select(Currency).where(
-                Currency.company_id == fixture.company_id, Currency.is_base.is_(True)
-            )
-        )
-        base.decimal_places = 2
-        db.flush()
+        _use_a_two_decimal_base(db, fixture)
         _drive(db, fixture, client, plan)
 
 
 # --- Decision 6: the payload map, and the residue census ---------------------------------------
 
-#: How far the wire's taxable amount fell from the posted gross, counted by difference. Printed
-#: rather than asserted to zero, because it **is not** zero on a zero-decimal base: `prc` is the
-#: VAT-inclusive unit price at two decimals, and `prc x qty` need not equal a gross the ledger
-#: rounded to the franc. Whether RRA tolerates it is one of the two questions step 5 carries to
-#: the live environment, so the number has to be one somebody can quote.
+#: How far the wire's taxable amount fell from the posted gross, counted by difference and
+#: **keyed by the base currency's decimals**, because the answer differs between them and
+#: "measured zero" beats "argued zero".
+#:
+#: Printed rather than asserted away: `prc` is the VAT-inclusive unit price at two decimals and
+#: `prc x qty` need not equal a gross the ledger rounded to its own places. Whether RRA
+#: tolerates the difference is one of the questions step 5 carries to the live environment, so
+#: the number has to be one somebody can quote.
 _RESIDUE: Counter[str] = Counter()
+
+#: How many payloads the machine actually checked, and how many lines the census reached. An
+#: anti-vacuity guard has to *guard* something: the first version of this file ended with
+#: `assert checked >= 0`, which is true of every integer and was therefore a comment with an
+#: `assert` in front of it. Floors, like the order-entry machine's.
+_REACH: Counter[str] = Counter()
+
+#: What a deep pass has to reach before these numbers mean anything. Both are far below what a
+#: 300-example run produces (several hundred payloads, ~140 census lines), and far above what a
+#: broken generator would.
+PAYLOAD_FLOOR = 50
+CENSUS_FLOOR = 20
+#: Of those, how many must carry tax. See the assertion for why this one is the load-bearing.
+TAXED_FLOOR = 10
+#: Only a run with enough examples can be held to a floor. The per-commit profile draws two.
+_FLOORS_FROM_EXAMPLES = 100
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -386,23 +416,85 @@ def _report_residue():  # noqa: ANN202
     yield
     if _RESIDUE:
         print("\n[decision 6] residue census (wire taxable - posted gross):", dict(_RESIDUE))
+    if _REACH:
+        print("[decision 6] reach:", dict(sorted(_REACH.items())))
+    if settings.default.max_examples < _FLOORS_FROM_EXAMPLES:
+        return
+
+    # **A floor per family that ran, and at least one family must have.** The first version of
+    # this file ended with `assert checked >= 0`, which is true of every integer and was
+    # therefore a comment with an `assert` in front of it.
+    #
+    # Scoped to the families present rather than to all of them, because a developer running
+    # one property at a deep profile should not be told the others under-reached. The "at least
+    # one" clause is what stops that tolerance becoming the vacuum it replaced: a whole-file
+    # deep pass — which is what the nightly runs — always has all three.
+    floors = {
+        "payloads": PAYLOAD_FLOOR,
+        "census lines 0dp": CENSUS_FLOOR,
+        "census lines 2dp": CENSUS_FLOOR,
+        "census lines 0dp taxed": TAXED_FLOOR,
+        "census lines 2dp taxed": TAXED_FLOOR,
+        "awkward lines": CENSUS_FLOOR,
+    }
+    assert any(_REACH.get(name) for name in floors), (
+        "a deep pass reached none of the census families. Whatever ran, it measured nothing."
+    )
+    short = {
+        name: _REACH.get(name, 0)
+        for name, floor in floors.items()
+        if _REACH.get(name) and _REACH[name] < floor
+    }
+    # A *taxed* sub-floor of zero is the interesting failure and the one the family floor above
+    # cannot see: an exempt or zero-rated line is exact by construction, so a census made
+    # entirely of them reports a comfortable zero about a question it never asked.
+    for scale in ("0dp", "2dp"):
+        if _REACH.get(f"census lines {scale}") and not _REACH.get(f"census lines {scale} taxed"):
+            short[f"census lines {scale} taxed"] = 0
+    assert not short, (
+        f"the deep pass under-reached {short}. A census that measured almost nothing is green "
+        "for a reason that has nothing to do with what it is measuring — read the reach "
+        "counters above, and if the answer is 'the generator never got near it', the fix is a "
+        "targeted property that constructs the precondition, not a bigger max_examples.\n"
+        f"{dict(sorted(_REACH.items()))}"
+    )
 
 
-def _census_line(wire: Decimal, posted: Decimal) -> None:
+def _census_line(
+    wire: Decimal, posted: Decimal, *, places: int, discounted: bool, taxed: bool
+) -> None:
+    """One line's residue, in **minor units of the base currency**.
+
+    Bucketed by the smallest unit that currency has, so the two bases are comparable: a franc
+    on RWF and a cent on a two-decimal base are both "one unit", which is what the wire's own
+    rounding step costs at most.
+
+    Split by **discounted or not**, because the two have different causes and only one of them
+    is decision 6's residue. An undiscounted line differs only where the wire's two decimals
+    and the ledger's places differ; a discounted line differs because the wire takes the
+    discount off an already-rounded `splyAmt` while the ledger applies it before rounding the
+    line at all. The census reports both so the step-5 conversation can be about the right one.
+    """
+    unit = Decimal(1).scaleb(-places)
     difference = wire - posted
+    scale = f"{places}dp {'discounted' if discounted else 'plain'}"
+    _REACH[f"census lines {places}dp"] += 1
+    if taxed:
+        _REACH[f"census lines {places}dp taxed"] += 1
     if difference == ZERO:
-        _RESIDUE["exact"] += 1
-    elif abs(difference) < Decimal(1):
-        _RESIDUE["under a unit"] += 1
+        _RESIDUE[f"{scale} exact"] += 1
+    elif abs(difference) <= unit:
+        _RESIDUE[f"{scale} one unit"] += 1
     else:
-        _RESIDUE["a unit or more"] += 1
+        _RESIDUE[f"{scale} more than one unit"] += 1
 
 
 @pytest.mark.slow
+@pytest.mark.parametrize("two_decimals", [False, True], ids=["0dp", "2dp"])
 @given(plan=PLAN)
 @settings(deadline=None)
 def test_the_payload_agrees_with_itself_and_the_residue_is_measured(
-    db: Session, plan: list[tuple], sandbox_state
+    db: Session, plan: list[tuple], sandbox_state, two_decimals: bool
 ) -> None:  # noqa: ANN001
     """Decision 6, over whatever the machine posted.
 
@@ -419,6 +511,8 @@ def test_the_payload_agrees_with_itself_and_the_residue_is_measured(
         fixture = fiscalize(
             db, build_order_entry(db, f"fis-map-{next(_EXAMPLE)}"), client, tag="map"
         )
+        if two_decimals:
+            _use_a_two_decimal_base(db, fixture)
         base = base_currency(db, fixture.company_id)
         places, base_id = base.decimal_places, base.id
         _drive(db, fixture, client, [step for step in plan if step[0] != "drain"])
@@ -431,27 +525,33 @@ def test_the_payload_agrees_with_itself_and_the_residue_is_measured(
                 ),
             )
         )
-        checked = 0
         for row in rows:
             _assert_payload_agrees_with_itself(row.payload)
             _assert_no_negative_amount(row.payload)
-            checked += 1
+            _REACH["payloads"] += 1
             document = db.get(PartnerDocument, row.source_doc_id)
             # **Base-currency documents only.** `gross_amount` is in the *document's* currency
             # and the wire is in base, so a USD invoice would be comparing dollars with francs
             # — which is how this census first read 218 lines "a unit or more" apart and meant
-            # nothing at all. The residue decision 6 names is the two-decimal wire against a
-            # zero-decimal ledger; a foreign document's own conversion rounding is a different
+            # nothing at all. The residue decision 6 names is the wire's two decimals against
+            # the ledger's; a foreign document's own conversion rounding is a different
             # question, and one the ledger already owns.
-            if document is None or places != 0 or document.currency_id != base_id:
+            if document is None or document.currency_id != base_id:
                 continue
-            for line, item in zip(
-                [line for line in document.lines if line.kit_parent_line_id is None],
-                row.payload["itemList"],
-                strict=False,
-            ):
-                _census_line(Decimal(str(item["taxblAmt"])), line.gross_amount)
-        assert checked >= 0
+            posted_lines = [
+                line for line in document.lines if line.kit_parent_line_id is None
+            ]
+            # **`strict=True`.** The payload carries one item per non-kit-component line, so a
+            # length mismatch is a mapping defect — and a silent truncation would go on to
+            # compare the wrong pairs and report a residue about two different lines.
+            for line, item in zip(posted_lines, row.payload["itemList"], strict=True):
+                _census_line(
+                    Decimal(str(item["taxblAmt"])),
+                    line.gross_amount,
+                    places=places,
+                    discounted=line.discount_percent > 0,
+                    taxed=Decimal(str(item["taxAmt"])) > 0,
+                )
 
 
 def _assert_payload_agrees_with_itself(payload: dict) -> None:
@@ -519,3 +619,84 @@ def _assert_no_negative_amount(value: object, path: str = "") -> None:
             f"{path} is negative. A refund goes out positive under `rcptTyCd R`; the minus "
             "signs belong to the printed receipt (CIS §14), never to the wire."
         )
+
+
+# --- The residue, on prices that cannot come out even (decision 6) ------------------------------
+#
+# **Why this exists, and it is the same lesson P6 wrote down at F-9.10.** The machine above
+# reported a zero-decimal census of 211 lines in which every *undiscounted* line was exact, while
+# `test_the_decision_6_residue_worked_by_hand` shows an undiscounted line 0.30 out. Both are
+# true, and the reconciliation is the generator: the residue on a plain standard-rated exclusive
+# line is `0.18 x price x qty − round(0.18 x price x qty)`, which is zero exactly when
+# `price x qty` divides by 50 — and Hypothesis draws integers with a heavy bias toward round
+# values, because round values shrink well. Round prices are precisely the ones with no residue,
+# so the machine spent its census on the case that cannot show anything.
+#
+# Buying reach with `max_examples` would not have fixed that; the bias is in the shape of the
+# draw, not its count. So this property **constructs the precondition** instead: a price
+# congruent to 3 mod 5 can never make `price x qty` divisible by 50 for any quantity under 25,
+# so every line it draws has a residue, and the property is about how large one can get.
+
+#: `n x 5 + 3` — never a multiple of five, so `price x qty` is never a multiple of fifty for the
+#: quantities this machine draws, and the residue is never trivially zero.
+UNROUND_PRICE = st.integers(min_value=20, max_value=1800).map(lambda n: Decimal(n * 5 + 3))
+
+AWKWARD_PLAN = st.lists(
+    st.tuples(st.integers(min_value=1, max_value=8).map(Decimal), UNROUND_PRICE),
+    min_size=2,
+    max_size=6,
+)
+
+
+@pytest.mark.slow
+@given(plan=AWKWARD_PLAN)
+@settings(deadline=None)
+def test_the_residue_is_under_one_unit_on_every_price_that_cannot_come_out_even(
+    db: Session, plan: list[tuple], sandbox_state
+) -> None:  # noqa: ANN001
+    """The bound step 5 quotes to RRA: **never as much as one franc on a line.**
+
+    A plain, standard-rated, exclusive line on a zero-decimal base, priced so that the wire and
+    the ledger cannot agree by luck. What is asserted is that they never disagree by a whole
+    unit — the wire's `taxAmt` and the ledger's differ by the rounding of a single tax split,
+    and a difference of a franc or more would mean something else had gone wrong.
+    """
+    with _sandbox(sandbox_state) as client:
+        fixture = fiscalize(
+            db, build_order_entry(db, f"fis-odd-{next(_EXAMPLE)}"), client, tag="odd"
+        )
+        steps = [
+            ("receive", "up", Decimal(8), Decimal(1000), ZERO, "stock", "tin",
+             "VAT-OUT-18", TaxMode.EXCLUSIVE, False)
+        ]
+        steps += [
+            ("sell", "up", quantity, price, ZERO, "stock", "tin",
+             "VAT-OUT-18", TaxMode.EXCLUSIVE, False)
+            for quantity, price in plan
+        ]
+        _drive(db, fixture, client, steps)
+
+        for row in db.scalars(
+            select(FiscalOutboxRow).where(
+                FiscalOutboxRow.company_id == fixture.company_id,
+                FiscalOutboxRow.kind == FiscalOutboxKind.SALE,
+            )
+        ):
+            document = db.get(PartnerDocument, row.source_doc_id)
+            if document is None:
+                continue
+            posted_lines = [
+                line for line in document.lines if line.kit_parent_line_id is None
+            ]
+            for line, item in zip(posted_lines, row.payload["itemList"], strict=True):
+                residue = Decimal(str(item["taxblAmt"])) - line.gross_amount
+                _REACH["awkward lines"] += 1
+                _RESIDUE[
+                    "awkward exact" if residue == ZERO else "awkward under a franc"
+                ] += 1
+                assert abs(residue) < Decimal(1), (
+                    f"{document.number} line {item['itemSeq']}: the wire says "
+                    f"{item['taxblAmt']} and the ledger {line.gross_amount}, a whole franc "
+                    "apart or more. The two may differ by the rounding of one tax split and "
+                    "no more than that."
+                )

@@ -180,6 +180,55 @@ def test_the_frozen_payload_carries_the_posted_figures(
     assert document.tax_amount == Decimal(3600)
 
 
+def test_the_decision_6_residue_worked_by_hand(
+    db: Session, fiscal_posting: FiscalPosting
+) -> None:
+    """The residue decision 6 names, as one line with the arithmetic written out.
+
+    Five units at 313 exclusive, standard-rated, on a base currency with no minor unit:
+
+        posted   net  = 5 x 313                    = 1 565
+                 tax  = round(1 565 x 0.18)        =   282      (281.70, to the franc)
+                 gross                             = 1 847
+        wire     prc  = round(313 x 1.18, 2)       =   369.34
+                 splyAmt = round(369.34 x 5, 2)    = 1 846.70
+                 taxAmt  = round(1 846.70 x 18/118, 2) = 281.70
+
+    So the wire is **0.30 below** the ledger on this line, and that is not a defect in either:
+    the ledger rounded a franc-denominated tax to the franc and the wire is a two-decimal
+    field. It is here as a literal because the property census counts these by bucket, and a
+    census whose buckets were wrong would report the residue as zero and nobody would know.
+    """
+    receive(fiscal_posting, db)
+
+    document = invoice(
+        fiscal_posting,
+        db,
+        lines=(
+            documents_service.LineInput(
+                item_id=fiscal_posting.stock_item.id,
+                quantity=Decimal(5),
+                unit_price=Decimal(313),
+                tax_code_id=fiscal_posting.tax_codes["VAT-OUT-18"].id,
+            ),
+        ),
+    )
+
+    assert document.net_amount == Decimal(1565)
+    assert document.tax_amount == Decimal(282)
+    assert line_of(document).gross_amount == Decimal(1847)
+
+    sale = next(
+        row for row in _rows(db, fiscal_posting.company_id) if row.kind == FiscalOutboxKind.SALE
+    )
+    item = sale.payload["itemList"][0]
+    assert item["prc"] == 369.34
+    assert item["splyAmt"] == 1846.70
+    assert item["taxblAmt"] == 1846.70
+    assert item["taxAmt"] == 281.70
+    assert Decimal(str(item["taxblAmt"])) - line_of(document).gross_amount == Decimal("-0.30")
+
+
 def test_a_walk_in_sale_needs_no_purchase_code_and_defaults_to_cash(
     db: Session, fiscal_posting: FiscalPosting
 ) -> None:
