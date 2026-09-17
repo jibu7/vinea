@@ -123,6 +123,19 @@ From the 2018 CIS specification, and confirmed against the three live receipts:
   a dash after every 4th character**, `Receipt Signature` the same, and the QR code.
 * §7.24.7 — the QR content, verbatim:
   `invoice_date(ddmmyyyy)#time(hhmmss)#sdc number#sdc_receipt_number#internal_data#receipt_signature`
+
+  **`sdc_receipt_number` is read as `totRcptNo`, and the live receipts cannot settle it.** They
+  were rendered and checked: all three carry **no QR code at all** — the only embedded image is
+  the RRA logo — so there is nothing in them to read the field order or the counter choice off.
+  It is a question for Kigali, and the step-5 live run is where it gets asked.
+
+  The reason for the reading, so the live run has something to check against: the receipt prints
+  the pair as `rcptNo/totRcptNo` (§7.25's `A/B RT`), and only `totRcptNo` is unique across
+  receipt types on a device. `rcptNo` counts within a type, so a device that has issued one sale
+  and one refund holds `1 NS` and `1 NR` — a verifier scanning the refund and given `1` cannot
+  tell which receipt it has. `totRcptNo` identifies it. Built that way in
+  `app/fiscal/rwanda/adapter.py::verification_code`; if a sample from the test environment shows
+  otherwise, that function is the one line that changes.
 * §7.25 — `A/B RT`: A is the counter per receipt type, B the total counter, RT the label.
 * §7.27 — an item counter, excluding voids.
 * §7.29 — the official RRA logo on every receipt (`Rwanda-Revenue-Authority-logo.png`).
