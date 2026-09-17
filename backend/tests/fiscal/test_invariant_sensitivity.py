@@ -143,13 +143,15 @@ def test_a_sent_row_with_no_receipt_is_caught(
     """
     receive(fiscal_posting, db, quantity="200")
     invoice(fiscal_posting, db)
+    # The first invoice's whole queue — the item, the receipt of stock, the sale and the two
+    # stock rows behind it — so the device is idle and the next sale is the head.
+    drainer.drain_company(db, fiscal_posting.company_id, client=sandbox_client)
     invoice(fiscal_posting, db)
-    # Two rows: the item registration and the first sale. The second sale is left queued.
-    drainer.drain_company(
-        db, fiscal_posting.company_id, client=sandbox_client, max_rows_per_device=2
+    unsent = next(
+        row
+        for row in _rows(db, fiscal_posting.company_id)
+        if row.kind == FiscalOutboxKind.SALE and row.status == FiscalOutboxStatus.QUEUED
     )
-    unsent = _rows(db, fiscal_posting.company_id)[-1]
-    assert unsent.status == FiscalOutboxStatus.QUEUED
 
     unsent.status = FiscalOutboxStatus.SENT
     db.flush()

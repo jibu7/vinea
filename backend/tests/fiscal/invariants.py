@@ -30,6 +30,27 @@ month and then be a conversation with a revenue authority.
 6. **No key is anywhere.** The three device keys appear in no stored payload and no stored
    response. Walked over every row a test produced rather than asserted of one serializer,
    because the leak that matters is the one nobody thought to look for.
+
+Step 3 adds four, for the purchase and stock reports:
+
+7. **One document, one purchase row — or a confirmation instead, never both.** A posted AP
+   invoice or return whose branch had a live device when it posted has exactly one
+   non-cancelled `purchase` row; a document an **accepted feed row** is linked to has none,
+   because the confirmation registers it from the supplier's side and `feed.accept` cancelled
+   its own. Either mistake declares one supplier invoice twice and doubles the input VAT RRA
+   holds against the taxpayer.
+8. **`invc_no` is gapless per device on the purchase run too.** `FIP` is its own run and RRA
+   reconciles it the same way it reconciles the sales run.
+9. **`sar_no` is gapless per device.** The stock run, same argument: a hole in it is a question
+   from Kigali about a movement nobody can produce.
+10. **A movement never overtakes its document.** Every `stock_io` or `stock_master` row raised
+   by a partner document **that has one** sits *behind* that document's own sale, refund or
+   purchase row on the same device. A journal batch has none — it moves stock and is not a
+   sale — and its movement is reported as an adjustment for that reason.
+
+   VSDC §3.1 requires the invoice information first and RRA answers `921`/`922` when it does
+   not get it. The reason this is an invariant rather than a comment is that the companion
+   stock entry posts *first*, so the natural order is the wrong one.
 """
 
 import json
@@ -44,18 +65,29 @@ from app.fiscal.keys import decrypt_key
 from app.models.fiscalization import (
     FiscalDevice,
     FiscalDeviceStatus,
+    FiscalFeedDecision,
     FiscalOutboxKind,
     FiscalOutboxRow,
     FiscalOutboxStatus,
+    FiscalPurchaseFeedRow,
     FiscalReceipt,
 )
 from app.models.journal import JournalEntry
 from app.models.subledger import DocumentKind, DocumentStatus, PartnerDocument, PartnerRole
 
+DOCUMENT_SOURCE = outbox_service.DOCUMENT_SOURCE
+
 #: The runs a journal batch posts under. Not sales, so not rows — decision 3.
 JOURNAL_DOC_TYPES = frozenset({"ARJN", "APJN"})
 
 SALE_KINDS = (FiscalOutboxKind.SALE, FiscalOutboxKind.REFUND)
+PURCHASE_KINDS = (FiscalOutboxKind.PURCHASE, FiscalOutboxKind.PURCHASE_CONFIRM)
+#: The kinds a partner document raises *about* a movement rather than about itself.
+MOVEMENT_KINDS = (FiscalOutboxKind.STOCK_IO, FiscalOutboxKind.STOCK_MASTER)
+
+#: What a purchase feed confirmation's row points at — a row of RRA's own record rather than a
+#: Vinea document, so it is excluded from "one document, one row" on purpose.
+FEED_SOURCE = "fiscal_purchase_feed"
 
 
 def assert_fiscal_invariants(db: Session, company_id: int) -> None:
@@ -79,6 +111,10 @@ def assert_fiscal_invariants(db: Session, company_id: int) -> None:
     _assert_counters_only_rise(receipts)
     _assert_fifo(rows)
     _assert_no_key_leaked(devices, rows, receipts)
+    _assert_one_document_one_purchase_row(db, company_id, rows)
+    _assert_purchase_numbers_gapless(rows)
+    _assert_stock_numbers_gapless(rows)
+    _assert_movements_follow_their_document(rows)
 
 
 def _assert_one_document_one_row(
@@ -262,3 +298,187 @@ def _assert_no_key_leaked(
                 f"a device key is stored in {where}. The keys are the only secrets this phase "
                 "holds; a payload in a database is a payload in a backup."
             )
+
+
+def _assert_one_document_one_purchase_row(
+    db: Session, company_id: int, rows: list[FiscalOutboxRow]
+) -> None:
+    """Invariant 7. A posted AP invoice or return declares itself exactly once.
+
+    Journal batches are excluded for the reason they are on the sale side — an `APJN` document
+    is an opening balance or a correction, not a purchase — and so are the feed confirmations,
+    which point at a row of RRA's own record and often at no Vinea document at all.
+    """
+    # Keyed on (source type, document) the way the sale side is, and for the same reason: the
+    # **opposite declaration a reversal owes** is a different fact about the same document
+    # rather than a second declaration of it, so it carries `partner_document_reversal`.
+    by_document: dict[tuple[str | None, int | None], list[FiscalOutboxRow]] = defaultdict(list)
+    for row in rows:
+        if row.kind not in PURCHASE_KINDS or row.status == FiscalOutboxStatus.CANCELLED:
+            continue
+        if row.source_doc_type == FEED_SOURCE:
+            continue
+        assert row.source_doc_id is not None, (
+            "a purchase queue row names no document: a declaration RRA would hold against "
+            "nothing"
+        )
+        by_document[(row.source_doc_type, row.source_doc_id)].append(row)
+
+    for (source_type, document_id), group in by_document.items():
+        assert len(group) == 1, (
+            f"document {document_id} has {len(group)} live {source_type} rows — RRA would "
+            "register the same supplier invoice twice, and the input VAT with it"
+        )
+
+    # **Declared once: by its own registration, or by a confirmation, never by both.** An
+    # accepted feed row linked to a document says RRA is registering that purchase from the
+    # supplier's side, and `feed.accept` cancels the document's own row in favour of it — so
+    # for those documents the correct number of live rows is *zero*, and one would be the
+    # double registration decision 9 forbids.
+    confirmed = _documents_confirmed_by_the_feed(db, company_id, rows)
+    live_since = _device_live_since(db, company_id)
+    posted_at = _posting_moments(db, company_id)
+    candidates = db.scalars(
+        select(PartnerDocument).where(
+            PartnerDocument.company_id == company_id,
+            PartnerDocument.role == PartnerRole.AP,
+            PartnerDocument.kind.in_((DocumentKind.INVOICE, DocumentKind.CREDIT_NOTE)),
+            # `POSTED` only, as on the sale side: a **reversed** document's declaration is
+            # legitimately gone — RRA never received it, so the row was cancelled — or it
+            # stands beside the opposite declaration that undid it. Neither is a hole.
+            PartnerDocument.status == DocumentStatus.POSTED,
+        )
+    )
+    for document in candidates:
+        if document.doc_type in JOURNAL_DOC_TYPES:
+            continue
+        since = live_since.get(document.branch_id)
+        moment = posted_at.get(document.journal_entry_id)
+        if since is None or moment is None or moment < since:
+            continue
+        held = by_document.get((DOCUMENT_SOURCE, document.id))
+        if document.id in confirmed:
+            assert not held, (
+                f"{document.number} is registered with RRA by an accepted EBM feed row *and* "
+                "by its own declaration — one supplier invoice, registered twice"
+            )
+            continue
+        assert held, (
+            f"{document.number} posted at {moment} on a branch whose device has been live "
+            f"since {since}, and it has no purchase row — a purchase that reached the ledger "
+            "and never reached RRA"
+        )
+
+
+def _documents_confirmed_by_the_feed(
+    db: Session, company_id: int, rows: list[FiscalOutboxRow]
+) -> set[int]:
+    """AP documents an accepted feed row is registering from the supplier's side.
+
+    A **live confirmation** is what counts, not merely an accepted link. `feed.accept` does two
+    different things depending on what RRA already holds: where the document's own registration
+    had not been sent it cancels that and queues a confirmation, and where it *had* been sent it
+    records the link and queues nothing, because a confirmation would then be the second
+    registration. Both are "declared once"; reading only the link would call the second one a
+    hole.
+    """
+    live_confirmations = {
+        row.source_doc_id
+        for row in rows
+        if row.kind == FiscalOutboxKind.PURCHASE_CONFIRM
+        and row.source_doc_type == FEED_SOURCE
+        and row.status != FiscalOutboxStatus.CANCELLED
+    }
+    return {
+        feed_row.ap_document_id
+        for feed_row in db.scalars(
+            select(FiscalPurchaseFeedRow).where(
+                FiscalPurchaseFeedRow.company_id == company_id,
+                FiscalPurchaseFeedRow.decision == FiscalFeedDecision.ACCEPTED,
+                FiscalPurchaseFeedRow.ap_document_id.is_not(None),
+            )
+        )
+        if feed_row.id in live_confirmations
+    }
+
+
+def _assert_purchase_numbers_gapless(rows: list[FiscalOutboxRow]) -> None:
+    """Invariant 8 — the `FIP` run, per device, including cancelled rows."""
+    _assert_gapless(
+        rows,
+        kinds=PURCHASE_KINDS,
+        number=lambda row: row.invc_no,
+        run="purchase invoice",
+    )
+
+
+def _assert_stock_numbers_gapless(rows: list[FiscalOutboxRow]) -> None:
+    """Invariant 9 — the `FSAR` run. `stock_master` carries no number of its own: it is a
+    snapshot beside a movement rather than a movement."""
+    _assert_gapless(
+        rows,
+        kinds=(FiscalOutboxKind.STOCK_IO,),
+        number=lambda row: row.sar_no,
+        run="stock movement",
+    )
+
+
+def _assert_gapless(
+    rows: list[FiscalOutboxRow],
+    *,
+    kinds: tuple[FiscalOutboxKind, ...],
+    number,  # noqa: ANN001 - row -> int | None
+    run: str,
+) -> None:
+    by_device: dict[int, list[int]] = defaultdict(list)
+    for row in rows:
+        if row.kind in kinds and number(row) is not None:
+            by_device[row.device_id].append(number(row))
+    for device_id, numbers in by_device.items():
+        ordered = sorted(numbers)
+        assert ordered == list(range(1, len(ordered) + 1)), (
+            f"device {device_id}'s {run} numbers are {ordered}, not 1..{len(ordered)} — RRA "
+            "reconciles this run, and a hole in it is a question from Kigali"
+        )
+
+
+def _assert_movements_follow_their_document(rows: list[FiscalOutboxRow]) -> None:
+    """Invariant 10. A partner document's movement is behind the document's own row.
+
+    The one ordering that is *not* automatic. Everything else in the queue is in creation order
+    and creation order is the right order — but the companion stock entry posts **before** the
+    partner side (P6 decision 2), so a movement reported from inside the stock service would sit
+    ahead of the sale that caused it. `post_document` reports it afterwards instead, and this is
+    what holds that true.
+    """
+    document_rows: dict[tuple[str | None, int | None], list[FiscalOutboxRow]] = defaultdict(list)
+    for row in rows:
+        if row.kind in SALE_KINDS or row.kind in PURCHASE_KINDS:
+            document_rows[(row.source_doc_type, row.source_doc_id)].append(row)
+
+    for row in rows:
+        if row.kind not in MOVEMENT_KINDS or row.source_doc_type != DOCUMENT_SOURCE:
+            continue
+        on_this_device = [
+            candidate
+            for key, group in document_rows.items()
+            if key[1] == row.source_doc_id
+            for candidate in group
+            if candidate.device_id == row.device_id
+        ]
+        if not on_this_device:
+            # **A journal batch moves stock and is not a sale** (decision 3), so it has no
+            # document row for its movement to sit behind — which is exactly why that movement
+            # is reported as an *adjustment* rather than as a sale RRA has no invoice for. A
+            # sale that lost its row is a different failure, and invariant 1 is what catches it.
+            continue
+        earlier = [
+            candidate
+            for candidate in on_this_device
+            if candidate.sequence_no < row.sequence_no
+        ]
+        assert earlier, (
+            f"queue row {row.id} reports a movement of document {row.source_doc_id} on device "
+            f"{row.device_id} with no sale, refund or purchase of that document ahead of it — "
+            "RRA needs the invoice information first and answers 921/922 without it"
+        )

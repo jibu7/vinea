@@ -27,7 +27,7 @@ from app.models.fiscalization import (
 )
 from app.models.subledger import PartnerDocument
 from tests.fiscal.conftest import FiscalPosting
-from tests.fiscal.helpers import invoice, receive
+from tests.fiscal.helpers import drain_to_the_sale, invoice, receive
 from tests.fiscal.invariants import assert_fiscal_invariants
 
 
@@ -84,9 +84,16 @@ def test_a_drain_registers_the_item_then_the_sale_and_writes_the_receipt(
 
     outcomes = _drain(db, fiscal_posting, sandbox_client)
 
+    # The item first, because it is registered on first fiscal use and creation order is queue
+    # order; then the receipt's own stock report; then the sale and *its* stock report, which
+    # is behind it because RRA requires the sale before the movement it caused (decision 10).
     assert [outcome.kind for outcome in outcomes] == [
         FiscalOutboxKind.ITEM,
+        FiscalOutboxKind.STOCK_IO,
+        FiscalOutboxKind.STOCK_MASTER,
         FiscalOutboxKind.SALE,
+        FiscalOutboxKind.STOCK_IO,
+        FiscalOutboxKind.STOCK_MASTER,
     ]
     assert all(outcome.status == FiscalOutboxStatus.SENT for outcome in outcomes)
 
@@ -165,10 +172,12 @@ def test_a_row_that_is_not_due_is_not_sent(
 
     later = _rows(db, fiscal_posting.company_id)[0].next_attempt_at
     outcomes = _drain(db, fiscal_posting, sandbox_client, at=later)
-    assert [outcome.status for outcome in outcomes] == [
-        FiscalOutboxStatus.SENT,
-        FiscalOutboxStatus.SENT,
-    ]
+    # The row whose time came, and everything the FIFO was holding behind it: the item
+    # registration, the receipt of stock and its snapshot, then the sale and its own two.
+    assert [outcome.status for outcome in outcomes] == [FiscalOutboxStatus.SENT] * 6
+    assert outbox_service.head_row(
+        db, fiscal_posting.company_id, fiscal_posting.device.id
+    ) is None
 
 
 def test_a_refused_row_blocks_the_queue_behind_it(
@@ -299,7 +308,7 @@ def test_verifying_a_row_the_device_never_saw_puts_it_back_in_the_queue(
     below ours and the row is safe to send."""
     receive(fiscal_posting, db)
     invoice(fiscal_posting, db)
-    _drain(db, fiscal_posting, sandbox_client, max_rows=1)
+    drain_to_the_sale(fiscal_posting, db, sandbox_client)
     _mode(sandbox_client, "timeout")
     _drain(db, fiscal_posting, sandbox_client)
     sale = next(
@@ -319,7 +328,8 @@ def test_verifying_a_row_the_device_never_saw_puts_it_back_in_the_queue(
 
     assert sale.status == FiscalOutboxStatus.QUEUED
     outcomes = _drain(db, fiscal_posting, sandbox_client, at=now() + timedelta(minutes=1))
-    assert [outcome.status for outcome in outcomes] == [FiscalOutboxStatus.SENT]
+    # The sale, and the two rows its own stock movement queued behind it (P7 step 3).
+    assert [outcome.status for outcome in outcomes] == [FiscalOutboxStatus.SENT] * 3
     assert_fiscal_invariants(db, fiscal_posting.company_id)
 
 

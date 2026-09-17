@@ -84,7 +84,20 @@ def test_the_item_is_registered_ahead_of_the_sale_that_names_it(
 
     rows = _rows(db, fiscal_posting.company_id)
     kinds = [row.kind for row in rows]
-    assert kinds == [FiscalOutboxKind.ITEM, FiscalOutboxKind.SALE]
+    # The receipt of stock reports itself too (P7 step 3), which is why the list is six rows
+    # rather than two — and why the ordering assertion below is the one that matters: the
+    # `item` row is first on the device and the sale's stock report is behind the sale.
+    assert kinds == [
+        FiscalOutboxKind.ITEM,
+        FiscalOutboxKind.STOCK_IO,
+        FiscalOutboxKind.STOCK_MASTER,
+        FiscalOutboxKind.SALE,
+        FiscalOutboxKind.STOCK_IO,
+        FiscalOutboxKind.STOCK_MASTER,
+    ]
+    item_row = next(row for row in rows if row.kind == FiscalOutboxKind.ITEM)
+    sale_row = next(row for row in rows if row.kind == FiscalOutboxKind.SALE)
+    assert item_row.sequence_no < sale_row.sequence_no
     registered = db.scalars(
         select(FiscalItem).where(FiscalItem.company_id == fiscal_posting.company_id)
     ).one()
@@ -285,7 +298,6 @@ def test_a_non_fiscalized_company_queues_nothing(
     exactly as P6 left it, with no fiscal row and no refusal."""
     from app.fiscal import devices as device_service
 
-    receive(fiscal_posting, db)
     device_service.suspend(
         db,
         fiscal_posting.company_id,
@@ -294,6 +306,9 @@ def test_a_non_fiscalized_company_queues_nothing(
         actor=fiscal_posting.owner,
     )
 
+    # Suspended **first**, so the receipt of stock is a negative control too: P7 step 3 reports
+    # every stock posting on a fiscalized company, and this company is not one.
+    receive(fiscal_posting, db)
     invoice(fiscal_posting, db, purchase_code=None)
 
     assert _rows(db, fiscal_posting.company_id) == []
