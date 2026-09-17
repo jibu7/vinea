@@ -1,10 +1,17 @@
-"""Fiscalization API (P7). Step 1 is setup — devices, the two syncs, the TIN lookup — and
-step 2 adds the one endpoint the queue needs, `POST /fiscal/outbox/drain`.
+"""Fiscalization API (P7). Step 1 is setup — devices, the two syncs, the TIN lookup — step 2
+adds the one endpoint the queue needs, `POST /fiscal/outbox/drain`, and step 3 adds the purchase
+feed and the import register.
 
-The screens that drive these arrive at **step 6** (Maintenance → Tax → EBM devices, and Verify
-TIN on Customers / Suppliers). Until then every mutating endpoint here carries a
-`GAP (P7, step 6)` line in `tests/test_api_has_a_caller.py`, naming the step that deletes it —
-which is the register working as intended rather than four endpoints nobody can reach.
+The screens that drive these arrive at **steps 6 and 7**: Maintenance → Tax → EBM devices and
+Verify TIN on Customers / Suppliers at step 6, Transactions → Tax → EBM purchases and Import
+declarations at step 7. Until then every mutating endpoint here carries a `GAP (P7, step N)`
+line in `tests/test_api_has_a_caller.py`, naming the step that deletes it — which is the
+register working as intended rather than eleven endpoints nobody can reach.
+
+**Nothing here registers a purchase or reports stock**, and that is not an omission: a
+declaration is written by the posting that caused it, in the same transaction, by a row in
+`fiscal_outbox` (decision 4). What these endpoints do is the half a person decides — fetching
+what RRA is holding, and saying yes or no to it.
 
 The code and item-class *reads* are here now rather than in step 6 because the Item screen's
 class typeahead and the Tax-types screen's EBM column read them, and a listing with no caller
@@ -22,13 +29,27 @@ from app.core.errors import PermissionDeniedError
 from app.db import get_db
 from app.fiscal import devices as device_service
 from app.fiscal import drainer as drain_service
-from app.models.fiscalization import FiscalCode, FiscalItemClass, FiscalSyncKind
+from app.fiscal import feed as feed_service
+from app.fiscal import imports as import_service
+from app.models.fiscalization import (
+    FiscalCode,
+    FiscalFeedDecision,
+    FiscalImportStatus,
+    FiscalItemClass,
+    FiscalSyncKind,
+)
 from app.schemas.fiscal import (
     DeviceCreate,
     DeviceRead,
     DeviceSuspend,
     DeviceSyncResult,
     DrainResult,
+    FeedAccept,
+    FeedDecisionRead,
+    FeedRowRead,
+    ImportApprove,
+    ImportDeclarationRead,
+    ImportReject,
     TinLookupRead,
     device_read,
 )
@@ -274,3 +295,184 @@ def drain_outbox(
             for outcome in outcomes
         ],
     )
+
+
+# --- The purchase feed and the import register (P7 step 3) ----------------------------------
+#
+# The screens arrive at **step 7** (Transactions → Tax → EBM purchases and Import
+# declarations), so every mutating endpoint below carries a `GAP (P7, step 7)` line in
+# `tests/test_api_has_a_caller.py` naming the step that deletes it.
+
+
+@router.get("/purchase-feed")
+def list_purchase_feed(
+    device_id: int | None = Query(default=None),
+    decision: FiscalFeedDecision | None = Query(default=None),
+    auth: AuthContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+) -> list[FeedRowRead]:
+    _require_view(auth)
+    return [
+        FeedRowRead.model_validate(row)
+        for row in feed_service.list_rows(
+            db, auth.company_id, device_id=device_id, decision=decision
+        )
+    ]
+
+
+@router.post("/devices/{device_id}/fetch-purchase-feed")
+def fetch_purchase_feed(
+    device_id: int,
+    request: Request,
+    auth: AuthContext = permissions.require(permissions.FISCAL_QUEUE_MANAGE),
+    db: Session = Depends(get_db),
+) -> DeviceSyncResult:
+    device = device_service.get_device(db, auth.company_id, device_id)
+    rows = feed_service.fetch(db, auth.company_id, device, actor=auth.user, request=request)
+    db.commit()
+    return DeviceSyncResult(
+        device_id=device.id,
+        kind=FiscalSyncKind.PURCHASES,
+        rows=rows,
+        watermark=device.watermarks.get(FiscalSyncKind.PURCHASES),
+    )
+
+
+@router.post("/purchase-feed/{row_id}/accept")
+def accept_purchase_feed_row(
+    row_id: int,
+    payload: FeedAccept,
+    request: Request,
+    auth: AuthContext = permissions.require(permissions.FISCAL_QUEUE_MANAGE),
+    db: Session = Depends(get_db),
+    idempotency_key: str = IdempotencyKey,
+) -> FeedDecisionRead:
+    """Confirm a purchase RRA is holding, optionally linking the AP document it became.
+
+    `Idempotency-Key` because the decision claims an `FIP` number and queues a row: a
+    double-click would otherwise spend a number on a confirmation nobody asked for twice.
+    """
+    row = feed_service.get_row(db, auth.company_id, row_id)
+    decided = feed_service.accept(
+        db,
+        auth.company_id,
+        row,
+        ap_document_id=payload.ap_document_id,
+        actor=auth.user,
+        request=request,
+    )
+    db.commit()
+    return _feed_decision(decided)
+
+
+@router.post("/purchase-feed/{row_id}/reject")
+def reject_purchase_feed_row(
+    row_id: int,
+    request: Request,
+    auth: AuthContext = permissions.require(permissions.FISCAL_QUEUE_MANAGE),
+    db: Session = Depends(get_db),
+    idempotency_key: str = IdempotencyKey,
+) -> FeedDecisionRead:
+    row = feed_service.get_row(db, auth.company_id, row_id)
+    decided = feed_service.reject(
+        db, auth.company_id, row, actor=auth.user, request=request
+    )
+    db.commit()
+    return _feed_decision(decided)
+
+
+def _feed_decision(decided: feed_service.FeedDecision) -> FeedDecisionRead:
+    return FeedDecisionRead(
+        row=FeedRowRead.model_validate(decided.row),
+        confirmation_row_id=(
+            decided.confirmation.id if decided.confirmation is not None else None
+        ),
+        cancelled_row_id=decided.cancelled.id if decided.cancelled is not None else None,
+        note=decided.note,
+    )
+
+
+@router.get("/import-declarations")
+def list_import_declarations(
+    device_id: int | None = Query(default=None),
+    status_filter: FiscalImportStatus | None = Query(default=None, alias="status"),
+    auth: AuthContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+) -> list[ImportDeclarationRead]:
+    _require_view(auth)
+    return [
+        ImportDeclarationRead.model_validate(row)
+        for row in import_service.list_declarations(
+            db, auth.company_id, device_id=device_id, status=status_filter
+        )
+    ]
+
+
+@router.post("/devices/{device_id}/fetch-imports")
+def fetch_imports(
+    device_id: int,
+    request: Request,
+    auth: AuthContext = permissions.require(permissions.FISCAL_QUEUE_MANAGE),
+    db: Session = Depends(get_db),
+) -> DeviceSyncResult:
+    device = device_service.get_device(db, auth.company_id, device_id)
+    rows = import_service.fetch(
+        db, auth.company_id, device, actor=auth.user, request=request
+    )
+    db.commit()
+    return DeviceSyncResult(
+        device_id=device.id,
+        kind=FiscalSyncKind.IMPORTS,
+        rows=rows,
+        watermark=device.watermarks.get(FiscalSyncKind.IMPORTS),
+    )
+
+
+@router.post("/import-declarations/{declaration_id}/approve")
+def approve_import_declaration(
+    declaration_id: int,
+    payload: ImportApprove,
+    request: Request,
+    auth: AuthContext = permissions.require(permissions.FISCAL_QUEUE_MANAGE),
+    db: Session = Depends(get_db),
+    idempotency_key: str = IdempotencyKey,
+) -> ImportDeclarationRead:
+    """Acknowledge a declared line, naming the Vinea item it became.
+
+    It moves no stock and posts nothing (decision 9) — the goods reached the ledger through a
+    goods receipt, and saying so twice would double them.
+    """
+    declaration = import_service.get_declaration(db, auth.company_id, declaration_id)
+    import_service.approve(
+        db,
+        auth.company_id,
+        declaration,
+        item_id=payload.item_id,
+        note=payload.note,
+        actor=auth.user,
+        request=request,
+    )
+    db.commit()
+    return ImportDeclarationRead.model_validate(declaration)
+
+
+@router.post("/import-declarations/{declaration_id}/reject")
+def reject_import_declaration(
+    declaration_id: int,
+    payload: ImportReject,
+    request: Request,
+    auth: AuthContext = permissions.require(permissions.FISCAL_QUEUE_MANAGE),
+    db: Session = Depends(get_db),
+    idempotency_key: str = IdempotencyKey,
+) -> ImportDeclarationRead:
+    declaration = import_service.get_declaration(db, auth.company_id, declaration_id)
+    import_service.reject(
+        db,
+        auth.company_id,
+        declaration,
+        note=payload.note,
+        actor=auth.user,
+        request=request,
+    )
+    db.commit()
+    return ImportDeclarationRead.model_validate(declaration)

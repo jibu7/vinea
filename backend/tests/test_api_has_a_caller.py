@@ -110,6 +110,36 @@ NO_UI: dict[str, str] = {
         "GAP (P7, step 6) — deleted by Sync codes on the EBM devices screen, which syncs the "
         "item classification beside the code tables."
     ),
+    # --- GAP (P7, step 7): the purchase feed and the import register ---------------------------
+    #
+    # Six lines. The screens are **Transactions → Tax → EBM purchases** (`/fiscal/purchases`:
+    # the feed, with Accept, Reject and the AP-document link) and **Import declarations**
+    # (`/fiscal/imports`: the list, with the item picker, Approve and Reject). Each carries its
+    # own Fetch, because a feed nobody can refresh is a feed that is always yesterday's.
+    #
+    # Nothing here registers a purchase or reports stock: those are written by the posting that
+    # caused them, in its own transaction, and have no endpoint at all — which is the design
+    # rather than a gap (decision 4).
+    "POST /api/v1/fiscal/devices/{device_id}/fetch-purchase-feed": (
+        "GAP (P7, step 7) — deleted by Fetch on the EBM purchases screen."
+    ),
+    "POST /api/v1/fiscal/purchase-feed/{row_id}/accept": (
+        "GAP (P7, step 7) — deleted by Accept on the EBM purchases screen, which links the AP "
+        "document the purchase became."
+    ),
+    "POST /api/v1/fiscal/purchase-feed/{row_id}/reject": (
+        "GAP (P7, step 7) — deleted by Reject on the EBM purchases screen."
+    ),
+    "POST /api/v1/fiscal/devices/{device_id}/fetch-imports": (
+        "GAP (P7, step 7) — deleted by Fetch on the Import declarations screen."
+    ),
+    "POST /api/v1/fiscal/import-declarations/{declaration_id}/approve": (
+        "GAP (P7, step 7) — deleted by Approve on the Import declarations screen, which names "
+        "the Vinea item the declared line became."
+    ),
+    "POST /api/v1/fiscal/import-declarations/{declaration_id}/reject": (
+        "GAP (P7, step 7) — deleted by Reject on the Import declarations screen."
+    ),
     # --- GAP: the operator console, planned but unscheduled ------------------------------------
     "POST /api/v1/operator/tenants/{company_id}/activate": (
         "GAP (SaaS admin, Appendix C.2) — the operator console has no screens in any phase yet. "
