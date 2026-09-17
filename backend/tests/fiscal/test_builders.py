@@ -106,6 +106,9 @@ def line(
         taxable_amount=taxable,
         tax_amount=tax,
         tax_class=tax_class,
+        # The programmed rate that goes with the class, so the factory cannot build a line
+        # whose rate and class disagree — the wire tax is derived from this.
+        tax_rate_pct=Decimal(codes.PROGRAMMED_RATES[tax_class.value]),
         package_unit="NT",
         quantity_unit="U",
         discount_percent=discount,
@@ -350,7 +353,6 @@ def test_the_header_is_the_sum_of_the_lines_and_the_tax_is_the_inclusive_rate(
     base_decimals: int, data: st.DataObject
 ) -> None:
     lines = data.draw(random_lines(base_decimals))
-    exponent = Decimal(1).scaleb(-base_decimals)
 
     emitted = builders.build_sale_request(device(), sale(lines)).model_dump(mode="json")
 
@@ -360,8 +362,12 @@ def test_the_header_is_the_sum_of_the_lines_and_the_tax_is_the_inclusive_rate(
             (builders.wire(item.taxable_amount) for item in lines if item.tax_class == tax_class),
             ZERO,
         )
+        # The **derived** tax, not the posted one: since the build follows Sage's convention
+        # of sending `taxblAmt x r/(100+r)`, a header summing the posted tax would be a header
+        # disagreeing with its own lines. That is the defect this clause exists to catch, so it
+        # has to be computed the way the lines are.
         expected_tax = sum(
-            (builders.wire(item.tax_amount) for item in lines if item.tax_class == tax_class),
+            (builders.line_tax(item) for item in lines if item.tax_class == tax_class),
             ZERO,
         )
         assert emitted_amount(emitted[f"taxblAmt{tax_class.value}"]) == expected_taxable
@@ -377,37 +383,40 @@ def test_the_header_is_the_sum_of_the_lines_and_the_tax_is_the_inclusive_rate(
     assert emitted_amount(emitted["totAmt"]) == emitted_amount(emitted["totTaxblAmt"])
     assert emitted["totItemCnt"] == len(lines)
 
-    # 3. Every line's tax is its taxable amount at the programmed rate, VAT-inclusive, at the
-    # *base currency's* decimals — which is what the sandbox and RRA both check.
+    # 3. Every line's tax is its taxable amount at the programmed rate, VAT-inclusive, at two
+    # decimals — which is what the authority recomputes and therefore what must be sent.
     for item, source in zip(emitted["itemList"], lines, strict=True):
         rate = Decimal(codes.PROGRAMMED_RATES[source.tax_class.value])
-        expected = (emitted_amount(item["taxblAmt"]) * rate / (HUNDRED + rate)).quantize(
-            exponent
-        )
+        expected = (emitted_amount(item["taxblAmt"]) * rate / (HUNDRED + rate)).quantize(PENNY)
         assert emitted_amount(item["taxAmt"]) == expected
 
-        # 4. The census: how often the wire price fails to multiply back to the posted gross.
-        residue = emitted_amount(item["dcAmt"])
+        # 4. The line's own arithmetic, which the VSDC engine validates: an undiscounted line
+        # carries no discount amount, and `splyAmt - dcAmt` is the taxable amount exactly.
+        supply = emitted_amount(item["splyAmt"])
+        discount = emitted_amount(item["dcAmt"])
+        taxable = emitted_amount(item["taxblAmt"])
+        assert supply - discount == taxable, (
+            f"splyAmt {supply} - dcAmt {discount} is not taxblAmt {taxable}"
+        )
+        if emitted_amount(item["dcRt"]) == ZERO:
+            assert discount == ZERO, (
+                "a line nobody discounted may not carry a discount amount: that is the phantom "
+                "discount the VSDC engine rejects"
+            )
+
+        # 5. The census stays, because it is what would show the above quietly stopping being
+        # true. Both counters should now read exact on every draw; a residue line reappearing
+        # means the inclusive-price grounding has been lost somewhere.
         _count(
             f"{base_decimals}dp: dcAmt residue on an undiscounted line"
-            if residue != ZERO
+            if discount != ZERO and emitted_amount(item["dcRt"]) == ZERO
             else f"{base_decimals}dp: dcAmt exact"
         )
-        # 5. And the second, larger question this run surfaced: the posted tax is rounded to
-        # the *base currency's* decimals, while the wire is `NUMBER 18,2` and RRA recomputes
-        # there. On a zero-decimal base the two agree only when the gross is a multiple of
-        # 59 — so this counts how often they differ and by how much, because that is the
-        # question step 5's live run has to answer.
-        two_dp = (emitted_amount(item["taxblAmt"]) * rate / (HUNDRED + rate)).quantize(PENNY)
-        gap = abs(emitted_amount(item["taxAmt"]) - two_dp)
+        two_dp = (taxable * rate / (HUNDRED + rate)).quantize(PENNY)
         _count(
             f"{base_decimals}dp: taxAmt equals the 2dp recomputation"
-            if gap == ZERO
+            if emitted_amount(item["taxAmt"]) == two_dp
             else f"{base_decimals}dp: taxAmt differs from the 2dp recomputation"
-        )
-        assert gap < Decimal(1), (
-            "the posted tax may sit within one base-currency unit of a two-decimal "
-            f"recomputation, and no further: {item['taxAmt']} against {two_dp}"
         )
 
 
@@ -437,3 +446,49 @@ def test_a_payload_the_sandbox_accepts_is_what_the_builder_produces(
     ).json()
 
     assert response["resultCd"] == codes.RESULT_OK, response["resultMsg"]
+
+
+def test_a_refund_carries_no_negative_number() -> None:
+    """Sage's standard, held over the **whole payload** rather than the fields somebody thought
+    of: a refund is positive everywhere, and its direction is `rcptTyCd R` plus `orgInvcNo`.
+
+    Walked recursively because that is the only version that survives a new field. The VSDC
+    schema rejects a negative quantity outright, so a builder that "helpfully" negated a refund
+    would fail at the authority rather than here — which is a much worse place to find out.
+    """
+    refund = builders.build_refund_request(
+        device(),
+        FiscalRefund(
+            **{
+                **{
+                    field: value
+                    for field, value in vars(
+                        sale((line(quantity=Decimal(2), inclusive_price=Decimal("1180"),
+                                   taxable=Decimal(2360), tax=Decimal(360)),))
+                    ).items()
+                },
+                "original_invoice_no": 7,
+                "reason_code": codes.RefundReason.REFUND,
+            }
+        ),
+    ).model_dump(mode="json")
+
+    negatives: list[str] = []
+
+    def walk(node, path: str) -> None:  # noqa: ANN001
+        if isinstance(node, dict):
+            for key, value in node.items():
+                walk(value, f"{path}.{key}" if path else key)
+        elif isinstance(node, list):
+            for index, value in enumerate(node):
+                walk(value, f"{path}[{index}]")
+        elif isinstance(node, (int, float)) and not isinstance(node, bool) and node < 0:
+            negatives.append(f"{path}={node}")
+        elif isinstance(node, str) and node.startswith("-"):
+            negatives.append(f"{path}={node}")
+
+    walk(refund, "")
+
+    assert negatives == [], f"a refund payload must be positive throughout: {negatives}"
+    assert refund["rcptTyCd"] == "R", "the direction is the receipt type"
+    assert refund["orgInvcNo"] == 7, "and the original it reverses"

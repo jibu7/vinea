@@ -29,27 +29,36 @@ hash is updated.
 |---|---|---|
 | `EXCEL_SHEET_application_form_RRA_VSDC_okay(Compliance table).csv` | The RRA certification checkpoint sheet — 75 numbered requirements | `fea718cf650d7ac64589c1a05d904219587a818f66d48914a82dd5411419ba76` |
 | `Rwanda-Revenue-Authority-logo.png` | The RRA logo, for CIS §7.29 (checkpoint 32) | `5dcc58d56a2bd56d46275de972c42bb2dfbe62562c4e8912733d58c2b3973b6d` |
-| `CONTACTEUR.pdf` | A live EBM 2.1 receipt — normal sale, four standard-rated lines | `dfbf3acc21000dcfd6f75d6fd0b34be0a783247f10ce59a60e3ec994e760a5b6` |
-| `desktop iyaga transport 2.pdf` | A live EBM 2.1 receipt — normal sale, one exempt line | `a4060396bf86d961f53318b80592bf5d85a80b0e1d92159379f9e8a2b003368d` |
-| `12.pdf` | A live EBM 2.1 receipt — a **copy** (`CS`) | `833085bb04b29e0c12f787d9365bfccac0ef1dac7ab4ce0e0c43b243aca40116` |
-| `Screenshot 2026-09-16 142523.png` | A live EBM 2.1 receipt — invoice 1, a **copy** (`1/1CS`), one exempt line, item code `RW2NTXU0000002` | `57be62635329c8e2d02a6099339a45983b9c1be238586c3b96280521824fea8b` |
-| `Screenshot 2026-09-16 142549.png` | A live EBM 2.1 receipt — invoice 22 (`22/22NS`), one standard-rated line of 168,000 with tax 25,627.12, item code `RW2NTXNOX0000014` | `e887d685e3969cf2068463a5a6473a53b81c22abe4a076787687da3257d220a3` |
 
-The three receipt PDFs and the two screenshots are all the same vendor's output, not RRA's own
-samples. They are evidence of what a certified system actually prints — which is what step 8's
-layout is built to — and they are treated as evidence rather than as specification wherever
-they and the 2018 document differ. `contract-notes.md` records each place they do.
+### The live receipts, and why they are not here
 
-Evidence is not decoration, and these two earned their place twice:
+Five live EBM 2.1 receipts from one Rwandan vendor were held here while the adapter was
+written against them. **They have been removed**: they are real tax documents carrying real
+taxpayers' TINs, trading names, addresses and telephone numbers, this repository is public, and
+their use case is finished — everything they settled is written down below and in
+`contract-notes.md`, which is the durable form of the evidence.
 
-* Invoice 22's `Total Tax B Rwf 25,627.12` on a `Total B-18%` of 168,000 is a **third** data
-  point for the rounding question (`contract-notes.md` §7), agreeing with `CONTACTEUR.pdf`:
-  168,000 x 18/118 = 25,627.1186, printed to two decimals.
-* Invoice 22's item code `RW2NTXNOX0000014` **found a bug** in `build_item_code`. The rule had
-  been read off the two Rwandan samples in §4.17 as "left-pad the quantity unit to two
-  characters with `X`", which is wrong for the three-character codes §4.6 publishes: the
-  document's own `KR2AMXBLL0000001` and this receipt's `NOX` both carry an `X` that the padding
-  reading does not produce. All five known codes are now a parametrised test.
+What they were, and what each proved:
+
+| Receipt | What it showed |
+|---|---|
+| `CONTACTEUR.pdf` | Normal sale, four standard-rated lines. `Total Tax B Rwf 9,152.54` on a `Total B-18%` of 60 000 — two decimals on the printed tax. Item code `RW2NTXNOX0000011`. |
+| `desktop iyaga transport 2.pdf` | Normal sale with one exempt line — the `A-EX` bucket in the totals block. |
+| `12.pdf` | A **copy** (`CS`), which is what CIS §7.18's reprint rule looks like in practice. |
+| Invoice 1 (screenshot) | A copy (`1/1CS`), one exempt line, `Total A-EX Rwf 510,000.00` with tax `0.00`. Item code `RW2NTXU0000002`. |
+| Invoice 22 (screenshot) | `22/22NS`, one standard-rated line of 168 000 with tax 25 627.12 — the second two-decimal data point. Item code `RW2NTXNOX0000014`. |
+
+Two findings came out of them and are pinned by tests rather than by the files:
+
+* **The rounding question gained two data points**, both on the two-decimal side
+  (`contract-notes.md` §7).
+* **The item-code rule was wrong**, and five machine-generated codes — three from the
+  specification, two from these receipts — settle it (`contract-notes.md` §8,
+  `backend/tests/fiscal/test_routes_and_codes.py`).
+
+Note that `git rm` removes them going forward and **does not scrub them from history**: they
+entered on `main` via PR #48 and remain in that history until somebody rewrites it, which is a
+separate and destructive operation nobody has asked for.
 
 ## What the documents settled
 
@@ -67,11 +76,25 @@ Read `contract-notes.md` for the contract itself. The findings that changed code
 
 ## Still open
 
+The rounding, refund-sign and copy-counter questions are **closed**, on the Sage 200 Evolution
+standard — the certified Rwandan integration this build takes its conventions from. See
+`contract-notes.md` §7, §7a and §7b. What remains:
+
 1. **Test-environment access.** Step 5's live run against `https://sdcsandbox.rra.gov.rw` needs
    a TIN, branch id and device serial approved on `https://myrratest.rra.gov.rw`. Not a blocker
-   for steps 1–4.
-2. **Whether RRA recomputes a line's tax at two decimals.** The evidence points both ways and
-   is set out in `contract-notes.md` §7. The build sends the ledger's franc figure, which is
-   what RRA's own Rwandan sample does.
-3. **The QR payload.** CIS §7.24.7 gives a format; none of the five live receipts exposes its
+   for steps 1–4. **Status: still unstated** — the answer came back as an unfilled blank
+   (`not held / applied on <date>`), so nobody has recorded which it is.
+2. **The item-code segment rule.** `contract-notes.md` §8. The build terminates a
+   two-character packaging or quantity segment with `X`, following five machine-generated codes
+   against §4.17's one hand-written example, which it therefore does not reproduce. The live
+   run should register an item with a two-character quantity unit and one with a
+   three-character unit, and read back what the authority accepts.
+3. **The QR payload.** CIS §7.24.7 gives a format; none of the five live receipts exposed its
    QR content as text, so the format is unconfirmed.
+
+## Precondition (b), confirmed
+
+On **16 September 2026** RRA's integration page linked exactly the VSDC v1.0.5 and 2018 CIS
+documents pinned above, and OSDC v1.0.1 is the revision published on `rra.gov.rw`. **No newer
+revision of any of the three has been published.** The hashes above are therefore current, not
+merely reproducible, and `test_rra_documents.py` will fail the day one of them is replaced.

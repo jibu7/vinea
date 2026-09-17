@@ -11,12 +11,26 @@ line's posted gross in base currency and `taxAmt` the tax it attracted — not a
 The ledger already decided what the sale was worth; a payload that recomputed it would be a
 second opinion about a number an auditor can see.
 
-**`prc` is VAT-inclusive at two decimals, and the residue goes to `dcAmt`.** An exclusive
-document's unit price becomes `unit_price × (100 + r) / 100`, which on a zero-decimal base
-rarely multiplies back to the posted gross exactly. The difference has to land somewhere the
-header buckets still add up, and the discount amount is the one field the documents do not
-derive from another — so it takes it, while `dcRt` carries the discount somebody actually
-keyed. Whether RRA tolerates that is one of the two questions step 5's sandbox run answers.
+**An undiscounted line carries `dcRt` 0 and `dcAmt` 0, and the wire tax is derived, not
+copied.** Both follow the Sage 200 Evolution integration, which is the certified-in-Rwanda
+reference this build takes its conventions from.
+
+The first version of this file did the opposite: it multiplied the VAT-inclusive unit price by
+the quantity and put the difference from the posted gross into `dcAmt`, on the reasoning that
+the discount amount is the one field the documents do not derive from another. That produces a
+*phantom discount* on a line nobody discounted, and the VSDC engine validates line arithmetic
+strictly — `dcRt: 0` with a non-zero `dcAmt` is a payload validation failure, not a tolerance.
+So `splyAmt` is now the posted gross on an undiscounted line, `dcAmt` is zero, and
+`splyAmt − dcAmt == taxblAmt` holds exactly. On a discounted line `splyAmt` is the
+inclusive-price extension, `dcRt` the keyed percentage and `dcAmt` the money it came to, and
+the same relation holds.
+
+**`taxAmt` is `taxblAmt × r / (100 + r)`, half-up to two decimals** — the RRA split applied to
+the inclusive taxable amount, which is how Sage reconciles a zero-decimal ledger against a
+two-decimal wire. The consequence is deliberate and worth stating: the receipt's tax can differ
+from the *posted* tax by under a franc per line, so the VAT return — a query over the ledger —
+reconciles to the receipts rather than equalling them. §7 of `contract-notes.md` records the
+evidence and step 4's tie report shows the difference instead of asserting it away.
 
 **The header is Σ of the lines, by class.** Never a separate computation: `totTaxblAmt` is the
 sum of the four buckets and each bucket is the sum of its lines, so a payload cannot disagree
@@ -111,17 +125,38 @@ def _actor(sale_or_purchase: FiscalSale | FiscalPurchase | FiscalStockIO) -> tup
 
 
 def _line_amounts(line: FiscalLine) -> tuple[Decimal, Decimal, Decimal, Decimal]:
-    """`(prc, splyAmt, taxblAmt, dcAmt)` for one line.
+    """`(prc, splyAmt, taxblAmt, dcAmt)` for one line, satisfying `splyAmt - dcAmt == taxblAmt`.
 
-    `taxblAmt` is the posted gross; `splyAmt` is what the wire price multiplies out to; `dcAmt`
-    is the difference. On a discounted line the keyed discount is in `dcRt` and its money value
-    is inside this same residue, which is the arithmetic the header buckets need: RRA computes
-    `splyAmt − dcAmt` and must land on the posted figure.
+    On an **undiscounted** line the supply amount is the posted gross and the discount is zero:
+    the inclusive unit price times the quantity need not land on the posted figure once it has
+    been rounded to two decimals over a zero-decimal base, and putting that residue into
+    `dcAmt` invents a discount the VSDC engine rejects.
+
+    On a **discounted** line the supply amount is the inclusive-price extension and `dcAmt` is
+    what the discount came to, so the same relation holds and `dcRt` carries the percentage
+    somebody actually keyed.
     """
     price = wire(line.unit_price_inclusive)
-    supply = wire(price * line.quantity)
     taxable = wire(line.taxable_amount)
+    if line.discount_percent == ZERO:
+        return price, taxable, taxable, ZERO
+    supply = wire(price * line.quantity)
     return price, supply, taxable, supply - taxable
+
+
+def line_tax(line: FiscalLine) -> Decimal:
+    """`taxblAmt × r / (100 + r)`, half-up to two decimals — the RRA split on the inclusive
+    amount, which is what the authority recomputes and therefore what it must be sent.
+
+    Public because `bucket_totals` has to sum exactly these values: a header computed from the
+    posted tax while the lines carried the derived tax would be a payload disagreeing with
+    itself, which is the defect `bucket_totals` exists to make impossible.
+    """
+    rate = line.tax_rate_pct
+    if rate == ZERO:
+        return ZERO
+    taxable = wire(line.taxable_amount)
+    return (taxable * rate / (HUNDRED + rate)).quantize(WIRE_EXPONENT, rounding=ROUND_HALF_UP)
 
 
 def _sales_item(line: FiscalLine) -> SalesItem:
@@ -145,7 +180,7 @@ def _sales_item(line: FiscalLine) -> SalesItem:
         dcAmt=discount,
         taxTyCd=line.tax_class,
         taxblAmt=taxable,
-        taxAmt=wire(line.tax_amount),
+        taxAmt=line_tax(line),
         totAmt=taxable,
     )
 
@@ -170,7 +205,7 @@ def _purchase_item(line: FiscalLine) -> PurchaseItem:
         dcAmt=discount,
         taxTyCd=line.tax_class,
         taxblAmt=taxable,
-        taxAmt=wire(line.tax_amount),
+        taxAmt=line_tax(line),
         totAmt=taxable,
     )
 
@@ -189,7 +224,7 @@ def bucket_totals(lines: Sequence[FiscalLine]) -> dict[str, Decimal]:
     tax = {tax_class: ZERO for tax_class in FiscalTaxType}
     for line in lines:
         taxable[line.tax_class] += wire(line.taxable_amount)
-        tax[line.tax_class] += wire(line.tax_amount)
+        tax[line.tax_class] += line_tax(line)
     totals: dict[str, Decimal] = {}
     for tax_class in FiscalTaxType:
         totals[f"taxblAmt{tax_class.value}"] = taxable[tax_class]
@@ -299,10 +334,15 @@ def build_refund_request(
 ) -> SaveSalesRequest:
     """A refund, sent with **positive** amounts under `rcptTyCd R`.
 
-    Positive because the receipt type already says which direction this is, and the documents'
-    own refund example carries positive figures. Whether RRA expects negatives instead is the
-    second sandbox question of decision 6; the ledger and the rounding rule do not change
-    either way, and the answer changes this function and nothing else.
+    No longer an open question. Sage 200 Evolution — the certified Rwandan integration this
+    build takes its conventions from — transmits every refund quantity, price and amount as a
+    positive number, and communicates the direction entirely through the header: `rcptTyCd R`
+    plus `orgInvcNo` naming the sale being reversed. Negative numbers in the payload are
+    rejected by the VSDC schema as negative quantities or invalid decimals.
+
+    The minus signs and the REFUND label belong to the **printed** document (CIS §14) and are
+    applied by step 8's layout, never to the wire. `test_a_refund_carries_no_negative_number`
+    holds the whole payload to that.
     """
     return _sales_request(
         device,

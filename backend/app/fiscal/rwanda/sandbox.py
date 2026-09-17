@@ -53,10 +53,16 @@ INTERNAL_DATA_LENGTH = 26
 RECEIPT_SIGN_LENGTH = 16
 HUNDRED = Decimal(100)
 PENNY = Decimal("0.01")
-#: How far a line's tax may sit from a two-decimal recomputation. See `_validate_sale` step 3:
-#: one whole unit is the largest rounding step a base currency can impose, and RWF's is exactly
-#: that. Named rather than inlined because the live run at step 5 is what settles it.
-BASE_UNIT_TOLERANCE = Decimal(1)
+#: The tax check is **exact**, and the tolerance that used to be here is gone.
+#:
+#: It existed because the build sent the tax the ledger posted — rounded to the franc — while
+#: the authority recomputes at two decimals, so the two differed by up to a unit on every line.
+#: A sandbox that accepted a franc of slack could not tell that apart from a line taxed
+#: exclusively and reported inclusively, which is the defect the check is for.
+#:
+#: The build now derives the wire tax with this same formula (Sage 200 Evolution's convention,
+#: `docs/rra/contract-notes.md` §7), so there is nothing left to tolerate: a payload that does
+#: not reproduce it exactly has computed its tax some other way, and the authority will say so.
 
 
 class SandboxMode(enum.StrEnum):
@@ -183,30 +189,41 @@ def _validate_sale(payload: dict[str, Any]) -> tuple[str, str] | None:
     # 3. Each line's tax is its taxable amount at the programmed rate, VAT-inclusive —
     # **within one unit of the base currency**, and that tolerance is the interesting part.
     #
-    # The wire is `NUMBER 18,2`; Rwanda's base currency has *no* decimal places. So the tax
-    # Vinea sends is the tax the ledger posted, rounded to the franc, while a recomputation at
-    # two decimals lands somewhere between it and the next franc: 100.00 at 18 % inclusive is
-    # 15.2542…, the ledger holds 15, and the two differ by a quarter of a franc. Sending
-    # 15.25 instead would make the receipt disagree with the ledger — and the VAT return is a
-    # query over the ledger, so the return would then not tie to the receipts. The ledger is
-    # the truth and the receipt is derived from it, which settles which of the two moves.
-    #
-    # **Whether RRA tolerates it is a sandbox question for step 5** (decision 6), and it is
-    # modelled here rather than assumed away: one whole unit is the largest rounding step a
-    # base currency can impose, and a wider tolerance would stop catching the defect this
-    # check exists for — a line taxed exclusively and reported inclusively is out by 18 % of
-    # the gross against 15.25 %, which on any material amount is far more than a franc.
+    # The wire is `NUMBER 18,2` and Rwanda's base currency has none, so the authority's own
+    # split is the only figure both sides can agree on: `taxblAmt x r / (100 + r)`, half-up to
+    # two decimals. The build derives exactly this, so the comparison is exact.
     for item in items:
         rate = Decimal(codes.PROGRAMMED_RATES.get(item.get("taxTyCd", "D"), "0"))
         taxable = _decimal(item.get("taxblAmt"))
         expected = (taxable * rate / (HUNDRED + rate)).quantize(
             PENNY, rounding=ROUND_HALF_UP
         )
-        if abs(_decimal(item.get("taxAmt")) - expected) >= BASE_UNIT_TOLERANCE:
+        if _decimal(item.get("taxAmt")) != expected:
             return (
                 "804",
                 f"item {item.get('itemSeq')}: taxAmt {item.get('taxAmt')} is not "
                 f"taxblAmt x r/(100+r) = {expected}",
+            )
+
+    # 3b. The line's own arithmetic. `splyAmt - dcAmt` is what the authority reduces to the
+    # taxable amount, and an undiscounted line may not carry a discount amount: Sage's
+    # integration notes record `dcRt: 0` with a non-zero `dcAmt` as a payload validation
+    # failure, which is exactly the phantom discount a naive inclusive-price extension
+    # produces. Modelled here so the build cannot regress into it unnoticed.
+    for item in items:
+        supply = _decimal(item.get("splyAmt"))
+        discount = _decimal(item.get("dcAmt"))
+        taxable = _decimal(item.get("taxblAmt"))
+        if _decimal(item.get("dcRt")) == 0 and discount != 0:
+            return (
+                "804",
+                f"item {item.get('itemSeq')}: dcAmt {item.get('dcAmt')} on a line with dcRt 0",
+            )
+        if supply - discount != taxable:
+            return (
+                "804",
+                f"item {item.get('itemSeq')}: splyAmt - dcAmt is {supply - discount}, "
+                f"not taxblAmt {taxable}",
             )
 
     # 4. A business customer needs a purchase code, and its TIN has to exist.

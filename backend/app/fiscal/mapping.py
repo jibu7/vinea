@@ -59,6 +59,10 @@ class FiscalLine:
     taxable_amount: Decimal
     tax_amount: Decimal
     tax_class: FiscalTaxType
+    #: The programmed rate this line's tax class carries, as a percentage. Needed because the
+    #: wire tax is **derived** from the taxable amount rather than copied from the posting —
+    #: see `rwanda/builders.py` and `docs/rra/contract-notes.md` §7.
+    tax_rate_pct: Decimal
     #: The authority's packaging and quantity unit codes, from the item and its UoM.
     package_unit: str
     quantity_unit: str

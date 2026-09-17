@@ -100,15 +100,15 @@ BA  Quantity unit (Barrel)
 0000012  increments from 0000001 to N
 ```
 
-The same document's other Rwandan samples are `RW1NTXU0000001` / `RW1NTXU0000006`, whose items
-carry `qtyUnitCd: "U"` in the same request bodies — a one-character code left-padded to two
-with `X`. So the rule the build implements is **left-pad the quantity unit with `X` to at least
-two characters, never truncate**; three-character codes (`BLL`, `CMT`, `TNE`, `GRM`, `MWT`, …)
-go through whole, as the document's own `KR2AMXBLL0000001` keeps `BLL`.
+That breakdown is the document's own prose, and it is the **only** place the format appears
+without an `X`. Every code emitted by an actual system has one. **§8 works the evidence
+through and states the rule the build implements**; the short version is that `X` terminates a
+two-character segment, on the packaging unit and the quantity unit alike.
 
-**The live receipts disagree.** `CONTACTEUR.pdf` carries `RW2NTXNOX0000011` for an item whose
-quantity unit is `NO` (Number) — an `X` on *both* sides. That is one vendor's convention, not
-the specification's, and it is recorded here rather than copied.
+An earlier reading of this section had it as "left-pad the quantity unit to two characters",
+and dismissed the live receipts' `RW2NTXNOX0000011` as "one vendor's convention". It was the
+specification's convention and the prose example was the outlier — see §8, including the guard
+that now stops a test feeding the builder a quantity unit RRA does not publish.
 
 ## 5. What a CIS receipt must print
 
@@ -174,65 +174,117 @@ this phase builds:
   certification cannot complete on P7 alone; recorded for `docs/rra/certification.md` at step 9.
 * **24** — a PLU report (CIS §21) is required and is not in this phase's scope either.
 
-## 7. The open question: how the tax on a line is rounded
+## 7. How a line's tax is rounded — settled on the Sage Evolution standard
 
-Four pieces of evidence, pulling two ways — and the two that arrived with the live receipts
-both land on the same side.
+Four pieces of evidence, and they pulled two ways until a fifth settled it.
 
 * **RRA's own Rwandan API sample** sends whole francs: `taxblAmt: 200000` with `taxAmt: 30508`,
   where 200 000 × 18/118 is 30 508.47. Its Korean samples send two decimals
   (`taxblAmt: 660000`, `taxAmt: 100677.97`).
 * **Checkpoint 47** requires tax values rounded *on two decimals*.
-* **Live receipts print two decimals**, twice over. `CONTACTEUR.pdf` shows `Total Tax B Rwf
-  9,152.54` on a `Total B-18%` of 60 000 — 60 000 × 18/118 to two places. `Screenshot
-  2026-09-16 142549.png` (invoice 22, `22/22NS`) shows `Total Tax B Rwf 25,627.12` on a
-  `Total B-18%` of 168 000 — 168 000 × 18/118 = 25 627.1186, to two places. Same vendor, two
-  different amounts, same rule.
+* **Two live receipts print two decimals.** `CONTACTEUR.pdf`: `Total Tax B Rwf 9,152.54` on a
+  `Total B-18%` of 60 000. Invoice 22: `Total Tax B Rwf 25,627.12` on 168 000
+  (= 25 627.1186). Same vendor, different amounts, same rule.
+* **Sage 200 Evolution**, which integrates with EBM 2.1 through certified middleware, derives
+  the line tax **directly from the inclusive taxable amount** using the standard split,
+  `taxblAmt × r / (100 + r)`, and treats that as how a base-currency ledger is reconciled
+  against a two-decimal wire.
 
-Vinea's ledger holds RWF tax in whole francs, because rule 6 rounds to the currency's decimal
-places and RWF has none. The build therefore **sends the posted franc figure**, which is what
-RRA's own Rwandan sample does, and accepts that RRA may print a receipt whose tax differs from
-the ledger's by under one franc per line. The alternative — sending a two-decimal tax — would
-make the receipt disagree with the ledger, and the VAT return is a query over the ledger, so
-the return would then not tie to the receipts.
+### What the build does
 
-The in-repo sandbox models this by accepting a line's tax within **one base-currency unit** of a
-two-decimal recomputation, which is strict enough to catch the defect the check exists for (a
-line taxed exclusively and reported inclusively is out by 18 % against 15.25 %). The live run at
-step 5 is what settles it.
+`taxAmt` is `taxblAmt × r / (100 + r)`, half-up to two decimals. Not the posted tax.
 
-`backend/tests/fiscal/test_builders.py` censuses the divergence on every property run rather
-than asserting it away.
+An earlier version sent the posted franc figure on the reasoning that the ledger is the truth
+and the receipt derives from it. That reasoning is still right about *direction* and was wrong
+about *which field carries the residue*: the authority recomputes this number, so a payload
+that disagrees is a payload arguing with the engine that validates it.
 
+**The consequence, stated rather than buried:** a receipt's tax can differ from the posted tax
+by under a franc per line, so the VAT return — a query over the ledger — **reconciles to** the
+receipts rather than equalling them. Step 4's tie report shows that difference as a line rather
+than asserting equality, and step 5's live run is what confirms the authority accepts the
+derived figure.
+
+### The discount field, and the phantom discount
+
+Sage sends `dcRt: 0` **and** `dcAmt: 0` on an undiscounted line, and records that a non-zero
+`dcAmt` against `dcRt: 0` is a payload validation failure — the VSDC engine validates line
+arithmetic strictly.
+
+This build used to do exactly the rejected thing. It multiplied the VAT-inclusive unit price by
+the quantity and put the difference from the posted gross into `dcAmt`, because the discount
+amount is the one field the documents do not derive from another. On a zero-decimal base that
+produced a discount on a line nobody discounted, in a measurable fraction of cases.
+
+Now: an undiscounted line has `splyAmt = taxblAmt` and `dcAmt = 0`; a discounted line has
+`splyAmt` as the inclusive-price extension, `dcRt` the keyed percentage and `dcAmt` the money
+it came to. `splyAmt − dcAmt == taxblAmt` holds exactly either way, the in-repo sandbox
+enforces both rules, and the property census in `backend/tests/fiscal/test_builders.py` now
+reports every draw exact where it used to report residues.
+
+## 7a. Refunds are positive on the wire
+
+Sage transmits every refund quantity, price and amount as a **positive** number. The direction
+is the header's business: `rcptTyCd: "R"` and `orgInvcNo` naming the sale being reversed.
+Negative numbers are rejected by the VSDC schema as negative quantities or invalid decimals.
+
+Minus signs and the REFUND label belong to the printed document (CIS §14, and checkpoint 56,
+which requires a refund to print with a minus in front of each amount) — never to the payload.
+`test_a_refund_carries_no_negative_number` walks the whole payload recursively.
+
+## 7b. A copy is a print, not a call
+
+Sage does not contact the VSDC API when reprinting. A reprint retrieves the **stored** fiscal
+block — signature, QR payload, SDC timestamp and the original `rcptNo`/`totRcptNo` — and
+re-renders it. The ERP increments its own print counter and stamps the layout with `COPY` and
+`THIS IS NOT AN OFFICIAL RECEIPT` (CIS §7.18, §15).
+
+This settles the copy-counter question decision 11 left open: **the `CS` counter belonged to
+older physical EBM hardware with a copy button, and a software CIS integration does not request
+a separate counter from the server.** Vinea's `fiscal_receipts.copy_count` is therefore local
+and is the one column the row's immutability trigger excludes — which is now a decision with a
+reason behind it rather than a convenience.
 
 ## 8. The item code, and what the receipts settled about it
 
 §4.17 gives the format — origin, product type, packaging unit, quantity unit, seven-digit
-sequence — and then gives examples rather than a rule for the quantity-unit segment. The
-examples are therefore the specification, and there are five of them:
+sequence — and then gives worked examples rather than a rule for the two code segments. The
+examples are therefore the specification, and there are five.
 
-| Code | Source | Quantity unit | Segment |
-|---|---|---|---|
-| `RW2NTBA0000012` | VSDC §4.17 worked example | `BA` | `BA` |
-| `RW1NTXU0000006` | VSDC, same request body carries `qtyUnitCd: "U"` | `U` | `XU` |
-| `KR2AMXBLL0000001` | VSDC, Korean sample | `BLL` | `XBLL` |
-| `RW2NTXU0000002` | Live receipt, invoice 1 | `U` | `XU` |
-| `RW2NTXNOX0000014` | Live receipt, invoice 22 | `NOX` | `XNOX` |
+**Five come out of real VSDC/EBM systems and agree with each other:**
 
-The build first read this off the two Rwandan samples as **"left-pad the quantity unit to two
-characters with `X`"**, which fits the first two and nothing else. §4.6 publishes
-three-character codes (`BLL`, `CMT`, `GRM`, `TNE`, `MWT`), and both three-character examples
-carry an `X` that padding-to-two does not produce.
+| Code | Source | Packaging | Quantity unit | Segments |
+|---|---|---|---|---|
+| `RW1NTXU0000006` | VSDC, item carries `qtyUnitCd: "U"` | `NT` | `U` (42) | `NTX` + `U` |
+| `KR2AMXBLL0000001` | VSDC, Korean sample | `AM` | `BLL` (7) | `AMX` + `BLL` |
+| `RW2NTXU0000002` | Live receipt, invoice 1 | `NT` | `U` (42) | `NTX` + `U` |
+| `RW2NTXNOX0000014` | Live receipt, invoice 22 | `NT` | `NO` (31) | `NTX` + `NOX` |
+| `RW2NTXNOX0000011` | Live receipt, `CONTACTEUR.pdf` | `NT` | `NO` (31) | `NTX` + `NOX` |
 
-The rule that fits all five: **`X` is a marker, not padding.** The segment is the code itself
-when the code is exactly two characters, and `X` + the code otherwise. A code is never
-truncated — cutting `BLL` to `BL` would collide with the Bale packaging code and mis-register
-the item — and `itemCd` is `CHAR(20)`, so the longer form fits.
+**The rule they share: `X` terminates a two-character segment.** Both segments take it —
+packaging unit and quantity unit alike — and one- and three-character codes are left exactly as
+they are. It is a delimiter, not padding: §4.5 and §4.6 both publish codes of one, two and
+three characters, so a reader needs to know where a segment ends.
 
-`backend/tests/fiscal/test_routes_and_codes.py::test_every_published_item_code_is_reproduced`
-holds all five. Reverting to the padding rule fails exactly the three it got wrong.
+**The fifth is the outlier, and it is the one in prose.** §4.17's hand-written worked example
+is `RW2NTBA0000012`, and the document's own breakdown reads "NT: Packaging Unit (NET) / BA:
+Quantity Unity (Barrel)" — no terminator on either segment. The build follows the five machines
+over the one sentence, and produces `RW2NTXBAX0000012` where the document writes
+`RW2NTBA0000012`. `test_the_prose_worked_example_is_the_one_the_rule_does_not_reproduce` pins
+that disagreement so it stays visible.
 
-This is the clearest case so far for treating the receipts as evidence: the Korean sample was
-sitting in the pinned document the whole time and had been read as confirming the padding rule
-("`BLL` is kept whole" — true, and beside the point). It took a Rwandan receipt with a
-three-character unit to make the discrepancy impossible to read past.
+**This is a sandbox question, not a settled fact** — see the list in `README.md`. Both readings
+are inferences about a format RRA has not written down. Step 5's live run registers an item
+whose quantity unit is two characters and one whose unit is three, and reads back what the
+authority accepts.
+
+### The near-miss worth recording
+
+The first version of this rule read `X` as *left-padding to two characters*, fitted on the two
+shortest examples, and was pinned by a test that fed the builder a quantity unit of **`NOX`** —
+a string that does not appear in §4.6 at all. A wrong rule and a wrong input cancelled out, and
+the test was green. The unit on invoice 22 is `NO` (31, Number); `NOX` was never a code.
+
+`codes.QUANTITY_UNITS` now carries §4.6's own list and
+`test_no_case_above_feeds_a_quantity_unit_the_authority_does_not_publish` refuses any case fed
+a unit RRA does not publish. That guard, not the rule, is what would have caught this.
