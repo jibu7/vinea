@@ -181,18 +181,20 @@ Measured over a deep pass (300 examples), bucketed by the base currency's own mi
 split by whether the line carried a discount:
 
 ```
-0-dp, 211 lines   plain      82 exact
-                  discounted 28 exact, 101 one franc,  0 more
-2-dp, 194 lines   plain      89 exact
-                  discounted 105 exact,  0 one cent,   0 more
+0-dp, 234 lines   plain      141 exact,  15 one franc,  0 more
+                  discounted  15 exact,  63 one franc,  0 more
+2-dp, 369 lines   plain      193 exact,   0,            0
+                  discounted 163 exact,  13 one cent,   0 more
 ```
 
-**Read that carefully, because the first reading of it was wrong.** "Every plain line exact" is
-not a property of the build — it is a property of the *generator*. The residue on a plain,
-standard-rated, exclusive line is `0.18 x price x qty − round(0.18 x price x qty)`, which is
-zero exactly when `price x qty` divides by 50; Hypothesis draws integers with a heavy bias
-toward round values because round values shrink well, and round prices are precisely the ones
-with no residue. The machine spent its plain census on the case that cannot show anything.
+**An earlier pass of this census read `0-dp plain: 82 exact, 0 otherwise`, and that reading was
+wrong** — not about the build, about the *generator*. The residue on a plain, standard-rated,
+exclusive line is `0.18 x price x qty − round(0.18 x price x qty)`, which is zero exactly when
+`price x qty` divides by 50; Hypothesis draws integers with a heavy bias toward round values
+because round values shrink well, and round prices are precisely the ones with no residue. The
+machine was spending its plain census on the case that cannot show anything. The 15 plain 0-dp
+residues above are the fix showing up: the multi-line generator nudges each extra line's price
+off the round values, and the bucket that used to be empty is not.
 
 Two things were done about it rather than raising `max_examples`, which would not have helped —
 the bias is in the shape of the draw, not its count:
