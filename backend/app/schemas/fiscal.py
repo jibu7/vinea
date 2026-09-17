@@ -185,3 +185,45 @@ class ImportApprove(BaseModel):
 
 class ImportReject(BaseModel):
     note: str | None = Field(default=None, max_length=400)
+
+
+# --- X and Z (P7 decision 11) -----------------------------------------------------------------
+
+
+class ClassTotalsRead(BaseModel):
+    """One tax class of a day, split by receipt type — §19.1 prints the two apart."""
+
+    taxable_ns: Decimal
+    tax_ns: Decimal
+    taxable_nr: Decimal
+    tax_nr: Decimal
+    rate: Decimal
+
+
+class DailyFiguresRead(BaseModel):
+    ns_count: int
+    ns_gross: Decimal
+    nr_count: int
+    nr_gross: Decimal
+    net_gross: Decimal
+    total_tax: Decimal
+    items_count: int
+    copies_count: int
+    copies_gross: Decimal
+    #: What the device was still holding when the report was taken. A queued row is not a
+    #: receipt, so it is no part of the totals — and a Z that closed over one says so.
+    queued_rows: int
+    classes: dict[str, ClassTotalsRead]
+    by_payment_method: dict[str, Decimal]
+
+
+class DailyReportRead(BaseModel):
+    """An X or a Z in the same shape. They differ by whether anybody stored it."""
+
+    device_id: int
+    kind: str
+    from_at: datetime
+    to_at: datetime
+    figures: DailyFiguresRead
+    number: str | None = None
+    report_no: int | None = None

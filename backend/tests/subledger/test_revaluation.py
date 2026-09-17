@@ -33,6 +33,7 @@ from app.models.partner import PartnerRole
 from app.subledger import revaluation
 from tests.kernel.conftest import YEAR
 from tests.subledger.conftest import Subledger
+from tests.subledger.invariants import assert_subledger_invariants
 from tests.subledger.test_documents import post_invoice
 
 MARCH_END = date(YEAR, 3, 31)
@@ -350,3 +351,44 @@ def test_the_run_keeps_the_rate_it_used(db: Session, open_usd_receivable: Subled
     assert stored[0].carrying_base == Decimal(62304)
     assert stored[0].revalued_base == Decimal(63720)
     assert stored[0].difference == Decimal(1416)
+
+
+def test_the_control_account_still_reconciles_after_a_revaluation(
+    db: Session, open_usd_receivable: Subledger
+) -> None:
+    """P4's invariant, which is the whole reason the run avoids `1200`.
+
+    A control account's balance is Σ open items **at their booking rates**. A revaluation that
+    posted into it would move the balance without moving an open item, and this assertion is
+    what would have caught it — so it runs after the pair, not before.
+    """
+    revaluation.post_revaluation(
+        db,
+        open_usd_receivable.company_id,
+        revaluation_date=MARCH_END,
+        role=FxRevaluationRole.BOTH,
+        actor=open_usd_receivable.owner,
+    )
+    db.flush()
+
+    assert_subledger_invariants(db, open_usd_receivable.company_id)
+
+
+def test_the_gain_is_the_rate_movement_times_what_is_open(
+    db: Session, open_usd_receivable: Subledger
+) -> None:
+    """`difference == open_amount × (rate_at − booking_rate)`, per document.
+
+    Asserted as the identity rather than as a literal, because the literal is already checked
+    in `test_the_preview_states_the_arithmetic_document_by_document` — what this adds is that
+    the two roundings (carrying and revalued) do not drift apart from the one-step product.
+    """
+    view = revaluation.preview(
+        db,
+        open_usd_receivable.company_id,
+        revaluation_date=MARCH_END,
+        role=FxRevaluationRole.AR,
+    )
+
+    for line in view.lines:
+        assert line.difference == line.open_amount * (line.rate_at_date - line.booking_rate)

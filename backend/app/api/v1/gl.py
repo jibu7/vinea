@@ -25,8 +25,9 @@ from app.kernel.events import (
     ManualJournal,
 )
 from app.models.audit import AuditLog
-from app.models.currency import ExchangeRate
+from app.models.currency import Currency, ExchangeRate
 from app.models.fiscal import AccountingPeriod, FiscalYear, PeriodStatus
+from app.models.fiscalization import FxRevaluation, FxRevaluationRole
 from app.models.gl import GLSettings
 from app.models.inventory import INVENTORY_MODULE, InventoryDocument
 from app.models.journal import JournalEntry
@@ -50,6 +51,12 @@ from app.schemas.gl import (
     ExchangeRateRead,
     FiscalYearCreate,
     FiscalYearRead,
+    FxRevaluationCreate,
+    FxRevaluationDetail,
+    FxRevaluationLineRead,
+    FxRevaluationPreview,
+    FxRevaluationRead,
+    FxRevaluationReverse,
     GLAccountCreate,
     GLAccountRead,
     GLAccountUpdate,
@@ -74,6 +81,7 @@ from app.schemas.gl import (
     TrialBalanceRead,
     TrialBalanceRowRead,
 )
+from app.subledger import revaluation as revaluation_service
 
 router = APIRouter(prefix="/gl", tags=["general-ledger"])
 
@@ -1175,3 +1183,159 @@ def update_project(
     )
     db.commit()
     return ProjectRead.model_validate(project)
+
+
+# --- Unrealized FX revaluation (P7 decision 13) ---------------------------------------------
+#
+# The screen arrives at **step 7** — General Ledger → Period end → FX revaluation, with the
+# preview, Post and Reverse — so the three mutating endpoints carry a `GAP (P7, step 7)` line
+# in `tests/test_api_has_a_caller.py` naming the step that deletes them.
+
+
+def _revaluation_line(line: revaluation_service.RevaluationLine) -> FxRevaluationLineRead:
+    return FxRevaluationLineRead(
+        document_id=line.document_id,
+        document_number=line.document_number,
+        role=str(line.role),
+        partner_id=line.partner_id,
+        partner_name=line.partner_name,
+        currency_id=line.currency_id,
+        currency_code=line.currency_code,
+        open_amount=line.open_amount,
+        booking_rate=line.booking_rate,
+        carrying_base=line.carrying_base,
+        rate_at_date=line.rate_at_date,
+        revalued_base=line.revalued_base,
+        difference=line.difference,
+    )
+
+
+@router.get("/fx-revaluations/preview")
+def preview_fx_revaluation(
+    revaluation_date: date = Query(...),
+    role: FxRevaluationRole = Query(default=FxRevaluationRole.BOTH),
+    auth: AuthContext = permissions.require(permissions.GL_FX_REVALUE),
+    db: Session = Depends(get_db),
+) -> FxRevaluationPreview:
+    """What a run would post, document by document, without posting it.
+
+    Deliberately permissive about the date: a preview of a day that could not be posted is
+    still worth reading, and the refusals belong where they can be acted on.
+    """
+    view = revaluation_service.preview(
+        db, auth.company_id, revaluation_date=revaluation_date, role=role
+    )
+    return FxRevaluationPreview(
+        revaluation_date=view.revaluation_date,
+        role=view.role,
+        total_difference=view.total_difference,
+        lines=[_revaluation_line(line) for line in view.lines],
+    )
+
+
+@router.get("/fx-revaluations")
+def list_fx_revaluations(
+    auth: AuthContext = permissions.require(permissions.GL_FX_REVALUE),
+    db: Session = Depends(get_db),
+    limit: int = Query(default=50, ge=1, le=200),
+) -> list[FxRevaluationRead]:
+    rows = db.scalars(
+        select(FxRevaluation)
+        .where(FxRevaluation.company_id == auth.company_id)
+        .order_by(FxRevaluation.revaluation_date.desc(), FxRevaluation.id.desc())
+        .limit(limit)
+    )
+    return [FxRevaluationRead.model_validate(row) for row in rows]
+
+
+@router.get("/fx-revaluations/{revaluation_id}")
+def read_fx_revaluation(
+    revaluation_id: int,
+    auth: AuthContext = permissions.require(permissions.GL_FX_REVALUE),
+    db: Session = Depends(get_db),
+) -> FxRevaluationDetail:
+    run = db.scalar(
+        select(FxRevaluation).where(
+            FxRevaluation.company_id == auth.company_id, FxRevaluation.id == revaluation_id
+        )
+    )
+    if run is None:
+        raise NotFoundError("FX revaluation not found")
+    stored = revaluation_service.lines_of(db, auth.company_id, run.id)
+    documents = {
+        document.id: document
+        for document in db.scalars(
+            select(PartnerDocument).where(
+                PartnerDocument.company_id == auth.company_id,
+                PartnerDocument.id.in_([line.document_id for line in stored] or [0]),
+            )
+        )
+    }
+    currencies = {
+        currency.id: currency
+        for currency in db.scalars(
+            select(Currency).where(Currency.company_id == auth.company_id)
+        )
+    }
+    detail = FxRevaluationDetail.model_validate(run)
+    detail.lines = [
+        FxRevaluationLineRead(
+            document_id=line.document_id,
+            document_number=documents[line.document_id].number,
+            role=str(documents[line.document_id].role),
+            partner_id=documents[line.document_id].partner_id,
+            partner_name="",
+            currency_id=line.currency_id,
+            currency_code=currencies[line.currency_id].code,
+            open_amount=line.open_amount,
+            booking_rate=line.booking_rate,
+            carrying_base=line.carrying_base,
+            rate_at_date=line.rate_at_date,
+            revalued_base=line.revalued_base,
+            difference=line.difference,
+        )
+        for line in stored
+    ]
+    return detail
+
+
+@router.post("/fx-revaluations", status_code=status.HTTP_201_CREATED)
+def post_fx_revaluation(
+    payload: FxRevaluationCreate,
+    request: Request,
+    auth: AuthContext = permissions.require(permissions.GL_FX_REVALUE),
+    db: Session = Depends(get_db),
+    idempotency_key: str = idempotency.IdempotencyKey,
+) -> FxRevaluationRead:
+    """Post the run and its mirror in one transaction."""
+    run = revaluation_service.post_revaluation(
+        db,
+        auth.company_id,
+        revaluation_date=payload.revaluation_date,
+        role=payload.role,
+        actor=auth.user,
+        idempotency_key=idempotency_key,
+        request=request,
+    )
+    db.commit()
+    return FxRevaluationRead.model_validate(run)
+
+
+@router.post("/fx-revaluations/{revaluation_id}/reverse")
+def reverse_fx_revaluation(
+    revaluation_id: int,
+    payload: FxRevaluationReverse,
+    request: Request,
+    auth: AuthContext = permissions.require(permissions.GL_FX_REVALUE),
+    db: Session = Depends(get_db),
+) -> FxRevaluationRead:
+    run = revaluation_service.reverse_revaluation(
+        db,
+        auth.company_id,
+        revaluation_id,
+        reason=payload.reason,
+        actor=auth.user,
+        request=request,
+    )
+    db.commit()
+    return FxRevaluationRead.model_validate(run)

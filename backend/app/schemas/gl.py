@@ -8,6 +8,7 @@ from typing import Annotated, Any
 from pydantic import BaseModel, Field, model_validator
 
 from app.models.fiscal import PeriodStatus
+from app.models.fiscalization import FxRevaluationRole, FxRevaluationStatus
 from app.models.gl import AccountClass, ControlType
 from app.models.inventory import InventoryTransactionKind
 from app.models.journal import JournalStatus
@@ -459,3 +460,59 @@ class AccountAuditRead(ApiModel):
     before: dict[str, Any] | None
     after: dict[str, Any] | None
 
+
+
+# --- Unrealized FX revaluation (P7 decision 13) ---------------------------------------------
+
+
+class FxRevaluationLineRead(BaseModel):
+    """One open document in a run. Every figure is the one the run used, not a recomputation:
+    a later correction to `exchange_rates` must not restate a posted revaluation."""
+
+    document_id: int
+    document_number: str
+    role: str
+    partner_id: int
+    partner_name: str
+    currency_id: int
+    currency_code: str
+    #: Signed by the control account's side — an AR invoice positive, an AP invoice negative.
+    open_amount: Decimal
+    booking_rate: Decimal
+    carrying_base: Decimal
+    rate_at_date: Decimal
+    revalued_base: Decimal
+    difference: Decimal
+
+
+class FxRevaluationPreview(BaseModel):
+    revaluation_date: date
+    role: FxRevaluationRole
+    total_difference: Decimal
+    lines: list[FxRevaluationLineRead]
+
+
+class FxRevaluationCreate(BaseModel):
+    revaluation_date: date
+    role: FxRevaluationRole = FxRevaluationRole.BOTH
+
+
+class FxRevaluationReverse(BaseModel):
+    reason: str
+
+
+class FxRevaluationRead(ApiModel):
+    id: int
+    number: str
+    revaluation_date: date
+    role: FxRevaluationRole
+    journal_entry_id: int | None
+    #: The next-day reversal posted in the same transaction as the entry.
+    mirror_entry_id: int | None
+    #: The counter-entry that undid the whole run, when one was posted.
+    reversal_entry_id: int | None
+    status: FxRevaluationStatus
+
+
+class FxRevaluationDetail(FxRevaluationRead):
+    lines: list[FxRevaluationLineRead]

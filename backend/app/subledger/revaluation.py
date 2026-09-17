@@ -43,11 +43,13 @@ from app.models.fiscalization import (
     FxRevaluationRole,
     FxRevaluationStatus,
 )
+from app.models.job import Job
 from app.models.journal import JournalLine
 from app.models.partner import Partner, PartnerRole
 from app.models.subledger import DocumentStatus, PartnerDocument
 from app.models.user import User
 from app.services.audit import record_audit
+from app.services.jobs import handler
 
 #: `journal_entries.source_doc_type`, so the GL entry drills back to the run.
 FX_REVALUATION_SOURCE = "fx_revaluation"
@@ -554,3 +556,45 @@ def _replay(
             code="idempotency_key_reused",
         )
     return run
+
+
+#: The job kind decision 13 names. A month-end run over every open foreign-currency document
+#: can be long, so it is offered out of band on `run_job` as well as synchronously — the
+#: preview endpoint is the synchronous half, and this is the one that posts.
+FX_REVALUATION_JOB = "fx_revaluation"
+
+
+@handler(FX_REVALUATION_JOB)
+def run_fx_revaluation_job(db: Session, job: Job) -> None:
+    """Post a run from a queued job.
+
+    `run_job` has already set the tenant and the actor on this session; the *service* still
+    needs a `User` for the audit row, so the requester is loaded rather than assumed. A job
+    with no requester cannot post, because an audited service call takes a real actor and never
+    `None` (rule 5).
+    """
+    params = job.params or {}
+    if job.requested_by is None:
+        raise LedgerStateError(
+            "An FX revaluation job must name the user who asked for it",
+            code="job_actor_missing",
+        )
+    actor = db.get(User, job.requested_by)
+    if actor is None:
+        raise NotFoundError("The user who requested this revaluation no longer exists")
+
+    run = post_revaluation(
+        db,
+        job.company_id,
+        revaluation_date=date.fromisoformat(params["revaluation_date"]),
+        role=FxRevaluationRole(params.get("role", FxRevaluationRole.BOTH)),
+        actor=actor,
+        idempotency_key=params.get("idempotency_key"),
+    )
+    job.result = {
+        "revaluation_id": run.id,
+        "number": run.number,
+        "journal_entry_id": run.journal_entry_id,
+        "mirror_entry_id": run.mirror_entry_id,
+        "lines": len(lines_of(db, job.company_id, run.id)),
+    }
