@@ -19,6 +19,7 @@ kept apart with some care — `FiscalTransportError` never reached RRA and is sa
 
 import logging
 import time
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
 
@@ -267,9 +268,15 @@ class RwandaEbmAdapter:
         result = self._envelope_result(envelope, elapsed_ms)
         if kind not in _RECEIPT_KINDS:
             return result, None
-        return result, self.normalize_receipt(
+        receipt = self.normalize_receipt(
             device, envelope.data if envelope.ok else None, invc_no=payload.get("invcNo")
         )
+        if receipt is None:
+            return result, None
+        # The refunded sale's number is in the *request*, not the answer — RRA does not echo
+        # it — so it is read here, where the field name belongs, and travels on the DTO.
+        original = payload.get("orgInvcNo") or None
+        return result, replace(receipt, org_invc_no=int(original) if original else None)
 
     # --- Setup -----------------------------------------------------------------------------
 

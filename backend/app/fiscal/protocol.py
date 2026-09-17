@@ -121,6 +121,10 @@ class FiscalReceiptData:
     sdc_datetime: datetime
     mrc_no: str | None = None
     invc_no: int | None = None
+    #: The refunded sale's number, on a refund. Read off the request by the adapter, because
+    #: the field is the authority's and a neutral module reaching into a frozen payload for it
+    #: would be exactly the leak rule 12 is about.
+    org_invc_no: int | None = None
     #: What the receipt's verification code encodes, in the authority's own format. Built by
     #: the adapter because the format is the authority's (Rwanda: CIS §7.24.7) and stored
     #: rather than recomputed, so a receipt reprinted years later carries the string that was

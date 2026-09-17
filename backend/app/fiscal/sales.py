@@ -405,7 +405,7 @@ def _assert_within_original(db: Session, company_id: int, computed: list) -> Non
         original = db.get(PartnerDocumentLine, original_line_id)
         if original is None or original.company_id != company_id:
             continue
-        invoiced = _line_quantity(original)
+        invoiced = original.quantity
         already = (
             db.scalar(
                 select(func.coalesce(func.sum(PartnerDocumentLine.quantity), 0))
@@ -430,10 +430,6 @@ def _assert_within_original(db: Session, company_id: int, computed: list) -> Non
                     f"lines.{index}.quantity": ["more than the invoice's remaining quantity"]
                 },
             )
-
-
-def _line_quantity(line: PartnerDocumentLine) -> Decimal:
-    return line.quantity
 
 
 def _require_refund_reason(refund_reason: str | None) -> str:

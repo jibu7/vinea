@@ -71,10 +71,24 @@ def test_the_registry_is_the_only_sanctioned_importer_and_it_still_imports_lazil
     assert _imports_rwanda(source), "the registry is how the adapter is reached at all"
 
 
-#: Five field names a leak would most plausibly carry — the ones a screen or a report would be
-#: tempted to reach for. A full lexicon would be unmaintainable; these five are specific enough
-#: to mean something and rare enough not to fire by accident.
-RRA_FIELD_NAMES = ("taxblAmt", "rcptTyCd", "itemClsCd", "prcOrdCd", "sarTyCd")
+#: Field names a leak would most plausibly carry — the ones a screen, a report or a queue
+#: drainer would be tempted to reach for. A full lexicon would be unmaintainable; these are
+#: specific enough to mean something and rare enough not to fire by accident.
+#:
+#: `orgInvcNo` and `invcNo` are P7 step 2's addition, and they are here because the drainer
+#: *did* reach for one: writing a refund's receipt needs the number of the sale it reverses,
+#: and the shortest way to it was `row.payload["orgInvcNo"]` in a country-neutral module. The
+#: number now travels on `FiscalReceiptData`, filled by the adapter, and this line is what
+#: stops the shortcut coming back.
+RRA_FIELD_NAMES = (
+    "taxblAmt",
+    "rcptTyCd",
+    "itemClsCd",
+    "prcOrdCd",
+    "sarTyCd",
+    "orgInvcNo",
+    "invcNo",
+)
 
 
 def _code_corpus(source: str) -> str:

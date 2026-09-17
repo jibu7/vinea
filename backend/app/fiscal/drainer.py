@@ -135,7 +135,15 @@ def drain_device(
         outcomes.append(outcome)
         if outcome.status != FiscalOutboxStatus.SENT:
             # The head did not go. Everything behind it waits — that is the FIFO, not a
-            # failure of it.
+            # failure of it. Logged at device level because "this shop's queue has stopped" is
+            # the thing an operator needs to hear, and the row's own reason is on the row.
+            logger.info(
+                "ebm queue stopped device=%s row=%s status=%s code=%s",
+                device.id,
+                outcome.row_id,
+                outcome.status,
+                outcome.code,
+            )
             break
     return outcomes
 
@@ -267,7 +275,7 @@ def _write_receipt(
         outbox_id=row.id,
         receipt_type=receipt_type,
         invc_no=row.invc_no or receipt.invc_no or 0,
-        org_invc_no=_original_invoice_no(row),
+        org_invc_no=receipt.org_invc_no,
         rcpt_no=receipt.rcpt_no,
         tot_rcpt_no=receipt.tot_rcpt_no,
         intrl_data=receipt.intrl_data,
@@ -290,22 +298,6 @@ def _write_receipt(
             document.fiscal_receipt_id = stored.id
     db.flush()
     return stored
-
-
-def _original_invoice_no(row: FiscalOutboxRow) -> int | None:
-    """The refunded sale's number, read back off the frozen payload.
-
-    Off the payload rather than out of a column, because the payload is what RRA was told and
-    the refund row carries no other record of it. A `0` in that field means "no original",
-    which is what a sale sends, so it reads back as `None`.
-    """
-    if row.kind != FiscalOutboxKind.REFUND:
-        return None
-    for key in ("orgInvcNo", "original_invoice_no"):
-        value = row.payload.get(key)
-        if value:
-            return int(value)
-    return None
 
 
 # --- The queue screen's four actions (decision 4) -------------------------------------------
