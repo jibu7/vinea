@@ -11,3 +11,9 @@ tenant invented for it. The fixtures are re-exported the way `tests/inventory` r
 from tests.fiscal.conftest import fiscal_posting as fiscal_posting  # noqa: PLC0414
 from tests.fiscal.conftest import sandbox_client as sandbox_client  # noqa: PLC0414
 from tests.fiscal.conftest import sandbox_state as sandbox_state  # noqa: PLC0414
+
+# The API tests need an ordinary AR/AP tenant rather than a fiscalized one: a VAT return and an
+# FX revaluation are not fiscal features, and the surface has to work for a company that never
+# fiscalizes. Re-exported the same way.
+from tests.kernel.conftest import ledger as ledger  # noqa: E402, PLC0414
+from tests.subledger.conftest import subledger as subledger  # noqa: E402, PLC0414

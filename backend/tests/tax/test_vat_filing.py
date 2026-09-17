@@ -380,3 +380,40 @@ def test_a_filed_return_leaves_the_vat_run_gapless(
     )
     db.flush()
     assert_ledger_invariants(db, month.company_id)
+
+
+def test_a_late_entry_is_declared_once_and_not_by_every_return_after_it(
+    db: Session, month: FiscalPosting  # noqa: F811
+) -> None:
+    """The regression `tests/tax/test_property_vat.py` found, pinned as an example.
+
+    `_late` selected entries dated in a filed range whose id was above that return's high-water
+    mark. True the month after, and true *forever* — so a correction posted into a closed month
+    was declared again by every subsequent return for the life of the company. Here: March is
+    filed, an entry arrives into March, April declares it, and **May must not**.
+
+    Kept as an example beside the property because CI runs Hypothesis at `max_examples=1`; the
+    property earns its keep in the nightly, and this is what fails in the pull request.
+    """
+    vat.file_return(
+        db, month.company_id, period_from=MARCH_FROM, period_to=MARCH_TO, actor=month.owner
+    )
+    db.flush()
+    _backdated_sale(db, month)  # 1 000 net, 180 VAT, into the month already filed
+
+    april = vat.file_return(
+        db, month.company_id, period_from=APRIL_FROM, period_to=APRIL_TO, actor=month.owner
+    )
+    db.flush()
+    # April picks it up, once, as a late entry dated in March.
+    assert april.output_vat == Decimal("180.000000")
+    assert april.figures["late_entries"], "April is the return that should declare it"
+
+    may = vat.compute(
+        db,
+        month.company_id,
+        period_from=date(YEAR, 5, 1),
+        period_to=date(YEAR, 5, 31),
+    )
+    assert may.late_entries == (), "April already declared it; May must not see it again"
+    assert may.output_vat == Decimal(0)

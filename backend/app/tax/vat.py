@@ -531,15 +531,32 @@ def _late(
     if not filed:
         return [], {}
 
-    windows = [
-        and_(
-            JournalEntry.entry_date >= ret.period_from,
-            JournalEntry.entry_date <= ret.period_to,
-            JournalEntry.id > ret.high_water_entry_id,
+    windows = []
+    for ret in filed:
+        if ret.period_from >= before:
+            continue
+        # **And not already swept up by a later return.** `id > ret.high_water_entry_id` says
+        # the entry arrived after its own period was filed; on its own it says that *forever*,
+        # so every subsequent return would declare the same entry again. A return filed over a
+        # range after `ret`'s has already looked into this window — its `before` was past these
+        # dates — so if it existed then (`id <= that return's mark`), that return declared it
+        # and this one must not.
+        swept = max(
+            (
+                later.high_water_entry_id
+                for later in filed
+                if later.period_from > ret.period_from
+            ),
+            default=0,
         )
-        for ret in filed
-        if ret.period_from < before
-    ]
+        windows.append(
+            and_(
+                JournalEntry.entry_date >= ret.period_from,
+                JournalEntry.entry_date <= ret.period_to,
+                JournalEntry.id > ret.high_water_entry_id,
+                JournalEntry.id > swept,
+            )
+        )
     if not windows:
         return [], {}
 
