@@ -65,6 +65,11 @@ _EXAMPLE = itertools.count()
 ZERO = Decimal(0)
 HUNDRED = Decimal(100)
 PENNY = Decimal("0.01")
+#: Tax class `B`'s rate, in both the forms this file needs it: the payload carries a percentage
+#: and the residue arithmetic wants the multiplier. Derived from one literal so the two cannot
+#: drift apart.
+STANDARD_RATE_PERCENT = Decimal("18.00")
+STANDARD_RATE = STANDARD_RATE_PERCENT / HUNDRED
 
 #: Which refusals and which queue states the machine actually produced. Measured, not assumed —
 #: a state the generator never reaches is a state this suite does not cover, however green it
@@ -463,6 +468,9 @@ PAYLOAD_FLOOR = 50
 CENSUS_FLOOR = 20
 #: Of those, how many must carry tax. See the assertion for why this one is the load-bearing.
 TAXED_FLOOR = 10
+#: How many constructed discounted lines must land past a whole franc. See the floor's own
+#: comment; a deep pass produces several times this.
+TWICE_ROUNDED_FLOOR = 20
 #: Only a run with enough examples can be held to a floor. The per-commit profile draws two.
 _FLOORS_FROM_EXAMPLES = 100
 
@@ -505,6 +513,16 @@ def _report_residue():  # noqa: ANN202
         "documents 0dp base": CENSUS_FLOOR,
         "documents 0dp fx": CENSUS_FLOOR,
         "multi-line documents 0dp base": CENSUS_FLOOR,
+        "discounted lines": CENSUS_FLOOR,
+        # **The sub-floor that carries the claim.** A discounted line rounds twice, and the
+        # whole point of that property is the residues a second rounding puts up to a franc
+        # and past it —
+        # the ones both of this file's old document bounds were written as though impossible.
+        # A pass in which none appeared would be green about a case it never reached, which is
+        # what happened when the plan drew the machine's own quantities: one line in 1 196.
+        # Constructed, it is about a tenth of them, so this floor sits far below what a working
+        # generator produces and far above what a broken one would.
+        "discounted lines a franc or more": TWICE_ROUNDED_FLOOR,
     }
     assert any(_REACH.get(name) for name in floors), (
         "a deep pass reached none of the census families. Whatever ran, it measured nothing."
@@ -520,38 +538,42 @@ def _report_residue():  # noqa: ANN202
     for scale in ("0dp", "2dp"):
         if _REACH.get(f"census lines {scale}") and not _REACH.get(f"census lines {scale} taxed"):
             short[f"census lines {scale} taxed"] = 0
-    # **No document may exceed one unit per line.** The per-line census bounds each line; this
-    # is the claim that they do not compound past their own count, and it is the number a
-    # customer comparing a receipt with an invoice actually sees.
+    # **No document may exceed the budget its own lines carry.** `_line_allowance` derives what
+    # each line is allowed from the roundings it actually goes through; this is the claim that
+    # a document is no further out than its lines are, which is the figure a customer comparing
+    # a receipt with an invoice sees.
+    #
+    # **This replaced two bounds that were both false, and the nightly found the first.** They
+    # were "no document further than one unit per line" and, tighter, "no document further than
+    # one unit at all" — the latter on the evidence of 511 documents in which none had been.
+    # A deep pass duly produced a 3-line RWF invoice 1.40 francs out, and 12.5% off 3 x 1 798
+    # reproduces it exactly: line residues of -0.70, -0.50 and -0.20, which add because nothing
+    # makes them cancel. The one-unit-per-line bound is false for a different reason — a single
+    # discounted line can reach 1.09 on its own (see `_line_allowance`), so a one-line invoice
+    # can breach a bound written as "a unit per line" without anything being wrong.
     over = {
         key: count
         for key, count in _DOCUMENT_RESIDUE.items()
-        if key.endswith("OVER one unit per line")
+        if key.endswith("OVER its budget")
     }
     assert not over, (
-        f"documents whose foot is further from the ledger than one unit per line: {over}. The "
-        "per-line residue is bounded; if a document exceeds the sum of its lines' bounds then "
-        "something other than rounding is happening.\n"
+        f"documents further from the ledger than their own lines allow: {over}. Each line's "
+        "allowance is derived from the roundings it goes through, so a document past the sum "
+        "of them is not rounding — read the document before changing the bound.\n"
         f"worst: {dict(sorted((k, str(v)) for k, v in _WORST.items()))}"
     )
-    # **And the measured bound, which is tighter than the structural one.** Four lines each up
-    # to a unit out *could* sum to four units; over 511 documents none exceeded one, because
-    # the wire and the ledger round the same underlying figures and their errors are correlated
-    # rather than independent. Asserted because a regression that made them compound would
-    # still satisfy the structural bound above and would be invisible.
+    # **What replaced the second assertion, and why it is not one.** There used to be a tighter
+    # bound here — "no document more than one minor unit out at all" — asserted on the evidence
+    # of a pass in which none had been. It was false, and a ratio against the derived budget
+    # cannot take its place as a gate: `residue > budget` and `residue / budget > 1` are the
+    # same condition, so asserting both would be the count above restated.
     #
-    # If this ever fires: look at the document it names before loosening the number. A genuine
-    # compounding case is a finding about the payload map, not an untidy threshold.
-    compounding = {
-        key: str(value)
-        for key, value in _WORST.items()
-        if key.endswith("in units") and abs(value) > 1
-    }
-    assert not compounding, (
-        f"a document's foot drifted more than one minor unit of its own currency: "
-        f"{compounding}. Measured over every document the deep pass produced, the residue has "
-        "never exceeded one — read the document before changing this."
-    )
+    # So the ratio is *reported* instead, in the `of budget` keys of the worst-residue line
+    # above. It is the number to read on a green run — the bound is reached by construction
+    # (5 x 6 661 at 10% off is 1.09 out on one line against an allowance of 1.12), so a
+    # regression shows up as the ratio climbing towards 1 well before any document crosses it.
+    # The claim that the bound is *reached* rather than merely respected is asserted where it
+    # can be, in the floors above and in the constructed discounted-line property.
     assert not short, (
         f"the deep pass under-reached {short}. A census that measured almost nothing is green "
         "for a reason that has nothing to do with what it is measuring — read the reach "
@@ -582,6 +604,32 @@ _WORST: dict[str, Decimal] = {}
 def _worst(key: str, value: Decimal) -> None:
     if abs(value) > abs(_WORST.get(key, ZERO)):
         _WORST[key] = value
+
+
+def _line_allowance(unit: Decimal, quantity: Decimal, rate: Decimal) -> Decimal:
+    """How far one line's wire taxable amount may sit from the posted gross, **derived**.
+
+    Not a threshold somebody measured and rounded up. The ledger rounds a line twice and the
+    wire rounds it once, and each rounding has a known worst case:
+
+    * the ledger rounds the discounted **net** to the currency's places, so `net_posted` is up
+      to `u/2` from the exact net — and that error reaches the gross multiplied by `1 + r`,
+      because the tax is then taken on the rounded figure;
+    * the ledger rounds that **tax** to the same places, another `u/2`;
+    * the wire's `prc` is the inclusive unit price at **two decimals**, so `splyAmt` is up to
+      `0.005 x qty` out, and the discount it subtracts is rounded to two decimals as well.
+
+    Summed: `u(1 + r)/2 + u/2 = u(2 + r)/2`, plus `0.005(qty + 1)` for the wire's side. At the
+    standard rate on a zero-decimal base that ceiling is **1.09 francs**, and it is reached
+    exactly — 5 x 6 661 at 10% off, exclusive, is 1.09 below the ledger — so it is tight rather
+    than generous.
+
+    **An undiscounted line cannot get there**, which is why the awkward-price property below
+    can assert a whole franc: `qty x price` on integer inputs is an integer, so the net rounds
+    exactly and the first term vanishes. Only a discount makes the net fractional, and only
+    then does a line round twice.
+    """
+    return unit * (2 + rate) / 2 + PENNY / 2 * (quantity + 1)
 
 
 def _posted_tax_in_base(db: Session, document: PartnerDocument) -> Decimal:
@@ -632,6 +680,21 @@ def _census_document(
     _REACH[f"documents {scale}"] += 1
     if lines > 1:
         _REACH[f"multi-line documents {scale}"] += 1
+    # **The document's own budget**, summed from its lines rather than assumed from their
+    # count. Each line contributes what its rate and quantity allow it to (see
+    # `_line_allowance`), so a four-line invoice of standard-rated goods is allowed more than a
+    # four-line invoice of exempt ones — which is the truth, and "one unit per line" was not.
+    budget = sum(
+        (
+            _line_allowance(
+                unit,
+                Decimal(str(item["qty"])),
+                STANDARD_RATE if item["taxTyCd"] == "B" else ZERO,
+            )
+            for item in payload["itemList"]
+        ),
+        ZERO,
+    )
 
     for field, wire, posted in (
         ("total", Decimal(str(payload["totAmt"])), document.base_total_amount),
@@ -640,16 +703,20 @@ def _census_document(
         residue = wire - posted
         _worst(f"{scale} {field}", residue)
         _worst(f"{scale} {field} in units", residue / unit)
+        # **The number to read on a green run.** The counts below say how often; the ratio says
+        # how much of the derived headroom the worst document actually used, so a regression
+        # that doubled the residue is visible here long before it crosses the bound.
+        _worst(f"{scale} {field} of budget", residue / budget)
         if residue == ZERO:
             _DOCUMENT_RESIDUE[f"{scale} {field} exact"] += 1
         elif abs(residue) <= unit:
             _DOCUMENT_RESIDUE[f"{scale} {field} one unit"] += 1
-        elif abs(residue) <= unit * lines:
-            # Bounded by the line count, which is the shape the per-line census predicts: each
-            # line may be up to one unit out and they do not have to cancel.
-            _DOCUMENT_RESIDUE[f"{scale} {field} within one unit per line"] += 1
+        elif abs(residue) <= budget:
+            # Past a unit but inside what its own lines are allowed. A multi-line invoice lands
+            # here routinely: the residues do not have to cancel and mostly do not.
+            _DOCUMENT_RESIDUE[f"{scale} {field} within its budget"] += 1
         else:
-            _DOCUMENT_RESIDUE[f"{scale} {field} OVER one unit per line"] += 1
+            _DOCUMENT_RESIDUE[f"{scale} {field} OVER its budget"] += 1
 
 
 def _census_line(
@@ -792,7 +859,7 @@ def _assert_payload_agrees_with_itself(payload: dict) -> None:
     assert Decimal(str(payload["totAmt"])) == Decimal(str(payload["totTaxblAmt"]))
 
     for item in items:
-        rate = Decimal("18.00") if item["taxTyCd"] == "B" else ZERO
+        rate = STANDARD_RATE_PERCENT if item["taxTyCd"] == "B" else ZERO
         taxable = Decimal(str(item["taxblAmt"]))
         expected = (
             (taxable * rate / (HUNDRED + rate)).quantize(PENNY, rounding=ROUND_HALF_UP)
@@ -857,12 +924,18 @@ AWKWARD_PLAN = st.lists(
 def test_the_residue_is_under_one_unit_on_every_price_that_cannot_come_out_even(
     db: Session, plan: list[tuple], sandbox_state
 ) -> None:  # noqa: ANN001
-    """The bound step 5 quotes to RRA: **never as much as one franc on a line.**
+    """**Never as much as one franc on an undiscounted line**, and the qualifier is load-bearing.
 
     A plain, standard-rated, exclusive line on a zero-decimal base, priced so that the wire and
     the ledger cannot agree by luck. What is asserted is that they never disagree by a whole
-    unit — the wire's `taxAmt` and the ledger's differ by the rounding of a single tax split,
-    and a difference of a franc or more would mean something else had gone wrong.
+    unit — the wire's `taxAmt` and the ledger's differ by the rounding of a **single** tax
+    split, and a difference of a franc or more would mean something else had gone wrong.
+
+    A franc holds here because `qty x price` on integer inputs is an integer: the ledger's net
+    rounding is exact, so the line rounds once. Put a discount on it and the net becomes
+    fractional, the line rounds twice, and the bound is `u(2 + r)/2` rather than `u` — which is
+    `test_a_discounted_line_rounds_twice_and_stays_inside_the_derived_bound` below, and which
+    the step-2 report quoted to RRA without the qualifier.
     """
     with _sandbox(sandbox_state) as client:
         fixture = fiscalize(
@@ -906,4 +979,117 @@ def test_the_residue_is_under_one_unit_on_every_price_that_cannot_come_out_even(
                     f"{item['taxblAmt']} and the ledger {line.gross_amount}, a whole franc "
                     "apart or more. The two may differ by the rounding of one tax split and "
                     "no more than that."
+                )
+
+
+# --- The residue on a line that rounds twice (decision 6) ---------------------------------------
+#
+# **Why this exists.** The property above drives undiscounted lines only — deliberately, because
+# it is about the per-line bound and a second line could dilute it — and it therefore proves a
+# franc about the case that rounds *once*. The census machine draws discounts, so the case that
+# rounds twice was reachable all along and the numbers went into the same buckets; what nothing
+# did was construct it, so how large it can get was never asked. The answer is 1.09 francs, and
+# the file's two document-level bounds were both written as though it were under one.
+#
+# Same lesson, same shape as P7's targeted refusals: where a case matters and the generator
+# reaches it only if the seed is kind, build the case.
+
+#: **The precondition, constructed rather than drawn.** The first version of this drew the
+#: machine's own quantities, prices and discounts, and one line in 1 196 got past a franc — the
+#: same bias the awkward-price property was written for, because a line only rounds twice to any
+#: effect when the *first* rounding is near its worst.
+#:
+#: It is worth exactly half a unit when the discounted net lands on `x.5`. At 10% off that is
+#: `9 x qty x price / 10`, whose fractional part is `.5` exactly when `qty x price` ends in a
+#: five — so an odd quantity against a price ending in five gets it on every single draw, and
+#: what is left to vary is the tax rounding on top. (12.5% has the same shape one modulus over:
+#: `qty x price` congruent to 4 mod 8. One discount is enough to drive the arithmetic, and the
+#: machine draws the other.)
+TEN_PERCENT = Decimal(10)
+ODD_QUANTITY = st.sampled_from((Decimal(1), Decimal(3), Decimal(5), Decimal(7)))
+#: `n x 10 + 5`, inside the machine's own 100-9 000 band.
+PRICE_ENDING_IN_FIVE = st.integers(min_value=10, max_value=899).map(
+    lambda n: Decimal(n * 10 + 5)
+)
+
+DISCOUNTED_PLAN = st.lists(
+    st.tuples(ODD_QUANTITY, PRICE_ENDING_IN_FIVE),
+    min_size=2,
+    max_size=6,
+)
+
+
+@pytest.mark.slow
+@given(plan=DISCOUNTED_PLAN)
+@settings(deadline=None)
+def test_a_discounted_line_rounds_twice_and_stays_inside_the_derived_bound(
+    db: Session, plan: list[tuple], sandbox_state
+) -> None:  # noqa: ANN001
+    """The bound step 5 should quote to RRA for a discounted line: **`u(2 + r)/2`.**
+
+    The ledger rounds the discounted net to the franc and then rounds the tax on that rounded
+    net, so two roundings reach the gross and the second is taken on a figure the first already
+    moved. The wire keeps both at two decimals. `_line_allowance` derives what that is worth;
+    this drives the case and holds the build to it.
+
+    That the bound is **reached** rather than merely respected is the
+    `discounted lines a franc or more` floor in `_report_residue`, not an assertion here: a
+    property that only ever saw residues of 0.2 would pass against any ceiling and would be
+    measuring nothing. A deep pass puts about a tenth of these lines a franc or more out, which
+    is the fact the two document bounds this replaced denied.
+    """
+    with _sandbox(sandbox_state) as client:
+        fixture = fiscalize(
+            db, build_order_entry(db, f"fis-disc-{next(_EXAMPLE)}"), client, tag="disc"
+        )
+        steps = [
+            ("receive", "up", Decimal(8), Decimal(1000), ZERO, "stock", "tin",
+             "VAT-OUT-18", TaxMode.EXCLUSIVE, False, 1)
+        ]
+        steps += [
+            ("sell", "up", quantity, price, TEN_PERCENT, "stock", "tin",
+             "VAT-OUT-18", TaxMode.EXCLUSIVE, False, 1)
+            for quantity, price in plan
+        ]
+        _drive(db, fixture, client, steps)
+
+        for row in db.scalars(
+            select(FiscalOutboxRow).where(
+                FiscalOutboxRow.company_id == fixture.company_id,
+                FiscalOutboxRow.kind == FiscalOutboxKind.SALE,
+            )
+        ):
+            document = db.get(PartnerDocument, row.source_doc_id)
+            if document is None:
+                continue
+            posted_lines = [
+                line for line in document.lines if line.kit_parent_line_id is None
+            ]
+            for line, item in zip(posted_lines, row.payload["itemList"], strict=True):
+                residue = Decimal(str(item["taxblAmt"])) - line.gross_amount
+                rate = STANDARD_RATE if item["taxTyCd"] == "B" else ZERO
+                # `unit` is one franc: `build_order_entry` bases the tenant on RWF and this
+                # property does not move it, which is the whole point — a zero-decimal base is
+                # where the wire's two decimals and the ledger's none are furthest apart.
+                allowance = _line_allowance(
+                    Decimal(1), Decimal(str(item["qty"])), rate
+                )
+                _REACH["discounted lines"] += 1
+                if abs(residue) >= Decimal(1):
+                    _REACH["discounted lines a franc or more"] += 1
+                # Prefixed, because `_census_line` already writes `0dp discounted ...` from
+                # the machine and two censuses in one counter have to stay tellable apart.
+                _RESIDUE[
+                    "constructed discounted exact"
+                    if residue == ZERO
+                    else "constructed discounted under a franc"
+                    if abs(residue) < Decimal(1)
+                    else "constructed discounted a franc or more"
+                ] += 1
+                _worst("discounted line", residue)
+                assert abs(residue) <= allowance, (
+                    f"{document.number} line {item['itemSeq']}: the wire says "
+                    f"{item['taxblAmt']} and the ledger {line.gross_amount}, {abs(residue)} "
+                    f"apart against an allowance of {allowance}. A discounted line rounds "
+                    "twice and no more than twice; past that is not rounding."
                 )
