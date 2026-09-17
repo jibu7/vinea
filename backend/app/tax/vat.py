@@ -34,7 +34,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
-from sqlalchemy import Row, Select, and_, func, or_, select
+from sqlalchemy import Row, Select, and_, func, or_, select, text
 from sqlalchemy.orm import Session
 from starlette.requests import Request
 
@@ -767,28 +767,42 @@ def file_return(
     view = compute(db, company_id, period_from=period_from, period_to=period_to)
     settlement_account_id = _settlement_account(db, company_id)
 
-    claimed = claim_number(db, company_id, DocType.VAT_RETURN)
     lines = _settlement_lines(db, company_id, view, settlement_account_id)
+    # The entry names the return it settles, so the GL entry screen drills back to it. That id
+    # has to exist *before* the entry posts: a posted entry is immutable (rule 3 —
+    # `kernel_block_posted_entry_mutation` raises on any UPDATE), so it cannot be stamped
+    # afterwards. The cycle-breaker is `partner_documents`': take the id from the sequence.
+    return_id = _reserve_return_id(db)
     entry = None
     if lines:
         entry = posting.post(
             db,
             VatReturnPosted(
                 entry_date=period_to,
-                description=f"VAT return {claimed.number} "
-                f"({period_from.isoformat()} — {period_to.isoformat()})",
-                reference=claimed.number,
+                description="VAT return "
+                f"{period_from.isoformat()} — {period_to.isoformat()}",
                 lines=tuple(lines),
                 source_doc_type=VAT_RETURN_SOURCE,
-                idempotency_key=f"{claimed.number}:settlement" if idempotency_key else None,
+                source_doc_id=return_id,
+                idempotency_key=f"{idempotency_key}:settlement" if idempotency_key else None,
             ),
             company_id=company_id,
             actor=actor,
         )
 
+    # **One number per filing.** A return that posts a settlement entry takes *that entry's*
+    # number, and only a nil return claims one of its own — which is precisely what the
+    # `_NIL_VAT_RETURN` claimant says by being narrowed to `journal_entry_id IS NULL`. Claiming
+    # here as well would leave a number no row holds, and `assert_ledger_invariants` reads that
+    # as a hole in the `VAT` run.
+    number = entry.number if entry is not None else claim_number(
+        db, company_id, DocType.VAT_RETURN
+    ).number
+
     filed = VatReturn(
+        id=return_id,
         company_id=company_id,
-        number=claimed.number,
+        number=number,
         period_from=period_from,
         period_to=period_to,
         figures=view.as_filed(),
@@ -805,11 +819,6 @@ def file_return(
     )
     db.add(filed)
     db.flush()
-
-    # The entry names the return it settles, so the GL drills back to it (`sources.py`).
-    if entry is not None:
-        entry.source_doc_id = filed.id
-        db.flush()
 
     record_audit(
         db,
@@ -901,6 +910,20 @@ def reverse_return(
         request=request,
     )
     return filed
+
+
+def _reserve_return_id(db: Session) -> int:
+    """Take the next `vat_returns.id` before the settlement entry posts.
+
+    The same cycle-breaker `partner_documents` uses. The entry carries `source_doc_id` so the
+    GL can drill from it back to the return, and a posted entry can never be updated to add it
+    — so the id is drawn from the sequence first and the row is written with it. A rolled-back
+    filing burns one id, which is what a sequence is for; the return's *number* comes from
+    `document_sequences` and stays gapless.
+    """
+    return int(
+        db.execute(text("SELECT nextval(pg_get_serial_sequence('vat_returns', 'id'))")).scalar_one()
+    )
 
 
 def _replay(
