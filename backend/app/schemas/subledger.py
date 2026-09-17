@@ -7,6 +7,7 @@ from typing import Annotated
 
 from pydantic import BaseModel, Field, model_validator
 
+from app.models.fiscalization import PaymentMethod
 from app.models.partner import AgeingBasis, DueBasis, TaxMode
 from app.schemas.common import ApiModel
 
@@ -330,6 +331,16 @@ class DocumentCreate(BaseModel):
     cash_account_id: int | None = None
     instrument_type: str | None = Field(default=None, pattern="^(cash|bank|cheque|mobile|other)$")
     maturity_date: date | None = None
+    # --- P7 fiscalization (decision 7) -------------------------------------------------------
+    #: Left unset it defaults from the payment terms — `credit` with them, `cash` without.
+    payment_method: PaymentMethod | None = None
+    #: The customer's EBM purchase code, six characters. Required on a fiscalized sale to a
+    #: customer with a TIN, and refused at post rather than here: whether it is needed depends
+    #: on the company's devices and the partner's TIN, neither of which a schema can see.
+    purchase_code: str | None = Field(default=None, min_length=6, max_length=6)
+    refund_of_document_id: int | None = None
+    #: One of the authority's refund reason codes. Two characters because they are `01`–`13`.
+    refund_reason: str | None = Field(default=None, min_length=2, max_length=2)
 
     @model_validator(mode="after")
     def _shape_matches_kind(self) -> "DocumentCreate":
@@ -440,6 +451,14 @@ class DocumentRead(ApiModel):
     status: str
     reversal_entry_id: int | None
     reversed_on: date | None
+    # --- P7 fiscalization --------------------------------------------------------------------
+    payment_method: PaymentMethod | None = None
+    purchase_code: str | None = None
+    refund_of_document_id: int | None = None
+    refund_reason: str | None = None
+    #: The receipt RRA signed for this document, once the queue row has been sent. `None` while
+    #: the row is still in flight — which is what the print refusal at step 8 reads.
+    fiscal_receipt_id: int | None = None
     lines: list[DocumentLineRead] = []
 
 
@@ -669,6 +688,11 @@ class MaturityRunRequest(BaseModel):
 class ReversalRequest(BaseModel):
     on_date: date
     reason: str = Field(min_length=3, max_length=500)
+    #: The authority's refund reason code, for a fiscalized document whose sale RRA signed:
+    #: reversing it queues a full refund, and a refund carries a reason code (decision 7).
+    #: Optional here and required at the service, for the same reason `purchase_code` is: the
+    #: schema cannot see whether this document was ever registered.
+    refund_reason: str | None = Field(default=None, min_length=2, max_length=2)
 
 
 class InstrumentRunRow(BaseModel):

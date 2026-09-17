@@ -2,9 +2,10 @@
 
 **Country logic never leaks out of an adapter.** Everything above this line — the posting
 engine, AR/AP, the stock service, the screens — speaks the DTOs in `app.fiscal.mapping` and
-calls the fourteen methods below. Everything about how a particular revenue authority spells
-its JSON, numbers its receipts or names its codes lives under the adapter that implements
-them, and `tests/fiscal/test_boundary.py` fails the build if any module outside
+calls the methods below — fourteen business calls, plus the three seams P7 step 2 added and
+names where they are declared. Everything about how a particular revenue authority spells its
+JSON, numbers its receipts or names its codes lives under the adapter that implements them,
+and `tests/fiscal/test_boundary.py` fails the build if any module outside
 `app/fiscal/rwanda/` imports that package.
 
 The Protocol is **grown to what Rwanda needs**, deliberately and with that stated. A boundary
@@ -22,6 +23,7 @@ registered with nothing to print).
 """
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Protocol, runtime_checkable
 
 from app.fiscal.mapping import (
@@ -33,7 +35,7 @@ from app.fiscal.mapping import (
     FiscalStockMaster,
     FiscalSyncResult,
 )
-from app.models.fiscalization import FiscalDevice
+from app.models.fiscalization import FiscalDevice, FiscalOutboxKind
 
 #: The one result code that means "accepted". Everything else is a refusal with a reason.
 RESULT_OK = "000"
@@ -113,9 +115,21 @@ class FiscalReceiptData:
     intrl_data: str
     rcpt_sign: str
     sdc_id: str
-    sdc_datetime: str
+    #: When the device signed, as an **instant**. Parsed by the adapter because both the format
+    #: and the zone are the authority's — RRA stamps `yyyyMMddHHmmss` in Kigali, and a neutral
+    #: module reading that as UTC would shift every receipt by two hours on a daily report.
+    sdc_datetime: datetime
     mrc_no: str | None = None
     invc_no: int | None = None
+    #: The refunded sale's number, on a refund. Read off the request by the adapter, because
+    #: the field is the authority's and a neutral module reaching into a frozen payload for it
+    #: would be exactly the leak rule 12 is about.
+    org_invc_no: int | None = None
+    #: What the receipt's verification code encodes, in the authority's own format. Built by
+    #: the adapter because the format is the authority's (Rwanda: CIS §7.24.7) and stored
+    #: rather than recomputed, so a receipt reprinted years later carries the string that was
+    #: issued with it rather than whatever today's code would produce.
+    qr_payload: str = ""
 
 
 @dataclass(frozen=True)
@@ -163,7 +177,56 @@ class FiscalizationAdapter(Protocol):
         """Is this a taxpayer the authority knows, and what is it called?"""
         ...
 
+    # --- The outbox seam -------------------------------------------------------------------
+    #
+    # Two calls, and they exist because a queue row is **frozen at enqueue and sent later**
+    # (decision 4). The fourteen business calls below each do both halves at once, which is
+    # what a caller holding a document wants; the drainer holds neither a document nor a
+    # session that ever saw one — it holds bytes that were rendered inside the posting
+    # transaction, and it must send exactly those. A drainer that re-rendered from a DTO
+    # would send whatever today's masters say, which is the one thing the frozen payload is
+    # for.
+    #
+    # So `render` is what the posting transaction calls and `send` is what the drainer calls;
+    # the business methods are `send(render(...))` and stay the vocabulary a caller reads.
+    def render(
+        self, device: FiscalDevice, kind: FiscalOutboxKind, document: Any
+    ) -> dict[str, Any]:
+        """The wire payload for one queue row, ready to be frozen. Device keys are never in
+        it: they are added at `send`, from a caller that decrypted one on purpose."""
+        ...
+
+    def send(
+        self,
+        device: FiscalDevice,
+        kind: FiscalOutboxKind,
+        payload: dict[str, Any],
+        *,
+        cmc_key: str | None = None,
+    ) -> tuple[FiscalResult, FiscalReceiptData | None]:
+        """Send a payload rendered earlier, exactly as it was frozen. The receipt comes back
+        on the kinds that produce one and is `None` on the rest."""
+        ...
+
     # --- Masters ---------------------------------------------------------------------------
+    def mint_item_code(
+        self,
+        *,
+        origin_country: str,
+        product_type: str,
+        packaging_unit: str,
+        quantity_unit: str,
+        sequence_no: int,
+    ) -> str:
+        """The authority's own item code, composed from the item's attributes and a sequence.
+
+        Here rather than in a service because the composition is a *format the authority
+        publishes* — Rwanda's is VSDC §4.17 — and a service that built it would be country
+        logic above the boundary. What the service supplies is the sequence, claimed gaplessly
+        from `document_sequences` like every other number this build issues.
+        """
+        ...
+
     def register_item(
         self, device: FiscalDevice, item: FiscalItemRegistration, *, cmc_key: str | None = None
     ) -> FiscalResult:
@@ -179,6 +242,23 @@ class FiscalizationAdapter(Protocol):
     def fiscalize_refund(
         self, device: FiscalDevice, refund: FiscalRefund, *, cmc_key: str | None = None
     ) -> tuple[FiscalResult, FiscalReceiptData | None]:
+        ...
+
+    def normalize_receipt(
+        self,
+        device: FiscalDevice,
+        response: dict[str, Any] | None,
+        *,
+        invc_no: int | None = None,
+    ) -> FiscalReceiptData | None:
+        """One receipt out of whatever shape the authority answered in.
+
+        On the Protocol rather than inside the adapter's own `send`, because the queue's
+        **manual attach** needs it: a person reading a receipt off the authority's portal is
+        keying the same facts, and normalising them anywhere else would be a second opinion
+        about what a receipt is. `None` when the fields are not a receipt — a success carrying
+        no receipt data is not one, and a part-filled row would make "sent means signed" false.
+        """
         ...
 
     # --- Purchases and imports -------------------------------------------------------------

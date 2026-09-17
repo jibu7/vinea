@@ -318,6 +318,12 @@ def activate(
     for doc_type in DEVICE_SEQUENCES:
         ensure_sequence(db, company_id, doc_type, branch_id=device.branch_id)
     device.status = FiscalDeviceStatus.ACTIVE
+    # **Every activation, not only the first.** A device that was suspended and brought back
+    # starts a new continuous period of fiscalizing, and `assert_fiscal_invariants` asserts
+    # over that period alone: documents posted while it was suspended are legitimately
+    # row-less, because a suspended device leaves the company unfiscalized and the posting
+    # hook is never reached.
+    device.activated_at = datetime.now(UTC)
     # Flushed here rather than left to the commit: the session runs `autoflush=False`, and the
     # very next thing a caller asks is usually "is this company fiscalized now" — a question
     # answered by a query, which would otherwise read the row as it was.

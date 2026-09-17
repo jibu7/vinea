@@ -14,6 +14,8 @@ from app.api.idempotency import IdempotencyKey, fingerprint
 from app.core import permissions
 from app.core.errors import ConflictError, NotFoundError, PermissionDeniedError
 from app.db import get_db
+from app.fiscal import devices as device_service
+from app.fiscal import worker as fiscal_worker
 from app.kernel.posting import gl_settings_for
 from app.models.audit import AuditLog
 from app.models.job import JobStatus
@@ -593,6 +595,22 @@ def update_defaults(
 # --- Documents --------------------------------------------------------------------------
 
 
+def _kick_fiscal_drain(background: BackgroundTasks, db: Session, company_id: int) -> None:
+    """Drain the queue right after the response, for a fiscalized tenant.
+
+    The `run_job` pattern, and for the same reason: the row is already durable — it committed
+    with the document — so this buys **latency**, not safety. A customer is standing at the
+    counter waiting for a receipt, and waiting fifteen seconds for the worker's next pass is a
+    worse product than sending the moment the response is out of the way.
+
+    Guarded by `is_fiscalized` so an ordinary tenant pays nothing: one indexed query per post,
+    against a background session per post for a company that would have no rows to drain.
+    """
+    if not device_service.is_fiscalized(db, company_id):
+        return
+    background.add_task(fiscal_worker.drain_tenant, company_id)
+
+
 def _document_read(db: Session, document: PartnerDocument) -> DocumentRead:
     loaded = db.scalar(
         select(PartnerDocument)
@@ -630,6 +648,7 @@ def post_document(
     payload: DocumentCreate,
     request: Request,
     response: Response,
+    background: BackgroundTasks,
     role: PartnerRole = RolePath,
     idempotency_key: str = IdempotencyKey,
     auth: AuthContext = Depends(get_tenant_context),
@@ -678,6 +697,10 @@ def post_document(
         cash_account_id=payload.cash_account_id,
         instrument_type=payload.instrument_type,
         maturity_date=payload.maturity_date,
+        payment_method=payload.payment_method,
+        purchase_code=payload.purchase_code,
+        refund_of_document_id=payload.refund_of_document_id,
+        refund_reason=payload.refund_reason,
     )
     document, replayed = documents_service.post_document(
         db,
@@ -691,6 +714,8 @@ def post_document(
         request=request,
     )
     db.commit()
+    if not replayed:
+        _kick_fiscal_drain(background, db, auth.company_id)
     response.status_code = status.HTTP_200_OK if replayed else status.HTTP_201_CREATED
     return _document_read(db, document)
 
@@ -801,6 +826,7 @@ def reverse_document(
     document_id: int,
     payload: ReversalRequest,
     request: Request,
+    background: BackgroundTasks,
     role: PartnerRole = RolePath,
     auth: AuthContext = Depends(get_tenant_context),
     db: Session = Depends(get_db),
@@ -812,10 +838,12 @@ def reverse_document(
         document,
         on_date=payload.on_date,
         reason=payload.reason,
+        refund_reason=payload.refund_reason,
         actor=auth.user,
         request=request,
     )
     db.commit()
+    _kick_fiscal_drain(background, db, auth.company_id)
     return _document_read(db, document)
 
 

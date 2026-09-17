@@ -40,6 +40,22 @@ services:
       - .:/repo:ro
     ports: ["8000:8000"]
     depends_on: { db: { condition: service_healthy } }
+  # The outbox drainer (P7 decision 4). A plain loop process, not a broker: Postgres is the
+  # queue, `SELECT ... FOR UPDATE SKIP LOCKED` is the claim, and the durability is the
+  # transaction the row was written in. It shares the backend image and the backend's
+  # environment because it is the same application — one code path sends a row, whether the
+  # loop, an after-response kick or the drain endpoint reached it.
+  worker:
+    build: ./backend
+    command: uv run python -m app.fiscal.worker
+    environment:
+      DATABASE_URL: postgresql+psycopg://vinea_app:vinea_app@db:5432/vinea
+      MIGRATION_DATABASE_URL: postgresql+psycopg://vinea:vinea@db:5432/vinea
+      REDIS_URL: redis://redis:6379/0
+      JWT_SECRET: dev-only-insecure-secret-change-me
+    volumes:
+      - ./backend:/app
+    depends_on: { db: { condition: service_healthy } }
   frontend:
     build: ./frontend
     command: npm run dev

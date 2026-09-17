@@ -60,6 +60,14 @@ NO_UI: dict[str, str] = {
         "deletes expired artifacts on a schedule; there is no moment at which a person wants "
         "to press it."
     ),
+    "POST /api/v1/fiscal/outbox/drain": (
+        "by design — the EBM queue's scheduler hook. The queue drains by itself: a worker "
+        "loop every fifteen seconds (`python -m app.fiscal.worker`, a service in "
+        "docker-compose) and an after-response kick from the posting that filled it. This "
+        "endpoint exists for a deployment that runs no worker and drives an external "
+        "scheduler instead, and for the e2e stack, which drives it rather than waiting. The "
+        "same shape as `jobs/sweep`: there is no moment at which a person wants to press it."
+    ),
     # --- P6 carries no entry. -------------------------------------------------------------------
     # There were twenty. P6 builds its services in steps 1-5 and its screens in steps 6-8, so
     # between those two points the endpoints existed and nothing called them; each entry named

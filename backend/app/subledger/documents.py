@@ -16,6 +16,7 @@ from starlette.requests import Request
 
 from app.core.errors import ConflictError, NotFoundError
 from app.core.permissions import AP_CREDIT_LIMIT_OVERRIDE, AR_CREDIT_LIMIT_OVERRIDE
+from app.fiscal import sales as fiscal_sales
 from app.inventory import masters as inventory_masters
 from app.inventory import stock as stock_service
 from app.kernel import posting
@@ -33,6 +34,7 @@ from app.kernel.money import (
 )
 from app.kernel.sequences import DocType
 from app.models.currency import Currency
+from app.models.fiscalization import PaymentMethod
 from app.models.gl import CASHBOOK_CONTROL_TYPES, GLAccount
 from app.models.inventory import GoodsReceivedNote, GoodsReceivedNoteLine, Item, ItemType
 from app.models.journal import JournalEntry
@@ -187,6 +189,18 @@ class DocumentInput:
     cash_account_id: int | None = None
     instrument_type: InstrumentType | None = None
     maturity_date: date | None = None
+    # --- P7 fiscalization (decision 7) -------------------------------------------------
+    #: How the document is paid. Defaulted from the payment terms when it is not supplied —
+    #: `credit` with terms, `cash` without — and stored on both roles.
+    payment_method: PaymentMethod | None = None
+    #: The customer's EBM purchase code. Required on a fiscalized sale to a customer with a
+    #: TIN (`purchase_code_required`), and meaningless without one.
+    purchase_code: str | None = None
+    #: On a credit note: the invoice it refunds, when its lines do not say so themselves.
+    refund_of_document_id: int | None = None
+    #: The authority's refund reason code. Required on a fiscalized credit note — only the
+    #: person issuing it can answer "why", and a default would put the same answer on all.
+    refund_reason: str | None = None
 
 
 @dataclass
@@ -410,6 +424,31 @@ def post_document(
             code="invalid_amount",
             field_errors={"lines": ["document total must be positive"]},
         )
+
+    # **The fiscal contract, before the first write** (decision 2/3/7/8). Here rather than
+    # after the posting because every one of its refusals is a refusal about the *document* —
+    # a line with no item, a customer with a TIN and no purchase code, a credit note that
+    # refunds two invoices — and a refusal that arrives after the companion stock entry has
+    # posted is a rollback where a `422` would have done. It writes nothing and reads only
+    # what `_compute_lines` already resolved.
+    payment_method = data.payment_method or fiscal_sales.default_payment_method(
+        terms is not None
+    )
+    fiscal_plan = fiscal_sales.plan(
+        db,
+        company_id,
+        role=role,
+        kind=data.kind,
+        is_journal=spec.transaction_type == JOURNAL_TRANSACTION_TYPE,
+        partner=partner,
+        computed=computed,
+        branch_id=branch_id,
+        tax_mode=tax_mode,
+        purchase_code=data.purchase_code,
+        refund_of_document_id=data.refund_of_document_id,
+        refund_reason=data.refund_reason,
+        payment_method=payment_method,
+    )
 
     _check_credit_limit(
         db,
@@ -760,6 +799,10 @@ def post_document(
         direction=spec.direction,
         instrument_type=data.instrument_type,
         maturity_date=data.maturity_date,
+        payment_method=payment_method,
+        purchase_code=data.purchase_code,
+        refund_of_document_id=data.refund_of_document_id,
+        refund_reason=data.refund_reason,
         cash_account_id=data.cash_account_id,
         stock_entry_id=companion.entry_id,
         status=DocumentStatus.POSTED,
@@ -821,6 +864,21 @@ def post_document(
         ]
     )
     db.flush()
+    # **In the posting transaction, before this function returns** (decision 4). The row and
+    # the document commit together or neither does, which is the whole guarantee: nothing
+    # posted is ever lost and nothing unposted is ever sent.
+    if fiscal_plan is not None:
+        fiscal_sales.enqueue(
+            db,
+            company_id,
+            plan=fiscal_plan,
+            document=document,
+            partner=partner,
+            currency=currency,
+            base=base,
+            posted_at=entry.posted_at,
+            actor=actor,
+        )
     _refresh_matched_receipts(db, computed)
     _refresh_fulfilled_orders(db, company_id, computed)
     audit(
@@ -1446,6 +1504,7 @@ def reverse_document(
     on_date: date,
     reason: str,
     actor: User,
+    refund_reason: str | None = None,
     idempotency_key: str | None = None,
     idempotency_hash: str | None = None,
     request: Request | None = None,
@@ -1485,6 +1544,16 @@ def reverse_document(
             f"{document.number} has already matured into the bank; reverse the maturity first",
             code="instrument_matured",
         )
+    # **The fiscal decision, before anything is written** (decision 7). Two refusals live here
+    # — a refund RRA has already signed cannot be reversed, and a row whose outcome is
+    # unresolved must not be — and they have to arrive before the stock half, which is the
+    # other refusal this function can raise. `plan_reversal_refund` reads and refuses;
+    # `on_reverse` cancels the row when RRA never held it, which is a write and therefore
+    # second.
+    fiscal_refund = fiscal_sales.plan_reversal_refund(
+        db, document.company_id, document, refund_reason=refund_reason
+    )
+    fiscal_sales.on_reverse(db, document.company_id, document, reason=reason)
     # **The companion goes first, and that ordering is the whole of whether this function can
     # be trusted to refuse before it writes.**
     #
@@ -1531,6 +1600,21 @@ def reverse_document(
     document.reversed_on = on_date
     document.open_amount = ZERO
     db.flush()
+    # A sale RRA signed cannot be un-signed: what reverses it there is a **refund**, queued
+    # here in the same transaction as the reversal that owes it.
+    if fiscal_refund is not None:
+        fiscal_sales.enqueue(
+            db,
+            document.company_id,
+            plan=fiscal_refund,
+            document=document,
+            partner=masters.get_partner(db, document.company_id, document.partner_id),
+            currency=_resolve_currency(db, document.company_id, document.currency_id),
+            base=base_currency(db, document.company_id),
+            posted_at=reversal.posted_at,
+            actor=actor,
+            source_doc_type=fiscal_sales.REVERSAL_SOURCE,
+        )
     # `matched`, `invoiced` and `received` are queries over posted, unreversed lines, so
     # reversing this document has already changed all three. The stored status on every receipt
     # and every order it touched has to follow.

@@ -35,6 +35,13 @@ services:
       db: { condition: service_healthy }
       ebm-sandbox: { condition: service_started }
 
+  # The drainer needs the sandbox up before it starts asking a device to talk to one. Nothing
+  # else about it changes: the same loop, the same code path, the same queue.
+  worker:
+    depends_on:
+      db: { condition: service_healthy }
+      ebm-sandbox: { condition: service_started }
+
   # The in-repo EBM server. Built from the backend image — it *is* backend code
   # (`app/fiscal/rwanda/sandbox.py`), and a second image would be a second thing to keep in
   # step with the payload models it validates.

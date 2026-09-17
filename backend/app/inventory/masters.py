@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from starlette.requests import Request
 
 from app.core.errors import ConflictError, NotFoundError
+from app.fiscal import devices as fiscal_devices
 from app.kernel.accounts import get_account
 from app.kernel.errors import LedgerStateError
 from app.kernel.posting import gl_settings_for
@@ -1166,6 +1167,14 @@ def update_inventory_defaults(
 
     policy = changes.get("negative_stock_policy")
     if policy is not None:
+        # CIS §7.30: no fiscal receipt may be issued for goods the stock does not hold, and
+        # `block` is what makes that true. A company with a live EBM device cannot turn it off
+        # from this screen (`fiscal_requires_block`) — the refusal belongs where the setting
+        # changes, not only where the device is activated, because the setting is the thing
+        # somebody would move without knowing what it was for.
+        fiscal_devices.assert_negative_stock_policy_allowed(
+            db, company_id, NegativeStockPolicy(policy)
+        )
         settings.negative_stock_policy = NegativeStockPolicy(policy)
 
     if changes.get("clear_default_warehouse"):

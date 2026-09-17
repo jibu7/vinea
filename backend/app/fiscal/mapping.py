@@ -90,6 +90,11 @@ class FiscalSale:
     purchase_code: str | None = None
     #: True when any line moves stock — the authority wants a release date only then.
     releases_stock: bool = False
+    #: Which daily report this sale falls in — the authority prints it on the receipt, and it
+    #: is the number the next Z close will carry. Frozen onto the DTO rather than passed to
+    #: the adapter beside it, because the outbox renders a payload from the DTO alone: a
+    #: parameter the renderer took separately would be a fact the frozen row did not hold.
+    daily_report_no: int = 1
     #: The actor, for the authority's "who keyed this" fields.
     actor_id: str = ""
     actor_name: str = ""

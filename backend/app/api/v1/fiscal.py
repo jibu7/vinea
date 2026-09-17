@@ -1,4 +1,5 @@
-"""Fiscalization API (P7). Step 1 is setup: devices, the two syncs, and the TIN lookup.
+"""Fiscalization API (P7). Step 1 is setup — devices, the two syncs, the TIN lookup — and
+step 2 adds the one endpoint the queue needs, `POST /fiscal/outbox/drain`.
 
 The screens that drive these arrive at **step 6** (Maintenance → Tax → EBM devices, and Verify
 TIN on Customers / Suppliers). Until then every mutating endpoint here carries a
@@ -20,12 +21,14 @@ from app.core import permissions
 from app.core.errors import PermissionDeniedError
 from app.db import get_db
 from app.fiscal import devices as device_service
+from app.fiscal import drainer as drain_service
 from app.models.fiscalization import FiscalCode, FiscalItemClass, FiscalSyncKind
 from app.schemas.fiscal import (
     DeviceCreate,
     DeviceRead,
     DeviceSuspend,
     DeviceSyncResult,
+    DrainResult,
     TinLookupRead,
     device_read,
 )
@@ -240,3 +243,34 @@ def list_item_classes(
         }
         for row in rows
     ]
+
+
+@router.post("/outbox/drain")
+def drain_outbox(
+    auth: AuthContext = permissions.require(permissions.FISCAL_QUEUE_MANAGE),
+    db: Session = Depends(get_db),
+) -> DrainResult:
+    """Drain every active device's queue for this company, now.
+
+    The scheduler's hook, and `by design` in the rule-14 register for the same reason
+    `jobs/sweep` is: the queue drains by itself — the worker loop every fifteen seconds and an
+    after-response kick from the posting that filled it — so there is no moment at which a
+    person wants to press this. What it exists for is a deployment with no worker process and
+    an external scheduler, and for the e2e stack, which drives it instead of waiting.
+    """
+    outcomes = drain_service.drain_company(db, auth.company_id)
+    db.commit()
+    return DrainResult(
+        rows=len(outcomes),
+        sent=sum(1 for outcome in outcomes if outcome.status == "sent"),
+        outcomes=[
+            {
+                "row_id": outcome.row_id,
+                "kind": str(outcome.kind),
+                "status": str(outcome.status),
+                "code": outcome.code,
+                "message": outcome.message,
+            }
+            for outcome in outcomes
+        ],
+    )
