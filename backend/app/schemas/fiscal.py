@@ -210,6 +210,13 @@ class DailyFiguresRead(BaseModel):
     items_count: int
     copies_count: int
     copies_gross: Decimal
+    #: §19.1 prints the day's discounts.
+    discounts: Decimal
+    #: The same documents' ledger value, and the wire-versus-ledger residue between the two.
+    #: Expected rather than a defect (decision 6), and named so a month-end reconciliation
+    #: against the VAT return does not meet an unexplained franc.
+    posted_net: Decimal
+    declared_less_posted: Decimal
     #: What the device was still holding when the report was taken. A queued row is not a
     #: receipt, so it is no part of the totals — and a Z that closed over one says so.
     queued_rows: int

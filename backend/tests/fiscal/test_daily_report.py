@@ -19,7 +19,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.fiscal import daily, drainer
+from app.fiscal import daily, drainer, registry
 from app.kernel.errors import LedgerStateError
 from app.models.fiscalization import FiscalDailyReport, FiscalReceipt, FiscalReceiptType
 from app.models.subledger import PartnerDocument
@@ -277,3 +277,121 @@ def test_a_z_totals_equal_the_sum_of_its_own_receipts(
         (Decimal(str(r.request["totTaxAmt"])) for r in covered), Decimal(0)
     )
     assert report.figures["items_count"] == sum(int(r.request["totItemCnt"]) for r in covered)
+
+
+def test_the_day_reports_discounts_and_follows_the_receipt_not_the_ledger(
+    db: Session, fiscal_posting: FiscalPosting, sandbox_client: httpx.Client
+) -> None:
+    """Two requirements at once, because one case proves both.
+
+    §19.1 prints the day's **discounts**, so a Z that could not state them would fail the
+    checkpoint sheet — decision 11 lists them beside the copies and the item count.
+
+    And a discounted line is exactly where the ledger and the receipt part company. The wire's
+    taxable amount is `splyAmt − dcAmt`, extended from the two-decimal **inclusive** price,
+    while the ledger holds the posted gross of an exclusive line; on round, undiscounted prices
+    the two coincide, which is why an undiscounted fixture proves nothing about which one a Z
+    follows. A Z states what the authority signed, so the figures below are asserted against
+    the stored payload — the thing RRA actually received — and not against `journal_lines`.
+    """
+    helpers.receive(fiscal_posting, db)
+    helpers.invoice(
+        fiscal_posting,
+        db,
+        lines=(
+            documents_service.LineInput(
+                item_id=fiscal_posting.stock_item.id,
+                quantity=Decimal(7),
+                unit_price=Decimal("333.33"),
+                discount_percent=Decimal("12.5"),
+                tax_code_id=fiscal_posting.tax_codes["VAT-OUT-18"].id,
+            ),
+        ),
+    )
+    db.flush()
+    _drain_everything(db, fiscal_posting, sandbox_client)
+
+    view = daily.x_report(db, fiscal_posting.company_id, fiscal_posting.device.id)
+    receipt = db.scalars(
+        select(FiscalReceipt).where(FiscalReceipt.company_id == fiscal_posting.company_id)
+    ).one()
+    declared = receipt.request
+
+    # The discount is on the day, and it is the one the receipt carries.
+    expected_discount = sum(
+        (Decimal(str(line["dcAmt"])) for line in declared["itemList"]), Decimal(0)
+    )
+    assert expected_discount > 0, "a 12.5% line must declare a discount"
+    assert view.figures.discounts == expected_discount
+
+    # And every money figure is the receipt's, to the franc.
+    assert view.figures.ns_gross == Decimal(str(declared["totAmt"]))
+    assert view.figures.classes["B"].taxable_ns == Decimal(str(declared["taxblAmtB"]))
+    assert view.figures.classes["B"].tax_ns == Decimal(str(declared["taxAmtB"]))
+    assert view.figures.total_tax == Decimal(str(declared["totTaxAmt"]))
+
+
+def test_a_payload_that_declared_no_receipt_is_no_part_of_a_till(
+    db: Session, fiscal_posting: FiscalPosting
+) -> None:
+    """A stock or item row is in the outbox and in no day. The adapter says so, rather than a
+    neutral module guessing from a field it should not be reading."""
+    adapter = registry.adapter_for("RW")
+
+    assert adapter.normalize_declared_totals(None) is None
+    assert adapter.normalize_declared_totals({"sarNo": 1, "itemList": []}) is None
+    assert adapter.normalize_declared_totals({"rcptTyCd": "S", "totAmt": "10.00"}) is not None
+
+
+# --- The three fiscal-day endpoints answer ---------------------------------------------------
+
+
+@pytest.fixture
+def signed_in_owner(client, db: Session, a_day: FiscalPosting):  # noqa: ANN001, ANN201
+    """The fixture's own owner, through the real login, so the permissions are the real ones."""
+    db.commit()
+    response = client.post(
+        "/api/v1/auth/login",
+        json={"email": a_day.owner.email, "password": "correct horse battery staple"},
+    )
+    assert response.status_code == 200, response.text
+    return a_day
+
+
+def test_the_x_report_endpoint_renders_the_day(client, signed_in_owner: FiscalPosting) -> None:  # noqa: ANN001
+    """Rule 13 in the small: assert a **figure**, not that the route compiles."""
+    response = client.get(f"/api/v1/fiscal/devices/{signed_in_owner.device.id}/x-report")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["kind"] == "X"
+    assert body["figures"]["ns_count"] == 1
+    assert Decimal(body["figures"]["ns_gross"]) == GROSS
+    # The figures decision 11 lists and the first pass omitted.
+    assert "discounts" in body["figures"]
+    assert "declared_less_posted" in body["figures"]
+
+
+def test_closing_the_day_over_the_api_stores_a_z_and_lists_it(
+    client, signed_in_owner: FiscalPosting  # noqa: ANN001
+) -> None:
+    """Over HTTP there is no injected clock, and there should not be — a caller does not get to
+    say when the day ended. So the test waits out the activation second instead, the same
+    resolution limit `_floor_second` documents: a device activated and closed inside one second
+    is an empty range, and `fiscal_z_empty_range` is the right answer to it (409)."""
+    time.sleep(1.05)
+
+    closed = client.post(
+        f"/api/v1/fiscal/devices/{signed_in_owner.device.id}/close-day",
+        headers={"Idempotency-Key": "close-day-api"},
+    )
+
+    assert closed.status_code == 201, closed.text
+    body = closed.json()
+    assert body["kind"] == "Z"
+    assert body["number"].startswith("Z-")
+    assert body["figures"]["ns_count"] == 1
+
+    listing = client.get(f"/api/v1/fiscal/devices/{signed_in_owner.device.id}/z-reports")
+    assert listing.status_code == 200, listing.text
+    assert [row["number"] for row in listing.json()] == [body["number"]]

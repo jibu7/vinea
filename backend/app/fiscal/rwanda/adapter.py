@@ -43,6 +43,8 @@ from app.fiscal.mapping import (
     FiscalSyncResult,
 )
 from app.fiscal.protocol import (
+    DeclaredClassTotals,
+    DeclaredTotals,
     DeviceIdentity,
     FiscalReceiptData,
     FiscalResult,
@@ -126,6 +128,23 @@ _OUTBOX_OPERATIONS: dict[FiscalOutboxKind, Operation] = {
 #: The kinds whose answer carries a receipt. Everything else comes back with an acknowledgment
 #: and nothing to print.
 _RECEIPT_KINDS = frozenset({FiscalOutboxKind.SALE, FiscalOutboxKind.REFUND})
+
+
+#: The four tax classes a receipt prints, in the order §19.1 prints them. The letters are the
+#: one piece of vocabulary already shared with the neutral side — `tax_codes.fiscal_tax_type`
+#: maps onto exactly these — so a module above the adapter names a class without naming a field.
+TAX_CLASSES = ("A", "B", "C", "D")
+
+#: Two places, because every amount on the wire is `NUMBER 18,2`. A total read back out of
+#: JSONB must not depend on the exponent the driver happened to hand back.
+_WIRE_CENTS = Decimal("0.01")
+_WIRE_ZERO = Decimal("0.00")
+
+
+def _wire_money(value: object) -> Decimal:
+    if value is None or value == "":
+        return _WIRE_ZERO
+    return Decimal(str(value)).quantize(_WIRE_CENTS)
 
 
 class RwandaEbmAdapter:
@@ -478,6 +497,63 @@ class RwandaEbmAdapter:
         )
 
     # --- Purchases -------------------------------------------------------------------------
+
+    def normalize_declared_totals(
+        self,
+        request: dict[str, Any] | None,
+        response: dict[str, Any] | None = None,
+    ) -> DeclaredTotals | None:
+        """A stored sale or refund, as neutral totals for a daily report.
+
+        **RRA countersigns three figures and no more.** `SalesResponseData` carries
+        `totTaxblAmt`, `totTaxAmt` and `totAmt`; it does not echo the per-class buckets, the
+        rates, the item count or any line. So the headline totals are taken from the response
+        when it has them — that is what the authority signed, and a day's takings should be its
+        number rather than ours — and the split, the count and the discounts come from the
+        request, because there is nowhere else for them to come from. `countersigned` records
+        which happened, so a Z can say whose figures it is printing.
+
+        Read with `.get()` rather than through the payload models, deliberately: this runs over
+        rows frozen months ago, and a Z that refused to total a day because one old payload no
+        longer validates against today's model would be a checkpoint sheet nobody can produce.
+        """
+        if not request:
+            return None
+        # A stock, purchase or item payload declared no receipt and belongs to no till.
+        if "rcptTyCd" not in request:
+            return None
+        answered = response or {}
+
+        classes: list[DeclaredClassTotals] = []
+        for name in TAX_CLASSES:
+            taxable = _wire_money(request.get(f"taxblAmt{name}"))
+            tax = _wire_money(request.get(f"taxAmt{name}"))
+            if taxable == _WIRE_ZERO and tax == _WIRE_ZERO:
+                continue
+            classes.append(
+                DeclaredClassTotals(
+                    tax_class=name,
+                    taxable=taxable,
+                    tax=tax,
+                    rate=_wire_money(request.get(f"taxRt{name}")),
+                )
+            )
+
+        lines = request.get("itemList") or []
+        signed = {
+            field: answered.get(field)
+            for field in ("totAmt", "totTaxblAmt", "totTaxAmt")
+            if answered.get(field) is not None
+        }
+        return DeclaredTotals(
+            gross=_wire_money(signed.get("totAmt", request.get("totAmt"))),
+            taxable=_wire_money(signed.get("totTaxblAmt", request.get("totTaxblAmt"))),
+            tax=_wire_money(signed.get("totTaxAmt", request.get("totTaxAmt"))),
+            item_count=int(request.get("totItemCnt") or 0),
+            discount=sum((_wire_money(line.get("dcAmt")) for line in lines), _WIRE_ZERO),
+            classes=tuple(classes),
+            countersigned=bool(signed),
+        )
 
     def register_purchase(
         self, device: FiscalDevice, purchase: FiscalPurchase, *, cmc_key: str | None = None
