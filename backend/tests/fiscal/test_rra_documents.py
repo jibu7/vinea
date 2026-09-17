@@ -29,7 +29,7 @@ SPECIFICATIONS = {
 }
 
 #: The owner-supplied material beside them: the certification checkpoint sheet, the logo CIS
-#: §7.29 requires on every receipt, and three live EBM receipts.
+#: §7.29 requires on every receipt, and five live EBM receipts.
 SUPPORTING = {
     "EXCEL_SHEET_application_form_RRA_VSDC_okay(Compliance table).csv",
     "Rwanda-Revenue-Authority-logo.png",

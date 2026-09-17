@@ -73,5 +73,5 @@ Read `contract-notes.md` for the contract itself. The findings that changed code
 2. **Whether RRA recomputes a line's tax at two decimals.** The evidence points both ways and
    is set out in `contract-notes.md` §7. The build sends the ledger's franc figure, which is
    what RRA's own Rwandan sample does.
-3. **The QR payload.** CIS §7.24.7 gives a format; none of the three live receipts exposes its
+3. **The QR payload.** CIS §7.24.7 gives a format; none of the five live receipts exposes its
    QR content as text, so the format is unconfirmed.

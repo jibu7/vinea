@@ -176,7 +176,8 @@ this phase builds:
 
 ## 7. The open question: how the tax on a line is rounded
 
-Three pieces of evidence, pulling two ways.
+Four pieces of evidence, pulling two ways — and the two that arrived with the live receipts
+both land on the same side.
 
 * **RRA's own Rwandan API sample** sends whole francs: `taxblAmt: 200000` with `taxAmt: 30508`,
   where 200 000 × 18/118 is 30 508.47. Its Korean samples send two decimals
