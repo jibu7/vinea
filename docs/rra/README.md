@@ -32,12 +32,24 @@ hash is updated.
 | `CONTACTEUR.pdf` | A live EBM 2.1 receipt — normal sale, four standard-rated lines | `dfbf3acc21000dcfd6f75d6fd0b34be0a783247f10ce59a60e3ec994e760a5b6` |
 | `desktop iyaga transport 2.pdf` | A live EBM 2.1 receipt — normal sale, one exempt line | `a4060396bf86d961f53318b80592bf5d85a80b0e1d92159379f9e8a2b003368d` |
 | `12.pdf` | A live EBM 2.1 receipt — a **copy** (`CS`) | `833085bb04b29e0c12f787d9365bfccac0ef1dac7ab4ce0e0c43b243aca40116` |
-| `Screenshot 2026-09-16 142523.png`, `Screenshot 2026-09-16 142549.png` | Owner-supplied screenshots | `57be62635329c8e2d02a6099339a45983b9c1be238586c3b96280521824fea8b`, `e887d685e3969cf2068463a5a6473a53b81c22abe4a076787687da3257d220a3` |
+| `Screenshot 2026-09-16 142523.png` | A live EBM 2.1 receipt — invoice 1, a **copy** (`1/1CS`), one exempt line, item code `RW2NTXU0000002` | `57be62635329c8e2d02a6099339a45983b9c1be238586c3b96280521824fea8b` |
+| `Screenshot 2026-09-16 142549.png` | A live EBM 2.1 receipt — invoice 22 (`22/22NS`), one standard-rated line of 168,000 with tax 25,627.12, item code `RW2NTXNOX0000014` | `e887d685e3969cf2068463a5a6473a53b81c22abe4a076787687da3257d220a3` |
 
-The three receipt PDFs are another vendor's output, not RRA's own samples. They are evidence of
-what a certified system actually prints — which is what step 8's layout is built to — and they
-are treated as evidence rather than as specification wherever they and the 2018 document
-differ. `contract-notes.md` records each place they do.
+The three receipt PDFs and the two screenshots are all the same vendor's output, not RRA's own
+samples. They are evidence of what a certified system actually prints — which is what step 8's
+layout is built to — and they are treated as evidence rather than as specification wherever
+they and the 2018 document differ. `contract-notes.md` records each place they do.
+
+Evidence is not decoration, and these two earned their place twice:
+
+* Invoice 22's `Total Tax B Rwf 25,627.12` on a `Total B-18%` of 168,000 is a **third** data
+  point for the rounding question (`contract-notes.md` §7), agreeing with `CONTACTEUR.pdf`:
+  168,000 x 18/118 = 25,627.1186, printed to two decimals.
+* Invoice 22's item code `RW2NTXNOX0000014` **found a bug** in `build_item_code`. The rule had
+  been read off the two Rwandan samples in §4.17 as "left-pad the quantity unit to two
+  characters with `X`", which is wrong for the three-character codes §4.6 publishes: the
+  document's own `KR2AMXBLL0000001` and this receipt's `NOX` both carry an `X` that the padding
+  reading does not produce. All five known codes are now a parametrised test.
 
 ## What the documents settled
 

@@ -182,8 +182,11 @@ Three pieces of evidence, pulling two ways.
   where 200 000 × 18/118 is 30 508.47. Its Korean samples send two decimals
   (`taxblAmt: 660000`, `taxAmt: 100677.97`).
 * **Checkpoint 47** requires tax values rounded *on two decimals*.
-* **A live receipt prints two decimals**: `CONTACTEUR.pdf` shows `Total Tax B Rwf 9,152.54` on
-  a `Total B-18%` of 60 000 — 60 000 × 18/118 to two places.
+* **Live receipts print two decimals**, twice over. `CONTACTEUR.pdf` shows `Total Tax B Rwf
+  9,152.54` on a `Total B-18%` of 60 000 — 60 000 × 18/118 to two places. `Screenshot
+  2026-09-16 142549.png` (invoice 22, `22/22NS`) shows `Total Tax B Rwf 25,627.12` on a
+  `Total B-18%` of 168 000 — 168 000 × 18/118 = 25 627.1186, to two places. Same vendor, two
+  different amounts, same rule.
 
 Vinea's ledger holds RWF tax in whole francs, because rule 6 rounds to the currency's decimal
 places and RWF has none. The build therefore **sends the posted franc figure**, which is what
@@ -199,3 +202,36 @@ step 5 is what settles it.
 
 `backend/tests/fiscal/test_builders.py` censuses the divergence on every property run rather
 than asserting it away.
+
+
+## 8. The item code, and what the receipts settled about it
+
+§4.17 gives the format — origin, product type, packaging unit, quantity unit, seven-digit
+sequence — and then gives examples rather than a rule for the quantity-unit segment. The
+examples are therefore the specification, and there are five of them:
+
+| Code | Source | Quantity unit | Segment |
+|---|---|---|---|
+| `RW2NTBA0000012` | VSDC §4.17 worked example | `BA` | `BA` |
+| `RW1NTXU0000006` | VSDC, same request body carries `qtyUnitCd: "U"` | `U` | `XU` |
+| `KR2AMXBLL0000001` | VSDC, Korean sample | `BLL` | `XBLL` |
+| `RW2NTXU0000002` | Live receipt, invoice 1 | `U` | `XU` |
+| `RW2NTXNOX0000014` | Live receipt, invoice 22 | `NOX` | `XNOX` |
+
+The build first read this off the two Rwandan samples as **"left-pad the quantity unit to two
+characters with `X`"**, which fits the first two and nothing else. §4.6 publishes
+three-character codes (`BLL`, `CMT`, `GRM`, `TNE`, `MWT`), and both three-character examples
+carry an `X` that padding-to-two does not produce.
+
+The rule that fits all five: **`X` is a marker, not padding.** The segment is the code itself
+when the code is exactly two characters, and `X` + the code otherwise. A code is never
+truncated — cutting `BLL` to `BL` would collide with the Bale packaging code and mis-register
+the item — and `itemCd` is `CHAR(20)`, so the longer form fits.
+
+`backend/tests/fiscal/test_routes_and_codes.py::test_every_published_item_code_is_reproduced`
+holds all five. Reverting to the padding rule fails exactly the three it got wrong.
+
+This is the clearest case so far for treating the receipts as evidence: the Korean sample was
+sitting in the pinned document the whole time and had been read as confirming the padding rule
+("`BLL` is kept whole" — true, and beside the point). It took a Rwandan receipt with a
+three-character unit to make the discrepancy impossible to read past.

@@ -122,19 +122,66 @@ def test_a_two_character_quantity_unit_is_not_padded() -> None:
     ) == "RW2BXKG0000042"
 
 
-def test_the_sequence_is_seven_digits_and_the_code_is_fourteen_characters() -> None:
-    """Fourteen, always: the whole point of a fixed-width code is that a revenue authority can
-    key on it, and a code whose length depends on the sequence number cannot be keyed on."""
+#: Every item code anyone has published, and the reason there is a table rather than an
+#: assertion: the rule is not written down in prose anywhere, so the examples *are* the
+#: specification and a rule is only as good as the examples it reproduces.
+#:
+#: The first two were all this test had, and a rule that fit them both — "left-pad the quantity
+#: unit to two characters with `X`" — got the other three wrong. §4.6 publishes three-character
+#: codes, and all three three-character codes below carry an `X` the padding reading would not
+#: have produced.
+PUBLISHED_ITEM_CODES = (
+    ("RW", "2", "NT", "BA", 12, "RW2NTBA0000012", "§4.17's worked example; BA needs no marker"),
+    ("RW", "1", "NT", "U", 6, "RW1NTXU0000006", "same document; qtyUnitCd 'U' in the body"),
+    ("KR", "2", "AM", "BLL", 1, "KR2AMXBLL0000001", "same document; BLL keeps its X"),
+    ("RW", "2", "NT", "U", 2, "RW2NTXU0000002", "live receipt, invoice 1 (docs/rra/)"),
+    ("RW", "2", "NT", "NOX", 14, "RW2NTXNOX0000014", "live receipt, invoice 22 (docs/rra/)"),
+)
+
+
+@pytest.mark.parametrize(
+    ("origin", "product_type", "packaging", "quantity_unit", "sequence_no", "expected", "source"),
+    PUBLISHED_ITEM_CODES,
+    ids=[case[5] for case in PUBLISHED_ITEM_CODES],
+)
+def test_every_published_item_code_is_reproduced(
+    origin: str,
+    product_type: str,
+    packaging: str,
+    quantity_unit: str,
+    sequence_no: int,
+    expected: str,
+    source: str,
+) -> None:
+    built = codes.build_item_code(
+        origin_country=origin,
+        product_type=product_type,
+        packaging_unit=packaging,
+        quantity_unit=quantity_unit,
+        sequence_no=sequence_no,
+    )
+
+    assert built == expected, f"{source}: built {built}"
+
+
+def test_the_sequence_is_always_the_last_seven_digits() -> None:
+    """The length is **not** fixed — a three-character quantity unit makes a sixteen-character
+    code, which is why the old "always fourteen" assertion here was hiding a bug rather than
+    catching one. What is fixed is the tail: a revenue authority keys on the sequence, and a
+    code whose sequence width moved with the number could not be keyed on.
+    """
     for sequence_no in (1, 999, 1_000_000, 9_999_999):
-        built = codes.build_item_code(
-            origin_country="RW",
-            product_type=codes.ProductType.SERVICE,
-            packaging_unit="NT",
-            quantity_unit="U",
-            sequence_no=sequence_no,
-        )
-        assert len(built) == 14, built
-        assert built.endswith(f"{sequence_no:07d}")
+        for quantity_unit, width in (("U", 14), ("KG", 14), ("BLL", 16)):
+            built = codes.build_item_code(
+                origin_country="RW",
+                product_type=codes.ProductType.SERVICE,
+                packaging_unit="NT",
+                quantity_unit=quantity_unit,
+                sequence_no=sequence_no,
+            )
+            assert built.endswith(f"{sequence_no:07d}")
+            assert len(built) == width, built
+            assert len(built) <= 20, "itemCd is CHAR(20)"
 
 
 def test_the_refund_reasons_are_the_published_range() -> None:

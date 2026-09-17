@@ -249,20 +249,28 @@ def is_retryable(result_code: str) -> bool:
 
 # --- §4.17, the item code -----------------------------------------------------------------
 
-#: The quantity-unit segment: **at least** two characters, left-padded with `X`, never
-#: truncated.
+#: The quantity-unit segment: the code itself when it is exactly two characters, and `X` +
+#: the code when it is not. Never truncated.
 #:
-#: §4.17's worked example is `RW2NTBA0000012` — `BA` is the two-character Barrel code and needs
-#: no padding. The document's other Rwandan samples are `RW1NTXU0000001` / `RW1NTXU0000006`,
-#: whose items carry `qtyUnitCd: "U"` in the same request bodies: a one-character code padded
-#: to two with a leading `X`. Neither is stated as a rule in prose, and the padding character
-#: is only visible by comparing the two.
+#: The rule is nowhere in prose — §4.17 gives a format and some examples, and the examples are
+#: the specification. Four codes pin it, and the first version of this got the third and fourth
+#: wrong by reading only the first two:
 #:
-#: **Never truncated**, because §4.6 publishes three-character codes (`BLL`, `CMT`, `GRM`,
-#: `TNE`, `MWT`…) and the document's own `KR2AMXBLL0000001` keeps `BLL` whole. `itemCd` is
-#: `CHAR(20)`, so a fifteen-character code fits; cutting `BLL` to `BL` would silently collide
-#: with the Bale packaging code and mis-register the item.
-QUANTITY_UNIT_MIN_WIDTH = 2
+#: * `RW2NTBA0000012` — §4.17's worked example. `BA` is two characters and stands alone.
+#: * `RW1NTXU0000006` — same document, whose item carries `qtyUnitCd: "U"` in the same request
+#:   body. One character, prefixed with `X`.
+#: * `KR2AMXBLL0000001` — same document. `BLL` is three characters and is **also** prefixed
+#:   with `X`, which is what a "left-pad to a minimum of two" rule gets wrong: it would leave
+#:   `BLL` alone and build `KR2AMBLL0000001`.
+#: * `RW2NTXNOX0000014` — a live EBM 2.1 receipt (`docs/rra/`, invoice 22). `NOX`, three
+#:   characters, prefixed with `X`. Independent confirmation from outside the document.
+#:
+#: So `X` is not padding to a width; it is a marker that the segment is not a two-character
+#: code, and the reader takes the rest of the segment up to the seven-digit sequence. Under
+#: that reading all four reproduce exactly, and a three-character code is never cut down to
+#: two — which would silently collide with a different unit and mis-register the item.
+#: `itemCd` is `CHAR(20)`, so the longer form fits.
+QUANTITY_UNIT_EXACT_WIDTH = 2
 QUANTITY_UNIT_PAD = "X"
 ITEM_SEQUENCE_WIDTH = 7
 
@@ -282,7 +290,8 @@ def build_item_code(
     The sequence is claimed from the `FITM` run, so it is gapless per taxpayer — which is
     what makes the code itself a usable audit key rather than an opaque string.
     """
-    padded_unit = quantity_unit.rjust(QUANTITY_UNIT_MIN_WIDTH, QUANTITY_UNIT_PAD)
+    unit = quantity_unit.upper()
+    padded_unit = unit if len(unit) == QUANTITY_UNIT_EXACT_WIDTH else f"{QUANTITY_UNIT_PAD}{unit}"
     return (
         f"{origin_country.upper()}"
         f"{product_type}"
