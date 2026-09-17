@@ -15,6 +15,7 @@ the adapter, and the residue between the two is the adapter's problem to place. 
 matters: a DTO shaped to the payload would make every posting a negotiation with the payload.
 """
 
+import enum
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
@@ -144,11 +145,12 @@ class FiscalItemRegistration:
 
 @dataclass(frozen=True)
 class FiscalPurchase:
-    """An AP invoice or return, or a confirmation of one the authority is already holding.
+    """An AP invoice or return — a purchase **this company originated** and is declaring.
 
-    `confirming` is what tells the two apart: a purchase this company originated is registered,
-    one the authority already knows about is confirmed with *its* figures. Sending the second
-    as the first would register the supplier's invoice twice.
+    A purchase the authority is already holding is a different thing and has its own DTO
+    (`FiscalPurchaseConfirmation`): that one echoes the authority's figures, this one carries
+    the document's. Sending the second as the first would register one supplier invoice twice,
+    which is the failure decision 9 spends a whole paragraph on.
     """
 
     invoice_no: int
@@ -161,12 +163,33 @@ class FiscalPurchase:
     #: The supplier's own reference for this invoice.
     supplier_invoice_no: str | None = None
     is_return: bool = False
-    confirming: bool = False
-    accepted: bool = True
     supplier_branch_id: str | None = None
     actor_id: str = ""
     actor_name: str = ""
     remark: str | None = None
+
+
+class StockMovementFacing(enum.StrEnum):
+    """Which side of the business a stock movement faces — the neutral half of decision 10.
+
+    Not the document kind, and that is the point. A revenue authority reports a movement by
+    *who it was with* and *which way it went*, so a sale out and a customer return in are the
+    same pair of facts read in two directions: `CUSTOMER` plus a direction covers both, and a
+    reversal is then the same facing with the direction flipped rather than a case of its own.
+
+    The mapping onto an authority's own in/out codes — Rwanda's `sarTyCd`, VSDC §4.15 — is the
+    adapter's, because those codes are the authority's.
+    """
+
+    #: A sale and a customer return. What left the shop through the front, or came back in.
+    CUSTOMER = "customer"
+    #: A goods receipt, an unmatched supplier invoice, a return to a supplier.
+    SUPPLIER = "supplier"
+    #: An adjustment, a count variance, a write-off — a movement with nobody on the other side.
+    INTERNAL = "internal"
+    #: One leg of a movement **between branches**. A movement inside one branch changes no
+    #: branch's position and is reported by nobody (decision 10).
+    TRANSFER = "transfer"
 
 
 @dataclass(frozen=True)
@@ -174,14 +197,17 @@ class FiscalStockLine:
     item_code: str
     item_class_code: str
     name: str
-    #: In the item's **base** unit — the authority holds one quantity per item, and the unit
-    #: it holds it in is the one the item was registered with.
+    #: In the item's **base** unit, as a magnitude — the authority holds one quantity per item,
+    #: the unit it holds it in is the one the item was registered with, and the direction is
+    #: the movement's rather than the line's.
     quantity: Decimal
     unit_cost: Decimal
     value: Decimal
     tax_class: FiscalTaxType
-    taxable_amount: Decimal
-    tax_amount: Decimal
+    #: The programmed rate the class carries. Here for the same reason it is on `FiscalLine`:
+    #: the wire tax is **derived** from the reported value rather than copied from a posting,
+    #: because a stock movement posts a cost and not a tax.
+    tax_rate_pct: Decimal
     package_unit: str
     quantity_unit: str
     sequence: int = 1
@@ -192,17 +218,18 @@ class FiscalStockLine:
 class FiscalStockIO:
     """One stock movement, reported after the document that caused it.
 
-    `movement_type` is the authority's own in/out code, resolved from the source document by
-    the adapter's table — a sale's companion issue is not the same movement as a stock-count
+    `facing` and `outgoing` are the neutral pair the adapter's table turns into the authority's
+    own in/out code: a sale's companion issue is not the same movement as a stock-count
     shrinkage, and the authority reports them differently.
     """
 
     stock_no: int
-    movement_type: str
+    facing: StockMovementFacing
+    #: True when stock left. One row is one direction: a posting that both receives and issues
+    #: is two movements, because the authority's code says which way it went.
+    outgoing: bool
     occurred_on: date
     lines: tuple[FiscalStockLine, ...]
-    #: The sale or purchase this movement belongs to, where it has one.
-    source_invoice_no: int | None = None
     actor_id: str = ""
     actor_name: str = ""
     remark: str | None = None
@@ -221,6 +248,88 @@ class FiscalStockMaster:
     quantity_on_hand: Decimal
     actor_id: str = ""
     actor_name: str = ""
+
+
+@dataclass(frozen=True)
+class FiscalPurchaseConfirmation:
+    """An authority-held purchase, confirmed or declined by an operator (decision 9).
+
+    The one DTO here whose figures are **not Vinea's**, and deliberately so: a confirmation
+    echoes the record the authority is already holding, and Vinea has no document of its own to
+    derive it from — the whole point of the feed is that somebody *else* registered this sale.
+    So the record travels verbatim in `source` and only the adapter reads inside it, which is
+    the same boundary every other DTO keeps. What is neutral is the decision: accepted or not,
+    by whom, under which number.
+    """
+
+    invoice_no: int
+    #: The authority's own record of the purchase, exactly as it was fetched.
+    source: dict
+    accepted: bool = True
+    actor_id: str = ""
+    actor_name: str = ""
+
+
+@dataclass(frozen=True)
+class FiscalImportDecision:
+    """One customs line, approved or declined, naming the item it became (decision 9).
+
+    Approval is a **compliance acknowledgment**: it moves no stock and posts nothing. The goods
+    reached the ledger through a goods receipt, and saying so twice would double them.
+    """
+
+    #: The authority's own keys for the declaration line, verbatim — a customs declaration is
+    #: the authority's document and Vinea holds no version of it to rebuild.
+    source: dict
+    approved: bool
+    item_code: str | None = None
+    item_class_code: str | None = None
+    note: str | None = None
+    actor_id: str = ""
+    actor_name: str = ""
+
+
+@dataclass(frozen=True)
+class FiscalPurchaseFeedEntry:
+    """One purchase the authority holds against this taxpayer, in Vinea's words.
+
+    `source` is the authority's record kept whole beside the fields Vinea reads, because the
+    confirmation has to echo those figures rather than a re-derivation of them.
+    """
+
+    supplier: FiscalParty
+    supplier_invoice_no: int
+    supplier_branch_id: str | None = None
+    document_date: date | None = None
+    total_taxable: Decimal = ZERO
+    total_tax: Decimal = ZERO
+    total_amount: Decimal = ZERO
+    source: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class FiscalImportEntry:
+    """One customs declaration line the authority is holding, in Vinea's words."""
+
+    #: The authority's keys for the line. Three fields identify it — a task, a declaration and
+    #: a sequence within it — and all three go back on the decision.
+    task_code: str
+    declaration_no: str
+    line_no: int
+    declared_on: date | None = None
+    hs_code: str | None = None
+    name: str | None = None
+    origin_country: str | None = None
+    packages: Decimal | None = None
+    package_unit: str | None = None
+    quantity: Decimal | None = None
+    quantity_unit: str | None = None
+    supplier_name: str | None = None
+    agent_name: str | None = None
+    foreign_amount: Decimal | None = None
+    foreign_currency: str | None = None
+    foreign_rate: Decimal | None = None
+    source: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -258,5 +367,6 @@ class FiscalSyncResult:
 
     codes: tuple[FiscalCodeEntry, ...] = ()
     item_classes: tuple[FiscalItemClassEntry, ...] = ()
-    rows: tuple[dict, ...] = field(default_factory=tuple)
+    purchases: tuple[FiscalPurchaseFeedEntry, ...] = ()
+    imports: tuple[FiscalImportEntry, ...] = ()
     watermark: str | None = None

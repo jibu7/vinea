@@ -27,8 +27,10 @@ from datetime import datetime
 from typing import Any, Protocol, runtime_checkable
 
 from app.fiscal.mapping import (
+    FiscalImportDecision,
     FiscalItemRegistration,
     FiscalPurchase,
+    FiscalPurchaseConfirmation,
     FiscalRefund,
     FiscalSale,
     FiscalStockIO,
@@ -274,7 +276,11 @@ class FiscalizationAdapter(Protocol):
         ...
 
     def confirm_purchase(
-        self, device: FiscalDevice, purchase: FiscalPurchase, *, cmc_key: str | None = None
+        self,
+        device: FiscalDevice,
+        confirmation: FiscalPurchaseConfirmation,
+        *,
+        cmc_key: str | None = None,
     ) -> FiscalResult:
         """Accept or reject one of them. The same endpoint as `register_purchase`, with the
         authority's own figures and a registration type that says "this is a confirmation"."""
@@ -299,7 +305,11 @@ class FiscalizationAdapter(Protocol):
         ...
 
     def update_import(
-        self, device: FiscalDevice, *, declaration: dict[str, Any], cmc_key: str | None = None
+        self,
+        device: FiscalDevice,
+        *,
+        declaration: FiscalImportDecision,
+        cmc_key: str | None = None,
     ) -> FiscalResult:
         """Approve or reject a customs line, naming the item it became."""
         ...

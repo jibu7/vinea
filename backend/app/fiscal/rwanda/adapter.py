@@ -20,16 +20,22 @@ kept apart with some care — `FiscalTransportError` never reached RRA and is sa
 import logging
 import time
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
+from decimal import Decimal
 from typing import Any
 
 import httpx
 
 from app.fiscal.mapping import (
     FiscalCodeEntry,
+    FiscalImportDecision,
+    FiscalImportEntry,
     FiscalItemClassEntry,
     FiscalItemRegistration,
+    FiscalParty,
     FiscalPurchase,
+    FiscalPurchaseConfirmation,
+    FiscalPurchaseFeedEntry,
     FiscalRefund,
     FiscalSale,
     FiscalStockIO,
@@ -50,6 +56,7 @@ from app.fiscal.rwanda.payloads import (
     CodeListRequest,
     CustomerData,
     CustomerRequest,
+    ImportItem,
     ImportItemsData,
     ImportItemsRequest,
     InitData,
@@ -60,7 +67,6 @@ from app.fiscal.rwanda.payloads import (
     PurchaseFeedRequest,
     ResultEnvelope,
     SalesResponseData,
-    UpdateImportItemRequest,
 )
 from app.fiscal.rwanda.routes import Operation, routes_for
 from app.models.fiscalization import FiscalDevice, FiscalOutboxKind
@@ -240,7 +246,8 @@ class RwandaEbmAdapter:
             FiscalOutboxKind.SALE: builders.build_sale_request,
             FiscalOutboxKind.REFUND: builders.build_refund_request,
             FiscalOutboxKind.PURCHASE: builders.build_purchase_request,
-            FiscalOutboxKind.PURCHASE_CONFIRM: builders.build_purchase_request,
+            FiscalOutboxKind.PURCHASE_CONFIRM: builders.build_purchase_confirmation_request,
+            FiscalOutboxKind.IMPORT_UPDATE: builders.build_import_decision_request,
             FiscalOutboxKind.STOCK_IO: builders.build_stock_io_request,
             FiscalOutboxKind.STOCK_MASTER: builders.build_stock_master_request,
         }
@@ -482,11 +489,19 @@ class RwandaEbmAdapter:
         return self._envelope_result(envelope, elapsed_ms)
 
     def confirm_purchase(
-        self, device: FiscalDevice, purchase: FiscalPurchase, *, cmc_key: str | None = None
+        self,
+        device: FiscalDevice,
+        confirmation: FiscalPurchaseConfirmation,
+        *,
+        cmc_key: str | None = None,
     ) -> FiscalResult:
-        """The same endpoint as `register_purchase` — what differs is `regTyCd` and whose
-        figures are being sent, which `builders` reads off `FiscalPurchase.confirming`."""
-        return self.register_purchase(device, purchase, cmc_key=cmc_key)
+        """The same endpoint as `register_purchase`, with `regTyCd A` and the authority's own
+        figures — which is what makes this a *confirmation* rather than a second registration."""
+        request = builders.build_purchase_confirmation_request(device, confirmation)
+        envelope, elapsed_ms = self._post(
+            device, Operation.SAVE_PURCHASES, self._body(device, request, cmc_key=cmc_key)
+        )
+        return self._envelope_result(envelope, elapsed_ms)
 
     def fetch_purchase_feed(
         self, device: FiscalDevice, *, since: str | None, cmc_key: str | None = None
@@ -501,8 +516,10 @@ class RwandaEbmAdapter:
         if not envelope.ok or not envelope.data:
             return result, FiscalSyncResult()
         parsed = PurchaseFeedData.model_validate(envelope.data)
-        rows = tuple(sale.model_dump(mode="json") for sale in parsed.saleList)
-        return result, FiscalSyncResult(rows=rows, watermark=_now_watermark())
+        return result, FiscalSyncResult(
+            purchases=tuple(_feed_entry(sale) for sale in parsed.saleList),
+            watermark=_now_watermark(),
+        )
 
     # --- Stock -----------------------------------------------------------------------------
 
@@ -540,19 +557,19 @@ class RwandaEbmAdapter:
         if not envelope.ok or not envelope.data:
             return result, FiscalSyncResult()
         parsed = ImportItemsData.model_validate(envelope.data)
-        rows = tuple(item.model_dump(mode="json") for item in parsed.itemList)
-        return result, FiscalSyncResult(rows=rows, watermark=_now_watermark())
+        return result, FiscalSyncResult(
+            imports=tuple(_import_entry(item) for item in parsed.itemList),
+            watermark=_now_watermark(),
+        )
 
     def update_import(
         self,
         device: FiscalDevice,
         *,
-        declaration: dict[str, Any],
+        declaration: FiscalImportDecision,
         cmc_key: str | None = None,
     ) -> FiscalResult:
-        request = UpdateImportItemRequest(
-            tin=device.tin or "", bhfId=device.bhf_id, **declaration
-        )
+        request = builders.build_import_decision_request(device, declaration)
         envelope, elapsed_ms = self._post(
             device, Operation.UPDATE_IMPORT_ITEMS, self._body(device, request, cmc_key=cmc_key)
         )
@@ -602,6 +619,59 @@ def parse_stamp(stamped: str) -> datetime:
         return datetime.strptime(stamped, "%Y%m%d%H%M%S").replace(tzinfo=builders.KIGALI)
     except ValueError:
         return datetime.now(UTC)
+
+
+def _feed_entry(sale: Any) -> FiscalPurchaseFeedEntry:
+    """One feed row in Vinea's words, with the authority's own record kept beside it.
+
+    The record is kept whole because the **confirmation echoes it** (decision 9): a
+    confirmation carrying figures Vinea re-derived would be Vinea's opinion of somebody else's
+    sale, and the field names inside it never leave this package.
+    """
+    return FiscalPurchaseFeedEntry(
+        supplier=FiscalParty(name=sale.spplrNm or "", tin=sale.spplrTin),
+        supplier_invoice_no=sale.spplrInvcNo,
+        supplier_branch_id=sale.spplrBhfId,
+        document_date=_parse_day(sale.salesDt),
+        total_taxable=sale.totTaxblAmt or Decimal(0),
+        total_tax=sale.totTaxAmt or Decimal(0),
+        total_amount=sale.totAmt or Decimal(0),
+        source=sale.model_dump(mode="json"),
+    )
+
+
+def _import_entry(item: ImportItem) -> FiscalImportEntry:
+    return FiscalImportEntry(
+        task_code=item.taskCd,
+        declaration_no=item.dclNo or "",
+        line_no=item.itemSeq,
+        declared_on=_parse_day(item.dclDe),
+        hs_code=item.hsCd,
+        name=item.itemNm,
+        origin_country=item.orgnNatCd,
+        packages=item.pkg,
+        package_unit=item.pkgUnitCd,
+        quantity=item.qty,
+        quantity_unit=item.qtyUnitCd,
+        supplier_name=item.spplrNm,
+        agent_name=item.agntNm,
+        foreign_amount=item.invcFcurAmt,
+        foreign_currency=item.invcFcurCd,
+        foreign_rate=item.invcFcurExcrt,
+        source=item.model_dump(mode="json"),
+    )
+
+
+def _parse_day(stamped: str | None) -> date | None:
+    """`yyyyMMdd`, which is the only date format the documents use. `None` on anything else:
+    a feed row with an unreadable date is still a feed row, and refusing the whole fetch over
+    one field would lose every other row in the page."""
+    if not stamped:
+        return None
+    try:
+        return datetime.strptime(stamped[:8], "%Y%m%d").date()
+    except ValueError:
+        return None
 
 
 def _now_watermark() -> str:

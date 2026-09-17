@@ -18,8 +18,10 @@ from datetime import UTC, datetime
 from typing import Any
 
 from app.fiscal.mapping import (
+    FiscalImportDecision,
     FiscalItemRegistration,
     FiscalPurchase,
+    FiscalPurchaseConfirmation,
     FiscalRefund,
     FiscalSale,
     FiscalStockIO,
@@ -181,10 +183,14 @@ class NullAdapter:
         )
 
     def confirm_purchase(
-        self, device: FiscalDevice, purchase: FiscalPurchase, *, cmc_key: str | None = None
+        self,
+        device: FiscalDevice,
+        confirmation: FiscalPurchaseConfirmation,
+        *,
+        cmc_key: str | None = None,
     ) -> FiscalResult:
         return self._record(
-            "confirm_purchase", device_id=device.id, invoice_no=purchase.invoice_no
+            "confirm_purchase", device_id=device.id, invoice_no=confirmation.invoice_no
         )
 
     # --- Stock -----------------------------------------------------------------------------
@@ -210,6 +216,12 @@ class NullAdapter:
         )
 
     def update_import(
-        self, device: FiscalDevice, *, declaration: dict[str, Any], cmc_key: str | None = None
+        self,
+        device: FiscalDevice,
+        *,
+        declaration: FiscalImportDecision,
+        cmc_key: str | None = None,
     ) -> FiscalResult:
-        return self._record("update_import", device_id=device.id, declaration=declaration)
+        return self._record(
+            "update_import", device_id=device.id, approved=declaration.approved
+        )
