@@ -354,3 +354,64 @@ the test was green. The unit on invoice 22 is `NO` (31, Number); `NOX` was never
 `codes.QUANTITY_UNITS` now carries §4.6's own list and
 `test_no_case_above_feeds_a_quantity_unit_the_authority_does_not_publish` refuses any case fed
 a unit RRA does not publish. That guard, not the rule, is what would have caught this.
+
+
+## 9. Questions the live run has to settle
+
+Step 5 runs the tape against `sdcsandbox.rra.gov.rw` with an approved TIN, branch and device
+serial. These are the three the build had to choose without the authority, each with what it
+chose and what changes if Kigali says otherwise.
+
+### 9.1 What does `orgSarNo` carry on a stock movement?
+
+The build sends `orgSarNo = sarNo`. The field's name reads as "the movement this one corrects",
+the documents neither say so nor show one, and §3.3.8.2's only sample is a plain sale-out
+movement with `sarNo` and `orgSarNo` both `2` (pinned at
+`backend/tests/fiscal/samples/save_stock_io_request.json`). Nothing in P7 corrects a movement by
+stock number, so the sample's reading is the only value there is.
+
+**If a correction should name what it corrects:** one field, and the original row's `sar_no`.
+
+Worth checking beside it: that sample carries `taxblAmt 35 000` with `taxAmt 6 000`, which is
+neither `35 000 × 18 %` (6 300) nor `35 000 × 18/118` (5 338.98). The build derives the second,
+the relation every other payload here uses. The sample suggests the field is not validated on
+this endpoint; the live run is where that stops being a guess.
+
+### 9.2 Does a reversed purchase return reach RRA as a purchase that did not happen?
+
+**This is the asymmetry, and it is a question rather than a settled decision.**
+
+On the **sale** side, reversing a signed refund is refused: `fiscal_refund_irreversible`, because
+a refund of a refund is not in EBM's vocabulary and the correction is a new invoice.
+
+On the **purchase** side the build declares the opposite instead — a reversed AP invoice goes out
+as `rcptTyCd R`, a reversed return to supplier as `P`. The first is unambiguous: goods bought and
+then un-bought is a return, which is what happened. The second is where the asymmetry bites. A
+return to supplier that is reversed means *the goods never went back*, and what RRA receives is a
+**purchase** — `rcptTyCd P`, a fresh `FIP` number, the same figures — for a transaction that did
+not occur. The taxpayer's purchase register then shows a purchase nobody made and a return
+nobody made, which net correctly and individually describe nothing. Whether RRA's own
+reconciliation minds that is exactly what the build cannot know from the documents.
+
+**Why "declare the opposite" won anyway.** The alternative was to refuse, as the sale side does:
+`fiscal_return_irreversible`, correct it by keying a fresh supplier invoice. It lost on three
+counts.
+
+* **The refusal has to be true of the vocabulary to be honest.** `fiscal_refund_irreversible` is
+  not a policy — `rcptTyCd` on `/trnsSales/saveSales` has `S` and `R` and there is no third
+  code, so a refund of a refund is a thing the payload *cannot say*. `P` and `R` on
+  `/trnsPurchase/savePurchases` are symmetric: the payload can say both, in either order, any
+  number of times. A refusal there would be Vinea's opinion dressed as the authority's.
+* **It would strand a posted document.** P4's reversal is how a mis-keyed AP document is undone,
+  and a return to supplier is the easiest of all AP documents to mis-key. Refusing the reversal
+  because of the fiscal half leaves a wrong document standing in the ledger with no way out but
+  a compensating entry — the ledger paying for a compliance question.
+* **The net is right either way.** Both declarations reach RRA, and Σ purchases − Σ returns is
+  the figure a VAT return is built from. The objection is to the *shape* of the register, not to
+  its arithmetic.
+
+**What the live run should establish:** register a purchase, register its return, then register
+the reversal of that return, and read `/trnsPurchase/selectTrnsPurchaseSales` back. If RRA
+rejects the third, or holds it in a way an accountant reading the register would call wrong, the
+answer is the refusal — one refusal code, one report line, and the ledger's reversal path
+untouched, because `on_reverse` already refuses `unknown` rows and this is the same shape.
