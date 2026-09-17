@@ -115,24 +115,25 @@ def _count(counter: dict[str, int], key: str) -> None:
 #: **Five of the eight moved out at P7**, and the reasoning is the point rather than the list.
 #:
 #: `grn_matched`, `weight_missing`, `period_not_open` and `invoice_exceeds_order` are
-#: *conjunctions* three and four operations deep in a 24-step plan, and this machine reached
-#: them by hoping to: the margins were 7–10 against a floor of 3, `pytest-randomly` reseeds
-#: every run, and `main` at #45 failed two deep runs in three on exactly those four. P6 left the
-#: question open (F-9.10) with `max_examples` 300 → 600 as the obvious lever — twice the nightly
-#: to buy reach.
+#: *conjunctions* three and four operations deep in the plan, and this machine reached them by
+#: hoping to: the margins sat a few hits above the floor, `pytest-randomly` reseeds every run,
+#: and the nightly on `main` failed more often than it passed on exactly those four. P6 left the
+#: question open (F-9.10) with a larger `max_examples` as the obvious lever — a much longer
+#: nightly, to buy reach.
 #:
 #: P7 took the other answer: each now has a property in `test_property_targeted_refusals.py`
-#: that **constructs its precondition**, so it is reached on every one of fifty examples instead
-#: of on three of three hundred if the seed is kind. They are still counted in `_REFUSALS`
+#: that **constructs its precondition**, so it is reached on every one of its examples instead
+#: of on a handful of the machine's if the seed is kind. They are still counted in `_REFUSALS`
 #: below — what this machine no longer does is *fail* when a seed misses a chain it was never
 #: the right tool for.
 #:
 #: **`receipt_exceeds_order` is the fifth, and it was found by running the census rather than
 #: by reasoning about it.** The first deep pass of P7 came back `{'receipt_exceeds_order': 0}`
-#: with the guard itself in perfect health — a purchase order for 5 received for 40 is refused,
-#: on the same code path this machine drives. What the reach counters did not say, because they
-#: were not counting it, was how rarely the machine gets to *try*: 226 `receive_from_po` draws,
-#: an open purchase order under only 30 of them. It is the same conjunction shape as the other
+#: with the guard itself in perfect health — a purchase order received for far more than it
+#: ordered is refused, on the same code path this machine drives. What the reach counters did
+#: not say, because they were not counting it, was how rarely the machine gets to *try*: an
+#: open purchase order was there for only a small fraction of `receive_from_po` draws, and a
+#: quantity past what remained for none of those. It is the same conjunction shape as the other
 #: four — a `create_po`, then a later `receive_from_po` landing on that order, then a drawn
 #: quantity larger than what is left — and it belongs in the same place. The split below is the
 #: counter that would have said so on the first run, so the next zero here names its own cause.
@@ -224,9 +225,9 @@ OPERATIONS = (
 #: `st.sampled_from` is uniform, so adding step 3's seven operations to step 2's seven halved
 #: the density of every posting operation — and the refusals that need a *conjunction* stopped
 #: being reached at all. `grn_matched` needs a receipt, a match against that receipt, and then a
-#: `reverse_grn` that lands on it; at 1/14 per draw over a 10-step plan that is close to never,
-#: and the reach counter measured it as exactly never: 389 `reverse_grn` draws, 328 with no
-#: receipt at all to reverse and a matched one available on none of the remaining 61.
+#: `reverse_grn` that lands on it; at one draw in fourteen over a short plan that is close to
+#: never, and the reach counter measured it as exactly never — most draws found no receipt at
+#: all to reverse, and a matched one was available on none of the rest.
 #:
 #: So the posting operations — the ones that build the state everything else needs — are drawn
 #: twice as often as the order operations, and plans run longer. That is a statement about how
@@ -240,16 +241,16 @@ OPERATIONS = (
 #: **Step 9's `kit` operation is not in here**, and the reasoning is worth writing down because
 #: the first version of it was wrong.
 #:
-#: It was in: one extra entry in a pool of 27, drawn once like the order operations. Two deep
+#: It was in: one extra entry in the pool, drawn once like the order operations. Two deep
 #: passes then came back with censused refusals at zero — `invoice_exceeds_order` and
-#: `period_not_open`, then `grn_matched` and `invoice_exceeds_order` — where `main` at #45
-#: reached them 25, 10 and 9 times. The obvious conclusion was dilution: the floors are
-#: conjunctions three and four deep in a 24-step plan, and a step that builds no state takes
-#: its draws out of exactly those chains.
+#: `period_not_open`, then `grn_matched` and `invoice_exceeds_order` — where the same run on
+#: `main` had reached all three comfortably. The obvious conclusion was dilution: the floors are
+#: conjunctions three and four deep in the plan, and a step that builds no state takes its
+#: draws out of exactly those chains.
 #:
 #: **That conclusion did not survive the control.** With the pool restored byte-for-byte to
 #: main's, a third deep pass still came back a floor short. The census is seed-dependent — the
-#: margins are 7–10 against a floor of 3, and `pytest-randomly` reseeds every run — and what
+#: margins are a few hits above the floor, and `pytest-randomly` reseeds every run — and what
 #: the passes had actually found was the `pick % 2` correlation now fixed in `reverse_lca`.
 #:
 #: So the operation stays out on its own merits rather than on that diagnosis. The redefinition
@@ -293,8 +294,8 @@ PLAN = st.lists(
     # more operations, each of which lengthens the chains the others need: `reverse_lca` wants a
     # receipt, an allocation, and then itself. With the census now enforced as a floor rather
     # than printed, the margin has to come from somewhere, and the lever is the plan — biasing
-    # the draw was measured at step 3 and bought nothing. The deep pass costs a couple more
-    # minutes; the per-commit profile draws two examples either way.
+    # the draw was measured at step 3 and bought nothing. The deep pass costs a little more
+    # time; the per-commit profile draws two examples either way.
     max_size=24,
 )
 
@@ -556,9 +557,9 @@ def _step(  # noqa: PLR0913
         # Leaving the quantity entirely as it fell is what makes `match_exceeds_receipt`
         # reachable, and step 2 introduced that deliberately. But it also meant most matches
         # were refused, and `grn_matched` — which needs a receipt that has been matched *and*
-        # then chosen for reversal — came back zero in a 300-example pass while
-        # `match_exceeds_receipt` came back 62. The suite was exercising the boundary and
-        # never the ordinary case behind it.
+        # then chosen for reversal — came back zero in a deep pass while
+        # `match_exceeds_receipt` came back in quantity. The suite was exercising the boundary
+        # and never the ordinary case behind it.
         #
         # So the over-match is drawn on odd picks and a legal match on even ones. Both paths
         # are counted below, because "the guard held" and "the machine never matched anything"
@@ -659,10 +660,10 @@ def _step(  # noqa: PLR0913
         # **Aim at a matched receipt whenever one exists**, which is what `grn_matched` needs.
         #
         # That refusal takes a conjunction — receive, match *that* receipt, then draw
-        # `reverse_grn` and land on it — and step 3 doubled the operation pool from 7 to 14 while
-        # the plan stayed at 10 steps, so the conjunction stopped happening. Measured over a
-        # 300-example pass on the unbiased machine: `reverse_grn` drawn 252 times, 209 of those
-        # with **no receipt at all** to reverse, and a matched one available on none of the rest.
+        # `reverse_grn` and land on it — and step 3 doubled the operation pool while the plan
+        # length stayed put, so the conjunction stopped happening. Measured over a deep pass on
+        # the unbiased machine: of every `reverse_grn` drawn, the large majority found **no
+        # receipt at all** to reverse, and a matched one was available on none of the rest.
         #
         # Biasing the *choice* costs nothing, because a matched receipt exists in a small
         # minority of states — `_REACH` below counts the split on every run, so that claim stays
@@ -800,16 +801,18 @@ def _step(  # noqa: PLR0913
         # **Alternated, not drawn** (step 9), and the reason is a property of Hypothesis rather
         # than of this operation.
         #
-        # It was `bool(pick % 2)`. Four deep passes counted the split as 10 closed of 24
-        # reaches, then 0 of 20, then 0 of 20, then — after moving it onto the independent
-        # `weighted` boolean — 0 of 21. Twenty consecutive draws landing the same way is not
-        # chance, and the second experiment is what named the mechanism: Hypothesis **shrinks
+        # It was `bool(pick % 2)`. Four deep passes counted the split: a healthy mix on the
+        # first, then every reach landing on the open period on the next three — including
+        # after moving it onto the independent `weighted` boolean. That many consecutive draws
+        # landing the same way is not chance, and the second experiment named the mechanism:
+        # Hypothesis **shrinks
         # every value toward its zero**, so in the examples a deep pass spends most of its
         # budget near, `pick` is 0 and every boolean in the plan is False. Any draw from the
         # plan tuple inherits that, so no choice of field could have fixed it.
         #
-        # This branch is reached ~20 times in 300 examples, and `reverse_lca` is the only
-        # operation that can provoke `period_not_open` at all. So it alternates on a counter of
+        # This branch is reached a couple of dozen times in a deep pass, and `reverse_lca` is
+        # the only operation that can provoke `period_not_open` at all. So it alternates on a
+        # counter of
         # the reversals that actually happened: half of a rare event, by construction, instead
         # of half of it in expectation. The counter is module-level and therefore shared across
         # examples, which is fine for what it steers — both dates are legal inputs and the
@@ -1039,10 +1042,10 @@ def _drive(db: Session, fixture: OrderEntry, plan: list[tuple]) -> None:
     _assert_everything(db, fixture.company_id)
     # **Costs are quantized to the base currency once, here.** They are drawn at two decimal
     # places and the RWF machine has none, so every step keyed with a fraction of a franc was
-    # refused with `amount_precision` before it could reach a rule worth testing — 201 of them
-    # in a 300-example pass, a seventh of every step the machine took, spent on a complaint
-    # about a keystroke. The refusal is request validation and has its own unit test; the
-    # two-decimal machine still draws cents, so the precision path is not lost here either.
+    # refused with `amount_precision` before it could reach a rule worth testing — a large
+    # fraction of every step the machine took, spent on a complaint about a keystroke. The
+    # refusal is request validation and has its own unit test; the two-decimal machine still
+    # draws cents, so the precision path is not lost here either.
     places = base_currency(db, fixture.company_id).decimal_places
     for operation, quantity, cost, pick, use_depot, cross_branch, weighted in plan:
         priced = round_amount(Decimal(cost), places)

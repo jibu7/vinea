@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session, sessionmaker
 # `function_scoped_fixture` is suppressed because a property test that wants a *fresh* tenant per
 # example has to re-enter the fixture, and Hypothesis rightly warns about that being unusual. It
 # is the design here: a suite asserted after every step would otherwise re-examine an
-# ever-growing history and cost O(examples squared).
+# ever-growing history and cost time quadratic in the example count.
 settings.register_profile(
     "ci",
     max_examples=2,
@@ -39,15 +39,15 @@ settings.register_profile(
 )
 #: The nightly profile (`.github/workflows/nightly-property.yml`, and by hand when a property is
 #: being trusted with something new). Per-commit CI keeps the fast profile so the suite stays
-#: under a minute; depth is what the nightly buys.
+#: short; depth is what the nightly buys.
 #:
 #: **300, and P7 keeps it there deliberately.** P6 handed over the question (see its final
-#: report, F-9.10): the deep census was failing two runs in three, and the obvious lever was
-#: 600 at the price of doubling a 26-minute nightly. P7's answer is that the failures were a
-#: coverage problem rather than a depth problem — the floors that failed were conjunctions
-#: three and four operations deep, and those now have targeted properties that construct their
-#: preconditions instead of waiting for a random plan to stumble into them. Buying reach with
-#: examples is the expensive way to fix a generator.
+#: report, F-9.10): the deep census was failing more often than it passed, and the obvious
+#: lever was to raise this number at the price of roughly doubling the nightly. P7's answer is
+#: that the failures were a coverage problem rather than a depth problem — the floors that
+#: failed were conjunctions three and four operations deep, and those now have targeted
+#: properties that construct their preconditions instead of waiting for a random plan to
+#: stumble into them. Buying reach with examples is the expensive way to fix a generator.
 settings.register_profile(
     "deep",
     max_examples=300,

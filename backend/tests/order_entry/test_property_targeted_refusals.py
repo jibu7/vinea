@@ -1,24 +1,23 @@
 """Five refusals, each proved by a property that **constructs its precondition**.
 
 P6 handed P7 a question rather than an answer (final report, F-9.10). The deep census in
-`test_property_order.py` enforces a floor of three on eight refusals, and `main` at #45 failed
-two deep runs in three: the run that failed named `{'grn_matched': 0, 'weight_missing': 0,
-'period_not_open': 0}`, and the two runs before it named `invoice_exceeds_order` and
-`period_not_open`. The obvious lever was the deep profile's `max_examples` — 300 → 600 roughly
-doubles the reach counts, at the price of doubling a 26-minute nightly.
+`test_property_order.py` enforces a floor on each of eight refusals, and it was failing more
+often than it passed — a different refusal at zero each time, none of them broken. The obvious
+lever was the deep profile's `max_examples`, buying reach with depth at the price of a much
+longer nightly.
 
-**P7's answer is that those four were a coverage problem, not a depth problem.** Each of them is
-a *conjunction* three or four operations deep in a 24-step plan: `grn_matched` needs a receipt,
-then a match against that receipt, then a `reverse_grn` that lands on it. Waiting for a random
-plan to stumble through that chain is the expensive way to cover a guard, and it is also the
-unreliable way — the margin was 7–10 against a floor of 3, and `pytest-randomly` reseeds every
-run, so whether the gate passed was a coin weighted by the seed.
+**P7's answer is that those were a coverage problem, not a depth problem.** Each is a
+*conjunction* three or four operations deep in the plan: `grn_matched` needs a receipt, then a
+match against that receipt, then a `reverse_grn` that lands on it. Waiting for a random plan to
+stumble through that chain is the expensive way to cover a guard, and it is also the unreliable
+way — the margins sat a few hits above the floor and `pytest-randomly` reseeds every run, so
+whether the gate passed was a coin weighted by the seed.
 
 So they move here, where the chain is built rather than drawn, and out of
 `REQUIRED_REFUSALS` in the machine. Four moved on that diagnosis; `receipt_exceeds_order`
-moved on a measurement — P7's first deep pass provoked it zero times with the guard in
-perfect health, because only 30 of 226 `receive_from_po` draws ever found an open purchase
-order to over-receive. The machine now counts that split, so the next zero names its cause.
+moved on a measurement — P7's first deep pass provoked it zero times with the guard in perfect
+health, because hardly any `receive_from_po` draw ever found an open purchase order to
+over-receive. The machine now counts that split, so the next zero names its cause.
 
 They are still **properties**, not examples: the quantities, costs, baskets and dates vary, so
 what is proved is that the guard holds across the shape of the input rather than at one point
@@ -58,23 +57,22 @@ COSTS = st.integers(min_value=1, max_value=50_000)
 #: **Fifty, not the profile's three hundred.**
 #:
 #: The machine in `test_property_order.py` needs depth because it is *hoping* to reach these
-#: guards: at 300 examples of a 24-step plan it reached `grn_matched` somewhere between zero
-#: and twenty-five times depending on the seed. Every example here reaches its guard by
-#: construction, so fifty examples is fifty hits — an order of magnitude more coverage than the
-#: floor of three these replace, for a fraction of the time.
+#: guards: how often it reached one swung wildly with the seed, from a healthy count down to
+#: never. Every example here reaches its guard by construction, so fifty examples is fifty
+#: hits — far more coverage than the floor of three these replace, for a fraction of the time.
 #:
-#: Spending 300 here instead would add roughly twenty minutes to a nightly that is already
-#: twenty-six, to draw three hundred variations of a quantity. The number that matters is how
-#: often the guard is *reached*, and that is now the same as the example count.
+#: Spending 300 here instead would lengthen the nightly substantially to draw three hundred
+#: variations of a quantity. The number that matters is how often the guard is *reached*, and
+#: that is now the same as the example count.
 TARGETED_EXAMPLES = 50
 
 #: One tenant per test, reused across its examples — the opposite of what the machine needs.
 #:
 #: The machine asserts every invariant after every step, so a shared tenant would re-examine an
-#: ever-growing history and cost O(examples²). These assert one refusal and build their own
-#: receipt or order each time, so nothing here reads the accumulated history and the fixture is
-#: pure setup. Rebuilding a tenant per example cost ~20 seconds each when this was first
-#: written; reusing one costs nothing.
+#: ever-growing history and cost time quadratic in the example count. These assert one refusal
+#: and build their own receipt or order each time, so nothing here reads the accumulated
+#: history and the fixture is pure setup. Rebuilding a tenant per example dominated the runtime
+#: when this was first written; reusing one costs nothing.
 
 
 def _receive(
@@ -431,9 +429,9 @@ def test_a_receipt_beyond_what_the_order_has_left_is_refused(
     moved by a measurement. P7's first deep pass reported it provoked **zero** times, and a
     direct probe — a purchase order for 5, received for 40, through
     `prepare_receipt_from_purchase_order` exactly as the machine drives it — was refused
-    correctly. The machine had simply never asked: 226 `receive_from_po` draws found an open
-    purchase order under 30 of them, and a drawn quantity larger than what was left under none
-    of those.
+    correctly. The machine had simply never asked: an open purchase order was there for only a
+    small fraction of `receive_from_po` draws, and a drawn quantity larger than what was left
+    for none of those.
 
     What is constructed here is the *second* receipt, because that is the case a plausible bug
     survives. "Received" is derived — a join over `stock_document_lines.purchase_order_line_id`,
