@@ -129,13 +129,20 @@ From the 2018 CIS specification, and confirmed against the three live receipts:
   the RRA logo — so there is nothing in them to read the field order or the counter choice off.
   It is a question for Kigali, and the step-5 live run is where it gets asked.
 
-  The reason for the reading, so the live run has something to check against: the receipt prints
-  the pair as `rcptNo/totRcptNo` (§7.25's `A/B RT`), and only `totRcptNo` is unique across
-  receipt types on a device. `rcptNo` counts within a type, so a device that has issued one sale
-  and one refund holds `1 NS` and `1 NR` — a verifier scanning the refund and given `1` cannot
-  tell which receipt it has. `totRcptNo` identifies it. Built that way in
-  `app/fiscal/rwanda/adapter.py::verification_code`; if a sample from the test environment shows
-  otherwise, that function is the one line that changes.
+  **Whose argument this is**, because six months from now that is the thing the file exists to
+  say. The reading was the build's, written into
+  `app/fiscal/rwanda/adapter.py::verification_code` at P7 step 2 and argued from **uniqueness**:
+  the receipt prints the pair as `rcptNo/totRcptNo` (§7.25's `A/B RT`), `rcptNo` restarts within
+  each receipt type, so a device that has issued one sale and one refund holds `1 NS` and `1 NR`
+  — a verifier scanning the refund and given `1` cannot tell which receipt it has, and
+  `totRcptNo` is unique per device. The **owner's** contribution was twofold: the evidence that
+  settles what the samples cannot do (the three live receipts were rendered and carry no QR),
+  and the ruling that this argument supersedes the weaker one it replaces — reading
+  `sdc_receipt_number` as whatever the field name most directly suggests, which distinguishes
+  nothing.
+
+  If a sample from the test environment shows otherwise, `verification_code` is the one function
+  that changes.
 * §7.25 — `A/B RT`: A is the counter per receipt type, B the total counter, RT the label.
 * §7.27 — an item counter, excluding voids.
 * §7.29 — the official RRA logo on every receipt (`Rwanda-Revenue-Authority-logo.png`).

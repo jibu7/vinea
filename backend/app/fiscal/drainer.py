@@ -292,6 +292,13 @@ def _write_receipt(
     # A document points at **its own** receipt. A reversal's refund is a receipt *about* the
     # invoice rather than the invoice's own, so it is deliberately not linked: linking it
     # would make the invoice print the refund that undid it.
+    #
+    # **Step 8 owes the refund a print.** It is a legal document the customer is owed and it
+    # has no document of its own, so the invoice's detail screen offers two prints — the sale,
+    # and the `NR` row against the same `document_id` (unique per type since 0023), which
+    # carries its own counters and `org_invc_no`. Decision 11's "print refused until the
+    # receipt exists" applies to each independently. `docs/p7-step-2-report.md` has the whole
+    # requirement; this comment is here because this is the line that decides it.
     if row.source_doc_type == outbox.DOCUMENT_SOURCE and row.source_doc_id is not None:
         document = db.get(PartnerDocument, row.source_doc_id)
         if document is not None:

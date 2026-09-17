@@ -175,6 +175,8 @@ Two new sensitivity tests hold it:
 
 ## The residue census (decision 6)
 
+### Per line
+
 Measured over a deep pass (300 examples), bucketed by the base currency's own minor unit, and
 split by whether the line carried a discount:
 
@@ -209,11 +211,62 @@ the bias is in the shape of the draw, not its count:
 awkward lines 1054   under a franc 1054,  exact 0,  a franc or more 0
 ```
 
-**So the answer for Kigali is: the wire is never as much as one minor unit from the ledger on a
-line, and on a zero-decimal base it usually is a fraction of a franc below it.** The census now
-carries floors — payloads, census lines per base, *taxed* census lines per base, and awkward
-lines — so a generator that stops reaching a case fails rather than reporting a comfortable
-zero. The taxed sub-floor is the one that would have caught this: an exempt or zero-rated line
+### Per document — the figure a customer actually compares
+
+A per-line bound of "under a franc" is not an answer about a twenty-line invoice: twenty of
+them is up to twenty francs at the foot. So the census also measures **Σ wire `totAmt` − posted
+document total** and **Σ wire `taxAmt` − posted tax**, both in base, over the documents the
+machine produced — and the machine now produces multi-line documents (1–4 lines, rotating tax
+class, alternating discount) rather than the one-line ones it used to.
+
+It covers the **FX path**, which the per-line census could not: a line's `gross_amount` is in
+the document's own currency, but `base_total_amount` and the payload are both in base. That
+matters because FX is where fractional unit prices actually come from — `_price_in_base`
+multiplies an inclusive price by the booking rate, so `prc` on a USD line is almost never
+round, which is the case the awkward-price property has to construct by hand on the base side.
+
+The posted tax is read **off the ledger** — the journal lines posted to the tax code's own
+account — rather than converted from `partner_documents.tax_amount`, which would be this census
+agreeing with the code it measures. (The first version of that query said "carries a tax code
+and zero tax", which is also what an *exempt revenue line* is; it counted whole revenue lines
+as tax and reported a document 17 472 francs out. Wrong, not alarming.)
+
+**The unit is the document's own, converted.** On an RWF document the ledger rounded to the
+franc; on a USD document at 1 300.5 it rounded to the cent, and a cent is thirteen francs.
+Measuring an FX document against the franc would call a correct build six francs out.
+
+Over a deep pass — 511 documents, 121/69 at 0-dp base/FX and 192/129 at 2-dp, of which
+63/31/84/94 were multi-line:
+
+```
+0-dp base   total   63 exact,  58 one unit      worst   0.60 franc
+            tax     48 exact,  73 one unit      worst  -0.47 franc
+0-dp fx     total   36 exact,  33 one unit      worst -12.87 francs = -0.99 unit (one US cent)
+            tax     20 exact,  49 one unit      worst  -6.41 francs = -0.49 unit
+2-dp base   total  179 exact,  13 one unit      worst  -0.01 = -1 unit
+            tax    192 exact,   0               worst   exact throughout
+2-dp fx     total   92 exact,  37 one unit      worst -13.00 francs = -1.00 unit
+            tax     96 exact,  33 one unit      worst  -4.41 francs = -0.34 unit
+```
+
+**Not one document in 511 exceeded a single minor unit of its own currency**, and no bucket
+above "one unit" was reached at all. That is tighter than the structural bound — four lines
+each up to a unit out *could* sum to four — and the reason is that the wire and the ledger
+round the same underlying figures, so their errors are correlated rather than independent. Both
+bounds are asserted: the structural one always, and the measured one at the deep profile, with
+the instruction to read the offending document before loosening the number.
+
+**So the answer for Kigali, and the number step 4's reconciliation carries:** the foot of the
+receipt is never more than one minor unit of the document's own currency from the foot of the
+invoice — under a franc on an RWF sale, under a cent on a foreign one — and per line the wire
+is never a whole unit from the ledger either. Step 4's VAT return ties to the VAT accounts by
+construction (it is a query over `journal_lines`); where it is reconciled against the sum of
+receipts, **this is the size of the difference it must show rather than assert away**.
+
+The census carries floors throughout — payloads, census lines per base, *taxed* census lines
+per base, awkward lines, documents per base and per FX, and multi-line documents — so a
+generator that stops reaching a case fails rather than reporting a comfortable zero. The taxed
+sub-floor is the one that would have caught the round-price bias: an exempt or zero-rated line
 is exact by construction, and a census made of them measures nothing.
 
 ## Decisions worth review
@@ -247,6 +300,38 @@ once, with `test_selling_the_same_item_at_a_different_price_does_not_re_register
 schema note) but the invoice keeps pointing at *its own* receipt — the invoice must not print
 the refund that undid it.
 
+### How the reversal's refund receipt reaches the customer — a step-8 requirement
+
+"The invoice must not print the refund" is right and is not the question. The question is that
+a refund receipt is a **legal document the customer is owed**, and this one has no document of
+its own: reversing an invoice posts a kernel reversing entry, not a credit note, so there is no
+second `partner_documents` row and `fiscal_receipt_id` points at the *sale*. Left as it stands,
+the receipt exists in `fiscal_receipts`, RRA has it, and nobody can print it.
+
+What step 8 owes, recorded here and against decision 11:
+
+* **Which screen.** The document-detail screen of the reversed **invoice** — there is nowhere
+  else, and it is where a person goes looking. A reversed fiscalized invoice offers *two*
+  prints rather than one: its own sale receipt, and the refund that reversed it.
+* **Which counters.** The refund receipt is the `NR` row against that `document_id` (the pair
+  is unique per document per type since 0023). It carries its own `rcpt_no` — the device's
+  `NR` counter — its own `tot_rcpt_no`, and `org_invc_no` = the sale's `invc_no`. The CIS §14
+  layout reads off that row: `REFUND`, `REF. NORMAL RECEIPT#: <the sale receipt's
+  tot_rcpt_no>`, and negative amounts. The **wire** stays positive (decision 6); the minus
+  signs are the printed document's alone.
+* **Which print is refused when.** Decision 11's "print is refused until the receipt exists"
+  applies to each of the two independently: the sale's print is refused until the sale row is
+  `sent`, the refund's until the refund row is. A reversed invoice whose refund is still queued
+  prints the sale as a `COPY` and shows the queue status where the refund would be.
+* **Which one the Z counts.** Both, as an `NS` and an `NR` — decision 11 computes the Z from
+  `fiscal_receipts`, which is the reason the refund is a stored receipt at all rather than a
+  response on a queue row.
+
+The alternative considered and rejected: giving the reversal a credit-note document of its own,
+so the refund receipt would hang off a document like every other. That changes AR semantics —
+numbering, open items, allocations — for a presentation problem, and contradicts P4's reversal
+design. Two prints on one screen is the smaller answer.
+
 **5. `verify_with_device` is offered on `failed` as well as `unknown`.** Decision 4 names it for
 `unknown`; a `failed` row is safe to ask about too, and the answer is the same shape. `retry_now`
 is **not** offered on `unknown` or `needs_receipt`, which is the refusal that matters.
@@ -260,7 +345,8 @@ device would be told it has no device on a document about to post to that very b
 1. **Does RRA tolerate the residue?** On a zero-decimal base the wire's `taxblAmt` is derived
    from a two-decimal `prc`, and the ledger rounded the same line to the franc. The census
    above is how far apart they get: never a whole franc on a line, over 1 054 lines built to
-   make it as large as it can be.
+   make it as large as it can be — and, at the foot of the document, never more than one minor
+   unit of its own currency over 511 documents.
 2. **Is a refund sent with positive amounts under `rcptTyCd R`, or negative ones?** Built
    positive, following Sage 200 Evolution, with the minus signs belonging to the printed
    receipt (CIS §14). `_assert_no_negative_amount` walks the whole payload recursively and
@@ -279,7 +365,7 @@ device would be told it has no device on a document about to post to that very b
 
 ```
 uv run ruff check .            All checks passed!
-uv run pytest -n 4 -q          1200 passed, 7 warnings in 322.36s (0:05:22)
+uv run pytest -n 4 -q          1200 passed, 7 warnings in 325.51s (0:05:25)
 alembic upgrade head && alembic check && alembic downgrade base   (scratch database) green
 git status --short             (empty)
 git log @{u}..                 (empty)
@@ -290,8 +376,10 @@ Deep Hypothesis passes, `HYPOTHESIS_PROFILE=deep`, 300 examples each:
 ```
 0-dp machine:  states {cancelled 408, failed 9, needs_receipt 2, queued 1916, sent 429, unknown 40}
 2-dp machine:  states {cancelled 311, failed 29, needs_receipt 25, queued 2773, sent 511, unknown 128}
-census 0dp/2dp reach  {payloads 684, census lines 0dp 211 (96 taxed), 2dp 194 (76 taxed)}
-awkward prices reach  {awkward lines 1054}
+census reach   {payloads 511, lines 0dp 234 (85 taxed), 2dp 369 (148 taxed),
+                documents 0dp 121 base / 69 fx, 2dp 192 base / 129 fx,
+                multi-line 63 / 31 / 84 / 94}
+awkward prices {awkward lines 1054, none exact, none a whole franc}
 ```
 
 Every non-terminal queue state is reached on both machines, including `unknown` — which only
