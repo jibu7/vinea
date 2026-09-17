@@ -62,7 +62,7 @@ from app.fiscal.rwanda.payloads import (
     UpdateImportItemRequest,
 )
 from app.fiscal.rwanda.routes import Operation, routes_for
-from app.models.fiscalization import FiscalDevice
+from app.models.fiscalization import FiscalDevice, FiscalOutboxKind
 
 logger = logging.getLogger("app.fiscal.rwanda")
 
@@ -71,6 +71,12 @@ READ_TIMEOUT_SECONDS = 60.0
 
 #: The documents' "give me everything" watermark, used the first time a device syncs.
 EPOCH_WATERMARK = "20180520000000"
+
+#: HTTP statuses that mean **the answer was lost**, not that the request failed. A proxy or a
+#: gateway in front of the VSDC answers one of these when the device took too long, and the
+#: request may well have arrived — so the outbox must treat them exactly as it treats a read
+#: timeout, and never resend.
+GATEWAY_TIMEOUT_STATUSES = frozenset({408, 504})
 
 #: The three key fields, by every name they appear under. Stripped from anything stored or
 #: logged — `sgnKey` is the initialization response's spelling and `signKey` the column's, and
@@ -94,6 +100,25 @@ def redact(value: Any) -> Any:
     if isinstance(value, list):
         return [redact(item) for item in value]
     return value
+
+
+#: Outbox kind → the builder that renders it and the operation that sends it. One table, so a
+#: kind cannot be rendered onto one path and sent down another — which is exactly the sort of
+#: mistake that only shows up as a `921` from Kigali.
+_OUTBOX_OPERATIONS: dict[FiscalOutboxKind, Operation] = {
+    FiscalOutboxKind.ITEM: Operation.SAVE_ITEM,
+    FiscalOutboxKind.SALE: Operation.SAVE_SALES,
+    FiscalOutboxKind.REFUND: Operation.SAVE_SALES,
+    FiscalOutboxKind.PURCHASE: Operation.SAVE_PURCHASES,
+    FiscalOutboxKind.PURCHASE_CONFIRM: Operation.SAVE_PURCHASES,
+    FiscalOutboxKind.STOCK_IO: Operation.SAVE_STOCK_ITEMS,
+    FiscalOutboxKind.STOCK_MASTER: Operation.SAVE_STOCK_MASTER,
+    FiscalOutboxKind.IMPORT_UPDATE: Operation.UPDATE_IMPORT_ITEMS,
+}
+
+#: The kinds whose answer carries a receipt. Everything else comes back with an acknowledgment
+#: and nothing to print.
+_RECEIPT_KINDS = frozenset({FiscalOutboxKind.SALE, FiscalOutboxKind.REFUND})
 
 
 class RwandaEbmAdapter:
@@ -128,6 +153,20 @@ class RwandaEbmAdapter:
             elapsed_ms = int((time.monotonic() - started) * 1000)
             self._log(device, path, "timeout", elapsed_ms)
             raise FiscalTimeout(f"{path} timed out after {elapsed_ms} ms") from timeout
+        except httpx.HTTPStatusError as refused:
+            # **A gateway timeout is a timeout.** `408` and `504` both mean the request
+            # reached something and the answer did not come back, which is the one case that
+            # must never be retried blindly — RRA may be holding the sale. Any other status is
+            # a transport failure the request did not survive, and is safe to retry.
+            elapsed_ms = int((time.monotonic() - started) * 1000)
+            status_code = refused.response.status_code
+            if status_code in GATEWAY_TIMEOUT_STATUSES:
+                self._log(device, path, "timeout", elapsed_ms)
+                raise FiscalTimeout(
+                    f"{path} answered {status_code} after {elapsed_ms} ms"
+                ) from refused
+            self._log(device, path, f"http{status_code}", elapsed_ms)
+            raise FiscalTransportError(f"{path} failed: HTTP {status_code}") from refused
         except (httpx.HTTPError, ValueError) as failure:
             elapsed_ms = int((time.monotonic() - started) * 1000)
             self._log(device, path, "transport", elapsed_ms)
@@ -183,6 +222,54 @@ class RwandaEbmAdapter:
         else:
             body.pop("cmcKey", None)
         return body
+
+    # --- The outbox seam -------------------------------------------------------------------
+
+    def render(
+        self, device: FiscalDevice, kind: FiscalOutboxKind, document: Any
+    ) -> dict[str, Any]:
+        """One queue row's payload, built from the DTO the posting transaction held.
+
+        Redacted on the way out even though nothing here carries a key: `cmcKey` is added at
+        `send`, so a rendered payload *should* be clean — and the cheapest way to keep that
+        true is to strip it here anyway rather than to rely on it.
+        """
+        builders_by_kind = {
+            FiscalOutboxKind.ITEM: builders.build_item_request,
+            FiscalOutboxKind.SALE: builders.build_sale_request,
+            FiscalOutboxKind.REFUND: builders.build_refund_request,
+            FiscalOutboxKind.PURCHASE: builders.build_purchase_request,
+            FiscalOutboxKind.PURCHASE_CONFIRM: builders.build_purchase_request,
+            FiscalOutboxKind.STOCK_IO: builders.build_stock_io_request,
+            FiscalOutboxKind.STOCK_MASTER: builders.build_stock_master_request,
+        }
+        build = builders_by_kind.get(kind)
+        if build is None:
+            raise LookupError(f"{kind} has no payload builder")
+        request = build(device, document)
+        return redact(request.model_dump(mode="json", exclude_none=True))
+
+    def send(
+        self,
+        device: FiscalDevice,
+        kind: FiscalOutboxKind,
+        payload: dict[str, Any],
+        *,
+        cmc_key: str | None = None,
+    ) -> tuple[FiscalResult, FiscalReceiptData | None]:
+        """The frozen bytes, down the path this kind belongs on."""
+        body = dict(payload)
+        if routes_for(device.profile).carries_cmc_key and cmc_key:
+            body["cmcKey"] = cmc_key
+        else:
+            body.pop("cmcKey", None)
+        envelope, elapsed_ms = self._post(device, _OUTBOX_OPERATIONS[kind], body)
+        result = self._envelope_result(envelope, elapsed_ms)
+        if kind not in _RECEIPT_KINDS:
+            return result, None
+        return result, self.normalize_receipt(
+            device, envelope.data if envelope.ok else None, invc_no=payload.get("invcNo")
+        )
 
     # --- Setup -----------------------------------------------------------------------------
 
@@ -287,6 +374,24 @@ class RwandaEbmAdapter:
 
     # --- Masters ---------------------------------------------------------------------------
 
+    def mint_item_code(
+        self,
+        *,
+        origin_country: str,
+        product_type: str,
+        packaging_unit: str,
+        quantity_unit: str,
+        sequence_no: int,
+    ) -> str:
+        """§4.17's composition, and the only caller of it outside this package's own tests."""
+        return codes.build_item_code(
+            origin_country=origin_country,
+            product_type=product_type,
+            packaging_unit=packaging_unit,
+            quantity_unit=quantity_unit,
+            sequence_no=sequence_no,
+        )
+
     def register_item(
         self, device: FiscalDevice, item: FiscalItemRegistration, *, cmc_key: str | None = None
     ) -> FiscalResult:
@@ -301,25 +406,21 @@ class RwandaEbmAdapter:
     def fiscalize_sale(
         self, device: FiscalDevice, sale: FiscalSale, *, cmc_key: str | None = None
     ) -> tuple[FiscalResult, FiscalReceiptData | None]:
-        request = builders.build_sale_request(device, sale)
-        envelope, elapsed_ms = self._post(
-            device, Operation.SAVE_SALES, self._body(device, request, cmc_key=cmc_key)
-        )
-        result = self._envelope_result(envelope, elapsed_ms)
-        return result, self.normalize_receipt(device, envelope, invc_no=sale.invoice_no)
+        kind = FiscalOutboxKind.SALE
+        return self.send(device, kind, self.render(device, kind, sale), cmc_key=cmc_key)
 
     def fiscalize_refund(
         self, device: FiscalDevice, refund: FiscalRefund, *, cmc_key: str | None = None
     ) -> tuple[FiscalResult, FiscalReceiptData | None]:
-        request = builders.build_refund_request(device, refund)
-        envelope, elapsed_ms = self._post(
-            device, Operation.SAVE_SALES, self._body(device, request, cmc_key=cmc_key)
-        )
-        result = self._envelope_result(envelope, elapsed_ms)
-        return result, self.normalize_receipt(device, envelope, invc_no=refund.invoice_no)
+        kind = FiscalOutboxKind.REFUND
+        return self.send(device, kind, self.render(device, kind, refund), cmc_key=cmc_key)
 
     def normalize_receipt(
-        self, device: FiscalDevice, envelope: ResultEnvelope, *, invc_no: int | None = None
+        self,
+        device: FiscalDevice,
+        response: dict[str, Any] | None,
+        *,
+        invc_no: int | None = None,
     ) -> FiscalReceiptData | None:
         """One `FiscalReceiptData` from either profile's sales response.
 
@@ -327,10 +428,16 @@ class RwandaEbmAdapter:
         `vsdcRcptPbctDate`/`sdcDateTime` — and this is where that stops. `sdcId` and `mrcNo`
         fall back to the device's own, because the OSDC response does not repeat what
         initialization already established.
+
+        It takes the **response body**, not an envelope, for one reason beyond tidiness: the
+        manual "attach a receipt" path on the queue screen has no envelope. An operator reading
+        the receipt off the MyRRA portal is keying the same six facts, and they should be
+        normalised by the same code — otherwise the manual path is a second, untested opinion
+        about what a receipt is.
         """
-        if not envelope.ok or not envelope.data:
+        if not response:
             return None
-        data = SalesResponseData.model_validate(envelope.data)
+        data = SalesResponseData.model_validate(response)
         rcpt_no = data.rcptNo if data.rcptNo is not None else data.curRcptNo
         stamped = data.vsdcRcptPbctDate or data.sdcDateTime
         if rcpt_no is None or data.totRcptNo is None or stamped is None:
@@ -344,9 +451,16 @@ class RwandaEbmAdapter:
             intrl_data=data.intrlData or "",
             rcpt_sign=data.rcptSign or "",
             sdc_id=data.sdcId or device.sdc_id or "",
-            sdc_datetime=stamped,
+            sdc_datetime=parse_stamp(stamped),
             mrc_no=data.mrcNo or device.mrc_no,
             invc_no=invc_no,
+            qr_payload=verification_code(
+                stamped=stamped,
+                sdc_id=data.sdcId or device.sdc_id or "",
+                tot_rcpt_no=data.totRcptNo,
+                intrl_data=data.intrlData or "",
+                rcpt_sign=data.rcptSign or "",
+            ),
         )
 
     # --- Purchases -------------------------------------------------------------------------
@@ -438,6 +552,51 @@ class RwandaEbmAdapter:
         return self._envelope_result(envelope, elapsed_ms)
 
 
+#: CIS §7.24.7: what the receipt's QR code encodes, `#`-separated.
+#:
+#: `invoice_date(ddmmyyyy)#time(hhmmss)#sdc number#sdc_receipt_number#internal_data#
+#: receipt_signature` — six fields, from the **device's** clock rather than the posting's,
+#: because what a person scanning the receipt is checking is what the SDC signed.
+#:
+#: `sdc_receipt_number` is read as the *total* receipt counter, not the per-type one: the pair
+#: prints as `rcptNo/totRcptNo` and the total is the one that identifies a receipt uniquely on
+#: the device. The 2018 document does not say which, and a sample receipt from the test
+#: environment settles it — carried as a step-5 sandbox question, exactly as the phase brief
+#: says a sample receipt overrides this format.
+QR_FIELD_SEPARATOR = "#"
+
+
+def verification_code(
+    *,
+    stamped: str,
+    sdc_id: str,
+    tot_rcpt_no: int,
+    intrl_data: str,
+    rcpt_sign: str,
+) -> str:
+    day, clock = stamped[:8], stamped[8:14]
+    # `ddmmyyyy` from `yyyyMMdd`: the wire and the receipt disagree about field order, and the
+    # receipt's is the one a person reads.
+    printed_day = f"{day[6:8]}{day[4:6]}{day[0:4]}" if len(day) == 8 else day
+    return QR_FIELD_SEPARATOR.join(
+        (printed_day, clock, sdc_id, str(tot_rcpt_no), intrl_data, rcpt_sign)
+    )
+
+
+def parse_stamp(stamped: str) -> datetime:
+    """`yyyyMMddHHmmss` in **Kigali**, as an instant.
+
+    The documents use one date format and no zone, and the taxpayer is in Kigali — so that is
+    the zone, said here where the format is read rather than guessed at by whoever stores the
+    value. An unparseable stamp falls back to now: a receipt whose other five fields are
+    present is still a receipt, and refusing it would strand a sale RRA has already signed.
+    """
+    try:
+        return datetime.strptime(stamped, "%Y%m%d%H%M%S").replace(tzinfo=builders.KIGALI)
+    except ValueError:
+        return datetime.now(UTC)
+
+
 def _now_watermark() -> str:
     """`yyyyMMddHHmmss`, which is the only date format the documents use.
 
@@ -448,4 +607,4 @@ def _now_watermark() -> str:
     return datetime.now(UTC).strftime("%Y%m%d%H%M%S")
 
 
-__all__ = ["RwandaEbmAdapter", "codes", "redact"]
+__all__ = ["RwandaEbmAdapter", "codes", "parse_stamp", "redact", "verification_code"]

@@ -32,7 +32,7 @@ from app.fiscal.protocol import (
     FiscalResult,
     TinLookup,
 )
-from app.models.fiscalization import FiscalDevice
+from app.models.fiscalization import FiscalDevice, FiscalOutboxKind
 
 
 @dataclass(frozen=True)
@@ -86,7 +86,50 @@ class NullAdapter:
         # `found=False` rather than True: "we did not look" must not read as "it is valid".
         return result, TinLookup(tin=tin, found=False)
 
+    # --- The outbox seam -------------------------------------------------------------------
+    def render(
+        self, device: FiscalDevice, kind: FiscalOutboxKind, document: Any
+    ) -> dict[str, Any]:
+        """A record of what *would* have been sent, in Vinea's own words.
+
+        Not an authority's payload, because there is no authority: this adapter serves a
+        company that does not fiscalize, and inventing a revenue authority's field names for
+        one would be the country logic rule 12 exists to keep out of a tenant that has none.
+        """
+        self._record("render", device_id=device.id, kind=str(kind))
+        return {"adapter": "null", "kind": str(kind), "document": repr(document)}
+
+    def send(
+        self,
+        device: FiscalDevice,
+        kind: FiscalOutboxKind,
+        payload: dict[str, Any],
+        *,
+        cmc_key: str | None = None,
+    ) -> tuple[FiscalResult, FiscalReceiptData | None]:
+        result = self._record("send", device_id=device.id, kind=str(kind))
+        # No receipt, for the reason `fiscalize_sale` gives below: a receipt is what an
+        # authority signed, and none has.
+        return result, None
+
     # --- Masters ---------------------------------------------------------------------------
+    def mint_item_code(
+        self,
+        *,
+        origin_country: str,
+        product_type: str,
+        packaging_unit: str,
+        quantity_unit: str,
+        sequence_no: int,
+    ) -> str:
+        """The sequence, and nothing composed around it.
+
+        A company with no authority has no published item-code format, and borrowing Rwanda's
+        would put a `RW` on an item in a country that never issued one.
+        """
+        self._record("mint_item_code", sequence_no=sequence_no)
+        return f"{sequence_no:07d}"
+
     def register_item(
         self, device: FiscalDevice, item: FiscalItemRegistration, *, cmc_key: str | None = None
     ) -> FiscalResult:
@@ -108,6 +151,18 @@ class NullAdapter:
             "fiscalize_refund", device_id=device.id, invoice_no=refund.invoice_no
         )
         return result, None
+
+    def normalize_receipt(
+        self,
+        device: FiscalDevice,
+        response: dict[str, Any] | None,
+        *,
+        invc_no: int | None = None,
+    ) -> FiscalReceiptData | None:
+        """Always `None`. There is no authority, so there is nothing that signed anything, and
+        a receipt normalised out of an empty conversation would print on an invoice."""
+        self._record("normalize_receipt", device_id=device.id)
+        return None
 
     # --- Purchases and imports -------------------------------------------------------------
     def register_purchase(

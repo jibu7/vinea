@@ -331,17 +331,16 @@ def _sales_request(
     )
 
 
-def build_sale_request(
-    device: FiscalDevice, sale: FiscalSale, *, z_report_no: int = 1
-) -> SaveSalesRequest:
+def build_sale_request(device: FiscalDevice, sale: FiscalSale) -> SaveSalesRequest:
     return _sales_request(
-        device, sale, receipt_type=codes.SalesReceiptType.SALE, z_report_no=z_report_no
+        device,
+        sale,
+        receipt_type=codes.SalesReceiptType.SALE,
+        z_report_no=sale.daily_report_no,
     )
 
 
-def build_refund_request(
-    device: FiscalDevice, refund: FiscalRefund, *, z_report_no: int = 1
-) -> SaveSalesRequest:
+def build_refund_request(device: FiscalDevice, refund: FiscalRefund) -> SaveSalesRequest:
     """A refund, sent with **positive** amounts under `rcptTyCd R`.
 
     No longer an open question. Sage 200 Evolution — the certified Rwandan integration this
@@ -358,7 +357,7 @@ def build_refund_request(
         device,
         refund,
         receipt_type=codes.SalesReceiptType.REFUND,
-        z_report_no=z_report_no,
+        z_report_no=refund.daily_report_no,
         original_invoice_no=refund.original_invoice_no,
         refund_reason=refund.reason_code,
     )
