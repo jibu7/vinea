@@ -341,52 +341,56 @@ def declared_documents(
 ) -> dict[tuple[str, int], PartnerDocument]:
     """(supplier TIN, supplier invoice number) → the AP document declaring it.
 
-    Only documents holding a **live** registration, because that is what "already declared"
-    means: a cancelled row is one RRA never received. Read by `accept` to refuse the
-    coincidence and by `assert_fiscal_invariants` to prove the state unreachable — one
-    query, so the refusal and the invariant cannot disagree about what a duplicate is.
+    The pair RRA itself reconciles a purchase by, which is the whole point: `accept` reads it
+    to refuse the coincidence and `assert_fiscal_invariants` reads it to catch the state, so
+    one function means the refusal and the invariant cannot come to disagree about what a
+    duplicate is.
 
-    Keyed on the pair RRA itself reconciles by, which is why a reference with no numeric form
-    is absent: there is nothing for the authority or for this build to match on.
+    **One query**, joined rather than a row at a time. `accept` is something a person presses
+    on a screen and the live-registration set grows for as long as the tenant buys anything, so
+    a lookup per row would get slower every month — and the invariant runs after every step of
+    the property machine, where the same cost is paid again per example.
+
+    Three things are absent, each deliberately:
+
+    * a **cancelled** row — "already declared" means RRA received it, and a cancelled row is
+      one it never did;
+    * a **reversed** document — reversing a declared purchase declares the opposite
+      (decision 6), so RRA holds a `P` and an `R` that net to nothing held, and the invoice is
+      free to be confirmed from the supplier's side;
+    * a reference with **no numeric form** — RRA types `spplrInvcNo` as a number, so there is
+      nothing for the authority or for this build to match on, and the pair is reconciled by
+      hand.
     """
-    declared: dict[tuple[str, int], PartnerDocument] = {}
-    rows = db.scalars(
-        select(FiscalOutboxRow).where(
-            FiscalOutboxRow.company_id == company_id,
+    rows = db.execute(
+        select(PartnerDocument, Partner.tin)
+        .join(
+            FiscalOutboxRow,
+            (FiscalOutboxRow.company_id == PartnerDocument.company_id)
+            & (FiscalOutboxRow.source_doc_id == PartnerDocument.id),
+        )
+        .join(
+            Partner,
+            (Partner.company_id == PartnerDocument.company_id)
+            & (Partner.id == PartnerDocument.partner_id),
+        )
+        .where(
+            PartnerDocument.company_id == company_id,
+            PartnerDocument.status == DocumentStatus.POSTED,
+            PartnerDocument.reference.is_not(None),
+            Partner.tin.is_not(None),
             FiscalOutboxRow.kind.in_(
                 (FiscalOutboxKind.PURCHASE, FiscalOutboxKind.PURCHASE_CONFIRM)
             ),
             FiscalOutboxRow.source_doc_type != FEED_SOURCE,
             FiscalOutboxRow.status != FiscalOutboxStatus.CANCELLED,
-            FiscalOutboxRow.source_doc_id.is_not(None),
         )
-    )
-    for outbox_row in rows:
-        document = db.scalar(
-            select(PartnerDocument).where(
-                PartnerDocument.company_id == company_id,
-                PartnerDocument.id == outbox_row.source_doc_id,
-                # **A reversed document declares nothing.** Reversing a declared purchase
-                # declares the opposite (decision 6), so RRA holds a `P` and an `R` for the
-                # same invoice and they net to nothing held. The invoice is then free to be
-                # confirmed from the supplier's side, and treating it as still declared would
-                # refuse an accept over a registration that was already undone.
-                PartnerDocument.status == DocumentStatus.POSTED,
-            )
-        )
-        if document is None:
-            continue
+    ).all()
+    declared: dict[tuple[str, int], PartnerDocument] = {}
+    for document, tin in rows:
         number = purchase_service.supplier_reference_number(document.reference)
-        if number is None:
-            continue
-        partner = db.scalar(
-            select(Partner).where(
-                Partner.company_id == company_id, Partner.id == document.partner_id
-            )
-        )
-        if partner is None or not partner.tin:
-            continue
-        declared[(partner.tin, number)] = document
+        if number is not None:
+            declared[(tin, number)] = document
     return declared
 
 
