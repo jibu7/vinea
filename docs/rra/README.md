@@ -105,12 +105,20 @@ each of these:
    receipt, or one line of its QR text, closes this**; until then step 8 builds to §7.24.7 as
    written.
 
-And one precondition, still unanswered:
+And one precondition, now answered:
 
 6. **Test-environment access.** The live run needs a TIN, branch id and device serial approved
-   on `https://myrratest.rra.gov.rw`. **Status: unstated** — the answer came back as an
-   unfilled blank (`not held / applied on <date>`), so nobody has recorded which it is. Not a
-   blocker for steps 1–4; it is the blocker for step 5.
+   on `https://myrratest.rra.gov.rw`. **Status (18 September 2026): not held.** The owner
+   confirmed it at step 5; no application is outstanding. So step 5 closed without the live
+   run, and questions 1–5 above stay open — every one of them is a question only Kigali can
+   answer, and none of them blocks code that is written to the documents.
+
+   What this costs, stated plainly so it is not rediscovered at step 9: the phase will close
+   **code-complete, certification pending**. `docs/rra/certification.md` (step 9) is where the
+   runbook for obtaining access goes, and the moment access exists, rows 0–3 of
+   `tests/fiscal/test_acceptance_tape.py` are the script to run against
+   `https://sdcsandbox.rra.gov.rw` — the tape is written so that the only thing which changes
+   is the device's `base_url`, TIN and serial.
 
 ## Precondition (b), confirmed
 

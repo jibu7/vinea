@@ -498,6 +498,16 @@ class RwandaEbmAdapter:
 
     # --- Purchases -------------------------------------------------------------------------
 
+    def redact_payload(self, value: Any) -> Any:
+        """The Protocol's name for `redact` — the three device keys, wherever they sit.
+
+        A method as well as a module function because callers above the boundary reach it
+        through `adapter_for(country)`: which fields are secret is this authority's fact, and a
+        neutral module importing `redact` would be importing `rwanda` (rule 12, and
+        `tests/fiscal/test_boundary.py`).
+        """
+        return redact(value)
+
     def normalize_declared_totals(
         self,
         request: dict[str, Any] | None,
@@ -528,14 +538,18 @@ class RwandaEbmAdapter:
         for name in TAX_CLASSES:
             taxable = _wire_money(request.get(f"taxblAmt{name}"))
             tax = _wire_money(request.get(f"taxAmt{name}"))
-            if taxable == _WIRE_ZERO and tax == _WIRE_ZERO:
+            rate = _wire_money(request.get(f"taxRt{name}"))
+            # **A programmed rate above zero is declared even at nil**, because CIS §7.22–7.23
+            # says a receipt prints every rate greater than zero and prints a zero rate only
+            # when it was used. The payload carries all four rates; dropping a class on its
+            # amounts alone threw away the rate with them, and the printed receipt could then
+            # not obey the rule. A zero-rate class with no amounts declared nothing and is
+            # still dropped.
+            if taxable == _WIRE_ZERO and tax == _WIRE_ZERO and rate == _WIRE_ZERO:
                 continue
             classes.append(
                 DeclaredClassTotals(
-                    tax_class=name,
-                    taxable=taxable,
-                    tax=tax,
-                    rate=_wire_money(request.get(f"taxRt{name}")),
+                    tax_class=name, taxable=taxable, tax=tax, rate=rate
                 )
             )
 
@@ -550,6 +564,7 @@ class RwandaEbmAdapter:
             taxable=_wire_money(signed.get("totTaxblAmt", request.get("totTaxblAmt"))),
             tax=_wire_money(signed.get("totTaxAmt", request.get("totTaxAmt"))),
             item_count=int(request.get("totItemCnt") or 0),
+            quantity=sum((_wire_money(line.get("qty")) for line in lines), _WIRE_ZERO),
             discount=sum((_wire_money(line.get("dcAmt")) for line in lines), _WIRE_ZERO),
             classes=tuple(classes),
             countersigned=bool(signed),

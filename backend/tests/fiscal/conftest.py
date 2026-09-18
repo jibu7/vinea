@@ -33,7 +33,14 @@ from app.models.tax import TaxCode
 from app.models.user import User
 from app.subledger import masters as partner_masters
 from tests.conftest import make_tenant
+
+# An ordinary AR/AP tenant that never fiscalizes, re-exported the way `tests/tax` re-exports
+# it — with the `ledger` it is built on, which is a fixture rather than the `build_ledger`
+# function this module already calls. Decision 11's last sentence needs one: a company with no
+# device prints the P4 layout, and proving that needs a company with no device.
+from tests.kernel.conftest import ledger as ledger  # noqa: PLC0414
 from tests.order_entry.conftest import OrderEntry, build_order_entry
+from tests.subledger.conftest import subledger as subledger  # noqa: PLC0414
 
 #: Any host: the test transport never resolves it, and a device's `base_url` is a column, so
 #: the value only has to be a URL the adapter can join a path onto.

@@ -89,7 +89,14 @@ class DailyFigures:
     ns_gross: Decimal = MONEY_ZERO
     nr_count: int = 0
     nr_gross: Decimal = MONEY_ZERO
-    items_count: int = 0
+    #: How many **things** were sold and how many came back — Σ of the receipts' line
+    #: quantities, split the way §19.1 splits every other figure on the page. Not the line
+    #: count: a four-line invoice of 10 + 1 + 5 + 2 sold eighteen items, and "items" on a day's
+    #: report is the question a shopkeeper asks about stock, not about paperwork. (The *line*
+    #: count is the receipt's own `ITEMS NUMBER` and stays on the printed receipt, where CIS
+    #: §7.27 puts it.)
+    items_ns: Decimal = MONEY_ZERO
+    items_nr: Decimal = MONEY_ZERO
     copies_count: int = 0
     copies_gross: Decimal = MONEY_ZERO
     #: §19.1 prints the day's discounts, so a Z that could not state them would fail the
@@ -100,7 +107,16 @@ class DailyFigures:
     posted_net: Decimal = MONEY_ZERO
     queued_rows: int = 0
     classes: dict[str, ClassTotals] = field(default_factory=dict)
+    #: **Sales by method, and refunds beside them — not netted.** Every other figure on a Z is
+    #: split NS from NR, and a payment bucket that quietly nets the two is the one number on
+    #: the page a reader cannot take apart again. It also could not be trusted if it were: the
+    #: method on the bucket is the *credit note's* own, and a refund keyed cash against an
+    #: invoice sold on credit would subtract from a drawer the money never came out of.
+    #:
+    #: Kept apart, the identity a reader can check is Σ `by_payment_method` == `ns_gross`, and
+    #: Σ `refunds_by_payment_method` == `nr_gross`.
     by_payment_method: dict[str, Decimal] = field(default_factory=dict)
+    refunds_by_payment_method: dict[str, Decimal] = field(default_factory=dict)
 
     @property
     def total_tax(self) -> Decimal:
@@ -140,7 +156,8 @@ class DailyFigures:
             "nr_gross": str(self.nr_gross),
             "net_gross": str(self.net_gross),
             "total_tax": str(self.total_tax),
-            "items_count": self.items_count,
+            "items_ns": str(self.items_ns),
+            "items_nr": str(self.items_nr),
             "copies_count": self.copies_count,
             "copies_gross": str(self.copies_gross),
             "discounts": str(self.discounts),
@@ -150,6 +167,10 @@ class DailyFigures:
             "classes": {name: totals.as_dict() for name, totals in sorted(self.classes.items())},
             "by_payment_method": {
                 code: str(amount) for code, amount in sorted(self.by_payment_method.items())
+            },
+            "refunds_by_payment_method": {
+                code: str(amount)
+                for code, amount in sorted(self.refunds_by_payment_method.items())
             },
         }
 
@@ -346,7 +367,10 @@ def _absorb(
     else:
         figures.ns_count += 1
         figures.ns_gross += declared.gross
-    figures.items_count += declared.item_count
+    if is_refund:
+        figures.items_nr += declared.quantity
+    else:
+        figures.items_ns += declared.quantity
     figures.discounts += declared.discount
     if document is not None:
         posted = _money(document.base_total_amount)
@@ -368,14 +392,14 @@ def _absorb(
             totals.taxable_ns += row.taxable
             totals.tax_ns += row.tax
 
-    # Refunds reduce what was taken by the method the original was paid by, which is how a till
-    # reconciles: the money went back out the way it came in.
+    # Sales in one bucket, refunds in another. See `DailyFigures.by_payment_method` for why
+    # they are not netted: the method on a refund is the credit note's own, so netting would
+    # take money out of whichever drawer the *credit note* names rather than the drawer the
+    # sale went into — and the reader could not tell afterwards.
     if document is not None and document.payment_method is not None:
         method = str(document.payment_method)
-        signed = -declared.gross if is_refund else declared.gross
-        figures.by_payment_method[method] = (
-            figures.by_payment_method.get(method, MONEY_ZERO) + signed
-        )
+        bucket = figures.refunds_by_payment_method if is_refund else figures.by_payment_method
+        bucket[method] = bucket.get(method, MONEY_ZERO) + declared.gross
 
 
 def _adapter_for(db: Session, company_id: int) -> FiscalizationAdapter:
