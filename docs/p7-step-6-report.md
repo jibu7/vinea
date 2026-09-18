@@ -299,3 +299,21 @@ git diff --stat main..HEAD
   `fallbackLabel` for the selected row when the server's current page no longer holds it —
   without the latter the control would read as empty over a field that holds something, which
   is the defect class rule 13 exists for.
+
+## The tree
+
+```
+git status --short
+[empty]
+
+git log @{u}..
+[empty]
+```
+
+Three commits on `p7-step-6`, from a pulled `main` at `43e57a4`:
+
+```
+a379818  docs(p7): the step-6 report
+b5fe3bb  fix(fiscal): a synced-code picker renders what it holds, not its placeholder
+4c7f805  feat(fiscal): P7 step 6 — EBM devices and the fiscal master fields
+```
