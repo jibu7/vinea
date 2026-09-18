@@ -329,28 +329,27 @@ def _block(
 def _class_lines(declared) -> tuple[ReceiptClassLine, ...]:  # noqa: ANN001 - DeclaredTotals|None
     """Every programmed rate above zero, plus the zero rates this receipt actually used.
 
-    CIS §7.22–7.23. The rates come from the declaration rather than from a constant, because
+    CIS §7.22–7.23, and the selection is the adapter's: `normalize_declared_totals` keeps a
+    class that carries amounts **or** a rate above zero, and drops a zero-rate class nothing
+    was sold under. The rates come from the declaration rather than from a constant, because
     what is "programmed" is what the device was initialized with and a hard-coded 18 would be
     wrong the day RRA changes it.
+
+    `used` is what the template needs to tell "TOTAL B-18.00%: 0" — a rate that must print
+    whether or not anything was sold under it — from a line the receipt has figures for.
     """
     if declared is None:
         return ()
-    used = {row.tax_class: row for row in declared.classes}
-    lines: list[ReceiptClassLine] = []
-    for name in ("A", "B", "C", "D"):
-        row = used.get(name)
-        if row is None:
-            continue
-        lines.append(
-            ReceiptClassLine(
-                tax_class=name,
-                rate=row.rate,
-                taxable=row.taxable,
-                tax=row.tax,
-                used=True,
-            )
+    return tuple(
+        ReceiptClassLine(
+            tax_class=row.tax_class,
+            rate=row.rate,
+            taxable=row.taxable,
+            tax=row.tax,
+            used=row.taxable != MONEY_ZERO or row.tax != MONEY_ZERO,
         )
-    return tuple(lines)
+        for row in sorted(declared.classes, key=lambda row: row.tax_class)
+    )
 
 
 __all__ = ["ReceiptBlock", "ReceiptClassLine", "receipt_block", "record_copy"]

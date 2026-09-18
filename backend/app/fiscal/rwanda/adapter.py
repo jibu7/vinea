@@ -538,14 +538,18 @@ class RwandaEbmAdapter:
         for name in TAX_CLASSES:
             taxable = _wire_money(request.get(f"taxblAmt{name}"))
             tax = _wire_money(request.get(f"taxAmt{name}"))
-            if taxable == _WIRE_ZERO and tax == _WIRE_ZERO:
+            rate = _wire_money(request.get(f"taxRt{name}"))
+            # **A programmed rate above zero is declared even at nil**, because CIS §7.22–7.23
+            # says a receipt prints every rate greater than zero and prints a zero rate only
+            # when it was used. The payload carries all four rates; dropping a class on its
+            # amounts alone threw away the rate with them, and the printed receipt could then
+            # not obey the rule. A zero-rate class with no amounts declared nothing and is
+            # still dropped.
+            if taxable == _WIRE_ZERO and tax == _WIRE_ZERO and rate == _WIRE_ZERO:
                 continue
             classes.append(
                 DeclaredClassTotals(
-                    tax_class=name,
-                    taxable=taxable,
-                    tax=tax,
-                    rate=_wire_money(request.get(f"taxRt{name}")),
+                    tax_class=name, taxable=taxable, tax=tax, rate=rate
                 )
             )
 

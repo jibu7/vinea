@@ -20,6 +20,8 @@ from sqlalchemy.orm import Session
 
 from app.db import set_actor, set_tenant
 from app.fiscal import drainer
+from app.fiscal import feed as feed_service
+from app.fiscal import imports as import_service
 from app.fiscal import outbox as outbox_service
 from app.fiscal.rwanda.sandbox import (
     SANDBOX_CMC_KEY,
@@ -32,6 +34,7 @@ from app.models.fiscalization import (
     FiscalOutboxStatus,
     FiscalReceipt,
 )
+from app.subledger import documents as documents_service
 from tests.fiscal.conftest import FiscalPosting
 from tests.fiscal.helpers import invoice, receive
 from tests.subledger.conftest import Subledger
@@ -449,6 +452,49 @@ def test_the_document_receipt_renders_the_sdc_block_and_the_class_lines(
     assert D(str(classes["B"]["rate"])) == D("18.00")
 
 
+def test_every_programmed_rate_prints_and_an_unused_zero_rate_does_not(
+    client: TestClient, db: Session, signed_in: FiscalPosting, sandbox_client: httpx.Client
+) -> None:
+    """CIS §7.22–7.23, and it needs a receipt that does **not** use the standard rate.
+
+    An exempt-only sale declares class A and nothing in B — and B is programmed at 18 %, so the
+    receipt must still print `TOTAL B-18.00%: 0`. A selection made on the amounts alone would
+    drop B from the block entirely, and the shop would issue receipts a checkpoint sheet
+    rejects. The zero-rated class C is programmed at 0 and was not used, so it is absent: that
+    is the other half of the same rule, and it is what keeps this from being "print everything".
+    """
+    exempt = signed_in.tax_codes["VAT-EXEMPT"]
+    document = invoice(
+        signed_in,
+        db,
+        lines=(
+            documents_service.LineInput(
+                item_id=signed_in.stock_item.id,
+                quantity=D(1),
+                unit_price=D(1000),
+                tax_code_id=exempt.id,
+            ),
+        ),
+    )
+    drainer.drain_company(
+        db, signed_in.company_id, client=sandbox_client, max_rows_per_device=50
+    )
+    db.commit()
+
+    block = client.get(f"/api/v1/fiscal/documents/{document.id}/receipt").json()
+
+    classes = {line["tax_class"]: line for line in block["classes"]}
+    assert set(classes) == {"A", "B"}, (
+        "A was sold under and B is programmed above zero; C and D are zero rates nothing used"
+    )
+    assert classes["A"]["used"] is True
+    assert D(str(classes["A"]["taxable"])) == D("1000.00")
+    assert classes["B"]["used"] is False, "programmed, and nothing was sold under it"
+    assert D(str(classes["B"]["rate"])) == D("18.00")
+    assert D(str(classes["B"]["taxable"])) == D("0.00")
+    assert D(str(classes["B"]["tax"])) == D("0.00")
+
+
 def test_a_second_print_is_a_copy_and_tells_rra_nothing(
     client: TestClient, db: Session, signed_in: FiscalPosting
 ) -> None:
@@ -509,3 +555,63 @@ def test_a_company_that_does_not_fiscalize_has_no_receipt_and_no_refusal(
 
     assert response.status_code == 200, response.text
     assert response.json() is None
+
+
+# --- The two listings step 3 shipped and nobody had opened ------------------------------------
+#
+# Both are in step 5's brief, and neither had a test that asked it for data. That is the exact
+# shape of step 4's finding — the rule-14 register proves a caller, never an answer — so they
+# are closed here rather than carried.
+
+
+def test_the_purchase_feed_listing_answers_with_what_rra_is_holding(
+    client: TestClient, db: Session, signed_in: FiscalPosting, sandbox_client: httpx.Client
+) -> None:
+    feed_service.fetch(
+        db, signed_in.company_id, signed_in.device, actor=signed_in.owner, client=sandbox_client
+    )
+    db.commit()
+
+    response = client.get("/api/v1/fiscal/purchase-feed")
+
+    assert response.status_code == 200, response.text
+    rows = response.json()
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["spplr_tin"] == "100000003"
+    assert row["spplr_invc_no"] == 77
+    assert D(str(row["total_taxable_amount"])) == D("11800.000000")
+    assert D(str(row["total_tax_amount"])) == D("1800.000000")
+    assert row["decision"] == "pending"
+    assert row["ap_document_id"] is None
+
+    decided = client.get("/api/v1/fiscal/purchase-feed", params={"decision": "accepted"})
+    assert decided.status_code == 200, decided.text
+    assert decided.json() == [], "nobody has decided yet, and the filter says so"
+
+
+def test_the_import_register_listing_answers_with_the_declaration(
+    client: TestClient, db: Session, signed_in: FiscalPosting, sandbox_client: httpx.Client
+) -> None:
+    import_service.fetch(
+        db, signed_in.company_id, signed_in.device, actor=signed_in.owner, client=sandbox_client
+    )
+    db.commit()
+
+    response = client.get("/api/v1/fiscal/import-declarations")
+
+    assert response.status_code == 200, response.text
+    rows = response.json()
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["dcl_no"] == "IM 2026 000123"
+    assert row["task_cd"] == "2231990000"
+    assert row["status"] == "pending"
+    assert row["item_id"] is None, "nothing has been matched to a Vinea item yet"
+
+    assert (
+        client.get(
+            "/api/v1/fiscal/import-declarations", params={"status": "approved"}
+        ).json()
+        == []
+    )

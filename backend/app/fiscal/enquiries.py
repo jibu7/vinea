@@ -190,6 +190,10 @@ def queue_summary(
         if oldest is not None and oldest.tzinfo is None:
             oldest = oldest.replace(tzinfo=UTC)
         head = outbox_service.head_row(db, company_id, device.id)
+        # Derived from the `oldest` already in hand rather than through
+        # `outbox.is_offline`, which would run the same aggregate a second time per device.
+        # The threshold stays the outbox module's, so the two cannot drift.
+        offline = oldest is not None and moment - oldest >= outbox_service.OFFLINE_AFTER
         views.append(
             QueueDeviceView(
                 device_id=device.id,
@@ -203,7 +207,7 @@ def queue_summary(
                 mrc_no=device.mrc_no,
                 last_success_at=device.last_success_at,
                 last_error=device.last_error,
-                offline=outbox_service.is_offline(db, company_id, device.id, now=moment),
+                offline=offline,
                 oldest_queued_at=oldest,
                 oldest_queued_age_seconds=(
                     None if oldest is None else int((moment - oldest).total_seconds())
@@ -653,23 +657,24 @@ def item_registrations(
         )
 
     rows = list(db.execute(query.order_by(Item.code).limit(limit)))
+    # The rows themselves rather than an aggregate, because the error wanted is the **latest**
+    # one and `max()` over text is alphabetical: it would have shown whichever refusal happened
+    # to sort last. Pending item registrations are a handful of rows even on a busy tenant.
     pending: dict[int, int] = {}
     errors: dict[int, str | None] = {}
-    for item_id, rows_count, last_error in db.execute(
-        select(
-            FiscalOutboxRow.source_doc_id,
-            func.count(FiscalOutboxRow.id),
-            func.max(FiscalOutboxRow.last_error),
-        )
+    for row in db.scalars(
+        select(FiscalOutboxRow)
         .where(
             FiscalOutboxRow.company_id == company_id,
             FiscalOutboxRow.kind == FiscalOutboxKind.ITEM,
             FiscalOutboxRow.status.in_(tuple(outbox_service.NON_TERMINAL)),
         )
-        .group_by(FiscalOutboxRow.source_doc_id)
+        .order_by(FiscalOutboxRow.sequence_no)
     ):
-        pending[item_id] = rows_count
-        errors[item_id] = last_error
+        if row.source_doc_id is None:
+            continue
+        pending[row.source_doc_id] = pending.get(row.source_doc_id, 0) + 1
+        errors[row.source_doc_id] = row.last_error
 
     return [
         ItemRegistrationView(

@@ -1009,6 +1009,10 @@ def test_the_acceptance_tape(  # noqa: PLR0915
     _expect("9", "cash", D("19172.00"), D(figures["by_payment_method"]["cash"]))
     _expect("9", "copies count", 1, figures["copies_count"])
     _expect("9", "copies gross", D("50400.00"), D(figures["copies_gross"]))
+    # §19.1 prints the day's discounts. One line in the day carried one: row 2's 10 % off
+    # three bottles, `splyAmt 7 080 − taxblAmt 6 372`. Everything else was undiscounted, so
+    # the day's figure is that line's and nothing else.
+    _expect("9", "discounts", D("708.00"), D(figures["discounts"]))
     # 10 + 1 + 5 + 2 (INV-1) + 3 (INV-2) + 20 (INV-3) + 1 (INV-4) + 1 (INV-5) = 43 sold,
     # against 2 returned on CRN-1.
     _expect("9", "items sold", D("43.00"), D(figures["items_ns"]))
@@ -1077,6 +1081,20 @@ def test_the_acceptance_tape(  # noqa: PLR0915
     _expect("11", "2250 settlement", D(-7_956), _balance(db, tape, "2250"))
     _expect("11", "high water", last_entry_id, filed.high_water_entry_id)
     as_filed = dict(filed.figures)
+
+    # **Beyond the brief's row, and free here**: a filed range may not be filed over again.
+    # `test_a_range_may_not_overlap_a_filed_return` pins the one-day boundary; this asserts it
+    # on the state the tape has already built, so the refusal is proved against a return with
+    # real figures behind it rather than against an empty month.
+    with pytest.raises(LedgerStateError) as overlapping:
+        vat_service.file_return(
+            db,
+            company_id,
+            period_from=date(YEAR, 3, 15),
+            period_to=date(YEAR, 4, 15),
+            actor=owner,
+        )
+    _expect("11", "an overlapping range", "vat_period_filed", overlapping.value.code)
     _after_every_row(db, tape, "11")
 
     # --- Row 12: a backdated correction into the filed month --------------------------------
@@ -1297,7 +1315,7 @@ def test_the_acceptance_tape(  # noqa: PLR0915
     # --- Row 18: negative stock cannot be allowed while a device is live --------------------
     # CIS §7.30: no receipt for goods the stock does not hold, and `block` is what makes that
     # true. The refusal belongs on the screen that moves the setting, not only on activation.
-    with pytest.raises(Exception) as refused_policy:  # noqa: B017 - the code is the assertion
+    with pytest.raises(device_service.FiscalSetupError) as refused_policy:
         inventory_masters.update_inventory_defaults(
             db,
             company_id,
