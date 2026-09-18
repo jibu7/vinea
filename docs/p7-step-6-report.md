@@ -75,8 +75,15 @@ account, and each offers exactly one side:
 
 `_postable_account` now takes the permitted classes and refuses the rest with
 `invalid_gl_setting_account_class`, alongside the control-account refusal it always had. The
-e2e pins it as a **typeahead assertion** the way P6 step 6 pinned its three: typing `1200` into
-the AR revaluation picker and `1110` into the VAT settlement picker leaves **zero** options.
+e2e pins it as a **typeahead assertion** the way P6 step 6 pinned its three, and asserts *both*
+halves of each: `1200 · Accounts Receivable` is absent from the AR revaluation picker and
+`1290 · AR Revaluation` is present; `1110 · Cash on Hand` is absent from the VAT settlement
+picker and `2250 · VAT Payable (RRA)` is present. The first half alone would be satisfied by an
+empty picker, which is the P5 step 6 defect rather than the rule working.
+
+The first cut asserted "type `1200`, expect zero options" and was wrong: cmdk scores
+*subsequences*, so `1200` still matches `1290 · AR Revaluation` and the count was never zero.
+Asserting on the option is the claim that was actually worth making.
 
 ## Guards added, and each one broken before it was trusted
 
@@ -85,6 +92,21 @@ the AR revaluation picker and `1110` into the VAT settlement picker leaves **zer
 | a settings account of the wrong class is refused | `api/v1/gl.py::_postable_account` | `if False and classes is not None …` | `test_p7_settings_round_trip_and_refuse_the_wrong_class` — `assert 200 == 409` |
 | a device status spelled as a literal in a fiscal screen | `lib/api-enums.test.ts`, new `SCOPED_FIELDS` | `status === "active"` in `ebm-devices/page.tsx` | `ebm-devices/page.tsx spells a wire value by hand` |
 | the five GAP lines are deleted by real call sites | `test_api_has_a_caller.py` | `api.post("/fiscal/nope", …)` in `useSuspendFiscalDevice` | `POST /api/v1/fiscal/devices/{device_id}/suspend` back in the missing list |
+| a picker renders what it holds, not its placeholder | `Combobox` `fallbackLabel`, asserted in `p7-maintenance.spec.ts` | removing `fallbackLabel={fiscalOrigin}` | `Expected substring: "RW" / Received string: "Defaults to Rwanda"` |
+
+**The fourth was not planned — it was found by looking at a screenshot**, which is what rule 13
+is for. `Country of origin`, `Packaging unit` and the RRA quantity unit are all synced *from the
+device*, and the sandbox publishes no nation table (§4.4, class `05`); the picker therefore had
+no option carrying `RW` and fell back to its placeholder — rendering "Defaults to Rwanda" over
+an item whose origin was set to `RW`. A screen rendering perfectly and saying something untrue
+is the P4 defect class exactly. `Combobox` gained `fallbackLabel`: when `value` is set and no
+option carries it, the trigger shows the bare code. Worse than the code and its name, far
+better than a lie.
+
+Worth naming as an open question for the phase rather than a step-6 fix: **the sandbox's code
+tables carry classes 04, 10 and 17 and not 05.** That is step 1's sandbox and it is not wrong —
+those are the classes the tape needs — but a real RRA sync will carry more, and the screen has
+to be honest either way. It now is.
 
 The enum guard is **scoped** rather than global, and that is the interesting choice. `status` is
 a field name eight enums in this product use, and one of `FiscalDeviceStatus`'s three values is
@@ -180,7 +202,90 @@ Dates go through `lib/format.ts`: the device's last-success timestamp renders wi
 
 ## Checks
 
-<!-- FILLED AT COMMIT -->
+Run in the backend container and against the `docker compose` e2e stack, on committed heads.
+**Not a gate step**, so this is the changed specs plus the guard tests; CI is the record for the
+branch.
+
+```
+backend, at 4c7f805 (the tree the full suite ran against — every later commit is frontend only)
+  uv run ruff check .                  →  All checks passed!
+  uv run pytest -q -n 4                →  1365 passed, 7 warnings in 1088.27s (0:18:08)
+  uv run alembic check                 →  No new upgrade operations detected
+                                          (step 6 adds no migration)
+
+backend, at b5fe3bb (the branch head)
+  uv run ruff check .                  →  All checks passed!
+  uv run pytest -q -n 4 \
+    tests/test_api_has_a_caller.py \
+    tests/test_api_enums_export.py \
+    tests/kernel/test_gl_api.py \
+    tests/inventory/test_masters_api.py →  87 passed in 49.06s
+
+frontend, at b5fe3bb
+  npx tsc --noEmit                     →  clean
+  npx vitest run                       →  16 files, 377 passed
+  npm run lint                         →  no errors (three pre-existing exhaustive-deps warnings)
+  npm run build                        →  Compiled successfully; /maintenance/ebm-devices 9.04 kB
+
+e2e, at b5fe3bb, on a reset database with ebm-sandbox in the stack
+  npx playwright test e2e/p7-maintenance.spec.ts
+                                       →  7 passed (27.1s)
+  npx playwright test e2e/accessibility-maintenance.spec.ts -g "ebm-devices"
+                                       →  1 passed — no serious/critical axe violations,
+                                          light and dark
+```
+
+**+4 backend tests**, named rather than counted from a baseline:
+`test_p7_settings_round_trip_and_refuse_the_wrong_class`,
+`test_tax_code_carries_its_ebm_class`, `test_a_unit_carries_the_authoritys_quantity_code` and
+`test_an_item_carries_the_four_fields_the_authority_registers_it_by`. `main` was not re-run for
+a both-sides figure: this is not a gate step, and a figure taken from a run nobody would use is
+worse than none.
+
+**The fixture is verifiably restored.** After the e2e run, read straight out of the database:
+
+```
+is_fiscalized(company 1): False
+devices:                  [(1, 'suspended')]
+VAT-OUT-18 class:         [('B',)]
+```
+
+```
+git diff --stat main..HEAD
+ backend/app/api/v1/gl.py                           |  68 ++-
+ backend/app/api/v1/inventory.py                    |  28 ++
+ backend/app/inventory/masters.py                   |  36 ++
+ backend/app/kernel/masters.py                      |  18 +
+ backend/app/schemas/gl.py                          |  37 +-
+ backend/app/schemas/inventory.py                   |  31 ++
+ backend/tests/inventory/test_masters_api.py        | 103 +++++
+ backend/tests/kernel/test_gl_api.py                | 123 ++++++
+ backend/tests/test_api_has_a_caller.py             |  38 +-
+ docs/Vinea_ERP_Master_Plan_v5.md                   |  35 +-
+ docs/p7-step-6-report.md                           | 196 +++++++++
+ docs/screenshots/p7-step-6/*.png                   | 14 files, binary
+ docs/screenshots/p7-step-6/README.md               |  63 +
+ frontend/e2e/p7-maintenance.spec.ts                | 465 +++++++++++++++++++++
+ frontend/scripts/capture-p7-maintenance.ts         | 308 ++++++++++++++
+ frontend/src/app/(shell)/maintenance/defaults/page.tsx        | 240 +++++----
+ frontend/src/app/(shell)/maintenance/ebm-devices/page.tsx     | 447 +++++++++++++++
+ frontend/src/app/(shell)/maintenance/inventory-items/page.tsx | 181 ++++++-
+ frontend/src/app/(shell)/maintenance/taxes/page.tsx           |  35 +
+ frontend/src/app/(shell)/maintenance/uom-categories/page.tsx  |  47 +
+ frontend/src/design/components/appendix-c-order.test.tsx      |  17 +
+ frontend/src/design/components/combobox.tsx        |  26 +-
+ frontend/src/design/nav-tree.ts                    |  12 +
+ frontend/src/features/fiscal/hooks.ts              | 162 +++++++
+ frontend/src/features/fiscal/types.ts              | 147 +++++++
+ frontend/src/features/gl/hooks.ts                  |   7 +-
+ frontend/src/features/gl/types.ts                  |  35 ++
+ frontend/src/features/inventory/types.ts           |  32 +-
+ frontend/src/features/subledger/i18n-coverage.test.ts         |  10 +
+ frontend/src/features/subledger/partners-screen.tsx           |  70 ++
+ frontend/src/i18n/messages/en.json                 | 124 +++++-
+ frontend/src/lib/api-enums.test.ts                 |  67 ++-
+ 45 files changed, 3090 insertions(+), 118 deletions(-)
+```
 
 ## Not in this step
 
