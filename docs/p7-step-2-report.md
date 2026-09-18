@@ -258,12 +258,36 @@ round the same underlying figures, so their errors are correlated rather than in
 bounds are asserted: the structural one always, and the measured one at the deep profile, with
 the instruction to read the offending document before loosening the number.
 
-**So the answer for Kigali, and the number step 4's reconciliation carries:** the foot of the
-receipt is never more than one minor unit of the document's own currency from the foot of the
-invoice — under a franc on an RWF sale, under a cent on a foreign one — and per line the wire
-is never a whole unit from the ledger either. Step 4's VAT return ties to the VAT accounts by
-construction (it is a query over `journal_lines`); where it is reconciled against the sum of
-receipts, **this is the size of the difference it must show rather than assert away**.
+> **Superseded — both bounds above were false, and a later nightly said so.** A deep pass on
+> `main` produced a three-line RWF invoice 1.40 francs out at the foot and failed the measured
+> assertion; `12.5%` off `3 x 1 798` reproduces it exactly, as line residues of `-0.70`, `-0.50`
+> and `-0.20` that add because nothing makes them cancel. The correlation this section argued
+> for is not there. The *structural* bound was wrong too, for a separate reason it had not
+> occurred to anybody to look for: a **discounted** line rounds twice, not once — the ledger
+> rounds the discounted net, then rounds the tax taken on that already-rounded net — so one
+> line alone can reach `u(2 + r)/2`, which at the standard rate on a zero-decimal base is
+> **1.09 francs**. `5 x 6 661` at 10% off is exactly that, so a one-line invoice could breach a
+> bound written as "one unit per line" with nothing wrong. The per-line figure quoted above
+> holds only for the **undiscounted** lines the awkward-price property drives, where
+> `qty x price` is an integer and the net rounds exactly.
+>
+> Both are now derived rather than measured: `_line_allowance` in
+> `tests/fiscal/test_property_fiscal.py` states what each line's roundings are worth, a
+> document is held to the sum over its own lines, and the ratio of the two is printed on every
+> green run so a residue that starts growing is visible before it crosses. The 1.09 ceiling is
+> reached exactly under construction, so it is tight rather than generous.
+> `test_a_discounted_line_rounds_twice_and_stays_inside_the_derived_bound` is the property that
+> drives the case: the machine could always draw it, but only one line in 1 196 landed past a
+> franc until the precondition was constructed — an odd quantity against a price ending in five
+> puts the first rounding at its worst on every draw, and then about a tenth of them go past.
+
+**So the answer for Kigali, and the number step 4's reconciliation carries** (as corrected
+above): the foot of the receipt is within the sum of its lines' rounding allowances of the foot
+of the invoice — up to `u(2 + r)/2` per line, so about 1.09 francs for a discounted
+standard-rated line on an RWF sale and under a franc for an undiscounted one. Step 4's VAT
+return ties to the VAT accounts by construction (it is a query over `journal_lines`); where it
+is reconciled against the sum of receipts, **this is the size of the difference it must show
+rather than assert away**.
 
 The census carries floors throughout — payloads, census lines per base, *taxed* census lines
 per base, awkward lines, documents per base and per FX, and multi-line documents — so a
@@ -346,9 +370,13 @@ device would be told it has no device on a document about to post to that very b
 
 1. **Does RRA tolerate the residue?** On a zero-decimal base the wire's `taxblAmt` is derived
    from a two-decimal `prc`, and the ledger rounded the same line to the franc. The census
-   above is how far apart they get: never a whole franc on a line, over 1 054 lines built to
-   make it as large as it can be — and, at the foot of the document, never more than one minor
-   unit of its own currency over 511 documents.
+   above is how far apart they get: never a whole franc on an **undiscounted** line, over 1 054
+   lines built to make it as large as it can be — and up to **1.09 francs** on a discounted
+   one, which rounds twice rather than once, with a document bounded by the sum over its lines
+   (a three-line invoice measured 1.40 francs at the foot). The two sentences this question
+   originally carried — a franc per line, one minor unit per document — were both too tight;
+   see the superseded block above for the derivation and the properties that hold the build to
+   it.
 2. **Is a refund sent with positive amounts under `rcptTyCd R`, or negative ones?** Built
    positive, following Sage 200 Evolution, with the minus signs belonging to the printed
    receipt (CIS §14). `_assert_no_negative_amount` walks the whole payload recursively and

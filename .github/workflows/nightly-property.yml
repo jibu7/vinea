@@ -36,6 +36,13 @@ jobs:
       # `-m slow` is the property suite. `--hypothesis-show-statistics` puts the example
       # count and the shrink in the log, so a run that silently degraded to the fast profile
       # is visible rather than passing quietly.
+      #
+      # `-p no:randomly` is **defensive and currently a no-op**: `pytest-randomly` is not a
+      # dependency of this project, and pytest accepts `-p no:<name>` for a plugin it cannot
+      # find. It stays so that adding the plugin cannot silently start shuffling this run. What
+      # actually varies the census between two nightlies is Hypothesis drawing a fresh seed,
+      # which no flag here changes — so a census margin that only holds on some runs is a
+      # generator to fix, not an ordering to pin.
       # `-s` so the census `print`s reach the log: pytest captures stdout by default, and the
       # counters are printed from a module-scoped fixture at teardown, which capture swallows
       # on a passing run — the run where they are most worth having.
