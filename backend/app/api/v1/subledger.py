@@ -241,7 +241,9 @@ def get_partner_history(
             AuditLog.entity == "partners",
             AuditLog.entity_id == str(partner.id),
         )
-        .order_by(AuditLog.at.desc())
+        # `at` is the transaction clock, so two rows written by one request tie on it;
+        # the id breaks the tie in write order.
+        .order_by(AuditLog.at.desc(), AuditLog.id.desc())
     ).all()
     return [PartnerAuditRead.model_validate(row) for row in rows]
 
