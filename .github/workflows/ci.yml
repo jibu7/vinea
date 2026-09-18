@@ -87,7 +87,10 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: frontend/package-lock.json
-      - run: npm install --no-audit --no-fund
+      # `ci`, not `install`: the checks have to run against the tree the lockfile pins, or
+      # "green on this branch" means green on a tree nobody committed. See the note in the
+      # e2e job for the version of this that bites hardest.
+      - run: npm ci --no-audit --no-fund
       - run: npm run lint
       - run: npm run typecheck
       - run: npm run test
@@ -166,7 +169,15 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: frontend/package-lock.json
-      - run: npm install --no-audit --no-fund
+      # `ci`, not `install`, and this is the job where it matters most. Two dependency trees
+      # meet here: the one baked into the frontend image by `docker compose build` and this
+      # one, which is where Playwright itself comes from. The browser download below is cached
+      # under `hashFiles('frontend/package-lock.json')` — so the cache key says "the
+      # `@playwright/test` the lockfile pins" while an `npm install` was free to resolve a
+      # different one, and a browser build restored for a version that is not the installed
+      # one fails as a test failure, not as an install failure. Installing the lockfile
+      # exactly is what makes the key true.
+      - run: npm ci --no-audit --no-fund
 
       # The e2e fixture credential. Generated per run rather than written down anywhere: the
       # seed hashes it and the suite signs in with it, and neither has a literal to fall back

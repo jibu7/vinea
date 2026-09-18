@@ -17,4 +17,6 @@ jobs:
       - run: cd backend && uv sync
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
-      - run: cd frontend && npm install --no-audit --no-fund
+      # `ci`, not `install`, for the same reason CI uses it: an agent's environment should
+      # start from the tree the lockfile pins, not from whatever resolves on the day.
+      - run: cd frontend && npm ci --no-audit --no-fund
