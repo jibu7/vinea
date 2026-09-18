@@ -28,7 +28,7 @@ from app.models.audit import AuditLog
 from app.models.currency import Currency, ExchangeRate
 from app.models.fiscal import AccountingPeriod, FiscalYear, PeriodStatus
 from app.models.fiscalization import FxRevaluation, FxRevaluationRole
-from app.models.gl import GLSettings
+from app.models.gl import AccountClass, GLSettings
 from app.models.inventory import INVENTORY_MODULE, InventoryDocument
 from app.models.journal import JournalEntry
 from app.models.order_entry import LandedCostDocument
@@ -385,24 +385,67 @@ def update_settings(
     db: Session = Depends(get_db),
 ) -> GLSettingsRead:
     settings: GLSettings = posting.gl_settings_for(db, auth.company_id)
-    if payload.retained_earnings_account_id is not None:
-        settings.retained_earnings_account_id = _postable_account(
-            db, auth.company_id, payload.retained_earnings_account_id, "retained earnings"
-        )
-    if payload.rounding_difference_account_id is not None:
-        settings.rounding_difference_account_id = _postable_account(
-            db, auth.company_id, payload.rounding_difference_account_id, "rounding difference"
+    for field, label, classes in _SETTING_ACCOUNT_RULES:
+        value = getattr(payload, field)
+        if value is None:
+            continue
+        setattr(settings, field, _postable_account(db, auth.company_id, value, label, classes))
+    if payload.clear_fiscal_default_purchase_class_code:
+        settings.fiscal_default_purchase_class_code = None
+    elif payload.fiscal_default_purchase_class_code is not None:
+        settings.fiscal_default_purchase_class_code = (
+            payload.fiscal_default_purchase_class_code.strip() or None
         )
     db.commit()
     return GLSettingsRead.model_validate(settings)
 
 
-def _postable_account(db: Session, company_id: int, account_id: int, label: str) -> int:
+#: (field, the label a refusal names it by, the account classes it may hold).
+#:
+#: The class restriction is P7's, and it is the same rule the pickers on the Defaults screen
+#: filter by — a settings key that could hold any postable account is a key an operator can
+#: point at the wrong side of the balance sheet, and neither the VAT filing nor the
+#: revaluation would notice until it had posted. The revaluation contras are deliberately
+#: split: `1290` carries what the AR control account may not (decision 13), so it is an
+#: **asset**, and `2190` is its liability twin. None of them may be a control account, which
+#: `_postable_account` has always refused.
+_SETTING_ACCOUNT_RULES: tuple[tuple[str, str, tuple[AccountClass, ...] | None], ...] = (
+    ("retained_earnings_account_id", "retained earnings", None),
+    ("rounding_difference_account_id", "rounding difference", None),
+    ("vat_settlement_account_id", "VAT settlement", (AccountClass.LIABILITY,)),
+    ("ar_revaluation_account_id", "AR revaluation", (AccountClass.ASSET,)),
+    ("ap_revaluation_account_id", "AP revaluation", (AccountClass.LIABILITY,)),
+    (
+        "unrealized_fx_gain_account_id",
+        "unrealized FX gain",
+        (AccountClass.INCOME, AccountClass.EXPENSE),
+    ),
+    (
+        "unrealized_fx_loss_account_id",
+        "unrealized FX loss",
+        (AccountClass.INCOME, AccountClass.EXPENSE),
+    ),
+)
+
+
+def _postable_account(
+    db: Session,
+    company_id: int,
+    account_id: int,
+    label: str,
+    classes: tuple[AccountClass, ...] | None = None,
+) -> int:
     account = accounts_service.get_account(db, company_id, account_id)
     if not account.is_postable or account.is_control or not account.is_active:
         raise LedgerStateError(
             f"The {label} account must be active, postable and not a control account",
             code="invalid_gl_setting_account",
+        )
+    if classes is not None and account.class_ not in classes:
+        wanted = " or ".join(str(item) for item in classes)
+        raise LedgerStateError(
+            f"The {label} account must be {wanted}; {account.code} is {account.class_}",
+            code="invalid_gl_setting_account_class",
         )
     return account.id
 
@@ -523,6 +566,7 @@ def create_tax_code(
         gl_account_id=payload.gl_account_id,
         valid_from=payload.valid_from,
         valid_to=payload.valid_to,
+        fiscal_tax_type=payload.fiscal_tax_type,
         actor=auth.user,
         request=request,
     )
@@ -544,6 +588,11 @@ def update_tax_code(
         gl_acc = None
     elif payload.gl_account_id is not None:
         gl_acc = payload.gl_account_id
+    tax_type: object = ...
+    if payload.clear_fiscal_tax_type:
+        tax_type = None
+    elif payload.fiscal_tax_type is not None:
+        tax_type = payload.fiscal_tax_type
     masters.update_tax_code(
         db,
         tax_code,
@@ -551,6 +600,7 @@ def update_tax_code(
         rate_pct=payload.rate_pct,
         gl_account_id=gl_acc,
         valid_to=payload.valid_to if payload.valid_to is not None else ...,
+        fiscal_tax_type=tax_type,
         is_active=payload.is_active,
         actor=auth.user,
         request=request,

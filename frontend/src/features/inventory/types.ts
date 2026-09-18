@@ -10,9 +10,9 @@
 // Re-exported from the generated module rather than re-declared: a second hand-written copy
 // of a wire union is the same class of defect as a hand-written literal. Imported as well as
 // re-exported, because the interfaces below use them.
-import type { ItemType, NegativeStockPolicy } from "@/lib/api-enums";
+import type { FiscalItemTypeCode, ItemType, NegativeStockPolicy } from "@/lib/api-enums";
 
-export type { ItemType, NegativeStockPolicy };
+export type { FiscalItemTypeCode, ItemType, NegativeStockPolicy };
 
 export interface Page<T> {
   items: T[];
@@ -31,6 +31,10 @@ export interface Uom {
   decimal_places: number;
   is_base: boolean;
   is_active: boolean;
+  /** The authority's own quantity-unit code (RRA §4.6), from the synced code table. Vinea's
+   * `code` is the company's; this is the one RRA reads, and a fiscalized line whose unit has
+   * none is refused with `fiscal_uom_unmapped` rather than guessed at. */
+  fiscal_quantity_unit: string | null;
 }
 
 export interface UomCategory {
@@ -64,6 +68,7 @@ export interface UomCreatePayload {
   name: string;
   factor_to_base: string;
   decimal_places?: number;
+  fiscal_quantity_unit?: string | null;
 }
 
 export interface UomUpdatePayload {
@@ -71,6 +76,8 @@ export interface UomUpdatePayload {
   factor_to_base?: string;
   decimal_places?: number;
   is_active?: boolean;
+  fiscal_quantity_unit?: string | null;
+  clear_fiscal_quantity_unit?: boolean;
 }
 
 // --- Items ------------------------------------------------------------------------------
@@ -97,6 +104,15 @@ export interface Item {
    * that has none (`weight_missing`, P6 decision 9). */
   weight_per_base_unit: string | null;
   is_active: boolean;
+  // --- P7 fiscalization (decision 8) -----------------------------------------------------
+  /** The authority's classification. No default and no guess: a fiscalized sale of an item
+   * without one is refused with `fiscal_class_missing`. */
+  fiscal_class_code: string | null;
+  /** ISO-3166 alpha-2; registration defaults it to `RW` when unset. */
+  fiscal_origin_country: string | null;
+  fiscal_package_unit: string | null;
+  /** Overrides what the item type would register as. */
+  fiscal_item_type: FiscalItemTypeCode | null;
 }
 
 export interface ItemCreatePayload {
@@ -115,6 +131,10 @@ export interface ItemCreatePayload {
   selling_price?: string;
   price_includes_tax?: boolean;
   weight_per_base_unit?: string | null;
+  fiscal_class_code?: string | null;
+  fiscal_origin_country?: string | null;
+  fiscal_package_unit?: string | null;
+  fiscal_item_type?: FiscalItemTypeCode | null;
 }
 
 /**
@@ -146,6 +166,14 @@ export interface ItemUpdatePayload {
   selling_price?: string;
   price_includes_tax?: boolean;
   is_active?: boolean;
+  fiscal_class_code?: string | null;
+  clear_fiscal_class_code?: boolean;
+  fiscal_origin_country?: string | null;
+  clear_fiscal_origin_country?: boolean;
+  fiscal_package_unit?: string | null;
+  clear_fiscal_package_unit?: boolean;
+  fiscal_item_type?: FiscalItemTypeCode | null;
+  clear_fiscal_item_type?: boolean;
 }
 
 export interface ItemAuditRecord {

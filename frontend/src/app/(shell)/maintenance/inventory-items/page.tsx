@@ -16,6 +16,8 @@ import { TBody, TD, TH, THead, TR, Table } from "@/design/components/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/design/components/tabs";
 import { useToast } from "@/design/components/toast";
 import { isApiError, useHasPermission } from "@/features/auth/hooks";
+import { useFiscalCodes, useFiscalItemClasses, useItemRegistrations } from "@/features/fiscal/hooks";
+import { CODE_CLASS } from "@/features/fiscal/types";
 import { useAccounts, useCurrencies, useTaxCodes } from "@/features/gl/hooks";
 import {
   useCreateBarcode,
@@ -28,8 +30,9 @@ import {
   useUpdateBarcode,
   useUpdateItem,
 } from "@/features/inventory/hooks";
+import type { ItemRegistration } from "@/features/fiscal/types";
 import type { Barcode, Item, UomCategoryWithUnits } from "@/features/inventory/types";
-import { ControlType, ItemType } from "@/lib/api-enums";
+import { ControlType, FiscalItemTypeCode, ItemType } from "@/lib/api-enums";
 import {
   dotted,
   formatMoney,
@@ -119,6 +122,28 @@ export default function InventoryItemsPage() {
   const [weightPerBaseUnit, setWeightPerBaseUnit] = useState("");
   const [salesTaxCodeId, setSalesTaxCodeId] = useState("");
   const [purchaseTaxCodeId, setPurchaseTaxCodeId] = useState("");
+  // --- P7: what the authority is told this item is (decision 8) ---------------------------
+  const [fiscalClassCode, setFiscalClassCode] = useState("");
+  const [fiscalOrigin, setFiscalOrigin] = useState("");
+  const [fiscalPackageUnit, setFiscalPackageUnit] = useState("");
+  const [fiscalItemType, setFiscalItemType] = useState("");
+  /** Drives the **server's** search over the classification, which is tens of thousands of
+   * rows. Seeded from the item's own class when the dialog opens for edit, so the row it
+   * already holds is in the first result set and the picker reads as filled rather than
+   * empty. */
+  const [classSearch, setClassSearch] = useState("");
+
+  const itemClasses = useFiscalItemClasses(classSearch);
+  const nations = useFiscalCodes(CODE_CLASS.NATION);
+  const packagingUnits = useFiscalCodes(CODE_CLASS.PACKAGING_UNIT);
+  /** Registration is read, never written here: an item is registered with the authority by
+   * the posting that first uses it, in that posting's own transaction. What this screen shows
+   * is whether that has happened and under which `item_cd`. */
+  const registrations = useItemRegistrations();
+  const registrationByItem = useMemo(
+    () => new Map((registrations.data ?? []).map((row) => [row.item_id, row])),
+    [registrations.data],
+  );
 
   const usableAccounts = useMemo(
     () => (accounts.data ?? []).filter((a) => a.is_postable && a.is_active),
@@ -168,6 +193,11 @@ export default function InventoryItemsPage() {
     setWeightPerBaseUnit("");
     setSalesTaxCodeId("");
     setPurchaseTaxCodeId("");
+    setFiscalClassCode("");
+    setFiscalOrigin("");
+    setFiscalPackageUnit("");
+    setFiscalItemType("");
+    setClassSearch("");
     setOpen(true);
   }
 
@@ -194,6 +224,11 @@ export default function InventoryItemsPage() {
     setPurchaseTaxCodeId(
       item.default_purchase_tax_code_id ? String(item.default_purchase_tax_code_id) : "",
     );
+    setFiscalClassCode(item.fiscal_class_code ?? "");
+    setFiscalOrigin(item.fiscal_origin_country ?? "");
+    setFiscalPackageUnit(item.fiscal_package_unit ?? "");
+    setFiscalItemType(item.fiscal_item_type ?? "");
+    setClassSearch(item.fiscal_class_code ?? "");
     setOpen(true);
   }
 
@@ -231,6 +266,18 @@ export default function InventoryItemsPage() {
             ...(purchaseTaxCodeId
               ? { default_purchase_tax_code_id: Number(purchaseTaxCodeId) }
               : { clear_purchase_tax_code: true }),
+            ...(fiscalClassCode
+              ? { fiscal_class_code: fiscalClassCode }
+              : { clear_fiscal_class_code: true }),
+            ...(fiscalOrigin
+              ? { fiscal_origin_country: fiscalOrigin }
+              : { clear_fiscal_origin_country: true }),
+            ...(fiscalPackageUnit
+              ? { fiscal_package_unit: fiscalPackageUnit }
+              : { clear_fiscal_package_unit: true }),
+            ...(fiscalItemType
+              ? { fiscal_item_type: fiscalItemType as FiscalItemTypeCode }
+              : { clear_fiscal_item_type: true }),
           },
         });
         toast.show({ title: t("updated"), tone: "success" });
@@ -251,6 +298,10 @@ export default function InventoryItemsPage() {
           weight_per_base_unit: weightPerBaseUnit || null,
           default_sales_tax_code_id: salesTaxCodeId ? Number(salesTaxCodeId) : null,
           default_purchase_tax_code_id: purchaseTaxCodeId ? Number(purchaseTaxCodeId) : null,
+          fiscal_class_code: fiscalClassCode || null,
+          fiscal_origin_country: fiscalOrigin || null,
+          fiscal_package_unit: fiscalPackageUnit || null,
+          fiscal_item_type: fiscalItemType ? (fiscalItemType as FiscalItemTypeCode) : null,
         });
         toast.show({ title: t("created"), tone: "success" });
         // Straight into the drawer, so the barcodes tab is one click from creating the item
@@ -610,6 +661,86 @@ export default function InventoryItemsPage() {
             </div>
 
             <p className="text-xs text-[var(--vinea-ink-subtle)]">{t("accountsNote")}</p>
+
+            {/* --- Fiscal (P7 decision 8) -----------------------------------------------
+                Four fields and one read-only pair. The four are what RRA is told the item
+                *is*; the pair is what RRA has said back. Registration is not a button here
+                and is not meant to be: an item registers on its first fiscal use, in the
+                posting's own transaction, and re-registers under the same `item_cd` whenever
+                one of the four changes. A Register button would be a second way to do the
+                thing the posting already does, and the two would disagree. */}
+            <div className="border-t border-[var(--vinea-border)] pt-3">
+              <h3 className="pb-2 text-xs font-semibold text-[var(--vinea-ink)]">
+                {t("fiscalSection")}
+              </h3>
+              <div className="space-y-3">
+                <Field label={t("fiscalClassCode")}>
+                  <Combobox
+                    options={[
+                      { value: "", label: tc("emptyValue") },
+                      ...(itemClasses.data ?? []).map((row) => ({
+                        value: row.item_cls_cd,
+                        label: dotted(row.item_cls_cd, row.item_cls_nm),
+                      })),
+                    ]}
+                    value={fiscalClassCode}
+                    onValueChange={setFiscalClassCode}
+                    onSearch={setClassSearch}
+                    fallbackLabel={fiscalClassCode}
+                    placeholder={t("chooseFiscalClass")}
+                  />
+                </Field>
+                <div className="grid grid-cols-2 gap-3">
+                  <Field label={t("fiscalOrigin")}>
+                    <Combobox
+                      options={[
+                        { value: "", label: t("chooseOrigin") },
+                        ...(nations.data ?? []).map((row) => ({
+                          value: row.code,
+                          label: dotted(row.code, row.name),
+                        })),
+                      ]}
+                      value={fiscalOrigin}
+                      onValueChange={setFiscalOrigin}
+                      placeholder={t("chooseOrigin")}
+                    />
+                  </Field>
+                  <Field label={t("fiscalPackageUnit")}>
+                    <Combobox
+                      options={[
+                        { value: "", label: t("choosePackageUnit") },
+                        ...(packagingUnits.data ?? []).map((row) => ({
+                          value: row.code,
+                          label: dotted(row.code, row.name),
+                        })),
+                      ]}
+                      value={fiscalPackageUnit}
+                      onValueChange={setFiscalPackageUnit}
+                      placeholder={t("choosePackageUnit")}
+                    />
+                  </Field>
+                </div>
+                <Field label={t("fiscalItemType")}>
+                  <Combobox
+                    options={[
+                      { value: "", label: t("chooseFiscalItemType") },
+                      ...Object.values(FiscalItemTypeCode).map((value) => ({
+                        value,
+                        label: dotted(value, t(`fiscalItemTypeLabel.${value}`)),
+                      })),
+                    ]}
+                    value={fiscalItemType}
+                    onValueChange={setFiscalItemType}
+                    placeholder={t("chooseFiscalItemType")}
+                  />
+                </Field>
+                {editing ? (
+                  <FiscalRegistration registration={registrationByItem.get(editing.id)} />
+                ) : null}
+                <p className="text-xs text-[var(--vinea-ink-subtle)]">{t("fiscalNote")}</p>
+              </div>
+            </div>
+
             {editing ? (
               <p className="text-xs text-[var(--vinea-ink-subtle)]">{t("lockedNote")}</p>
             ) : null}
@@ -632,6 +763,45 @@ export default function InventoryItemsPage() {
         </DialogContent>
       </Dialog>
     </MaintenancePage>
+  );
+}
+
+/**
+ * What RRA holds about this item — read, never written.
+ *
+ * Three states, and the middle one is why this is a chip rather than a boolean. *Queued* is a
+ * registration sitting in the device's outbox: the item is not registered yet and the sale
+ * that needs it is behind it in the same FIFO queue, so "not registered" would be wrong and
+ * "registered" would be a lie. The last error is shown beside it, because a registration that
+ * keeps failing is the thing standing between this item and a fiscalized sale.
+ */
+function FiscalRegistration({ registration }: { registration?: ItemRegistration }) {
+  const t = useTranslations("inventory.items");
+  const tc = useTranslations("inventory.common");
+  if (!registration) return null;
+  const tone = registration.registered
+    ? "success"
+    : registration.pending_rows > 0
+      ? "info"
+      : "neutral";
+  const label = registration.registered
+    ? t("registered")
+    : registration.pending_rows > 0
+      ? t("registeredPending")
+      : t("notRegistered");
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center gap-2">
+        <span className="text-xs text-[var(--vinea-ink-muted)]">{t("registrationStatus")}</span>
+        <StatusChip tone={tone}>{label}</StatusChip>
+        <span className="font-mono text-xs text-[var(--vinea-ink)]">
+          {registration.item_cd ?? tc("emptyValue")}
+        </span>
+      </div>
+      {registration.last_error ? (
+        <p className="text-[11px] text-[var(--vinea-danger)]">{registration.last_error}</p>
+      ) : null}
+    </div>
   );
 }
 

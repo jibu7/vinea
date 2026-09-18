@@ -19,6 +19,8 @@ export function Combobox({
   onKeyDown,
   onFocus,
   ariaLabel,
+  onSearch,
+  fallbackLabel,
 }: {
   options: SelectOption[];
   value?: string;
@@ -29,11 +31,26 @@ export function Combobox({
   onFocus?: React.FocusEventHandler<HTMLButtonElement>;
   /** Accessible name for contexts with no `Field` wrapper to supply one (e.g. LineGrid cells). */
   ariaLabel?: string;
+  /**
+   * Hand the typed text to the caller and stop filtering locally.
+   *
+   * Every other picker in the product holds its whole list — a chart of accounts, a branch
+   * list, four tax classes — and cmdk filters it in the browser. RRA's item classification is
+   * tens of thousands of rows: loading it all would be a picker nobody could use, so the
+   * search runs on the server and what arrives is already the answer. Filtering that a second
+   * time locally would hide rows the server chose to return.
+   */
+  onSearch?: (value: string) => void;
+  /** What the trigger shows when `value` is set but no option carries it — a server-searched
+   * list that has moved on from the selected row. Without it the control would read as empty
+   * over a field that holds something, which is the defect class rule 13 exists for. */
+  fallbackLabel?: string;
 }) {
   const t = useTranslations("common");
   const [open, setOpen] = useState(false);
   const hint = placeholder ?? t("searchPlaceholder");
   const selected = options.find((o) => o.value === value);
+  const selectedLabel = selected?.label ?? (value ? fallbackLabel : undefined);
   const labelId = useFieldLabelId();
 
   return (
@@ -56,10 +73,10 @@ export function Combobox({
               in a dense grid cell must not wrap into the row above. The full text is the
               button's title, and the popover shows it whole. */}
           <span
-            className={cn("truncate", selected ? "" : "text-[var(--vinea-ink-subtle)]")}
-            title={selected?.label}
+            className={cn("truncate", selectedLabel ? "" : "text-[var(--vinea-ink-subtle)]")}
+            title={selectedLabel}
           >
-            {selected?.label ?? hint}
+            {selectedLabel ?? hint}
           </span>
           <ChevronsUpDown className="size-4 shrink-0 text-[var(--vinea-ink-subtle)]" />
         </button>
@@ -70,10 +87,11 @@ export function Combobox({
           sideOffset={4}
           className="z-50 w-[--radix-popover-trigger-width] overflow-hidden rounded-[var(--radius-control)] border border-[var(--vinea-border)] bg-[var(--vinea-surface-raised)] shadow-[var(--elevation-2)]"
         >
-          <CommandPrimitive>
+          <CommandPrimitive shouldFilter={onSearch === undefined}>
             <CommandPrimitive.Input
               autoFocus
               placeholder={hint}
+              onValueChange={onSearch}
               className="w-full border-b border-[var(--vinea-border)] px-3 py-2 text-sm outline-none"
             />
             <CommandPrimitive.List className="max-h-64 overflow-auto p-1">

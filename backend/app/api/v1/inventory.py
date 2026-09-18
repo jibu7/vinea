@@ -217,6 +217,7 @@ def create_uom(
         name=payload.name,
         factor_to_base=payload.factor_to_base,
         decimal_places=payload.decimal_places,
+        fiscal_quantity_unit=payload.fiscal_quantity_unit,
         actor=auth.user,
         request=request,
     )
@@ -239,6 +240,9 @@ def update_uom(
         name=payload.name,
         factor_to_base=payload.factor_to_base,
         decimal_places=payload.decimal_places,
+        fiscal_quantity_unit=_optional_text(
+            payload.fiscal_quantity_unit, payload.clear_fiscal_quantity_unit
+        ),
         is_active=payload.is_active,
         actor=auth.user,
         request=request,
@@ -358,6 +362,18 @@ def update_item(
         weight_per_base_unit=_optional_decimal(
             payload.weight_per_base_unit, payload.clear_weight_per_base_unit
         ),
+        fiscal_class_code=_optional_text(
+            payload.fiscal_class_code, payload.clear_fiscal_class_code
+        ),
+        fiscal_origin_country=_optional_text(
+            payload.fiscal_origin_country, payload.clear_fiscal_origin_country
+        ),
+        fiscal_package_unit=_optional_text(
+            payload.fiscal_package_unit, payload.clear_fiscal_package_unit
+        ),
+        fiscal_item_type=_optional_text(
+            payload.fiscal_item_type, payload.clear_fiscal_item_type
+        ),
         is_active=payload.is_active,
         actor=auth.user,
         request=request,
@@ -370,6 +386,18 @@ def _optional(value: int | None, clear: bool) -> int | None | object:
     """`...` means "leave alone"; `None` means "clear" — the P4 convention, so a PATCH that
     omits a field never silently blanks it."""
     if clear:
+        return None
+    return ... if value is None else value
+
+
+def _optional_text(value: object | None, clear: bool) -> object:
+    """`_optional` for a code or an enum member; same convention, different type.
+
+    An empty string is treated as absent rather than as a value: a text input that the
+    operator emptied sends `""`, and storing that would leave a unit "mapped" to nothing at
+    all, which reads as mapped everywhere that asks.
+    """
+    if clear or value == "":
         return None
     return ... if value is None else value
 

@@ -105,6 +105,22 @@ import { navIntents, type IntentLabel } from "@/design/nav-tree";
  *
  * Nothing outside the two new blocks moved, and both sit last in their intent, after Inventory.
  *
+ * Amended at P7 step 6 with **"EBM devices"** under Maintenance → Tax, directly after Tax
+ * types. It is an addition to the appendix rather than a tag being cleared: Appendix C's
+ * Maintenance → Tax block carries "Tax types" and nothing else, and the owner's tree has Tax
+ * under Maintenance only. A device is a maintenance object by the same reading that makes a
+ * branch or a warehouse one — registered once, initialized, and then left alone — and P7's
+ * own step list names the screen and its position ("Maintenance → Tax, after Tax types").
+ * Same footing as C.1.5's additions and C.1.8's two blocks: a change to the contract belongs
+ * in the document the contract lives in, which is why the Master Plan carries it too.
+ *
+ * Nothing else in the tree moved. The rest of what P7 step 6 built is **columns and sections
+ * on screens that already exist** — the EBM class on Tax types, the RRA quantity unit on
+ * Units of measure, a Fiscal section on Items, Verify TIN on Customers and Suppliers, and the
+ * tax block on GL Defaults — none of which is a navigable row and none of which belongs here.
+ * Step 7 brings the **Transactions → Tax** block (C.1.10) and the FX revaluation row under
+ * Transactions → GL (C.1.11), and pins both the same way.
+ *
  * Amended before P6 step 1 with **"Documents"** under Transactions → AR and → AP, the other
  * half of that same C.1.7 entry. The appendix already recorded it: "the same hole is open in
  * AR and AP, one phase older and twice over". `POST /{role}/documents/{id}/reverse` and
@@ -119,6 +135,7 @@ const APPENDIX_C: Record<IntentLabel, Array<[string, string, string | null]>> = 
     ["Common", "Company details", null],
     ["Common", "Foreign currency", null],
     ["Tax", "Tax types", null],
+    ["Tax", "EBM devices", null],
     ["General Ledger", "Chart of accounts", null],
     ["General Ledger", "Branches", null],
     ["General Ledger", "Transaction types", null],

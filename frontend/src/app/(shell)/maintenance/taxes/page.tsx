@@ -21,6 +21,7 @@ import {
 } from "@/features/gl/hooks";
 import { byId, toOptions } from "@/features/gl/lookups";
 import type { TaxCode } from "@/features/gl/types";
+import { FiscalTaxType } from "@/lib/api-enums";
 import { dotted, formatDate, toLocalIsoDate } from "@/lib/format";
 import { useApiErrorToast } from "@/lib/use-api-error-toast";
 
@@ -51,6 +52,12 @@ export default function TaxTypesPage() {
   const [glAccountId, setGlAccountId] = useState("");
   const [validFrom, setValidFrom] = useState<Date>(new Date());
   const [validTo, setValidTo] = useState<Date | undefined>(undefined);
+  /** The EBM class (P7 decision 8). `""` is "not mapped", which is a real state rather than a
+   * blank to be filled in: a company that never fiscalizes never maps one, and a fiscalized
+   * one that has not mapped this code has its sale refused with `tax_class_unmapped` — a
+   * refusal that says what to do, where a defaulted class would report the wrong bucket to
+   * the authority and say nothing at all. */
+  const [fiscalTaxType, setFiscalTaxType] = useState<string>("");
 
   function startCreate() {
     setEditingId(null);
@@ -61,6 +68,7 @@ export default function TaxTypesPage() {
     setGlAccountId("");
     setValidFrom(new Date());
     setValidTo(undefined);
+    setFiscalTaxType("");
     setOpen(true);
   }
 
@@ -73,6 +81,7 @@ export default function TaxTypesPage() {
     setGlAccountId(tc.gl_account_id ? String(tc.gl_account_id) : "");
     setValidFrom(new Date(tc.valid_from));
     setValidTo(tc.valid_to ? new Date(tc.valid_to) : undefined);
+    setFiscalTaxType(tc.fiscal_tax_type ?? "");
     setOpen(true);
   }
 
@@ -87,6 +96,9 @@ export default function TaxTypesPage() {
             gl_account_id: glAccountId ? Number(glAccountId) : null,
             clear_gl_account: !glAccountId,
             valid_to: validTo ? toLocalIsoDate(validTo) : null,
+            ...(fiscalTaxType
+              ? { fiscal_tax_type: fiscalTaxType as FiscalTaxType }
+              : { clear_fiscal_tax_type: true }),
           },
         });
         toast.show({ title: t("taxCodeUpdated"), tone: "success" });
@@ -99,6 +111,7 @@ export default function TaxTypesPage() {
           gl_account_id: glAccountId ? Number(glAccountId) : null,
           valid_from: toLocalIsoDate(validFrom),
           valid_to: validTo ? toLocalIsoDate(validTo) : null,
+          fiscal_tax_type: fiscalTaxType ? (fiscalTaxType as FiscalTaxType) : null,
         });
         toast.show({ title: t("taxCodeCreated"), tone: "success" });
       }
@@ -174,6 +187,7 @@ export default function TaxTypesPage() {
                   <TH className="w-32">{t("code")}</TH>
                   <TH>{t("taxNameAndNature")}</TH>
                   <TH className="w-24 text-right">{t("rate")}</TH>
+                  <TH className="w-28">{t("ebmTaxClass")}</TH>
                   <TH>{t("glAccount")}</TH>
                   <TH className="w-48">{t("validityWindow")}</TH>
                   <TH className="w-36 text-right">{t("status")}</TH>
@@ -191,6 +205,15 @@ export default function TaxTypesPage() {
                         <p className="text-[11px] text-[var(--vinea-ink-subtle)]">{formatNatureLabel(tc.nature)}</p>
                       </TD>
                       <TD className="text-right font-mono text-xs font-semibold">{t("percentValue", { value: rateNum })}</TD>
+                      <TD>
+                        {tc.fiscal_tax_type ? (
+                          <StatusChip tone="info">{tc.fiscal_tax_type}</StatusChip>
+                        ) : (
+                          <span className="text-[11px] text-[var(--vinea-ink-subtle)]">
+                            {t("ebmTaxClassNone")}
+                          </span>
+                        )}
+                      </TD>
                       <TD className="text-xs text-[var(--vinea-ink)]">
                         {acc ? dotted(acc.code, acc.name) : t("emptyValue")}
                       </TD>
@@ -261,6 +284,18 @@ export default function TaxTypesPage() {
                 placeholder={t("chooseGlPostingAccount")}
               />
             </Field>
+            <Field label={t("ebmTaxClass")}>
+              <Combobox
+                options={[
+                  { value: "", label: t("ebmTaxClassNone") },
+                  ...Object.values(FiscalTaxType).map((value) => ({ value, label: value })),
+                ]}
+                value={fiscalTaxType}
+                onValueChange={setFiscalTaxType}
+                placeholder={t("ebmTaxClassNone")}
+              />
+            </Field>
+            <p className="text-xs text-[var(--vinea-ink-subtle)]">{t("ebmTaxClassNote")}</p>
             {!editingId && (
               <Field label={t("validFrom")}>
                 <DatePicker value={validFrom} onValueChange={setValidFrom} />

@@ -13,9 +13,11 @@ import type {
   CompanyMember,
   Currency,
   ExchangeRate,
+  FiscalTaxType,
   FiscalYear,
   GLAccount,
   GLSettings,
+  GLSettingsPayload,
   JournalEntry,
   JournalEntryCreatePayload,
   Project,
@@ -206,7 +208,7 @@ export function useGLSettings() {
 export function useUpdateGLSettings() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (payload: GLSettings) => api.put<GLSettings>("/gl/settings", payload),
+    mutationFn: (payload: GLSettingsPayload) => api.put<GLSettings>("/gl/settings", payload),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["gl", "settings"] }),
   });
 }
@@ -375,6 +377,7 @@ export function useCreateTaxCode() {
       gl_account_id?: number | null;
       valid_from: string;
       valid_to?: string | null;
+      fiscal_tax_type?: FiscalTaxType | null;
     }) => api.post<TaxCode>("/gl/tax-codes", payload),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["gl", "tax-codes"] }),
   });
@@ -395,6 +398,8 @@ export function useUpdateTaxCode() {
         clear_gl_account?: boolean;
         valid_to?: string | null;
         is_active?: boolean;
+        fiscal_tax_type?: FiscalTaxType | null;
+        clear_fiscal_tax_type?: boolean;
       };
     }) => api.patch<TaxCode>(`/gl/tax-codes/${codeId}`, payload),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["gl", "tax-codes"] }),

@@ -409,7 +409,7 @@ The owner's original menu ordering (software_interface docx) is **adopted as the
 |---|---|---|
 | Administration → User | users, roles | P1 backend · P3 UI |
 | Maintenance → Common | Foreign Currency; Company details (Company, Accounting period, General) | P1–P2 backend · P3 UI |
-| Maintenance → Tax | Tax types (18%/18%/Exempt/Zero) | P1 seed · P2 kernel · P3 UI |
+| Maintenance → Tax | Tax types (18%/18%/Exempt/Zero), **EBM devices** (`/maintenance/ebm-devices`, C.1.10) | P1 seed · P2 kernel · P3 UI · devices P7 |
 | Maintenance → General Ledger | COA, Branches, Transaction types, Defaults, Rename Accounts | P2 · P3 |
 | Maintenance → AR / AP | Customers, Sales reps, Suppliers, Transaction types, Defaults, Rename | P4 |
 | Maintenance → Inventory | Items, Warehouses, Trans types, Variable barcodes, UoM categories, Defaults, Rename Item Code | P5 |
@@ -458,6 +458,39 @@ The owner's original menu ordering (software_interface docx) is **adopted as the
    Same footing as C.1.5's additions: a change to the contract belongs in the document the contract lives in, not only in the code that happens to satisfy it. `frontend/src/design/components/appendix-c-order.test.tsx` pins the tree row by row and has carried these blocks since step 8; this entry is the document catching up (P6 step 9).
 
 9. **Transactions → OE is Sales order, Breakup and Landed cost** — the appendix read "Purchase order, Breakup", which put the purchase order in two places at once: the owner's AP block already lists GRV and Purchase order, and that is where the tree puts them. What the Order Entry block holds is the sales side and the two screens that hang off it. **Landed cost** is the row P6 decision 8's Importation Split needed and the appendix never had; it sits after Breakup. Corrected here at P6 step 9, against `nav-tree.ts`.
+
+10. **The owner's tree has no home for an EBM device** — Maintenance → Tax carries "Tax types"
+   and nothing else, which was the whole of the tax setup before fiscalization. P7 needs one
+   more row there: a device is registered once per branch, initialized against the authority,
+   and then left alone, which is what makes it a maintenance object rather than a transaction.
+   The nav adds **"EBM devices"** under Maintenance → Tax (P7 step 6), directly after Tax
+   types, at `/maintenance/ebm-devices`: the list per branch with status, environment, profile,
+   `sdc_id`, `mrc_no` and last success, and Register, Initialize, Suspend and Sync codes on it.
+
+   **Initialize is the only activation path**, and that is a design decision rather than a
+   missing button: activation is what happens once the authority has been told about the
+   device and what it sent back has been stored, and `activate()` refuses a device with no
+   `sdc_id`. A suspended device is brought back by **re-initializing** it, which is also how
+   its keys are reissued. A separate Activate would be a control that could only ever fail on
+   the case it existed for.
+
+   **No key is ever rendered, because no key ever arrives.** `cmc_key`, `intrl_key` and
+   `sign_key` are the only secrets this phase holds; `DeviceRead` has no field for one and
+   `tests/fiscal/test_key_redaction.py` asserts that over the model rather than over one
+   endpoint's output. What the screen shows is whether the device is holding them.
+
+   The rest of what P7 step 6 built is **columns and sections on screens the tree already
+   carries** and needs no row: the EBM tax class on Tax types, the RRA quantity unit on Units
+   of measure, a Fiscal section on Items, Verify TIN on Customers and Suppliers, and the tax
+   and revaluation block on GL Defaults. Step 7 adds the **Transactions → Tax** block, which
+   is C.2's "fiscalization status/queue screens (P7)" made good, and the FX revaluation row
+   under Transactions → GL.
+
+   **A note on the numbering.** The P7 prompt reserved C.1.10 for step 7's Transactions → Tax
+   block and C.1.11 for its FX revaluation row, written before it was clear that step 6 would
+   need an entry of its own. It does — the tree gains a row, and this appendix is where a row
+   is recorded — and the numbers here run in the order the entries were written. So step 7's
+   two become **C.1.11** and **C.1.12**.
 
 ### C.2 Additions layered onto the owner's tree (post-spec decisions)
 

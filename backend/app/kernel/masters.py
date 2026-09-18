@@ -17,6 +17,7 @@ from app.kernel.accounts import get_account
 from app.kernel.errors import LedgerStateError
 from app.models.company import Branch
 from app.models.currency import Currency
+from app.models.fiscalization import FiscalTaxType
 from app.models.gl import GLTransactionType, Project
 from app.models.inventory import INVENTORY_MODULE, InventoryTransactionKind
 from app.models.journal import JournalLine
@@ -422,6 +423,11 @@ def get_tax_code(db: Session, company_id: int, tax_code_id: int) -> TaxCode:
     return tax_code
 
 
+def _tax_type_value(tax_code: TaxCode) -> str | None:
+    """The audit trail wants the string, not the enum member."""
+    return str(tax_code.fiscal_tax_type) if tax_code.fiscal_tax_type else None
+
+
 def create_tax_code(
     db: Session,
     company_id: int,
@@ -433,6 +439,7 @@ def create_tax_code(
     gl_account_id: int | None = None,
     valid_from: date,
     valid_to: date | None = None,
+    fiscal_tax_type: FiscalTaxType | None = None,
     actor: User,
     request: Request | None = None,
 ) -> TaxCode:
@@ -456,6 +463,7 @@ def create_tax_code(
         gl_account_id=gl_account_id,
         valid_from=valid_from,
         valid_to=valid_to,
+        fiscal_tax_type=fiscal_tax_type,
         is_active=True,
     )
     db.add(tax_code)
@@ -507,6 +515,7 @@ def update_tax_code(
     rate_pct: Decimal | None = None,
     gl_account_id: int | None | object = ...,
     valid_to: date | None | object = ...,
+    fiscal_tax_type: FiscalTaxType | None | object = ...,
     is_active: bool | None = None,
     actor: User,
     request: Request | None = None,
@@ -515,6 +524,7 @@ def update_tax_code(
         "name": tax_code.name,
         "rate_pct": str(tax_code.rate_pct),
         "gl_account_id": tax_code.gl_account_id,
+        "fiscal_tax_type": _tax_type_value(tax_code),
         "is_active": tax_code.is_active,
     }
     if name is not None:
@@ -533,6 +543,13 @@ def update_tax_code(
         tax_code.gl_account_id = gl_account_id  # type: ignore[assignment]
     if valid_to is not ...:
         tax_code.valid_to = valid_to  # type: ignore[assignment]
+    if fiscal_tax_type is not ...:
+        # **Not** locked by postings the way the rate is. The rate decides what was charged
+        # and a change would restate it; the EBM class only decides which bucket of the
+        # authority's own report the line lands in, and a company that mapped B where it meant
+        # C has to be able to correct it — the receipts already issued carry the class they
+        # were sent with, and `fiscal_receipts` is append-only.
+        tax_code.fiscal_tax_type = fiscal_tax_type  # type: ignore[assignment]
     if is_active is not None:
         tax_code.is_active = is_active
     db.flush()
@@ -540,6 +557,7 @@ def update_tax_code(
         "name": tax_code.name,
         "rate_pct": str(tax_code.rate_pct),
         "gl_account_id": tax_code.gl_account_id,
+        "fiscal_tax_type": _tax_type_value(tax_code),
         "is_active": tax_code.is_active,
     }
     if after != before:

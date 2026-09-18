@@ -8,7 +8,7 @@ from typing import Annotated, Any
 from pydantic import BaseModel, Field, model_validator
 
 from app.models.fiscal import PeriodStatus
-from app.models.fiscalization import FxRevaluationRole, FxRevaluationStatus
+from app.models.fiscalization import FiscalTaxType, FxRevaluationRole, FxRevaluationStatus
 from app.models.gl import AccountClass, ControlType
 from app.models.inventory import InventoryTransactionKind
 from app.models.journal import JournalStatus
@@ -57,13 +57,40 @@ class GLAccountRead(ApiModel):
 
 
 class GLSettingsRead(ApiModel):
+    """The GL keys the Defaults screen owns.
+
+    P7 adds five accounts and one code. They were seeded by `seed_rwanda` at step 1 and had
+    no way to be *set* until this screen: a tenant that did not come from the Rwanda pack, or
+    one whose accountant wants the unrealized gain somewhere else, had a VAT return that
+    refused to file (`required_setting` on `vat_settlement_account_id`) and no screen to fix
+    it on.
+    """
+
     retained_earnings_account_id: int | None
     rounding_difference_account_id: int | None
+    # --- P7 (step 6) ---------------------------------------------------------------------
+    vat_settlement_account_id: int | None
+    ar_revaluation_account_id: int | None
+    ap_revaluation_account_id: int | None
+    unrealized_fx_gain_account_id: int | None
+    unrealized_fx_loss_account_id: int | None
+    fiscal_default_purchase_class_code: str | None
 
 
 class GLSettingsUpdate(BaseModel):
+    """`None` means "leave it alone", which is why the class code needs an explicit clear flag:
+    the other seven keys are ids and a screen that wanted to unset one would be asking for a
+    posting to fail later rather than now, so they cannot be cleared at all."""
+
     retained_earnings_account_id: int | None = None
     rounding_difference_account_id: int | None = None
+    vat_settlement_account_id: int | None = None
+    ar_revaluation_account_id: int | None = None
+    ap_revaluation_account_id: int | None = None
+    unrealized_fx_gain_account_id: int | None = None
+    unrealized_fx_loss_account_id: int | None = None
+    fiscal_default_purchase_class_code: str | None = Field(default=None, max_length=20)
+    clear_fiscal_default_purchase_class_code: bool = False
 
 
 # --- Exchange rates ----------------------------------------------------------------------
@@ -405,6 +432,11 @@ class TaxCodeCreate(BaseModel):
     gl_account_id: int | None = None
     valid_from: date
     valid_to: date | None = None
+    #: P7 decision 8: which EBM tax class a line carrying this code is reported under. Nullable
+    #: — a company that never fiscalizes never needs one — and refused at post
+    #: (`tax_class_unmapped`) rather than guessed at, because a wrong class on a receipt is a
+    #: wrong VAT return.
+    fiscal_tax_type: FiscalTaxType | None = None
 
 
 class TaxCodeUpdate(BaseModel):
@@ -414,6 +446,8 @@ class TaxCodeUpdate(BaseModel):
     clear_gl_account: bool = False
     valid_to: date | None = None
     is_active: bool | None = None
+    fiscal_tax_type: FiscalTaxType | None = None
+    clear_fiscal_tax_type: bool = False
 
 
 class TaxCodeRead(ApiModel):
@@ -426,6 +460,7 @@ class TaxCodeRead(ApiModel):
     valid_from: date
     valid_to: date | None
     is_active: bool
+    fiscal_tax_type: FiscalTaxType | None
 
 
 class CurrencyCreate(BaseModel):

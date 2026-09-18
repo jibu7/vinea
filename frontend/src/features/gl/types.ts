@@ -1,4 +1,7 @@
 /** Mirrors backend/app/schemas/gl.py — snake_case, matching the raw JSON wire shape. */
+import type { FiscalTaxType } from "@/lib/api-enums";
+
+export type { FiscalTaxType };
 
 export interface GLAccount {
   id: number;
@@ -76,6 +79,10 @@ export interface TaxCode {
   valid_from: string;
   valid_to: string | null;
   is_active: boolean;
+  /** P7: which EBM tax class (A–D) a line carrying this code is reported under. `null` on a
+   * company that never fiscalizes; a fiscalized sale on an unmapped code is refused with
+   * `tax_class_unmapped` rather than defaulted to a class RRA would then report on. */
+  fiscal_tax_type: FiscalTaxType | null;
 }
 
 export interface Currency {
@@ -252,9 +259,37 @@ export interface CompanyDetails {
   coa_template: string;
 }
 
+/**
+ * The GL keys the Defaults screen owns.
+ *
+ * P7 added five accounts and one code. They were seeded by the Rwanda pack at step 1 and had
+ * nowhere to be *set* until this screen: a tenant that did not come from the pack had a VAT
+ * return that refused to file and no way to fix it.
+ */
 export interface GLSettings {
   retained_earnings_account_id: number | null;
   rounding_difference_account_id: number | null;
+  vat_settlement_account_id: number | null;
+  ar_revaluation_account_id: number | null;
+  ap_revaluation_account_id: number | null;
+  unrealized_fx_gain_account_id: number | null;
+  unrealized_fx_loss_account_id: number | null;
+  fiscal_default_purchase_class_code: string | null;
+}
+
+/** What the Defaults screen sends. Every key is optional — the service writes only what is
+ * present — and the class code needs an explicit clear, because `null` already means "leave
+ * it alone" on a body the screen does not fill in full. */
+export interface GLSettingsPayload {
+  retained_earnings_account_id?: number | null;
+  rounding_difference_account_id?: number | null;
+  vat_settlement_account_id?: number | null;
+  ar_revaluation_account_id?: number | null;
+  ap_revaluation_account_id?: number | null;
+  unrealized_fx_gain_account_id?: number | null;
+  unrealized_fx_loss_account_id?: number | null;
+  fiscal_default_purchase_class_code?: string | null;
+  clear_fiscal_default_purchase_class_code?: boolean;
 }
 
 export interface FiscalYear {

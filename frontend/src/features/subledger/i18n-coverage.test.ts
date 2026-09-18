@@ -159,6 +159,16 @@ describe("keys built from a template literal still resolve", () => {
     ["gl.controlTypeShort", ["none", "bank", "cash", "ar", "ap", "inventory"]],
     // line-grid.tsx: t(`${mode}Lines`) over the grid's five modes
     ["lineGrid", ["journalLines", "cashbookLines", "documentLines", "batchLines", "inventoryLines"]],
+    // maintenance/ebm-devices/page.tsx: t(`statusLabel.${device.status}`) over FiscalDeviceStatus
+    ["fiscal.devices.statusLabel", ["pending", "active", "suspended"]],
+    // …and t(`environmentLabel.${device.environment}`) over FiscalEnvironment. The register
+    // dialog's two Selects spell both out as literal keys, so those are already scanned; the
+    // table cell builds the key, and is why this row exists.
+    ["fiscal.devices.environmentLabel", ["test", "production"]],
+    ["fiscal.devices.profileLabel", ["vsdc", "osdc"]],
+    // maintenance/inventory-items/page.tsx: t(`fiscalItemTypeLabel.${value}`) over
+    // FiscalItemTypeCode — the authority's product types, whose values are the digits 1-3.
+    ["inventory.items.fiscalItemTypeLabel", ["1", "2", "3"]],
   ];
 
   it.each(dynamic)("%s resolves for every value the call site can produce", (prefix, keys) => {
