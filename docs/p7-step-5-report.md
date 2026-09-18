@@ -4,8 +4,55 @@ Step 5 is a gate. It adds the backend half of the phase a person looks at, and t
 tape: nineteen rows in one sequence, every expected value a literal worked by hand, all five
 invariant suites after each one.
 
-Written against `claude/p7-step-4` at `1361e52`. Step 4 is not yet on `main`, so this branch
-continues it rather than branching from a pulled `main`.
+## Branch lineage
+
+**Step 4 was completed locally and never pushed.** `origin/claude/p7-step-4` sat at `51f8d0a`,
+step 4's *handoff note* — the second of its twelve commits. The other ten, including every fix
+the step-4 report describes, existed only on this machine, and no pull request had been opened:
+49, 50 and 51 are steps 1, 2 and 3, and nothing followed them. `p7-step-5` therefore branched
+from `1361e52` and carried both steps.
+
+**Resolved at the step-5 gate, on the owner's direction:** step 4 goes first as its own pull
+request, and this branch is rebased onto its merge. So
+
+* **PR #56** — `feat(fiscal): P7 step 4 — VAT return, filing, X/Z and FX revaluation`, the
+  twelve commits as they stood at `1361e52`. Not a gate step, so it carries no approvals row;
+  its body is `docs/p7-step-4-report.md` and the gap-status table below.
+* **This PR** — step 5 alone, rebased onto `main` after #56 merged, which also takes `b53ad8d`
+  (PR #55).
+
+The gate run quoted under *Checks* is at `9cc94a1`, the pre-rebase head, because that is the
+tree the tape and the deep profile actually ran against. The rebased head's full run is CI's.
+
+## Step-4 gap status
+
+Five items were open against step 4 when this step started. **All five landed in step 4's own
+commits** — none are step 5's work — but because step 4 was never PR'd, all five are unreviewed
+and travel in this diff.
+
+| item | where | state |
+|---|---|---|
+| discounts in `DailyFigures` | `33bbeea` | landed. Asserted end to end for the first time here: tape row 9, `discounts 708.00` |
+| the Z reads what RRA signed, through the adapter's normalizer | `33bbeea` | landed (`normalize_declared_totals` on the Protocol). Step 5 extends it with `quantity` and the rate-keeping rule |
+| `partner_name=""` on the revaluation detail | `b0229a7` | landed — `gl.py:1297` fills it from the loaded partner, and `test_the_revaluation_detail_names_the_partner_each_line_drills_to` asserts the name |
+| the revaluation splits per (role, currency) | `f8f75aa` | landed — `subledger/test_revaluation.py::test_each_currency_gets_its_own_pair_of_lines` |
+| the three step-4 tests | `f8f75aa` | all three landed; see below for which the tape reaches |
+
+**Which of the three the tape reaches**, since two of them it does not:
+
+* *the filed return's figures unchanged by a late entry* — **tape row 12**, which asserts the
+  whole stored snapshot byte-for-byte after a backdated correction, not just the headline.
+  (`tax/test_vat_filing.py::test_a_late_entry_is_declared_on_the_next_return_and_the_filed_one_never_moves`)
+* *a range may not overlap a filed return* — **now tape row 11**, added in review. The named
+  test pins the one-day boundary against an empty month; the tape asserts the same refusal
+  against a return with 16 956 of declared VAT behind it.
+  (`tax/test_vat_filing.py::test_a_range_may_not_overlap_a_filed_return`)
+* *an untagged movement is listed rather than absorbed* — **not in the tape, and deliberately
+  so.** The tape's row 10 asserts the *complement*: `untagged == []` and every tie reconciled,
+  which is what the build order's row asks for ("untagged none"). Making the tape produce an
+  untagged movement would mean posting a cashbook payment to RRA inside the month, which moves
+  rows 10, 11 and 12's figures away from the literals the brief pins. The case keeps its own
+  test. (`tax/test_vat_return.py::test_an_untagged_movement_is_listed_rather_than_absorbed`)
 
 **The tape reproduces every expected value in the build order.** Two of those values could not
 be reproduced by the code as step 4 left it, and one of them was a defect. Both are below,
@@ -221,32 +268,269 @@ otherwise — the same thing `test_daily_report.py` does, for the same reason.
 
 ## The tape, row by row
 
-Every value below is the run's own output, printed by the test.
+**This is the run's own output**, pasted from
+`pytest tests/fiscal/test_acceptance_tape.py -s` at `9cc94a1` — 254 assertions, no mismatch.
+Every `expected` is a literal written into the test by hand; every `actual` came back from the
+services. The `invariants` line after each row is all five suites.
 
-| # | figures asserted | result |
-|---|---|---|
-| 0 | device `active`, `sdc_id SDC010000005`, `mrc_no WIS01006230`, no key field on the wire · code class 04 = A/B/C/D · `item_cd` X `RW2NTXU0000001`, S `RW3NTXU0000002`, E `RW2NTXU0000003`, Z `RW2NTXU0000004` · four `item` rows `sent` · `sarNo 1` `sarTyCd 02` · masters X 100 / E 50 / Z 20 | ok |
-| 1 | net 45 000 · tax 5 400 · gross 50 400 · `invc_no 1` · A 5 000 / B 35 400 tax 5 400 / C 10 000 / D 0 · `totTaxblAmt 50 400` · `totTaxAmt 5 400` · X `prc 2 360.00` `splyAmt 23 600` `taxAmt 3 600`; S 11 800 / 1 800; E 1 000 / 0; Z 5 000 / 0 · `custTin 100000001` · `prcOrdCd AB12CD` · `pmtTyCd 02` · Print refused `fiscal_receipt_pending`, then allowed · receipt `1/1 NS` · `sarNo 2` `sarTyCd 11` · masters X 90 / E 45 / Z 18 | ok |
-| 2 | net 5 400 · tax 972 · gross 6 372 · `prc 2 360.00` · `splyAmt 7 080` · `dcRt 10` · `dcAmt 708` · `taxblAmt 6 372` · `taxAmt 972` · `pmtTyCd 01` · `custTin` absent · receipt `2/2 NS` · master X 87 | ok |
-| 3 | net 4 000 · tax 720 · gross 4 720 · `rcptTyCd R` · `orgInvcNo 1` · `rfdRsnCd 06` · `invc_no 3` · receipt `1/3 NR` · `sarTyCd 03` · master X 89 | ok |
-| 3b | COPY, `copy_count 1`, same SDC block, same receipt number, **no new outbox row** | ok |
-| 4 | USD 40 / 7.20 / 47.20 · base 62 304 · `prc 3 115.20` · B 62 304 · `taxAmtB 9 504` · receipt `3/4 NS` · master X 69 | ok |
-| 5 | net 10 000 · tax 1 800 · gross 11 800 · attempts 3 · next due +15 min · `queued` · Print refused · sandbox up → receipt `4/5 NS` | ok |
-| 6 | row `unknown`, queue blocked · device holds 6, row is 6 → `needs_receipt` · attached → `sent`, receipt `5/6 NS` · queue resumes · `sarTyCd 11` · master E 44 | ok |
-| 7 | net 50 000 · tax 9 000 · gross 59 000 · `regTyCd M` · `pchsTyCd N` · `rcptTyCd P` · purchase `invcNo 1` · B 59 000 / `taxAmtB 9 000` · `sarTyCd 02` qty 50 @ 1 000 · master X 119 | ok |
-| 8 | feed `spplrTin 100000003` `spplrInvcNo 77` B 11 800 / 1 800 → accepted · `regTyCd A` · `pchsSttsCd 02` · watermark advanced · **no AP document** | ok |
-| 9 | `Z-000001` · NS 5 / 131 876 · NR 1 / 4 720 · B NS 115 876 / 17 676, NR 4 720 / 720 · A NS 6 000 · C NS 10 000 · credit 112 704 · cash 19 172 · refunds credit 4 720 · copies 1 / 50 400 · items sold 43, returned 2 · X after the close all zero | ok |
-| 10 | standard 94 200 / 16 956 · zero-rated 10 000 · exempt 6 000 · purchases 50 000 / 9 000 · imports 0 · net payable 7 956 · 2200 movement −16 956 difference 0 · 1400 movement +9 000 difference 0 · untagged none · every tie reconciled | ok |
-| 11 | `VATR-000001` · 2200 +16 956 · 1400 −9 000 · 2250 −7 956 · high water = the last entry that had arrived | ok |
-| 12 | filed return byte-for-byte unchanged · output VAT still 16 956 · one late **entry**, 1 000 base / 180 tax, naming `VATR-000001` · 2200 −180 on the trial balance | ok |
-| 13 | open USD 47.20 · carrying 62 304 · revalued 63 720 · gain 1 416 · `FXR-000001` · 1290 +1 416 / 4410 −1 416 at month end, both 0 after the mirror · **1200 untouched** · second run refused `fx_revaluation_exists` | ok |
-| 14 | `rcptTyCd R` · `orgInvcNo 5` · `rfdRsnCd 07` · receipt `2/7 NR` · `Z-000002`: NR 1 / 11 800, NS 0 | ok |
-| 15 | refused `fiscal_refund_irreversible` | ok |
-| 16 | refused `purchase_code_required`, on the `purchase_code` field | ok |
-| 17 | row `failed` `884`, queue blocked · reverse → row `cancelled`, **no refund queued**, reversal posts · queue resumes | ok |
-| 18 | refused `fiscal_requires_block` | ok |
+```
+[p7 tape] expected vs actual
+  0    device status                 expected             active  actual             active  ok
+  0    sdc_id                        expected       SDC010000005  actual       SDC010000005  ok
+  0    mrc_no                        expected        WIS01006230  actual        WIS01006230  ok
+  0    keys on the wire              expected                 []  actual                 []  ok
+  0    device holds keys             expected               True  actual               True  ok
+  0    code class 04                 expected ['A', 'B', 'C', 'D']  actual ['A', 'B', 'C', 'D']  ok
+  0    item_cd X                     expected     RW2NTXU0000001  actual     RW2NTXU0000001  ok
+  0    item_cd S                     expected     RW3NTXU0000002  actual     RW3NTXU0000002  ok
+  0    item_cd E                     expected     RW2NTXU0000003  actual     RW2NTXU0000003  ok
+  0    item_cd Z                     expected     RW2NTXU0000004  actual     RW2NTXU0000004  ok
+  0    item rows                     expected                  4  actual                  4  ok
+  0    item rows sent                expected [<FiscalOutboxStatus.SENT: 'sent'>, <FiscalOutboxStatus.S...  actual [<FiscalOutboxStatus.SENT: 'sent'>, <FiscalOutboxStatus.S...  ok
+  0    stock_io sarNo                expected                  1  actual                  1  ok
+  0    stock_io sarTyCd              expected                 02  actual                 02  ok
+  0    master X                      expected                100  actual                100  ok
+  0    master E                      expected                 50  actual                 50  ok
+  0    master Z                      expected                 20  actual                 20  ok
+  0    invariants                    expected              green  actual              green  ok
+  1    INV-1 net                     expected              45000  actual              45000  ok
+  1    INV-1 tax                     expected               5400  actual               5400  ok
+  1    INV-1 gross                   expected              50400  actual              50400  ok
+  1    sale row status               expected             queued  actual             queued  ok
+  1    sale invc_no                  expected                  1  actual                  1  ok
+  1    bucket A                      expected            5000.00  actual               5000  ok
+  1    bucket B                      expected           35400.00  actual              35400  ok
+  1    tax B                         expected            5400.00  actual               5400  ok
+  1    bucket C                      expected           10000.00  actual              10000  ok
+  1    bucket D                      expected               0.00  actual                  0  ok
+  1    totTaxblAmt                   expected           50400.00  actual              50400  ok
+  1    totTaxAmt                     expected            5400.00  actual               5400  ok
+  1    X prc                         expected            2360.00  actual               2360  ok
+  1    X splyAmt                     expected           23600.00  actual              23600  ok
+  1    X taxAmt                      expected            3600.00  actual               3600  ok
+  1    S prc                         expected           11800.00  actual              11800  ok
+  1    S taxAmt                      expected            1800.00  actual               1800  ok
+  1    E prc                         expected            1000.00  actual               1000  ok
+  1    E taxAmt                      expected               0.00  actual                  0  ok
+  1    Z prc                         expected            5000.00  actual               5000  ok
+  1    Z taxAmt                      expected               0.00  actual                  0  ok
+  1    custTin                       expected          100000001  actual          100000001  ok
+  1    prcOrdCd                      expected             AB12CD  actual             AB12CD  ok
+  1    pmtTyCd                       expected                 02  actual                 02  ok
+  1    print before the receipt      expected fiscal_receipt_pending  actual fiscal_receipt_pending  ok
+  1    INV-1 receipt                 expected             1/1 NS  actual             1/1 NS  ok
+  1    print after the receipt       expected             1/1 NS  actual             1/1 NS  ok
+  1    stock_io sarNo                expected                  2  actual                  2  ok
+  1    stock_io sarTyCd              expected                 11  actual                 11  ok
+  1    master X                      expected                 90  actual                 90  ok
+  1    master E                      expected                 45  actual                 45  ok
+  1    master Z                      expected                 18  actual                 18  ok
+  1    invariants                    expected              green  actual              green  ok
+  2    INV-2 net                     expected               5400  actual               5400  ok
+  2    INV-2 tax                     expected                972  actual                972  ok
+  2    INV-2 gross                   expected               6372  actual               6372  ok
+  2    prc                           expected            2360.00  actual               2360  ok
+  2    splyAmt                       expected            7080.00  actual               7080  ok
+  2    dcRt                          expected              10.00  actual                 10  ok
+  2    dcAmt                         expected             708.00  actual                708  ok
+  2    taxblAmt                      expected            6372.00  actual               6372  ok
+  2    taxAmt                        expected             972.00  actual                972  ok
+  2    pmtTyCd                       expected                 01  actual                 01  ok
+  2    custTin                       expected               None  actual               None  ok
+  2    INV-2 receipt                 expected             2/2 NS  actual             2/2 NS  ok
+  2    master X                      expected                 87  actual                 87  ok
+  2    invariants                    expected              green  actual              green  ok
+  3    CRN-1 net                     expected               4000  actual               4000  ok
+  3    CRN-1 tax                     expected                720  actual                720  ok
+  3    CRN-1 gross                   expected               4720  actual               4720  ok
+  3    rcptTyCd                      expected                  R  actual                  R  ok
+  3    orgInvcNo                     expected                  1  actual                  1  ok
+  3    rfdRsnCd                      expected                 06  actual                 06  ok
+  3    refund invc_no                expected                  3  actual                  3  ok
+  3    CRN-1 receipt                 expected             1/3 NR  actual             1/3 NR  ok
+  3    stock_io sarTyCd              expected                 03  actual                 03  ok
+  3    master X                      expected                 89  actual                 89  ok
+  3    invariants                    expected              green  actual              green  ok
+  3b   copy layout                   expected               True  actual               True  ok
+  3b   copy_count                    expected                  1  actual                  1  ok
+  3b   same SDC block                expected       SDC010000005  actual       SDC010000005  ok
+  3b   same receipt number           expected             1/1 NS  actual             1/1 NS  ok
+  3b   no new outbox row             expected                 19  actual                 19  ok
+  3b   invariants                    expected              green  actual              green  ok
+  4    INV-3 net USD                 expected              40.00  actual              40.00  ok
+  4    INV-3 tax USD                 expected               7.20  actual               7.20  ok
+  4    INV-3 gross USD               expected              47.20  actual              47.20  ok
+  4    INV-3 base                    expected              62304  actual       62304.000000  ok
+  4    prc RWF                       expected            3115.20  actual             3115.2  ok
+  4    bucket B                      expected           62304.00  actual              62304  ok
+  4    tax B                         expected            9504.00  actual               9504  ok
+  4    INV-3 receipt                 expected             3/4 NS  actual             3/4 NS  ok
+  4    master X                      expected                 69  actual                 69  ok
+  4    invariants                    expected              green  actual              green  ok
+  5    INV-4 net                     expected              10000  actual              10000  ok
+  5    INV-4 tax                     expected               1800  actual               1800  ok
+  5    INV-4 gross                   expected              11800  actual              11800  ok
+  5    attempts                      expected                  3  actual                  3  ok
+  5    status                        expected             queued  actual             queued  ok
+  5    next attempt in minutes       expected                 15  actual                 15  ok
+  5    print while queued            expected fiscal_receipt_pending  actual fiscal_receipt_pending  ok
+  5    INV-4 receipt                 expected             4/5 NS  actual             4/5 NS  ok
+  5    invariants                    expected              green  actual              green  ok
+  6    row after the lost answer     expected            unknown  actual            unknown  ok
+  6    device queue blocked          expected                 24  actual                 24  ok
+  6    lastSaleInvcNo                expected                  6  actual                  6  ok
+  6    row invc_no                   expected                  6  actual                  6  ok
+  6    after verify                  expected      needs_receipt  actual      needs_receipt  ok
+  6    after attach                  expected               sent  actual               sent  ok
+  6    INV-5 receipt                 expected             5/6 NS  actual             5/6 NS  ok
+  6    queue resumes                 expected               None  actual               None  ok
+  6    stock_io sarTyCd              expected                 11  actual                 11  ok
+  6    master E                      expected                 44  actual                 44  ok
+  6    invariants                    expected              green  actual              green  ok
+  7    SIN-1 net                     expected              50000  actual              50000  ok
+  7    SIN-1 tax                     expected               9000  actual               9000  ok
+  7    SIN-1 gross                   expected              59000  actual              59000  ok
+  7    regTyCd                       expected                  M  actual                  M  ok
+  7    pchsTyCd                      expected                  N  actual                  N  ok
+  7    rcptTyCd                      expected                  P  actual                  P  ok
+  7    purchase invcNo               expected                  1  actual                  1  ok
+  7    bucket B                      expected           59000.00  actual              59000  ok
+  7    tax B                         expected            9000.00  actual               9000  ok
+  7    stock_io sarTyCd              expected                 02  actual                 02  ok
+  7    stock_io qty                  expected              50.00  actual                 50  ok
+  7    stock_io prc                  expected            1000.00  actual               1000  ok
+  7    master X                      expected                119  actual                119  ok
+  7    invariants                    expected              green  actual              green  ok
+  8    feed spplrTin                 expected          100000003  actual          100000003  ok
+  8    feed spplrInvcNo              expected                 77  actual                 77  ok
+  8    feed taxable B                expected           11800.00  actual       11800.000000  ok
+  8    feed tax B                    expected            1800.00  actual        1800.000000  ok
+  8    decision                      expected           accepted  actual           accepted  ok
+  8    regTyCd                       expected                  A  actual                  A  ok
+  8    pchsSttsCd                    expected                 02  actual                 02  ok
+  8    spplrInvcNo                   expected                 77  actual                 77  ok
+  8    watermark advanced            expected               True  actual               True  ok
+  8    no AP document                expected                  7  actual                  7  ok
+  8    invariants                    expected              green  actual              green  ok
+  9    Z number                      expected           Z-000001  actual           Z-000001  ok
+  9    NS count                      expected                  5  actual                  5  ok
+  9    NS gross                      expected          131876.00  actual          131876.00  ok
+  9    NR count                      expected                  1  actual                  1  ok
+  9    NR gross                      expected            4720.00  actual            4720.00  ok
+  9    B taxable NS                  expected          115876.00  actual          115876.00  ok
+  9    B tax NS                      expected           17676.00  actual           17676.00  ok
+  9    B taxable NR                  expected            4720.00  actual            4720.00  ok
+  9    B tax NR                      expected             720.00  actual             720.00  ok
+  9    A taxable NS                  expected            6000.00  actual            6000.00  ok
+  9    C taxable NS                  expected           10000.00  actual           10000.00  ok
+  9    credit                        expected          112704.00  actual          112704.00  ok
+  9    cash                          expected           19172.00  actual           19172.00  ok
+  9    copies count                  expected                  1  actual                  1  ok
+  9    copies gross                  expected           50400.00  actual           50400.00  ok
+  9    discounts                     expected             708.00  actual             708.00  ok
+  9    items sold                    expected              43.00  actual              43.00  ok
+  9    items returned                expected               2.00  actual               2.00  ok
+  9    refunds by method             expected            4720.00  actual            4720.00  ok
+  9    X after the close — NS        expected                  0  actual                  0  ok
+  9    X after the close — NR        expected                  0  actual                  0  ok
+  9    X after the close — gross     expected               0.00  actual               0.00  ok
+  9    X after the close — items     expected               0.00  actual               0.00  ok
+  9    invariants                    expected              green  actual              green  ok
+  10   standard sales base           expected              94200  actual       94200.000000  ok
+  10   standard sales VAT            expected              16956  actual       16956.000000  ok
+  10   zero-rated sales              expected              10000  actual       10000.000000  ok
+  10   exempt sales                  expected               6000  actual        6000.000000  ok
+  10   standard purchases base       expected              50000  actual       50000.000000  ok
+  10   standard purchases VAT        expected               9000  actual        9000.000000  ok
+  10   imports                       expected                  0  actual                  0  ok
+  10   net payable                   expected               7956  actual        7956.000000  ok
+  10   2200 movement                 expected             -16956  actual      -16956.000000  ok
+  10   2200 difference               expected                  0  actual           0.000000  ok
+  10   1400 movement                 expected               9000  actual        9000.000000  ok
+  10   1400 difference               expected                  0  actual           0.000000  ok
+  10   untagged                      expected                 []  actual                 []  ok
+  10   every tie reconciled          expected               True  actual               True  ok
+  10   invariants                    expected              green  actual              green  ok
+  11   return number                 expected        VATR-000001  actual        VATR-000001  ok
+  11   2200 settlement               expected              16956  actual       16956.000000  ok
+  11   1400 settlement               expected              -9000  actual       -9000.000000  ok
+  11   2250 settlement               expected              -7956  actual       -7956.000000  ok
+  11   high water                    expected                 14  actual                 14  ok
+  11   an overlapping range          expected   vat_period_filed  actual   vat_period_filed  ok
+  11   invariants                    expected              green  actual              green  ok
+  12   filed return unchanged        expected {'period_from': '2026-03-01', 'period_to': '2026-03-31', ...  actual {'period_from': '2026-03-01', 'period_to': '2026-03-31', ...  ok
+  12   filed output VAT              expected              16956  actual       16956.000000  ok
+  12   late entries                  expected                  1  actual                  1  ok
+  12   late base                     expected               1000  actual        1000.000000  ok
+  12   late tax                      expected                180  actual         180.000000  ok
+  12   late return named             expected    {'VATR-000001'}  actual    {'VATR-000001'}  ok
+  12   2200 on the trial balance     expected               -180  actual        -180.000000  ok
+  12   invariants                    expected              green  actual              green  ok
+  13   revaluation lines             expected                  1  actual                  1  ok
+  13   open amount                   expected              47.20  actual          47.200000  ok
+  13   carrying                      expected              62304  actual       62304.000000  ok
+  13   revalued                      expected              63720  actual       63720.000000  ok
+  13   gain                          expected               1416  actual        1416.000000  ok
+  13   run number                    expected         FXR-000001  actual         FXR-000001  ok
+  13   1290 at month end             expected               1416  actual        1416.000000  ok
+  13   4410 at month end             expected              -1416  actual       -1416.000000  ok
+  13   1290 after the mirror         expected                  0  actual           0.000000  ok
+  13   4410 after the mirror         expected                  0  actual           0.000000  ok
+  13   1200 untouched                expected      127156.000000  actual      127156.000000  ok
+  13   a second run                  expected fx_revaluation_exists  actual fx_revaluation_exists  ok
+  13   invariants                    expected              green  actual              green  ok
+  14   rcptTyCd                      expected                  R  actual                  R  ok
+  14   orgInvcNo                     expected                  5  actual                  5  ok
+  14   rfdRsnCd                      expected                 07  actual                 07  ok
+  14   reversal receipt              expected             2/7 NR  actual             2/7 NR  ok
+  14   Z-2 number                    expected           Z-000002  actual           Z-000002  ok
+  14   Z-2 NR count                  expected                  1  actual                  1  ok
+  14   Z-2 NR gross                  expected           11800.00  actual           11800.00  ok
+  14   Z-2 NS count                  expected                  0  actual                  0  ok
+  14   invariants                    expected              green  actual              green  ok
+  15   reversing a signed refund     expected fiscal_refund_irreversible  actual fiscal_refund_irreversible  ok
+  15   invariants                    expected              green  actual              green  ok
+  16   no purchase code              expected purchase_code_required  actual purchase_code_required  ok
+  16   refused on the field          expected  ['purchase_code']  actual  ['purchase_code']  ok
+  16   invariants                    expected              green  actual              green  ok
+  17   row status                    expected             failed  actual             failed  ok
+  17   result code                   expected                884  actual                884  ok
+  17   queue blocked                 expected                 32  actual                 32  ok
+  17   row cancelled                 expected          cancelled  actual          cancelled  ok
+  17   no refund queued              expected                  2  actual                  2  ok
+  17   reversal posted               expected           reversed  actual           reversed  ok
+  17   queue resumes                 expected               None  actual               None  ok
+  17   invariants                    expected              green  actual              green  ok
+  18   allowing negative stock       expected fiscal_requires_block  actual fiscal_requires_block  ok
+  18   invariants                    expected              green  actual              green  ok
+  osdc 0 device status                 expected             active  actual             active  ok
+  osdc 0 sdc_id                        expected       SDC010000005  actual       SDC010000005  ok
+  osdc 0 mrc_no                        expected        WIS01006230  actual        WIS01006230  ok
+  osdc 0 code class 04                 expected ['A', 'B', 'C', 'D']  actual ['A', 'B', 'C', 'D']  ok
+  osdc 0 item_cd X                     expected     RW2NTXU0000001  actual     RW2NTXU0000001  ok
+  osdc 0 item_cd S                     expected     RW3NTXU0000002  actual     RW3NTXU0000002  ok
+  osdc 0 item_cd E                     expected     RW2NTXU0000003  actual     RW2NTXU0000003  ok
+  osdc 0 item_cd Z                     expected     RW2NTXU0000004  actual     RW2NTXU0000004  ok
+  osdc 0 master X                      expected                100  actual                100  ok
+  osdc 0 invariants                    expected              green  actual              green  ok
+  osdc 1 INV-1 gross                   expected              50400  actual              50400  ok
+  osdc 1 bucket B                      expected           35400.00  actual              35400  ok
+  osdc 1 tax B                         expected            5400.00  actual               5400  ok
+  osdc 1 no key in the stored payload  expected               None  actual               None  ok
+  osdc 1 INV-1 receipt                 expected             1/1 NS  actual             1/1 NS  ok
+  osdc 1 invariants                    expected              green  actual              green  ok
+  osdc 2 INV-2 gross                   expected               6372  actual               6372  ok
+  osdc 2 INV-2 receipt                 expected             2/2 NS  actual             2/2 NS  ok
+  osdc 2 master X                      expected                 87  actual                 87  ok
+  osdc 2 invariants                    expected              green  actual              green  ok
+  osdc 3 CRN-1 gross                   expected               4720  actual               4720  ok
+  osdc 3 rcptTyCd                      expected                  R  actual                  R  ok
+  osdc 3 orgInvcNo                     expected                  1  actual                  1  ok
+  osdc 3 CRN-1 receipt                 expected             1/3 NR  actual             1/3 NR  ok
+  osdc 3 master X                      expected                 89  actual                 89  ok
+  osdc 3 invariants                    expected              green  actual              green  ok
+```
 
-`assert_ledger_invariants`, `assert_subledger_invariants`, `assert_stock_invariants`,
 `assert_order_invariants` and `assert_fiscal_invariants` were green after every row above,
 including the three refusal rows.
 
@@ -320,11 +604,78 @@ things that change are the device's `base_url`, TIN and serial.
 
 ## Checks
 
-Run in the backend container, which is where this project's checks run.
+Run in the backend container, which is where this project's checks run, **on the committed
+head** — the first draft of this report quoted a run started before three later edits, which is
+exactly the thing a quoted number is supposed to make impossible.
 
 ```
-uv run ruff check .                       →  All checks passed!
-uv run pytest tests/ -n 4                 →  see below
-uv run alembic check                      →  No new upgrade operations detected
-                                             (step 5 adds no migration)
+HEAD                                      9cc94a15b2a69267591150c6c5bb4020900ce59c
+uv run ruff check .                    →  All checks passed!
+uv run pytest tests/ -n 4              →  1360 passed, 7 warnings in 1108.80s (0:18:28)
+uv run pytest tests/fiscal/test_acceptance_tape.py -s
+                                       →  2 passed in 38.09s  (254 assertions, no mismatch)
+uv run alembic check                   →  No new upgrade operations detected
+                                          (step 5 adds no migration)
+```
+
+**Both sides**, so the diff's effect on the suite is a number rather than a claim:
+
+| | commit | tests |
+|---|---|---|
+| merge base | `d8ed45b` | 1269 passed (16:52) |
+| `p7-step-5` | `9cc94a1` | **1360 passed** (18:28) |
+
+**+91 tests**, and the merge base does not carry step 4, so that figure is steps 4 **and** 5
+together — see *Branch lineage* above.
+
+`origin/main` has since moved to `b53ad8d` (PR #55, audit history endpoints breaking ties on
+id), which this branch takes in the rebase. The baseline above is the merge base rather than
+that tip, because the merge base is the code this diff was written against and is therefore
+the only figure the diff is answerable for.
+
+```
+git diff --stat main..
+   .github/prompts/phase-7-fiscalization.prompt.md |    6 +-
+   backend/app/api/v1/fiscal.py                    |  312 ++++-
+   backend/app/fiscal/daily.py                     |   42 +-
+   backend/app/fiscal/drainer.py                   |   17 +-
+   backend/app/fiscal/enquiries.py                 |  748 +++++++++++
+   backend/app/fiscal/null.py                      |    6 +
+   backend/app/fiscal/printing.py                  |  355 ++++++
+   backend/app/fiscal/protocol.py                  |   20 +
+   backend/app/fiscal/rwanda/adapter.py            |   25 +-
+   backend/app/schemas/fiscal.py                   |  215 +++-
+   backend/tests/fiscal/conftest.py                |    7 +
+   backend/tests/fiscal/test_acceptance_tape.py    | 1507 +++++++++++++++++++++++
+   backend/tests/fiscal/test_daily_report.py       |   20 +-
+   backend/tests/fiscal/test_enquiries_api.py      |  617 ++++++++++
+   backend/tests/test_api_has_a_caller.py          |   26 +
+   docs/approvals.md                               |    1 +
+   docs/p7-step-5-report.md                        |  681 ++++++++++
+   docs/rra/README.md                              |   16 +-
+   18 files changed, 4597 insertions(+), 24 deletions(-)
+
+git status --short                     →  (clean)
+git log @{u}..                         →  (empty — the branch is pushed and in sync)
+```
+
+### The deep Hypothesis profile
+
+A gate step runs the property machines deeply; per-commit CI runs them at `max_examples=1`, so
+a property that has only ever run in CI has not been run. `HYPOTHESIS_PROFILE=deep` is 300
+examples.
+
+```
+HYPOTHESIS_PROFILE=deep uv run pytest tests/fiscal/test_property_fiscal.py \
+                                      tests/tax/test_property_vat.py
+
+7 passed, 1 warning in 1003.76s (0:16:43)
+
+[property] refusals provoked: {'fiscal_status_unresolved': 3, 'insufficient_stock': 881, 'refund_exceeds_original': 92}
+[property] queue states reached: {'cancelled': 1365, 'failed': 83, 'needs_receipt': 16, 'queued': 56645, 'sent': 2575, 'unknown': 141}
+
+[decision 6] reach: {'awkward lines': 1171, 'census lines 0dp': 248, 'census lines 0dp taxed': 81, 'census lines 2dp': 186, 'census lines 2dp taxed': 66, 'discounted lines': 1304, 'discounted lines a franc or more': 134, 'documents 0dp base': 124, 'documents 0dp fx': 180, 'documents 2dp base': 105, 'documents 2dp fx': 125, 'multi-line documents 0dp base': 58, 'multi-line documents 0dp fx': 116, 'multi-line documents 2dp base': 48, 'multi-line documents 2dp fx': 62, 'payloads': 534}
+[decision 6] per-line census (wire taxable - posted gross): {'0dp discounted one unit': 47, '0dp plain exact': 174, '0dp discounted exact': 12, '0dp plain one unit': 15, '2dp plain exact': 79, '2dp discounted exact': 96, '2dp discounted one unit': 11, 'awkward under a franc': 1171, 'constructed discounted under a franc': 1170, 'constructed discounted a franc or more': 134}
+[decision 6] per-document census (wire foot - posted foot): {'0dp base tax exact': 57, '0dp base tax one unit': 67, '0dp base total exact': 83, '0dp base total one unit': 41, '0dp fx tax exact': 66, '0dp fx tax one unit': 114, '0dp fx total exact': 22, '0dp fx total one unit': 156, '0dp fx total within its budget': 2, '2dp base tax exact': 105, '2dp base total exact': 99, '2dp base total one unit': 1, '2dp base total within its budget': 5, '2dp fx tax exact': 82, '2dp fx tax one unit': 43, '2dp fx total exact': 110, '2dp fx total one unit': 15}
+[decision 6] worst document residue: {'0dp base tax': '-0.500000', '0dp base tax in units': '-0.5', '0dp base tax of budget': '0.2477876106194690265486725664', '0dp base total': '-0.760000', '0dp base total in units': '-0.76', '0dp base total of budget': '-0.4950495049504950495049504950', '0dp fx tax': '-9.640000', '0dp fx tax in units': '-0.7412533640907343329488658208', '0dp fx tax of budget': '0.1983059607818317985717751548', '0dp fx total': '-13.380000', '0dp fx total in units': '-1.028835063437139561707035755', '0dp fx total of budget': '-0.2615709621663145765315920876', '2dp base total': '-0.020000', '2dp base total in units': '-2', '2dp base total of budget': '-0.09442870632672332389046270066', '2dp fx tax': '8.590000', '2dp fx tax in units': '0.6605151864667435601691657055', '2dp fx tax of budget': '0.4347994602003460073500135655', '2dp fx total': '-6.500000', '2dp fx total in units': '-0.4998077662437524029219530950', '2dp fx total of budget': '-0.2384844132091012990062537951', 'discounted line': '-1.090000'}
 ```
