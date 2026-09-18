@@ -211,9 +211,10 @@ export default function EbmDevicesPage() {
                 <TH className="w-44">{t("branch")}</TH>
                 <TH className="w-28">{t("profile")}</TH>
                 <TH className="w-28">{t("environment")}</TH>
-                <TH>{t("identity")}</TH>
+                <TH className="w-52">{t("identity")}</TH>
                 <TH className="w-36">{t("lastSuccess")}</TH>
-                <TH className="w-64 text-right">{tc("status")}</TH>
+                <TH className="w-40">{tc("status")}</TH>
+                <TH className="w-36 text-right">{t("actions")}</TH>
               </TR>
             </THead>
             <TBody>
@@ -230,11 +231,19 @@ export default function EbmDevicesPage() {
                     {t(`environmentLabel.${device.environment}`)}
                   </TD>
                   <TD className="text-xs text-[var(--vinea-ink)]">
-                    <p className="font-mono">{device.sdc_id ?? tc("emptyValue")}</p>
-                    <p className="font-mono text-[11px] text-[var(--vinea-ink-subtle)]">
+                    {/* `truncate`, not wrap: an SDC id and a serial are single tokens, and a
+                        serial broken across two lines reads as two serials. The full value is
+                        the element's title. */}
+                    <p className="truncate font-mono" title={device.sdc_id ?? undefined}>
+                      {device.sdc_id ?? tc("emptyValue")}
+                    </p>
+                    <p className="truncate font-mono text-[11px] text-[var(--vinea-ink-subtle)]">
                       {t("mrcNo", { value: device.mrc_no ?? tc("emptyValue") })}
                     </p>
-                    <p className="font-mono text-[11px] text-[var(--vinea-ink-subtle)]">
+                    <p
+                      className="truncate font-mono text-[11px] text-[var(--vinea-ink-subtle)]"
+                      title={device.dvc_srl_no}
+                    >
                       {t("serial", { value: device.dvc_srl_no })}
                     </p>
                   </TD>
@@ -253,15 +262,26 @@ export default function EbmDevicesPage() {
                       </p>
                     ) : null}
                   </TD>
-                  <TD className="text-right">
-                    <div className="flex flex-wrap items-center justify-end gap-2">
+                  <TD>
+                    {/* The two chips and the three actions are separate columns rather than
+                        one: five controls in a `w-64` cell wrap into each other, and a row
+                        whose Suspend button sits under its own status chip reads as though
+                        the chip were the button. */}
+                    <div className="flex flex-col items-start gap-1.5">
+                      <StatusChip tone={statusTone(device.status)}>
+                        {t(`statusLabel.${device.status}`)}
+                      </StatusChip>
                       <StatusChip tone={device.has_keys ? "info" : "neutral"}>
                         <KeyRound className="size-3" />
                         {device.has_keys ? t("keysHeld") : t("keysAbsent")}
                       </StatusChip>
-                      <StatusChip tone={statusTone(device.status)}>
-                        {t(`statusLabel.${device.status}`)}
-                      </StatusChip>
+                    </div>
+                  </TD>
+                  <TD className="text-right">
+                    {/* Stacked and right-aligned rather than wrapped: three buttons do not fit
+                        on one line at this width, and a wrapped row puts the third under the
+                        first with no relationship the eye can read. */}
+                    <div className="flex flex-col items-end gap-1">
                       <Button
                         variant="ghost"
                         onClick={() => handleInitialize(device)}

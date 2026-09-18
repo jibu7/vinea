@@ -46,7 +46,7 @@ import {
 
 const SUFFIX = String(Date.now()).slice(-6);
 const ITEM_CODE = `E2EFI${SUFFIX}`;
-const UNIT_CODE = `BX${SUFFIX}`.slice(0, 20);
+const UNIT_CODE = `CS${SUFFIX}`.slice(0, 20);
 const CUSTOMER_CODE = `E2EFC${SUFFIX}`;
 
 /** The company TIN the sandbox recognises (`KNOWN_TAXPAYERS` in `app/fiscal/rwanda/sandbox.py`).
@@ -73,6 +73,13 @@ interface Identified {
   id: number;
 }
 
+/** The id of the row with this code, from a listing already fetched. */
+function idOf(rows: Array<{ id?: number; code: string }>, code: string): number {
+  const row = rows.find((item) => item.code === code) as { id: number } | undefined;
+  if (!row) throw new Error(`no row with code ${code}`);
+  return row.id;
+}
+
 async function apiOk(
   page: Page,
   path: string,
@@ -88,7 +95,7 @@ async function apiOk(
  * one — a company that has never fiscalized does not need one — so the first thing this flow
  * does is what an operator would do first: Company details, TIN. */
 async function ensureCompanyTin(page: Page): Promise<void> {
-  await apiOk(page, "/company", { method: "PUT", body: { tin: COMPANY_TIN } });
+  await apiOk(page, "/company", { method: "PATCH", body: { tin: COMPANY_TIN } });
 }
 
 /** The device this company already holds, if any.
@@ -231,6 +238,7 @@ test.describe("EBM devices", () => {
     // Read back from the server. An item with no class is the one a fiscalized sale refuses,
     // so "the picker accepted a click" is not the thing worth asserting.
     const items = (await apiOk(page, `/inventory/items?search=${ITEM_CODE}`)) as Array<{
+      id: number;
       code: string;
       fiscal_class_code: string | null;
       fiscal_item_type: string | null;
@@ -238,6 +246,25 @@ test.describe("EBM devices", () => {
     const saved = items.find((item) => item.code === ITEM_CODE)!;
     expect(saved.fiscal_class_code).toBe(firstClass.item_cls_cd);
     expect(saved.fiscal_item_type).toBe("2");
+
+    // A stored code that the *synced* list does not carry still reads as what it holds. The
+    // sandbox publishes no nation table, so `RW` has no name to resolve to — and the picker
+    // showing "Defaults to Rwanda" over an item whose origin is set would be a screen
+    // rendering perfectly and saying something untrue.
+    await apiOk(page, `/inventory/items/${idOf(items, ITEM_CODE)}`, {
+      method: "PATCH",
+      body: { fiscal_origin_country: "RW" },
+    });
+    await page.reload();
+    await page.waitForSelector("h1:has-text('Inventory items')");
+    await page.getByLabel("Search").fill(ITEM_CODE);
+    await page.locator(`tbody tr:has-text("${ITEM_CODE}")`).first()
+      .getByRole("button", { name: /^Edit/ })
+      .click();
+    await expect(
+      page.getByRole("dialog").getByRole("button", { name: "Country of origin", exact: true }),
+    ).toContainText("RW");
+    await page.getByRole("dialog").getByRole("button", { name: "Close" }).click();
 
     // …and the registration pair reads what RRA holds, which is nothing yet: this item has
     // never been sold, so it has never been registered.
@@ -271,7 +298,7 @@ test.describe("EBM devices", () => {
     await standard.getByRole("button", { name: /^Edit/ }).click();
     const dialog = page.getByRole("dialog");
     await pickCombobox(page, "EBM class", "D", { within: dialog });
-    await dialog.getByRole("button", { name: "Save", exact: true }).click();
+    await dialog.getByRole("button", { name: "Save changes", exact: true }).click();
     await expect(page.getByText("Tax code updated").first()).toBeVisible();
     await page.reload();
     await page.waitForSelector("h1:has-text('Tax types')");
@@ -283,7 +310,7 @@ test.describe("EBM devices", () => {
       .getByRole("button", { name: /^Edit/ })
       .click();
     await pickCombobox(page, "EBM class", "B", { within: page.getByRole("dialog") });
-    await page.getByRole("dialog").getByRole("button", { name: "Save", exact: true }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Save changes", exact: true }).click();
     await page.reload();
     await expect(page.locator('tbody tr:has-text("VAT-OUT-18")').first()).toContainText("B");
   });
@@ -301,18 +328,20 @@ test.describe("EBM devices", () => {
     await dialog.getByLabel("Code").fill(UNIT_CODE);
     await dialog.getByLabel("Name").fill(`Case of six ${SUFFIX}`);
     await dialog.getByLabel("Units per base").fill("6");
-    // The authority's §4.6 list, synced by the device in the first test — not typed.
-    await pickCombobox(page, "RRA quantity unit", "BX", { within: dialog });
+    // The authority's §4.6 list, synced by the device in the first test — not typed. `U` is
+    // RRA's unit for a countable thing, and a case of six is still counted in units: the
+    // *packing* unit (`BX`) is a different table, class 17, and lives on the item.
+    await pickCombobox(page, "RRA quantity unit", "U", { within: dialog });
     await dialog.getByRole("button", { name: "Save", exact: true }).click();
     await expect(page.getByText("Unit created").first()).toBeVisible();
 
     await page.reload();
-    await page.waitForSelector("h1:has-text('Unit of measure categories')");
+    await page.waitForSelector("h1:has-text('Units of measure')");
     const row = page.locator(`tbody tr:has-text("${UNIT_CODE}")`).first();
     await expect(row).toBeVisible();
     // **The quantity figure.** The column holds "6.0000000000"; the screen reads 6.
-    await expect(row).toContainText("6");
-    await expect(row).toContainText("BX");
+    await expect(row.getByText("6", { exact: true })).toBeVisible();
+    await expect(row.getByText("U", { exact: true })).toBeVisible();
   });
 
   // PATH: Verify TIN on a customer, both answers.
@@ -346,7 +375,9 @@ test.describe("EBM devices", () => {
     await expect(page.getByText("Customer C Ltd")).toBeVisible();
 
     // …and the answer that matters most before invoicing: RRA has never heard of this one.
-    await drawer.getByLabel("TIN").fill(UNKNOWN_TIN);
+    // `getByRole("textbox")`, not `getByLabel`: the drawer's inactive AR-settings tab panel is
+    // also labelled "…TIN…" through its trigger, and a label lookup matches both.
+    await drawer.getByRole("textbox", { name: "TIN", exact: true }).fill(UNKNOWN_TIN);
     await drawer.getByRole("button", { name: "Verify TIN" }).click();
     await expect(
       page.getByText("The authority holds no taxpayer with this number"),
@@ -373,26 +404,33 @@ test.describe("EBM devices", () => {
     await expect(page.getByText("6955 · Unrealized Foreign Exchange Loss")).toBeVisible();
 
     // **The typeahead assertion**, the way P6 step 6 pinned its three. Each picker offers a
-    // different list and none of them offers a control account: the AR revaluation contra is
-    // an asset and must not be 1200, whose balance is the sum of open items at their booking
-    // rates — the invariant a revaluation posted there would break.
+    // different list, and what is asserted is both halves: the account that must not be there
+    // is absent, and the one that belongs is present — an empty picker would satisfy the first
+    // on its own and would be the P5 step 6 defect rather than the rule working.
+    //
+    // Asserted on the *option* rather than on "typing leaves nothing": cmdk scores
+    // subsequences, so `1200` still matches `1290 · AR Revaluation` and a count of zero was
+    // never the claim worth making.
+    //
+    // 1200 is the AR **control** account: its balance is Σ open items at their booking rates,
+    // which is exactly the invariant a revaluation posted there would break (decision 13).
     await page.getByRole("button", { name: "AR revaluation", exact: true }).click();
     await page.locator("[cmdk-item]").first().waitFor({ state: "visible" });
-    await page.keyboard.type("1200");
-    await expect(page.locator("[cmdk-item]")).toHaveCount(0);
+    await expect(page.locator('[cmdk-item]:has-text("1200 · Accounts Receivable")')).toHaveCount(0);
+    await expect(page.locator('[cmdk-item]:has-text("1290 · AR Revaluation")')).toHaveCount(1);
     await page.keyboard.press("Escape");
 
-    // The VAT settlement account offers liabilities and nothing else, so an asset is not on
-    // the menu at all — `invalid_gl_setting_account_class` is the same rule server-side.
+    // VAT settlement offers liabilities and nothing else, so Cash on Hand is not on the menu
+    // at all — `invalid_gl_setting_account_class` is the same rule server-side.
     await page.getByRole("button", { name: "VAT settlement", exact: true }).click();
     await page.locator("[cmdk-item]").first().waitFor({ state: "visible" });
-    await page.keyboard.type("1110");
-    await expect(page.locator("[cmdk-item]")).toHaveCount(0);
+    await expect(page.locator('[cmdk-item]:has-text("1110 · Cash on Hand")')).toHaveCount(0);
+    await expect(page.locator('[cmdk-item]:has-text("2250 · VAT Payable (RRA)")')).toHaveCount(1);
     await page.keyboard.press("Escape");
 
     // One key changed and read back from the server.
     await pickCombobox(page, "Unrealized FX loss", "6955");
-    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await page.getByRole("button", { name: "Save changes", exact: true }).click();
     await expect(page.getByText("Saved successfully").first()).toBeVisible();
     await page.reload();
     await page.waitForSelector("h1:has-text('Defaults')");

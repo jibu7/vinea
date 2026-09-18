@@ -417,6 +417,10 @@ export default function UomCategoriesPage() {
                 ]}
                 value={quantityUnit}
                 onValueChange={setQuantityUnit}
+                // The list is synced from the device; a unit mapped before a sync, or to a
+                // code the authority has since retired, still has to render as what it holds
+                // rather than as the "not mapped" placeholder.
+                fallbackLabel={quantityUnit}
                 placeholder={t("chooseQuantityUnit")}
               />
             </Field>

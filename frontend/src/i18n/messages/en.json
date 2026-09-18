@@ -2000,7 +2000,8 @@
       "syncCodes": "Sync codes",
       "synced": "Code tables synced",
       "syncedRows": "{codes} codes, {classes} item classes",
-      "syncFailed": "The code tables could not be synced"
+      "syncFailed": "The code tables could not be synced",
+      "actions": "Actions"
     },
     "tin": {
       "verify": "Verify TIN",

@@ -29,6 +29,8 @@ const COMPANY_TIN = "999000099";
 
 const ITEM_CODE = "FISCAL-DEMO";
 const UNIT_CODE = "CS6";
+/** The branch shot 2 registers against — see `seedDevice`. */
+const SECOND_BRANCH_CODE = "KGL";
 
 /** `ONLY=3-tax-types` re-captures just that one, rather than rewriting twelve files to change
  * one of them. */
@@ -117,13 +119,23 @@ interface Named {
 async function seedDevice(page: Page): Promise<void> {
   await apiOk(page, "/company", { tin: COMPANY_TIN }, "PATCH");
 
+  // A **second branch**, so shot 2 can be taken at all: Register device is disabled when every
+  // branch already has one, which is the screen enforcing "one device per branch" where the
+  // operator is choosing rather than after they have chosen. The dialog is worth a photograph
+  // — it is where the profile and the environment are picked — and it needs somewhere to
+  // register to. Idempotent by code, like every other fixture here.
+  const branches = (await apiCall(page, "/gl/branches", undefined, "GET")).json as Named[];
+  if (!branches.some((branch) => branch.code === SECOND_BRANCH_CODE)) {
+    await apiOk(page, "/gl/branches", { code: SECOND_BRANCH_CODE, name: "Kigali Shop" });
+  }
+
   const existing = (await apiCall(page, "/fiscal/devices", undefined, "GET")).json as Array<{
     id: number;
   }>;
   let deviceId = existing[0]?.id;
   if (deviceId === undefined) {
-    const branches = (await apiCall(page, "/gl/branches", undefined, "GET")).json as Named[];
-    const main = branches.find((b) => b.code === "MAIN")!;
+    const all = (await apiCall(page, "/gl/branches", undefined, "GET")).json as Named[];
+    const main = all.find((b) => b.code === "MAIN")!;
     const device = (await apiOk(page, "/fiscal/devices", {
       branch_id: main.id,
       profile: "vsdc",
@@ -154,7 +166,10 @@ async function seedCatalogue(page: Page): Promise<void> {
       code: UNIT_CODE,
       name: "Case of six",
       factor_to_base: "6",
-      fiscal_quantity_unit: "BX",
+      // `U` — RRA's quantity unit for a countable thing (class 10). A case of six is still
+      // counted in units; `BX` is the *packing* unit, a different table (class 17), and it
+      // lives on the item rather than on the unit of measure.
+      fiscal_quantity_unit: "U",
     });
   }
   // The base unit needs one too, or the Fiscal section photographs an item that could not be
@@ -251,9 +266,13 @@ async function main() {
       .getByRole("button", { name: /^Edit/ })
       .click();
     await page.waitForTimeout(400);
-    // The section is below the fold of the dialog; scroll it into view before the shot.
-    await page.getByRole("dialog").getByText("Fiscal", { exact: true }).scrollIntoViewIfNeeded();
-    await page.waitForTimeout(200);
+    // The Fiscal section is the last block in a dialog taller than the viewport, and
+    // `scrollIntoViewIfNeeded` moves the *page*, not the dialog — `DialogContent` is itself
+    // the scroll container (`max-h-[calc(100vh-4rem)] overflow-y-auto`). Scroll it to the end.
+    await page.getByRole("dialog").evaluate((node) => {
+      node.scrollTop = node.scrollHeight;
+    });
+    await page.waitForTimeout(300);
     await shoot(page, "5-item-fiscal-section", theme);
     await page.getByRole("dialog").getByRole("button", { name: "Close" }).click();
 

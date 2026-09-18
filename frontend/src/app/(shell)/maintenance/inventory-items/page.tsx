@@ -690,6 +690,13 @@ export default function InventoryItemsPage() {
                     placeholder={t("chooseFiscalClass")}
                   />
                 </Field>
+                {/* `fallbackLabel` on both, and it is not belt-and-braces. These lists are
+                    **synced from the device**, and a company whose authority has not published
+                    a class — or has not synced yet — would otherwise see the placeholder over
+                    a field that holds a value: "Defaults to Rwanda" on an item whose origin is
+                    set to `RW`. That is a screen rendering perfectly and saying something
+                    untrue, which is the whole of rule 13. The bare code is worse than the
+                    code and its name, and far better than a lie. */}
                 <div className="grid grid-cols-2 gap-3">
                   <Field label={t("fiscalOrigin")}>
                     <Combobox
@@ -702,6 +709,7 @@ export default function InventoryItemsPage() {
                       ]}
                       value={fiscalOrigin}
                       onValueChange={setFiscalOrigin}
+                      fallbackLabel={fiscalOrigin}
                       placeholder={t("chooseOrigin")}
                     />
                   </Field>
@@ -716,6 +724,7 @@ export default function InventoryItemsPage() {
                       ]}
                       value={fiscalPackageUnit}
                       onValueChange={setFiscalPackageUnit}
+                      fallbackLabel={fiscalPackageUnit}
                       placeholder={t("choosePackageUnit")}
                     />
                   </Field>
