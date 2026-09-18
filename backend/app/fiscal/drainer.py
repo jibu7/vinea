@@ -364,7 +364,22 @@ def verify_with_device(
         )
     company = db.get(Company, company_id)
     adapter = adapter_for(company.fiscal_country if company else None, client=client)
-    result, identity = adapter.initialize_device(device, cmc_key=decrypt_key(device.cmc_key))
+    try:
+        result, identity = adapter.initialize_device(
+            device, cmc_key=decrypt_key(device.cmc_key)
+        )
+    except FiscalTransportError as unreachable:
+        # **The likeliest moment anybody presses Verify is while the device is unreachable** —
+        # that is usually why the row is `unknown` in the first place. Letting the transport
+        # error out of here made the queue screen's button a 500 with no message; it is a
+        # refusal with a reason, the same translation `devices.py` makes at its three call
+        # sites. The row is left exactly as it was: nothing was learned, so nothing moves.
+        device.last_error = str(unreachable)
+        db.flush()
+        raise QueueActionError(
+            f"the device could not be reached, so there is nothing to decide from: "
+            f"{unreachable}"
+        ) from unreachable
     if not result.ok or identity is None:
         raise QueueActionError(
             f"the device could not be asked ({result.code}): {result.message}"

@@ -168,7 +168,13 @@ class DeclaredTotals:
     gross: Decimal
     taxable: Decimal
     tax: Decimal
+    #: How many **lines** the receipt carried — the receipt's own "ITEMS NUMBER" (CIS §7.27),
+    #: and the authority's `totItemCnt`.
     item_count: int
+    #: How many **things** it sold — Σ of the line quantities. A different question from
+    #: `item_count` and the one a day's report asks: §19.1's items figure is "how many items
+    #: were sold today", which on a four-line invoice of 10 + 1 + 5 + 2 is 18, not 4.
+    quantity: Decimal
     #: Σ of the line discounts on the receipt. §19.1 prints the day's discounts, so a Z that
     #: could not state them would fail the checkpoint sheet.
     discount: Decimal
@@ -307,6 +313,20 @@ class FiscalizationAdapter(Protocol):
         keying the same facts, and normalising them anywhere else would be a second opinion
         about what a receipt is. `None` when the fields are not a receipt — a success carrying
         no receipt data is not one, and a part-filled row would make "sent means signed" false.
+        """
+        ...
+
+    def redact_payload(self, value: Any) -> Any:
+        """The same payload with every secret of this authority's replaced by a marker.
+
+        On the Protocol because **which fields are secret is the authority's fact**: Rwanda's
+        three device keys are `cmcKey`, `intrlKey` and `sgnKey`, nested under `data.info`, and
+        a neutral module that knew that would be country logic above the boundary (rule 12).
+
+        The drainer already applies this before anything is stored, so a stored row is clean.
+        It is on the Protocol because the *queue screen* applies it again on the way out
+        (`app/fiscal/enquiries.py`): "the stored rows are clean" is a property of today's
+        writer, and a screen that shows a payload will outlive it.
         """
         ...
 

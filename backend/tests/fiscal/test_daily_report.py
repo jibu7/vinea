@@ -276,7 +276,25 @@ def test_a_z_totals_equal_the_sum_of_its_own_receipts(
     assert Decimal(report.figures["total_tax"]) == sum(
         (Decimal(str(r.request["totTaxAmt"])) for r in covered), Decimal(0)
     )
-    assert report.figures["items_count"] == sum(int(r.request["totItemCnt"]) for r in covered)
+    # **Quantities, not lines, and split NS from NR** — §19.1's items figure is "how many
+    # things were sold today". `totItemCnt` is the receipt's line count and stays on the
+    # receipt (CIS §7.27); a Z that reported it would say 4 for an invoice of eighteen bottles.
+    assert Decimal(report.figures["items_ns"]) == sum(
+        (
+            Decimal(str(line["qty"]))
+            for r in sales
+            for line in r.request.get("itemList", [])
+        ),
+        Decimal(0),
+    )
+    assert Decimal(report.figures["items_nr"]) == sum(
+        (
+            Decimal(str(line["qty"]))
+            for r in refunds
+            for line in r.request.get("itemList", [])
+        ),
+        Decimal(0),
+    )
 
 
 def test_the_day_reports_discounts_and_follows_the_receipt_not_the_ledger(

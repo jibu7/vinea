@@ -164,6 +164,32 @@ NO_UI: dict[str, str] = {
     "POST /api/v1/gl/fx-revaluations/{revaluation_id}/reverse": (
         "GAP (P7, step 7) — deleted by Reverse on the FX revaluation detail."
     ),
+    # --- GAP (P7, step 7): the queue screen's three actions and the copy print ------------------
+    #
+    # The screens are **Transactions → Tax → Fiscal queue** (`/fiscal/queue`: per device, rows
+    # by status, Retry now / Verify with device / Attach receipt manually, the row's request and
+    # response, the action log) and the **document detail's Copy print**.
+    #
+    # The queue listing, the row detail, the receipts enquiry and the item registrations are
+    # reads and need no exemption. These four are acts: two of them tell the authority
+    # something, and the other two are a person asserting what the authority holds and a second
+    # piece of paper leaving the building.
+    "POST /api/v1/fiscal/queue/rows/{row_id}/retry": (
+        "GAP (P7, step 7) — deleted by Retry now on the Fiscal queue screen, which releases a "
+        "failed or backing-off row."
+    ),
+    "POST /api/v1/fiscal/queue/rows/{row_id}/verify": (
+        "GAP (P7, step 7) — deleted by Verify with device on the Fiscal queue screen, which "
+        "asks the device what it holds and decides from its counters."
+    ),
+    "POST /api/v1/fiscal/queue/rows/{row_id}/attach-receipt": (
+        "GAP (P7, step 7) — deleted by Attach receipt manually on the Fiscal queue screen, "
+        "which records a receipt read off MyRRA against a row that needs one."
+    ),
+    "POST /api/v1/fiscal/documents/{document_id}/receipt/copy": (
+        "GAP (P7, step 7) — deleted by Copy print on the document detail, which increments the "
+        "receipt's copy counter and prints the COPY layout. Nothing is sent to RRA."
+    ),
     # --- GAP (P7, step 8): closing the fiscal day ----------------------------------------------
     #
     # The screen is **Transactions → Tax → Close day**, which shows the X and offers the Z. The

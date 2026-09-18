@@ -18,6 +18,8 @@ class typeahead and the Tax-types screen's EBM column read them, and a listing w
 is not what rule 14 is about: the rule names mutating endpoints.
 """
 
+from datetime import date
+
 from fastapi import APIRouter, Depends, Query, Request, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -25,18 +27,25 @@ from sqlalchemy.orm import Session
 from app.api.deps import AuthContext, get_tenant_context
 from app.api.idempotency import IdempotencyKey
 from app.core import permissions
-from app.core.errors import PermissionDeniedError
+from app.core.errors import NotFoundError, PermissionDeniedError
 from app.db import get_db
 from app.fiscal import daily as daily_service
 from app.fiscal import devices as device_service
 from app.fiscal import drainer as drain_service
+from app.fiscal import enquiries as enquiry_service
 from app.fiscal import feed as feed_service
 from app.fiscal import imports as import_service
+from app.fiscal import printing as printing_service
+from app.kernel.errors import LedgerStateError
 from app.models.fiscalization import (
     FiscalCode,
     FiscalFeedDecision,
     FiscalImportStatus,
     FiscalItemClass,
+    FiscalOutboxKind,
+    FiscalOutboxRow,
+    FiscalOutboxStatus,
+    FiscalReceiptType,
     FiscalSyncKind,
 )
 from app.schemas.fiscal import (
@@ -53,6 +62,17 @@ from app.schemas.fiscal import (
     ImportApprove,
     ImportDeclarationRead,
     ImportReject,
+    ItemRegistrationRead,
+    QueueActionRead,
+    QueueAttachReceipt,
+    QueueDeviceRead,
+    QueueHeadRead,
+    QueueRowDetailRead,
+    QueueRowRead,
+    QueueStatusCountRead,
+    ReceiptBlockRead,
+    ReceiptClassLineRead,
+    ReceiptRead,
     TinLookupRead,
     device_read,
 )
@@ -562,3 +582,293 @@ def close_day(
         number=report.number,
         report_no=report.report_no,
     )
+
+
+# --- The enquiries and listings (P7 step 5) -------------------------------------------------
+#
+# The queue per device and per row, the receipts RRA signed, the item registrations, and the
+# receipt a document prints. The screens arrive at **steps 7 and 8** — Transactions → Tax →
+# Fiscal queue and the document detail's print at step 7, Enquiries → Tax at step 8 — so the
+# four mutating endpoints below carry `GAP (P7, step 7)` lines in
+# `tests/test_api_has_a_caller.py`. Everything else here is a read.
+
+
+def _queue_device_read(view: enquiry_service.QueueDeviceView) -> QueueDeviceRead:
+    return QueueDeviceRead(
+        device_id=view.device_id,
+        branch_id=view.branch_id,
+        branch_code=view.branch_code,
+        branch_name=view.branch_name,
+        status=view.status,
+        profile=view.profile,
+        environment=view.environment,
+        sdc_id=view.sdc_id,
+        mrc_no=view.mrc_no,
+        last_success_at=view.last_success_at,
+        last_error=view.last_error,
+        offline=view.offline,
+        oldest_queued_at=view.oldest_queued_at,
+        oldest_queued_age_seconds=view.oldest_queued_age_seconds,
+        pending_rows=view.pending_rows,
+        blocked=view.blocked,
+        counts=[
+            QueueStatusCountRead(status=count.status, rows=count.rows) for count in view.counts
+        ],
+        head=None if view.head is None else QueueHeadRead(**vars(view.head)),
+    )
+
+
+@router.get("/queue")
+def list_queue(
+    device_id: int | None = Query(default=None),
+    auth: AuthContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+) -> list[QueueDeviceRead]:
+    """Every device and what its queue holds — the dashboard of decision 4."""
+    _require_view(auth)
+    return [
+        _queue_device_read(view)
+        for view in enquiry_service.queue_summary(db, auth.company_id, device_id=device_id)
+    ]
+
+
+@router.get("/queue/rows")
+def list_queue_rows(
+    device_id: int | None = Query(default=None),
+    status_filter: FiscalOutboxStatus | None = Query(default=None, alias="status"),
+    kind: FiscalOutboxKind | None = Query(default=None),
+    document_id: int | None = Query(default=None),
+    limit: int = Query(default=200, ge=1, le=1000),
+    auth: AuthContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+) -> list[QueueRowRead]:
+    """The rows in queue order — which is send order. `document_id` is step 8's read-only
+    "Fiscal queue history, per document"."""
+    _require_view(auth)
+    return [
+        QueueRowRead(**vars(row))
+        for row in enquiry_service.queue_rows(
+            db,
+            auth.company_id,
+            device_id=device_id,
+            status=status_filter,
+            kind=kind,
+            document_id=document_id,
+            limit=limit,
+        )
+    ]
+
+
+@router.get("/queue/rows/{row_id}")
+def read_queue_row(
+    row_id: int,
+    auth: AuthContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+) -> QueueRowDetailRead:
+    _require_view(auth)
+    detail = enquiry_service.queue_row(db, auth.company_id, row_id)
+    return QueueRowDetailRead(
+        row=QueueRowRead(**vars(detail.row)),
+        request=detail.request,
+        response=detail.response,
+        resolved_by_email=detail.resolved_by_email,
+        resolution_note=detail.resolution_note,
+        actions=[QueueActionRead(**vars(entry)) for entry in detail.actions],
+    )
+
+
+def _queue_row(db: Session, company_id: int, row_id: int) -> FiscalOutboxRow:
+    row = db.scalar(
+        select(FiscalOutboxRow).where(
+            FiscalOutboxRow.company_id == company_id, FiscalOutboxRow.id == row_id
+        )
+    )
+    if row is None:
+        raise NotFoundError("Queue row not found")
+    return row
+
+
+def _action_error(error: drain_service.QueueActionError) -> LedgerStateError:
+    """A queue action asked of a row it does not apply to is a state refusal, not a 500.
+
+    The three actions are deliberately narrow — retry is not offered on `unknown` because RRA
+    may already hold the sale — so being told "no" is an ordinary outcome of the screen and has
+    to read as one.
+    """
+    return LedgerStateError(str(error), code="fiscal_queue_action_refused")
+
+
+@router.post("/queue/rows/{row_id}/retry")
+def retry_queue_row(
+    row_id: int,
+    auth: AuthContext = permissions.require(permissions.FISCAL_QUEUE_MANAGE),
+    db: Session = Depends(get_db),
+) -> QueueRowRead:
+    """Put a `failed` or backing-off row at the front of its queue, due now.
+
+    Never offered for `unknown` or `needs_receipt`: those mean RRA may already be holding the
+    sale, and a retry on them is precisely the duplicate the policy exists to prevent.
+    """
+    row = _queue_row(db, auth.company_id, row_id)
+    try:
+        drain_service.retry_now(db, auth.company_id, row, actor=auth.user)
+    except drain_service.QueueActionError as error:
+        raise _action_error(error) from error
+    db.commit()
+    return QueueRowRead(**vars(enquiry_service.queue_row(db, auth.company_id, row_id).row))
+
+
+@router.post("/queue/rows/{row_id}/verify")
+def verify_queue_row(
+    row_id: int,
+    auth: AuthContext = permissions.require(permissions.FISCAL_QUEUE_MANAGE),
+    db: Session = Depends(get_db),
+) -> QueueRowRead:
+    """Ask the device what it holds, and let its counters decide.
+
+    An `unknown` row is resolved by asking, never by resending: re-initialization returns
+    `lastSaleInvcNo`, and a counter at or above this row's number means RRA has the sale and a
+    person must attach the receipt.
+    """
+    row = _queue_row(db, auth.company_id, row_id)
+    device = device_service.get_device(db, auth.company_id, row.device_id)
+    try:
+        drain_service.verify_with_device(db, auth.company_id, device, row, actor=auth.user)
+    except drain_service.QueueActionError as error:
+        raise _action_error(error) from error
+    db.commit()
+    return QueueRowRead(**vars(enquiry_service.queue_row(db, auth.company_id, row_id).row))
+
+
+@router.post("/queue/rows/{row_id}/attach-receipt", status_code=status.HTTP_201_CREATED)
+def attach_queue_receipt(
+    row_id: int,
+    payload: QueueAttachReceipt,
+    auth: AuthContext = permissions.require(permissions.FISCAL_QUEUE_MANAGE),
+    db: Session = Depends(get_db),
+) -> ReceiptRead:
+    """A receipt read off the authority's portal, attached by a person who says so.
+
+    Normalised through the adapter rather than parsed here, and audited with the note, because
+    this is a human assertion about what a revenue authority is holding.
+    """
+    row = _queue_row(db, auth.company_id, row_id)
+    device = device_service.get_device(db, auth.company_id, row.device_id)
+    try:
+        receipt = drain_service.attach_receipt(
+            db,
+            auth.company_id,
+            device,
+            row,
+            fields=payload.fields,
+            note=payload.note,
+            actor=auth.user,
+        )
+    except drain_service.QueueActionError as error:
+        raise _action_error(error) from error
+    db.commit()
+    return ReceiptRead(
+        **vars(enquiry_service.receipt_detail(db, auth.company_id, receipt.id))
+    )
+
+
+@router.get("/receipts")
+def list_receipts(
+    device_id: int | None = Query(default=None),
+    receipt_type: FiscalReceiptType | None = Query(default=None),
+    document_id: int | None = Query(default=None),
+    partner_id: int | None = Query(default=None),
+    date_from: date | None = Query(default=None),
+    date_to: date | None = Query(default=None),
+    search: str | None = Query(default=None, max_length=100),
+    limit: int = Query(default=200, ge=1, le=1000),
+    auth: AuthContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+) -> list[ReceiptRead]:
+    """The receipts RRA signed, searched the way somebody holding one searches.
+
+    One box over the printed counter, the document number, the partner and the authority's
+    invoice number — the four things a person has in front of them — rather than four fields
+    nobody knows which to use.
+    """
+    _require_view(auth)
+    return [
+        ReceiptRead(**vars(view))
+        for view in enquiry_service.receipts(
+            db,
+            auth.company_id,
+            device_id=device_id,
+            receipt_type=receipt_type,
+            document_id=document_id,
+            partner_id=partner_id,
+            date_from=date_from,
+            date_to=date_to,
+            search=search,
+            limit=limit,
+        )
+    ]
+
+
+@router.get("/receipts/{receipt_id}")
+def read_receipt(
+    receipt_id: int,
+    auth: AuthContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+) -> ReceiptRead:
+    _require_view(auth)
+    return ReceiptRead(**vars(enquiry_service.receipt_detail(db, auth.company_id, receipt_id)))
+
+
+@router.get("/items")
+def list_item_registrations(
+    registered: bool | None = Query(default=None),
+    search: str | None = Query(default=None, max_length=100),
+    limit: int = Query(default=500, ge=1, le=2000),
+    auth: AuthContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+) -> list[ItemRegistrationRead]:
+    """Every item with its registration beside it — including the ones RRA has never heard of,
+    which are the ones that would refuse a fiscalized sale."""
+    _require_view(auth)
+    return [
+        ItemRegistrationRead(**vars(view))
+        for view in enquiry_service.item_registrations(
+            db, auth.company_id, registered=registered, search=search, limit=limit
+        )
+    ]
+
+
+def _block_read(block: printing_service.ReceiptBlock) -> ReceiptBlockRead:
+    fields = vars(block) | {
+        "classes": [ReceiptClassLineRead(**vars(line)) for line in block.classes]
+    }
+    return ReceiptBlockRead(**fields)
+
+
+@router.get("/documents/{document_id}/receipt")
+def read_document_receipt(
+    document_id: int,
+    auth: AuthContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+) -> ReceiptBlockRead | None:
+    """What this document prints, `null` when it is not a fiscal receipt at all, and
+    `fiscal_receipt_pending` when the authority has not signed it yet (CIS §10)."""
+    _require_view(auth)
+    block = printing_service.receipt_block(db, auth.company_id, document_id)
+    return None if block is None else _block_read(block)
+
+
+@router.post("/documents/{document_id}/receipt/copy")
+def print_document_receipt_copy(
+    document_id: int,
+    request: Request,
+    auth: AuthContext = permissions.require(permissions.FISCAL_REPORTS_VIEW),
+    db: Session = Depends(get_db),
+) -> ReceiptBlockRead:
+    """A reprint: `COPY` under the header, the counter incremented and audited, and **nothing
+    sent to RRA** — a copy is a print of a sale already declared (§11, §15)."""
+    block = printing_service.record_copy(
+        db, auth.company_id, document_id, actor=auth.user, request=request
+    )
+    db.commit()
+    return _block_read(block)

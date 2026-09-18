@@ -498,6 +498,16 @@ class RwandaEbmAdapter:
 
     # --- Purchases -------------------------------------------------------------------------
 
+    def redact_payload(self, value: Any) -> Any:
+        """The Protocol's name for `redact` — the three device keys, wherever they sit.
+
+        A method as well as a module function because callers above the boundary reach it
+        through `adapter_for(country)`: which fields are secret is this authority's fact, and a
+        neutral module importing `redact` would be importing `rwanda` (rule 12, and
+        `tests/fiscal/test_boundary.py`).
+        """
+        return redact(value)
+
     def normalize_declared_totals(
         self,
         request: dict[str, Any] | None,
@@ -550,6 +560,7 @@ class RwandaEbmAdapter:
             taxable=_wire_money(signed.get("totTaxblAmt", request.get("totTaxblAmt"))),
             tax=_wire_money(signed.get("totTaxAmt", request.get("totTaxAmt"))),
             item_count=int(request.get("totItemCnt") or 0),
+            quantity=sum((_wire_money(line.get("qty")) for line in lines), _WIRE_ZERO),
             discount=sum((_wire_money(line.get("dcAmt")) for line in lines), _WIRE_ZERO),
             classes=tuple(classes),
             countersigned=bool(signed),

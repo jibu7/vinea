@@ -168,6 +168,12 @@ class NullAdapter:
         return None
 
     # --- Purchases and imports -------------------------------------------------------------
+    def redact_payload(self, value: Any) -> Any:
+        """Unchanged. This adapter holds no keys, so it has none to hide — and returning the
+        value untouched is the honest answer rather than a defensive copy that suggests it
+        removed something."""
+        return value
+
     def normalize_declared_totals(
         self,
         request: dict[str, Any] | None,

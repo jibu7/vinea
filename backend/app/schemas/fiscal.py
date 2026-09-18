@@ -20,7 +20,11 @@ from app.models.fiscalization import (
     FiscalEnvironment,
     FiscalFeedDecision,
     FiscalImportStatus,
+    FiscalOutboxKind,
+    FiscalOutboxStatus,
     FiscalProfile,
+    FiscalReceiptType,
+    PaymentMethod,
 )
 
 
@@ -207,7 +211,10 @@ class DailyFiguresRead(BaseModel):
     nr_gross: Decimal
     net_gross: Decimal
     total_tax: Decimal
-    items_count: int
+    #: Σ of the receipts' line quantities, split NS from NR — how many things were sold and how
+    #: many came back. The receipt's own line count is on the receipt, not here.
+    items_ns: Decimal
+    items_nr: Decimal
     copies_count: int
     copies_gross: Decimal
     #: §19.1 prints the day's discounts.
@@ -221,7 +228,9 @@ class DailyFiguresRead(BaseModel):
     #: receipt, so it is no part of the totals — and a Z that closed over one says so.
     queued_rows: int
     classes: dict[str, ClassTotalsRead]
+    #: Sales by method, and refunds beside them. Never netted — see `DailyFigures`.
     by_payment_method: dict[str, Decimal]
+    refunds_by_payment_method: dict[str, Decimal]
 
 
 class DailyReportRead(BaseModel):
@@ -234,3 +243,207 @@ class DailyReportRead(BaseModel):
     figures: DailyFiguresRead
     number: str | None = None
     report_no: int | None = None
+
+
+# --- The enquiries and listings (P7 step 5) -------------------------------------------------
+#
+# The queue, the receipts and the item registrations. The screens arrive at steps 7 and 8
+# (Transactions → Tax → Fiscal queue, Enquiries → Tax → Fiscal receipts), and none of these is
+# a mutating endpoint except the three queue actions and the copy print, which carry their
+# `GAP (P7, step 7)` lines until those screens land.
+
+
+class QueueStatusCountRead(BaseModel):
+    status: FiscalOutboxStatus
+    rows: int
+
+
+class QueueHeadRead(BaseModel):
+    """The row at the front of a device's queue. Every row behind it is waiting on this one."""
+
+    row_id: int
+    kind: FiscalOutboxKind
+    status: FiscalOutboxStatus
+    sequence_no: int
+    attempts: int
+    next_attempt_at: datetime | None
+    last_result_cd: str | None
+    last_error: str | None
+
+
+class QueueDeviceRead(BaseModel):
+    device_id: int
+    branch_id: int
+    branch_code: str
+    branch_name: str
+    status: str
+    profile: str
+    environment: str
+    sdc_id: str | None
+    mrc_no: str | None
+    last_success_at: datetime | None
+    last_error: str | None
+    #: A device whose oldest unsent row is over 24 hours old (VSDC §2.2 item 4).
+    offline: bool
+    oldest_queued_at: datetime | None
+    oldest_queued_age_seconds: int | None
+    pending_rows: int
+    #: The head is in a state that will not move by itself — a person has to act.
+    blocked: bool
+    counts: list[QueueStatusCountRead]
+    head: QueueHeadRead | None
+
+
+class QueueRowRead(BaseModel):
+    row_id: int
+    device_id: int
+    kind: FiscalOutboxKind
+    status: FiscalOutboxStatus
+    sequence_no: int
+    invc_no: int | None
+    sar_no: int | None
+    attempts: int
+    next_attempt_at: datetime | None
+    last_result_cd: str | None
+    last_error: str | None
+    sent_at: datetime | None
+    created_at: datetime | None
+    source_doc_type: str | None
+    source_doc_id: int | None
+    document_number: str | None
+    document_id: int | None
+    partner_name: str | None
+    receipt_id: int | None
+
+
+class QueueActionRead(BaseModel):
+    at: datetime
+    action: str
+    actor_email: str | None
+    detail: dict
+
+
+class QueueRowDetailRead(BaseModel):
+    """The row, what was sent, what came back, and who has touched it.
+
+    `request` and `response` are redacted twice — at enqueue and again here — so that a screen
+    showing a payload can never be the place a device key escapes.
+    """
+
+    row: QueueRowRead
+    request: dict
+    response: dict | None
+    resolved_by_email: str | None
+    resolution_note: str | None
+    actions: list[QueueActionRead]
+
+
+class QueueAttachReceipt(BaseModel):
+    """The six fields off the authority's portal, plus the note that says who read them.
+
+    `fields` is passed to the adapter untouched: an operator copying a sales response is keying
+    one, and a second parser here would eventually disagree with `normalize_receipt`.
+    """
+
+    fields: dict
+    note: str = Field(min_length=1, max_length=500)
+
+
+class ReceiptRead(BaseModel):
+    receipt_id: int
+    device_id: int
+    document_id: int
+    document_number: str
+    document_date: date
+    partner_id: int
+    partner_name: str
+    receipt_type: FiscalReceiptType
+    invc_no: int
+    org_invc_no: int | None
+    rcpt_no: int
+    tot_rcpt_no: int
+    #: `rcptNo/totRcptNo LABEL`, as the paper prints it — what somebody holding one will type.
+    receipt_number: str
+    sdc_id: str
+    mrc_no: str | None
+    sdc_datetime: datetime
+    intrl_data: str
+    rcpt_sign: str
+    qr_payload: str
+    copy_count: int
+    total_amount: Decimal
+    base_total_amount: Decimal
+    currency_id: int
+    journal_entry_id: int | None
+
+
+class ItemRegistrationRead(BaseModel):
+    """An item and what RRA holds about it. The unregistered ones are why this exists: a
+    fiscalized sale of an item with no class is refused, so "which items would refuse" is the
+    question, and a listing of `fiscal_items` alone could never answer it."""
+
+    item_id: int
+    item_code: str
+    item_name: str
+    item_type: str
+    registered: bool
+    item_cd: str | None
+    item_cls_cd: str | None
+    item_ty_cd: str | None
+    orgn_nat_cd: str | None
+    pkg_unit_cd: str | None
+    qty_unit_cd: str | None
+    tax_ty_cd: str | None
+    default_price_inclusive: Decimal | None
+    barcode: str | None
+    active: bool
+    registered_at: datetime | None
+    pending_rows: int
+    last_error: str | None
+
+
+class ReceiptClassLineRead(BaseModel):
+    tax_class: str
+    rate: Decimal
+    taxable: Decimal
+    tax: Decimal
+    used: bool
+
+
+class ReceiptBlockRead(BaseModel):
+    """What the CIS §13/§14 layout prints. The template is step 7's; these are the facts."""
+
+    document_id: int
+    document_number: str
+    document_date: date
+    receipt_id: int
+    receipt_type: FiscalReceiptType
+    label: str
+    rcpt_no: int
+    tot_rcpt_no: int
+    receipt_number: str
+    invc_no: int
+    refund_of_tot_rcpt_no: int | None
+    sdc_id: str
+    mrc_no: str | None
+    sdc_datetime: datetime
+    intrl_data: str
+    rcpt_sign: str
+    qr_payload: str
+    taxpayer_name: str
+    taxpayer_tin: str | None
+    branch_name: str
+    branch_address: str | None
+    customer_name: str
+    customer_tin: str | None
+    payment_method: PaymentMethod | None
+    purchase_code: str | None
+    items_count: int
+    discount_total: Decimal
+    taxable_total: Decimal
+    tax_total: Decimal
+    gross_total: Decimal
+    classes: list[ReceiptClassLineRead]
+    #: True on every print after the first: the template adds `COPY` and the warning line.
+    is_copy: bool
+    copy_count: int
