@@ -354,7 +354,9 @@ def get_account_history(
             AuditLog.entity == "gl_accounts",
             AuditLog.entity_id == str(account.id),
         )
-        .order_by(AuditLog.at.desc())
+        # `at` is the transaction clock, so two rows written by one request tie on it;
+        # the id breaks the tie in write order.
+        .order_by(AuditLog.at.desc(), AuditLog.id.desc())
     )
     rows = db.scalars(statement).all()
     return [AccountAuditRead.model_validate(row) for row in rows]
