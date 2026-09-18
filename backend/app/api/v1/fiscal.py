@@ -27,6 +27,7 @@ from app.api.idempotency import IdempotencyKey
 from app.core import permissions
 from app.core.errors import PermissionDeniedError
 from app.db import get_db
+from app.fiscal import daily as daily_service
 from app.fiscal import devices as device_service
 from app.fiscal import drainer as drain_service
 from app.fiscal import feed as feed_service
@@ -39,6 +40,8 @@ from app.models.fiscalization import (
     FiscalSyncKind,
 )
 from app.schemas.fiscal import (
+    DailyFiguresRead,
+    DailyReportRead,
     DeviceCreate,
     DeviceRead,
     DeviceSuspend,
@@ -476,3 +479,86 @@ def reject_import_declaration(
     )
     db.commit()
     return ImportDeclarationRead.model_validate(declaration)
+
+
+# --- X and Z (decision 11) ---------------------------------------------------------------
+#
+# The screen arrives at **step 8** — Transactions → Tax → Close day, showing the X and offering
+# the close — so `close-day` carries a `GAP (P7, step 8)` line in
+# `tests/test_api_has_a_caller.py`. The X and the listing are reads and need no exemption.
+
+
+def _daily_read(view: daily_service.DailyReportView) -> DailyReportRead:
+    return DailyReportRead(
+        device_id=view.device_id,
+        kind=view.kind,
+        from_at=view.from_at,
+        to_at=view.to_at,
+        figures=DailyFiguresRead.model_validate(view.figures.as_dict()),
+        number=view.number,
+        report_no=view.report_no,
+    )
+
+
+@router.get("/devices/{device_id}/x-report")
+def x_report(
+    device_id: int,
+    auth: AuthContext = permissions.require(permissions.FISCAL_REPORTS_VIEW),
+    db: Session = Depends(get_db),
+) -> DailyReportRead:
+    """The day so far. An X is a question — it stores nothing and changes nothing."""
+    return _daily_read(daily_service.x_report(db, auth.company_id, device_id))
+
+
+@router.get("/devices/{device_id}/z-reports")
+def list_z_reports(
+    device_id: int,
+    auth: AuthContext = permissions.require(permissions.FISCAL_REPORTS_VIEW),
+    db: Session = Depends(get_db),
+    limit: int = Query(default=50, ge=1, le=200),
+) -> list[DailyReportRead]:
+    return [
+        DailyReportRead(
+            device_id=report.device_id,
+            kind="Z",
+            from_at=report.from_at,
+            to_at=report.to_at,
+            figures=DailyFiguresRead.model_validate(report.figures),
+            number=report.number,
+            report_no=report.report_no,
+        )
+        for report in daily_service.reports_of(db, auth.company_id, device_id, limit=limit)
+    ]
+
+
+@router.post("/devices/{device_id}/close-day", status_code=status.HTTP_201_CREATED)
+def close_day(
+    device_id: int,
+    request: Request,
+    auth: AuthContext = permissions.require(permissions.FISCAL_CLOSE_DAY),
+    db: Session = Depends(get_db),
+    idempotency_key: str = IdempotencyKey,
+) -> DailyReportRead:
+    """Take the Z: store the day, and open the next one where this one ended.
+
+    `Idempotency-Key` because a close is an act that cannot be taken back — a second one would
+    store an empty day and move the boundary, and the `FZR` run would carry a number for it.
+    """
+    report = daily_service.close_day(
+        db,
+        auth.company_id,
+        device_id,
+        actor=auth.user,
+        idempotency_key=idempotency_key,
+        request=request,
+    )
+    db.commit()
+    return DailyReportRead(
+        device_id=report.device_id,
+        kind="Z",
+        from_at=report.from_at,
+        to_at=report.to_at,
+        figures=DailyFiguresRead.model_validate(report.figures),
+        number=report.number,
+        report_no=report.report_no,
+    )

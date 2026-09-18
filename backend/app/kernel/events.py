@@ -252,6 +252,45 @@ class StockSold(StockJournal):
     doc_type: str = DocType.STOCK_COMPANION
 
 
+# --- Tax and unrealized FX (P7 decisions 12 and 13) -----------------------------------
+
+
+@dataclass(frozen=True, kw_only=True)
+class VatReturnPosted(SubledgerJournal):
+    """The settlement entry of a filed VAT return (decision 12).
+
+    Its own module, `tax`, for two reasons. It is what makes the return reversible **only
+    through the return** — `module_reversal("tax")` is the window, so a reversal asked for from
+    the general ledger is refused with `reverse_via_module_document` and cannot leave
+    `vat_returns.status` saying `posted` over an entry that is gone. And it is what tells the
+    *next* return's tie that these lines are a payment rather than tax: they sit on the VAT
+    accounts carrying the same tax codes, and no amount distinguishes them, so the module does.
+    """
+
+    event_type: ClassVar[str] = "vat_return_posted"
+    module: str = "tax"
+    doc_type: str = DocType.VAT_RETURN
+
+
+@dataclass(frozen=True, kw_only=True)
+class FxRevalued(SubledgerJournal):
+    """Unrealized FX on open foreign-currency partner documents (decision 13).
+
+    Module `gl`, as ADR-05 reserved it: the accounts it touches are ordinary GL accounts, and
+    deliberately **not** the AR/AP controls — those are subledger-only and their balance is the
+    sum of open items at booking rates, which a revaluation posting into them would break. The
+    balance sheet reads `1200` and `1290` together instead.
+
+    The run posts this entry at the revaluation date and its mirror the following day, in one
+    transaction, so the date carries the revaluation and the next period does not. Realized FX
+    at allocation stays P4's.
+    """
+
+    event_type: ClassVar[str] = "fx_revalued"
+    module: str = "gl"
+    doc_type: str = DocType.FX_REVALUATION
+
+
 # --- ADR-05's P6 vocabulary, and the classes that actually carry it --------------------
 #
 # `GoodsReceived`, `SupplierInvoiceMatched` and `StockSold` were declared here as stubs so the
@@ -279,11 +318,9 @@ class _StubEvent(PostingEvent):
 
     lines: tuple[LineSpec, ...] = field(default_factory=tuple)
 
-
-@dataclass(frozen=True, kw_only=True)
-class FxRevalued(_StubEvent):
-    event_type: ClassVar[str] = "fx_revalued"
-    doc_type: ClassVar[str] = "FXR"
+# `FxRevalued` stood here as a stub from P2 until P7 step 4, which built it: it is a real
+# `SubledgerJournal` above, posted by `app/subledger/revaluation.py`. ADR-05 called it the last
+# kernel-side stub the fiscalization phase retires, and this is that.
 
 
 @dataclass(frozen=True, kw_only=True)

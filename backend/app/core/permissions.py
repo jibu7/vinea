@@ -97,6 +97,13 @@ OE_LANDED_COST_POST = "oe:landed_cost_post"
 FISCAL_SETUP_MANAGE = "fiscal:setup_manage"
 FISCAL_QUEUE_MANAGE = "fiscal:queue_manage"
 FISCAL_REPORTS_VIEW = "fiscal:reports_view"
+#: Closing the fiscal day (decision 11's Z). Its own permission, added in P7 step 4: decision 15
+#: gives `fiscal:reports_view` the X/Z **view** and names nothing for the act, and the act is
+#: not a reading. A Z is irreversible, takes a number from the device's `FZR` run, and moves the
+#: boundary every later day is measured from — closer in kind to filing a return than to
+#: retrying a queue row, and `fiscal:queue_manage` would have handed it to whoever may press
+#: Retry. A till supervisor closes the day; they do not administer the device.
+FISCAL_CLOSE_DAY = "fiscal:close_day"
 
 # Tax returns (P7). Viewing a return is an ordinary accounting enquiry; **filing** one posts a
 # settlement entry and freezes the figures against a high-water mark, and is irreversible
@@ -188,6 +195,7 @@ ALL_PERMISSIONS: tuple[str, ...] = (
     FISCAL_SETUP_MANAGE,
     FISCAL_QUEUE_MANAGE,
     FISCAL_REPORTS_VIEW,
+    FISCAL_CLOSE_DAY,
     TAX_VAT_RETURN_VIEW,
     TAX_VAT_RETURN_FILE,
     GL_FX_REVALUE,
@@ -245,6 +253,7 @@ SYSTEM_ROLES: tuple[dict[str, object], ...] = (
             # so is reading what the EBM queue has done. Managing devices and working the
             # queue by hand are not — those stay with the administrator.
             FISCAL_REPORTS_VIEW,
+            FISCAL_CLOSE_DAY,
             TAX_VAT_RETURN_VIEW,
             TAX_VAT_RETURN_FILE,
             GL_FX_REVALUE,

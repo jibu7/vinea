@@ -140,6 +140,38 @@ NO_UI: dict[str, str] = {
     "POST /api/v1/fiscal/import-declarations/{declaration_id}/reject": (
         "GAP (P7, step 7) — deleted by Reject on the Import declarations screen."
     ),
+    # --- GAP (P7, step 7): the VAT return and the FX revaluation --------------------------------
+    #
+    # Five lines. The screens are **Transactions → Tax → VAT returns** (`/tax/vat-returns`: the
+    # preview with its tie and late entries, File, Reverse, and the two annex downloads) and
+    # **General Ledger → Period end → FX revaluation** (`/gl/fx-revaluations`: the preview per
+    # open document, Post, Reverse).
+    #
+    # The previews, the listings and the annex CSVs are reads and need no exemption; only the
+    # four acts below do.
+    "POST /api/v1/tax/vat-returns": (
+        "GAP (P7, step 7) — deleted by File on the VAT returns screen, which freezes the "
+        "figures and posts the settlement entry."
+    ),
+    "POST /api/v1/tax/vat-returns/{return_id}/reverse": (
+        "GAP (P7, step 7) — deleted by Reverse on the VAT return detail, which reopens the "
+        "range so it can be filed again."
+    ),
+    "POST /api/v1/gl/fx-revaluations": (
+        "GAP (P7, step 7) — deleted by Post on the FX revaluation screen, which posts the run "
+        "and its next-day mirror."
+    ),
+    "POST /api/v1/gl/fx-revaluations/{revaluation_id}/reverse": (
+        "GAP (P7, step 7) — deleted by Reverse on the FX revaluation detail."
+    ),
+    # --- GAP (P7, step 8): closing the fiscal day ----------------------------------------------
+    #
+    # The screen is **Transactions → Tax → Close day**, which shows the X and offers the Z. The
+    # X and the Z listing beside it are reads and need no exemption.
+    "POST /api/v1/fiscal/devices/{device_id}/close-day": (
+        "GAP (P7, step 8) — deleted by Close day, which stores the Z and opens the next day "
+        "where this one ended."
+    ),
     # --- GAP: the operator console, planned but unscheduled ------------------------------------
     "POST /api/v1/operator/tenants/{company_id}/activate": (
         "GAP (SaaS admin, Appendix C.2) — the operator console has no screens in any phase yet. "

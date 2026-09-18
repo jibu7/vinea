@@ -37,7 +37,7 @@ from fastapi import APIRouter, FastAPI
 from fastapi.responses import JSONResponse
 
 from app.config import settings
-from app.fiscal.rwanda import codes
+from app.fiscal.rwanda import builders, codes
 from app.fiscal.rwanda.routes import ROUTES, Operation
 
 #: What initialization hands back. Fixed values, because the acceptance tape asserts them as
@@ -123,7 +123,14 @@ KNOWN_TAXPAYERS: dict[str, str] = {
 
 
 def _now() -> str:
-    return datetime.now(UTC).strftime("%Y%m%d%H%M%S")
+    """The SDC's own clock, in **Kigali**, as `yyyyMMddHHmmss`.
+
+    The format carries no zone, and `parse_stamp` reads it as Kigali because that is where the
+    taxpayer and the device are. Formatting UTC into it instead put every sandbox receipt two
+    hours before the moment it was issued — invisible to a test that only reads counters, and
+    fatal to one that asks which day a receipt falls in.
+    """
+    return datetime.now(builders.KIGALI).strftime("%Y%m%d%H%M%S")
 
 
 def _envelope(

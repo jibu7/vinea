@@ -275,7 +275,12 @@ _FISCAL_Z_REPORT = SequenceClaimant(
     numeric=True,
     branch_expression=_DAILY_REPORT_BRANCH,
 )
-_VAT_RETURN = SequenceClaimant(table="vat_returns")
+#: A return over a range with no VAT movement at all declares nothing and therefore posts no
+#: settlement entry — a nil return is still an act of filing, and RRA expects one. So it holds
+#: its own number, the same shape as a valueless stock document (P5 decision 1) and as a
+#: revaluation whose every difference was zero. A return that *did* post shares its entry's
+#: number, which is why this claimant is narrowed rather than counting every row.
+_NIL_VAT_RETURN = SequenceClaimant(table="vat_returns", where="journal_entry_id IS NULL")
 #: A revaluation run whose every difference was zero posts nothing, so there is no entry to
 #: take a number from and the run holds its own — the same shape as a valueless stock document
 #: (P5 decision 1). A run that *did* post shares its entry's number, which is why this
@@ -325,8 +330,9 @@ SEQUENCE_CLAIMANTS: dict[str, tuple[SequenceClaimant, ...]] = {
     DocType.FISCAL_STOCK: (_FISCAL_STOCK_ROW,),
     DocType.FISCAL_ITEM: (_FISCAL_ITEM,),
     DocType.FISCAL_Z_REPORT: (_FISCAL_Z_REPORT,),
-    # The return's entry takes the return's number, as every posting document's does.
-    DocType.VAT_RETURN: (_ENTRY,),
+    # The return's entry takes the return's number, as every posting document's does — and a
+    # nil return, which posts none, holds it itself.
+    DocType.VAT_RETURN: (_ENTRY, _NIL_VAT_RETURN),
     DocType.FX_REVALUATION: (_ENTRY, _VALUELESS_REVALUATION),
 }
 

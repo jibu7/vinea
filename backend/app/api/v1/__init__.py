@@ -11,6 +11,7 @@ from app.api.v1 import (
     operator,
     order_entry,
     subledger,
+    tax,
 )
 
 api_router = APIRouter(prefix="/api/v1")
@@ -24,3 +25,4 @@ api_router.include_router(subledger.router)
 api_router.include_router(inventory.router)
 api_router.include_router(order_entry.router)
 api_router.include_router(fiscal.router)
+api_router.include_router(tax.router)

@@ -29,6 +29,7 @@ from app.fiscal.mapping import (
     FiscalSyncResult,
 )
 from app.fiscal.protocol import (
+    DeclaredTotals,
     DeviceIdentity,
     FiscalReceiptData,
     FiscalResult,
@@ -167,6 +168,14 @@ class NullAdapter:
         return None
 
     # --- Purchases and imports -------------------------------------------------------------
+    def normalize_declared_totals(
+        self,
+        request: dict[str, Any] | None,
+        response: dict[str, Any] | None = None,
+    ) -> DeclaredTotals | None:
+        """Always `None`. Nothing was declared to anybody, so there is no day to total."""
+        return None
+
     def register_purchase(
         self, device: FiscalDevice, purchase: FiscalPurchase, *, cmc_key: str | None = None
     ) -> FiscalResult:

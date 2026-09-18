@@ -24,6 +24,7 @@ registered with nothing to print).
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from decimal import Decimal
 from typing import Any, Protocol, runtime_checkable
 
 from app.fiscal.mapping import (
@@ -132,6 +133,52 @@ class FiscalReceiptData:
     #: rather than recomputed, so a receipt reprinted years later carries the string that was
     #: issued with it rather than whatever today's code would produce.
     qr_payload: str = ""
+
+
+@dataclass(frozen=True)
+class DeclaredClassTotals:
+    """One tax class, as the authority received it."""
+
+    #: `A`–`D`, the class the line was declared under. Neutral: `tax_codes.fiscal_tax_type` is
+    #: Vinea's own mapping onto it, and it is the same four buckets a receipt prints.
+    tax_class: str
+    taxable: Decimal
+    tax: Decimal
+    rate: Decimal
+
+
+@dataclass(frozen=True)
+class DeclaredTotals:
+    """What one receipt **declared**, normalised out of the payload it was issued against.
+
+    The sibling of `FiscalReceiptData`, and it exists for the same reason. That one normalises
+    the authority's *answer*; this one normalises the *request* that answer was given to, so a
+    daily report can state what was declared without a neutral module reading a field name.
+
+    **Why not the ledger.** A Z says what the authority signed, and on a discounted line the
+    wire's taxable amount is `splyAmt − dcAmt` — derived from the two-decimal inclusive price —
+    **not** the posted gross (`rwanda/builders.py` says so where it computes them). The two
+    coincide on round, undiscounted prices and part company everywhere else, so a Z computed
+    off `journal_lines` would be a Z that quietly disagreed with the receipts it is a summary
+    of. The VAT return reads the ledger because a return declares what was posted; a Z reads
+    the receipts because a Z reports what was declared. Both are right, and they are not the
+    same question.
+    """
+
+    gross: Decimal
+    taxable: Decimal
+    tax: Decimal
+    item_count: int
+    #: Σ of the line discounts on the receipt. §19.1 prints the day's discounts, so a Z that
+    #: could not state them would fail the checkpoint sheet.
+    discount: Decimal
+    classes: tuple[DeclaredClassTotals, ...] = ()
+    #: True when `gross`/`taxable`/`tax` came from the authority's **answer** rather than from
+    #: the request it answered. See `normalize_declared_totals`: the authority countersigns
+    #: three totals and returns nothing else, so a Z's class split is always the request's and
+    #: only its headline figures can be the authority's own.
+    countersigned: bool = False
+
 
 
 @dataclass(frozen=True)
@@ -260,6 +307,29 @@ class FiscalizationAdapter(Protocol):
         keying the same facts, and normalising them anywhere else would be a second opinion
         about what a receipt is. `None` when the fields are not a receipt — a success carrying
         no receipt data is not one, and a part-filled row would make "sent means signed" false.
+        """
+        ...
+
+    def normalize_declared_totals(
+        self,
+        request: dict[str, Any] | None,
+        response: dict[str, Any] | None = None,
+    ) -> DeclaredTotals | None:
+        """What one receipt declared, in neutral vocabulary — **the answer where there is one**.
+
+        The read half of `normalize_receipt`. A daily report (decision 11) totals what the
+        authority signed, and "signed" means its own answer: the request is what Vinea sent, and
+        the two are equal exactly until the day they are not, which is the day a Z has to be
+        right. So `gross`, `taxable` and `tax` are taken from the response when it carries them
+        and `countersigned` says so.
+
+        Everything else has to come from the request, because the authority does not send it
+        back: the per-class split, the rates, the item count and the line discounts appear in no
+        sales response. That asymmetry is the authority's, not a shortcut — an adapter whose
+        response carries more may prefer more of it.
+
+        `None` when the payload is not a sale or refund: a stock or purchase row declared no
+        receipt and is no part of anybody's till.
         """
         ...
 
