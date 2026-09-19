@@ -325,7 +325,7 @@ test.describe("EBM devices", () => {
     const card = page.locator("section", { hasText: "COUNT · Count" }).first();
     await card.getByRole("button", { name: "Add unit" }).click();
     const dialog = page.getByRole("dialog");
-    await dialog.getByLabel("Code").fill(UNIT_CODE);
+    await dialog.getByLabel("Code", { exact: true }).fill(UNIT_CODE);
     await dialog.getByLabel("Name").fill(`Case of six ${SUFFIX}`);
     await dialog.getByLabel("Units per base").fill("6");
     // The authority's §4.6 list, synced by the device in the first test — not typed. `U` is

@@ -127,7 +127,7 @@ test.describe("P5 acceptance", () => {
     await page.waitForSelector("h1:has-text('Units of measure')");
     const countCard = page.locator("section", { hasText: "COUNT" }).first();
     await countCard.getByRole("button", { name: /Add unit/ }).click();
-    await dialog(page).getByLabel("Code").fill(UNIT_CODE);
+    await dialog(page).getByLabel("Code", { exact: true }).fill(UNIT_CODE);
     await dialog(page).getByLabel("Name", { exact: true }).fill("Box of 10");
     await dialog(page).getByLabel("Units per base").fill("10");
     await dialog(page).getByRole("button", { name: "Save", exact: true }).click();
@@ -137,7 +137,7 @@ test.describe("P5 acceptance", () => {
     await page.goto("/maintenance/inventory-items");
     await page.waitForSelector("h1:has-text('Inventory items')");
     await page.getByRole("button", { name: /New item/i }).click();
-    await dialog(page).getByLabel("Code").fill(ITEM_CODE);
+    await dialog(page).getByLabel("Code", { exact: true }).fill(ITEM_CODE);
     await dialog(page).getByLabel("Name", { exact: true }).fill(`E2E Acceptance ${SUFFIX}`);
     await pick(page, /Unit category/, "COUNT");
     await pick(page, /Base unit/, "EA");
@@ -156,7 +156,7 @@ test.describe("P5 acceptance", () => {
 
     // A second stock item that will be received at no cost — step 9's zero-value case.
     await page.getByRole("button", { name: /New item/i }).click();
-    await dialog(page).getByLabel("Code").fill(FREE_CODE);
+    await dialog(page).getByLabel("Code", { exact: true }).fill(FREE_CODE);
     await dialog(page).getByLabel("Name", { exact: true }).fill(`E2E Sample ${SUFFIX}`);
     await pick(page, /Unit category/, "COUNT");
     await pick(page, /Base unit/, "EA");
@@ -169,7 +169,7 @@ test.describe("P5 acceptance", () => {
     await page.waitForSelector("h1:has-text('Warehouses')");
     if ((await page.locator("tbody tr", { hasText: DEPOT }).count()) === 0) {
       await page.getByRole("button", { name: /New warehouse/i }).click();
-      await dialog(page).getByLabel("Code").fill(DEPOT);
+      await dialog(page).getByLabel("Code", { exact: true }).fill(DEPOT);
       await dialog(page).getByLabel("Name", { exact: true }).fill("Musanze Depot");
       // A warehouse belongs to a branch — Save stays disabled until it names one, which is
       // what made this step pass on a dirty database and time out on a fresh one.

@@ -94,6 +94,12 @@ Asserting on the option is the claim that was actually worth making.
 | the five GAP lines are deleted by real call sites | `test_api_has_a_caller.py` | `api.post("/fiscal/nope", …)` in `useSuspendFiscalDevice` | `POST /api/v1/fiscal/devices/{device_id}/suspend` back in the missing list |
 | a picker renders what it holds, not its placeholder | `Combobox` `fallbackLabel`, asserted in `p7-maintenance.spec.ts` | removing `fallbackLabel={fiscalOrigin}` | `Expected substring: "RW" / Received string: "Defaults to Rwanda"` |
 
+A fifth was not written and is worth naming: **nothing guards against a new field's label making
+an existing `getByLabel` ambiguous.** CI caught it (see below), loudly and with both matching
+elements printed — a good failure. A static guard would have to know which spec drives which
+screen, which it cannot, so the honest answer is the process one: run the specs that open the
+screens you changed.
+
 **The fourth was not planned — it was found by looking at a screenshot**, which is what rule 13
 is for. `Country of origin`, `Packaging unit` and the RRA quantity unit are all synced *from the
 device*, and the sandbox publishes no nation table (§4.4, class `05`); the picker therefore had
@@ -233,7 +239,20 @@ e2e, at b5fe3bb, on a reset database with ebm-sandbox in the stack
   npx playwright test e2e/accessibility-maintenance.spec.ts -g "ebm-devices"
                                        →  1 passed — no serious/critical axe violations,
                                           light and dark
+
+e2e, after the CI failure below, **every spec that opens a screen this step changed**, on a
+reset database:
+  npx playwright test e2e/inventory-maintenance.spec.ts e2e/inventory-acceptance.spec.ts \
+                     e2e/p6-maintenance.spec.ts e2e/p7-maintenance.spec.ts
+                                       →  35 passed (3.1m)
+  npx playwright test e2e/p6-maintenance.spec.ts   (the `Type` hardening landed after the run
+                                                    above had already collected its specs)
+                                       →  6 passed (31.5s)
 ```
+
+The ar-ap specs open a changed screen too — Verify TIN on Customers and Suppliers — and they
+are validated by CI rather than locally: `e2e (rest-1)`, `e2e (tape)` and `e2e (a11y)` were
+**green on the first push**, and those nine specs run in them.
 
 **+4 backend tests**, named rather than counted from a baseline:
 `test_p7_settings_round_trip_and_refuse_the_wrong_class`,
@@ -299,6 +318,52 @@ git diff --stat main..HEAD
   `fallbackLabel` for the selected row when the server's current page no longer holds it —
   without the latter the control would read as empty over a field that holds something, which
   is the defect class rule 13 exists for.
+
+## CI went red, and why
+
+The first push failed `e2e (rest-2)` and `e2e (rest-3)` — four tests in three files, all with
+one cause, all mine:
+
+```
+Error: locator.fill: strict mode violation:
+  getByRole('dialog').getByLabel('Code') resolved to 2 elements:
+    1) <input placeholder="WINE-750" …>            aka getByRole('textbox', { name: 'Code' })
+    2) <button aria-haspopup="dialog" …>           aka getByRole('button', { name: 'Class code' })
+```
+
+`getByLabel` matches on **substring**. The Fiscal section this step adds to the item dialog
+carries a field labelled **Class code**, so every existing `getByLabel("Code")` inside that
+dialog became ambiguous: `inventory-acceptance`, `inventory-maintenance` (twice) and
+`p6-maintenance`. The sibling line in each of those tests already read
+`getByLabel("Name", { exact: true })` — `Code` was loose only because nothing had collided with
+it yet.
+
+**Fixed by making the lookup exact**, which is what the specs' own convention already was: nine
+sites across four files, one token each. The alternative — renaming the field — would have
+traded the authority's own vocabulary (`itemClsCd` is a *class code*) for a test's convenience.
+
+**Why local runs missed it.** The new spec and the axe sweep were run, and the inventory and
+order-entry maintenance specs were not — the ones that drive the screen this step changed. That
+is the process error behind the code one, and the fix for it is not a guard but an order of
+operations: run the specs that open the screens you touched, not only the specs you wrote.
+
+**A scan, rather than fixing only what CI happened to hit.** Every label and role name this step
+adds was checked against every loose lookup in `e2e/`. It found the nine `Code` sites and one
+more: `getByRole("combobox", { name: "Type" })` in `p6-maintenance`, which "Product type" also
+contains. That one is *not* broken — the new field is a `Combobox` (a plain button) and the item
+type is a `Select` (role `combobox`), so the roles keep them apart — but it is one accidental
+role change from the same failure, so it is exact now too, labelled as insurance rather than as
+a fix.
+
+**And one flake, seen once and closed.** Re-running the four files locally, `p6-maintenance`'s
+kit test failed at `closeDrawer` with a healthy drawer still open. It did not reproduce on a
+reset database, but the race is real and predates this step: creating an item closes the create
+dialog and opens the drawer, both are Radix dialogs, both render a Close button with the same
+label, and `getByRole("dialog")` matches whichever is mounted. A `closeDrawer` that ran while
+the POST was still in flight clicked the *create dialog's* Close, and the drawer opened behind
+the assertion. `closeDrawer` now waits for the drawer specifically — it is the one with the
+Details tab — rather than for "a dialog". This step did not cause that race, but it widened the
+window: the item dialog is taller and the Items page has three more queries to settle.
 
 ## The tree
 

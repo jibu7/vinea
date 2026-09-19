@@ -186,11 +186,29 @@ async function ensureKit(page: Page): Promise<void> {
   expect(defined.ok, JSON.stringify(defined.json)).toBe(true);
 }
 
-/** Closes the drawer and waits for it to be gone. `Escape` is not enough on its own: while a
+/**
+ * Closes the drawer and waits for it to be gone. `Escape` is not enough on its own: while a
  * Radix dialog is open the page behind it is `aria-hidden`, so a `getByLabel` that follows
- * resolves against a tree the test cannot actually type into. */
+ * resolves against a tree the test cannot actually type into.
+ *
+ * **It waits for the drawer, not for "a dialog"**, and that distinction is the whole of a race
+ * this went red on once. Creating an item closes the create dialog and opens the drawer on the
+ * new row, and for a moment after `Create` the create dialog is still mounted while the POST is
+ * in flight. `getByRole("dialog")` matches either — both are Radix dialogs and both render a
+ * Close button with the same label — so a `closeDrawer` that ran early clicked **the create
+ * dialog's** Close, and the drawer then opened behind the assertion: `toHaveCount(0)` received
+ * 1, with a perfectly healthy drawer in the failure snapshot.
+ *
+ * The tablist is what tells them apart: the drawer has Details / Barcodes tabs and the create
+ * dialog has none. Seen once locally after P7 step 6 made the item dialog taller and gave the
+ * Items page three more queries to settle — the race predates that and the window widened.
+ */
 async function closeDrawer(page: Page) {
-  await page.getByRole("dialog").getByRole("button", { name: "Close" }).click();
+  const drawer = page
+    .getByRole("dialog")
+    .filter({ has: page.getByRole("tab", { name: "Details" }) });
+  await expect(drawer).toBeVisible();
+  await drawer.getByRole("button", { name: "Close" }).click();
   await expect(page.getByRole("dialog")).toHaveCount(0);
 }
 
@@ -279,11 +297,15 @@ test.describe("Order entry maintenance", () => {
     await page.goto("/maintenance/inventory-items");
     await page.waitForSelector("h1:has-text('Inventory items')");
     await page.getByRole("button", { name: /New item/i }).click();
-    await dialog(page).getByLabel("Code").fill(KIT_CODE);
+    await dialog(page).getByLabel("Code", { exact: true }).fill(KIT_CODE);
     await dialog(page).getByLabel("Name", { exact: true }).fill(`E2E Gift kit ${SUFFIX}`);
     // `kit` is the item type this step adds to the dialog. Before it, a kit could be defined
     // by the API and by nothing a person could press.
-    await dialog(page).getByRole("combobox", { name: "Type" }).click();
+    // `exact`, as insurance rather than as a fix: P7 step 6's "Product type" also contains
+    // "Type", and this lookup only still resolves to one element because that field is a
+    // `Combobox` (a plain button) while the item type is a `Select` (role `combobox`). One
+    // accidental role change away from the ambiguity that took "Code" out above.
+    await dialog(page).getByRole("combobox", { name: "Type", exact: true }).click();
     await page.getByRole("option", { name: "Kit", exact: true }).click();
     await pickCombobox(page, "Unit category", "COUNT", { within: dialog(page) });
     await pickCombobox(page, "Base unit", "EA", { within: dialog(page) });
