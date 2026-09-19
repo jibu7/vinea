@@ -3,6 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { FiscalOutboxStatus } from "@/lib/api-enums";
 import type {
   AttachReceiptPayload,
   DeviceCreatePayload,
@@ -209,22 +210,47 @@ export function useFiscalQueue(deviceId?: number | null) {
   });
 }
 
-/** The rows in queue order — which is send order. `documentId` is the read-only per-document
- * history the document detail shows. */
+/**
+ * The rows in queue order — which is send order. `documentId` is the read-only per-document
+ * history the document detail shows.
+ *
+ * **Polls only while something can still move.** The queue screen is a watch screen and wants
+ * the page to notice when a stuck device clears, without anybody pressing anything. The
+ * document detail is not: a posted document's rows are a closed set, and once they are all
+ * terminal there is nothing left to see — so a non-fiscalized company would otherwise poll an
+ * endpoint every fifteen seconds, forever, on every document anybody opened.
+ */
 export function useFiscalQueueRows(
-  filters: { deviceId?: number | null; status?: string; documentId?: number | null } = {},
+  filters: {
+    deviceId?: number | null;
+    status?: string;
+    documentId?: number | null;
+    /** `false` on a closed set: stop once every row has reached a terminal state. */
+    watch?: boolean;
+  } = {},
 ) {
   const query = new URLSearchParams();
   if (filters.deviceId) query.set("device_id", String(filters.deviceId));
   if (filters.status) query.set("status", filters.status);
   if (filters.documentId) query.set("document_id", String(filters.documentId));
   const suffix = query.toString() ? `?${query}` : "";
+  const watch = filters.watch ?? true;
   return useQuery({
     queryKey: [ROOT, "queue-rows", suffix],
     queryFn: () => api.get<QueueRow[]>(`/fiscal/queue/rows${suffix}`),
-    refetchInterval: 15_000,
+    refetchInterval: (query) =>
+      watch || (query.state.data ?? []).some((row) => !TERMINAL_STATUSES.has(row.status))
+        ? 15_000
+        : false,
   });
 }
+
+/** A row in one of these will not change again by itself. `cancelled` is terminal too: the
+ * document it reported was reversed before RRA ever held it. */
+const TERMINAL_STATUSES: ReadonlySet<string> = new Set([
+  FiscalOutboxStatus.SENT,
+  FiscalOutboxStatus.CANCELLED,
+]);
 
 export function useFiscalQueueRow(rowId: number | null) {
   return useQuery({

@@ -82,7 +82,9 @@ export function DocumentFiscalPanel({
   const showApiError = useApiErrorToast();
   const canManage = useHasPermission()("fiscal:queue_manage");
 
-  const rows = useFiscalQueueRows({ documentId });
+  // `watch: false` — a posted document's rows are a closed set, so the panel stops asking
+  // once every one of them is terminal.
+  const rows = useFiscalQueueRows({ documentId, watch: false });
   const retry = useRetryQueueRow();
   const verify = useVerifyQueueRow();
   const attach = useAttachQueueReceipt();
