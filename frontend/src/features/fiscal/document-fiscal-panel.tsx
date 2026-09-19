@@ -158,7 +158,9 @@ export function DocumentFiscalPanel({
             {receipt.receipt_number}
           </Fact>
           <Fact label={t("invcNo")}>{String(receipt.invc_no)}</Fact>
-          <Fact label={t("sdcId")}>{receipt.sdc_id}</Fact>
+          <Fact label={t("sdcId")} testId="fiscal-sdc-id">
+            {receipt.sdc_id}
+          </Fact>
           <Fact label={t("sdcDateTime")}>{formatDate(receipt.sdc_datetime)}</Fact>
           <Fact label={t("internalData")} className="sm:col-span-2">
             {dashed(receipt.intrl_data)}

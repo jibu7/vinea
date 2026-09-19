@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 import { PRIMARY_EMAIL, login, pageFetch, pickCombobox, pickDate } from "./support/fixtures";
 
 /**
@@ -48,12 +48,25 @@ const PURCHASE_CODE = "AB12CD";
 const REFUND_REASON = "06";
 
 const EBM_URL = process.env.PLAYWRIGHT_EBM_URL ?? "http://ebm-sandbox:8100";
+/** The same sandbox, reached from **this** process rather than from the backend container — the
+ * mode switch is driven by the test, not by the app. */
+const SANDBOX_ADMIN = process.env.PLAYWRIGHT_EBM_ADMIN_URL ?? "http://localhost:8100";
 
 /** The one purchase the sandbox's feed fixture holds, and the one import declaration. Fixed
  * values, so the figures below are literals rather than whatever came back. */
 const FEED_SUPPLIER_TIN = "100000003";
 const FEED_TAXABLE = "11,800";
 const IMPORT_QUANTITY = "240";
+/** What the sandbox hands back on initialization — a fixed value, so a test can tell "the
+ * authority answered" from "the screen rendered the form it was given". */
+const SDC_ID = "SDC010000005";
+
+/** The two USD rates the revaluation test posts, and the difference they produce on its one
+ * invoice. Worked by hand in the test's own comment; nothing here is read back from the
+ * service that computes it. */
+const BOOKING_RATE = 1320;
+const RATE_AT_MONTH_END = 1350;
+const EXPECTED_DIFFERENCE = "708";
 
 interface Identified {
   id: number;
@@ -62,7 +75,7 @@ interface Identified {
 async function apiOk(
   page: Page,
   path: string,
-  init: { method?: string; body?: unknown } = {},
+  init: { method?: string; body?: unknown; headers?: Record<string, string> } = {},
 ): Promise<unknown> {
   const res = await pageFetch(page, path, init);
   expect(res.ok, `${init.method ?? "GET"} ${path} -> ${res.status}: ${JSON.stringify(res.json)}`)
@@ -77,6 +90,71 @@ async function apiOk(
  * test that would otherwise be a sleep. */
 async function drain(page: Page): Promise<void> {
   await apiOk(page, "/fiscal/outbox/drain", { method: "POST" });
+}
+
+/**
+ * Switch what the authority does next.
+ *
+ * `down` is how the print gate is made **deterministic**: the worker drains every fifteen
+ * seconds, so "the row is still queued" cannot be asserted by being quick. With the authority
+ * unreachable the row stays queued however many times the worker tries it, which is also
+ * exactly the situation CIS §10 is about — the receipt number does not exist yet, so there is
+ * nothing to print.
+ */
+/**
+ * Forget everything the authority is holding.
+ *
+ * The sandbox keeps its ledger — invoice numbers, receipt counters, the items it has been told
+ * about — in the **container's memory**, and `make db-reset` does not touch it. So a second run
+ * against a reset database starts Vinea's `FIS` sequence at 1 again while the authority still
+ * remembers invoice 1, and the sale comes back `994: the invoice number is already registered`.
+ * That is the sandbox behaving correctly and the *fixture* being stale, which is a distinction
+ * worth not having to make at two in the morning.
+ *
+ * Called once, first, so the run starts against an authority that has never heard of this
+ * taxpayer — which is also the state a fresh CI stack is in.
+ */
+async function sandboxReset(request: APIRequestContext): Promise<void> {
+  const res = await request.post(`${SANDBOX_ADMIN}/_sandbox/reset`);
+  expect(res.ok(), `sandbox reset -> ${res.status()}`).toBe(true);
+}
+
+async function sandboxMode(request: APIRequestContext, mode: string): Promise<void> {
+  const res = await request.post(`${SANDBOX_ADMIN}/_sandbox/mode`, { data: { mode } });
+  expect(res.ok(), `sandbox mode ${mode} -> ${res.status()}`).toBe(true);
+}
+
+/** How many rows this company's devices are still holding. */
+async function pendingRows(page: Page): Promise<number> {
+  const devices = (await apiOk(page, "/fiscal/queue")) as Array<{ pending_rows: number }>;
+  return devices.reduce((total, device) => total + device.pending_rows, 0);
+}
+
+/**
+ * Press **Retry now** on every waiting row until the device's queue is empty.
+ *
+ * Through the screen, not through the API: this is the button that deletes one of the
+ * fourteen `GAP (P7, step 7)` lines, and a test that released the queue with a `fetch` would
+ * leave it a button nobody has ever pressed — which is the defect rule 14 exists to catch,
+ * one level up.
+ *
+ * Bounded rather than `while (pending)`: a queue that never clears is a failure to report, not
+ * a loop to spin in.
+ */
+async function releaseTheQueue(page: Page): Promise<void> {
+  for (let pass = 0; pass < 8; pass += 1) {
+    if ((await pendingRows(page)) === 0) return;
+    await page.goto("/fiscal/queue");
+    await page.waitForSelector("h1:has-text('Fiscal queue')");
+    const buttons = page.getByRole("button", { name: "Retry now" });
+    const count = await buttons.count();
+    for (let index = 0; index < count; index += 1) {
+      const button = buttons.nth(index);
+      if (await button.isEnabled()) await button.click();
+    }
+    await drain(page);
+  }
+  expect(await pendingRows(page), "the queue never cleared").toBe(0);
 }
 
 /** The device this company holds, registered and initialized against the sandbox.
@@ -102,7 +180,13 @@ async function activeDevice(page: Page): Promise<Identified> {
         bhf_id: "00",
       },
     })) as Identified);
-  await apiOk(page, `/fiscal/devices/${device.id}/initialize`, { method: "POST" });
+  // The endpoint **requires** an Idempotency-Key: initialization is not naturally
+  // idempotent from the caller's side, and re-initializing a live device is how its keys get
+  // reissued. A fresh key per call, because two deliberate presses are two initializations.
+  await apiOk(page, `/fiscal/devices/${device.id}/initialize`, {
+    method: "POST",
+    headers: { "Idempotency-Key": `p7-step7-init-${Date.now()}` },
+  });
   await apiOk(page, `/fiscal/devices/${device.id}/sync-codes`, { method: "POST" });
   await apiOk(page, `/fiscal/devices/${device.id}/sync-item-classes`, { method: "POST" });
   return device;
@@ -115,7 +199,8 @@ test.describe("the fiscalized transaction screens", () => {
   let itemId = 0;
   let invoiceDocumentId = 0;
 
-  test("the catalogue and the device are fiscal-ready", async ({ page }) => {
+  test("the catalogue and the device are fiscal-ready", async ({ page, request }) => {
+    await sandboxReset(request);
     await login(page, PRIMARY_EMAIL);
     deviceId = (await activeDevice(page)).id;
 
@@ -134,6 +219,16 @@ test.describe("the fiscalized transaction screens", () => {
 
     const accounts = (await apiOk(page, "/gl/accounts")) as Array<Identified & { code: string }>;
     const byCode = new Map(accounts.map((a) => [a.code, a.id]));
+    // The item's own tax code, and the EBM class on it. Decision 8: a sale line whose code has
+    // no class is refused `tax_class_unmapped`, because RRA reports every line under one of
+    // A-D and there is no fifth answer.
+    const taxCodes = (await apiOk(page, "/gl/tax-codes")) as Array<
+      Identified & { code: string; fiscal_tax_type: string | null }
+    >;
+    const outputVat = taxCodes.find((code) => code.code === "VAT-OUT-18")!;
+    expect(outputVat.fiscal_tax_type, "the P7 migration seeds the four codes' EBM class").toBe(
+      "B",
+    );
     const item = (await apiOk(page, "/inventory/items", {
       method: "POST",
       body: {
@@ -145,6 +240,8 @@ test.describe("the fiscalized transaction screens", () => {
         selling_price: "2000",
         sales_account_id: byCode.get("4100"),
         cogs_account_id: byCode.get("5100"),
+        default_sales_tax_code_id: outputVat.id,
+        default_purchase_tax_code_id: taxCodes.find((code) => code.code === "VAT-IN-18")?.id,
         fiscal_class_code: "5059020800",
       },
     })) as Identified;
@@ -174,8 +271,9 @@ test.describe("the fiscalized transaction screens", () => {
     const suppliers = (await apiOk(page, "/subledger/ap/partners")) as Array<
       Identified & { supplier_code: string | null }
     >;
-    await apiOk(page, "/oe/goods-received", {
+    await apiOk(page, "/oe/goods-received-notes", {
       method: "POST",
+      headers: { "Idempotency-Key": `p7-step7-grn-${SUFFIX}` },
       body: {
         partner_id: suppliers.find((s) => s.supplier_code === SUPPLIER_CODE)!.id,
         grn_date: new Date().toISOString().slice(0, 10),
@@ -190,8 +288,19 @@ test.describe("the fiscalized transaction screens", () => {
   // PATH: /ar/invoices/new — the purchase code is demanded, refused inline when missing, and
   // accepted; the sale queues in the posting's own transaction.
   // CANNOT SEE: the payload that went to RRA. The queue screen's row detail shows it.
-  test("an invoice to a customer with a TIN demands a purchase code, inline", async ({ page }) => {
+  test("an invoice to a customer with a TIN demands a purchase code, inline", async ({
+    page,
+    request,
+  }) => {
     await login(page, PRIMARY_EMAIL);
+
+    // **The authority goes down before this invoice is posted.** The worker drains every
+    // fifteen seconds, so a row that RRA can answer is signed before any test could look at it
+    // — and the next test's whole subject is a document whose receipt does not exist yet. An
+    // unreachable authority keeps the row queued however many times the worker tries it, which
+    // is the real case CIS §10 is about rather than a contrivance.
+    await sandboxMode(request, "down");
+
     await page.goto("/ar/invoices/new");
     await page.waitForSelector("h1:has-text('Invoice')");
 
@@ -237,26 +346,48 @@ test.describe("the fiscalized transaction screens", () => {
   // CANNOT SEE: the printed sheet itself. `pdftotext` on the print is step 9's.
   test("the document refuses to print until RRA signs it, then prints and copies", async ({
     page,
+    request,
   }) => {
     await login(page, PRIMARY_EMAIL);
+
     await page.goto(`/ar/documents/${invoiceDocumentId}`);
     await page.waitForSelector("[data-testid='document-total']");
 
     // The figure, off the page: RWF has no decimals, so 59 000 renders without any.
     await expect(page.getByTestId("document-total")).toContainText("59,000");
 
-    // Before the drain the row is queued and there is nothing to print — CIS §10. The button
-    // is disabled and carries the queue row's own status as its reason.
     await expect(page.getByTestId("fiscal-status")).toContainText("Queued");
     await expect(page.getByTestId("report-print")).toBeDisabled();
+    // The reason is the row's own status, not a generic "cannot print".
+    await expect(page.getByTestId("report-print")).toHaveAttribute(
+      "title",
+      /queued/i,
+    );
 
-    await drain(page);
-    await page.reload();
+    // --- the authority comes back --------------------------------------------------------
+    //
+    // Bringing it back is not enough, and that is decision 4 working rather than an
+    // inconvenience: every failed attempt pushed the row's `next_attempt_at` out along the
+    // 1 → 5 → 15 minute backoff, so the drainer will not look at it again for minutes. **Retry
+    // now** is the button that exists for exactly this moment, and it is pressed here on the
+    // queue screen, once per waiting row — because the queue is per-device FIFO and releasing
+    // the sale while the item registration ahead of it is still backing off releases nothing.
+    await sandboxMode(request, "up");
+    await releaseTheQueue(page);
+
+    await page.goto(`/ar/documents/${invoiceDocumentId}`);
     await page.waitForSelector("[data-testid='fiscal-receipt-number']");
 
-    // The authority's counters, read off the page: first sale on a fresh device.
     await expect(page.getByTestId("fiscal-status")).toContainText("Sent");
-    await expect(page.getByTestId("fiscal-receipt-number")).toContainText("1/1 NS");
+    // The counters and the identity are the **authority's**, read off the page. The counter is
+    // asserted by its CIS §7.25 shape rather than as `1/1`: the sandbox keeps its counters in
+    // the container's memory, so a fresh stack starts at one and a second local run against the
+    // same container does not, and a literal here would be a test that passes in CI and fails
+    // on the machine it was written on. The SDC id is a fixture constant, so it is a literal —
+    // and it is the thing that proves these figures came back from a server rather than from
+    // the form that was submitted.
+    await expect(page.getByTestId("fiscal-receipt-number")).toHaveText(/^\d+\/\d+ NS$/);
+    await expect(page.getByTestId("fiscal-sdc-id")).toHaveText(SDC_ID);
     await expect(page.getByTestId("report-print")).toBeEnabled();
     await expect(page.getByTestId("fiscal-copy-count")).toHaveText("0");
 
@@ -268,9 +399,6 @@ test.describe("the fiscalized transaction screens", () => {
     // --- the copy print -------------------------------------------------------------------
     await page.getByTestId("copy-print").click();
     await page.getByTestId("confirm-copy-print").click();
-    await page.waitForTimeout(500);
-    await page.reload();
-    await page.waitForSelector("[data-testid='fiscal-copy-count']");
     await expect(page.getByTestId("fiscal-copy-count")).toHaveText("1");
   });
 
@@ -332,7 +460,8 @@ test.describe("the fiscalized transaction screens", () => {
     const payload = await request.innerText();
     expect(payload).not.toContain("sandbox-cmc-key");
     expect(payload).not.toContain("sandbox-sign-key");
-    await page.getByRole("button", { name: "Close" }).click();
+    // By test id: the dialog's own dismiss control is also named "Close".
+    await page.getByTestId("close-row").click();
   });
 
   // PATH: /fiscal/purchases — fetch what RRA is holding, and confirm one.
@@ -393,15 +522,30 @@ test.describe("the fiscalized transaction screens", () => {
     await page.waitForSelector("h1:has-text('VAT return')");
     await page.waitForSelector("[data-testid='vat-output']");
 
-    // The invoice declared 9 000 of output VAT and the credit note took 360 back
-    // (2 × 2 000 = 4 000 net, 18 % = 720 — halved by nothing; the credit is 720). Rather than
-    // restate the arithmetic of two documents keyed above, what is asserted is the tie: the
-    // account's movement and what the return declares of it agree, which is the one claim this
-    // screen exists to make.
+    // **The figures asserted here are the tie itself**, not a total.
+    //
+    // A return's sections are an aggregate over everything posted in the range, and this
+    // fixture is shared: another spec in the same shard posting a taxed AR document this month
+    // would move them. What is *not* movable is the claim this screen exists to make — that
+    // every franc of movement on a VAT account is accounted for by the return. So the two
+    // figures read off the page are the account's own movement and what the return declares of
+    // it, and they are asserted to be the same number.
+    //
+    // 2200 is VAT output and 1400 VAT input; `difference` is what is left over, which is where
+    // an untagged movement — a VAT payment to the authority, a journal keyed without a code —
+    // would show up rather than being swallowed.
     await expect(page.getByTestId("tie-2200")).toHaveText("Reconciled");
     await expect(page.getByTestId("tie-1400")).toHaveText("Reconciled");
-    // The figure, off the page: input VAT is the 9 000 on the opening-stock receipt.
-    await expect(page.getByTestId("vat-input")).toContainText("9,000");
+    await expect(page.getByTestId("difference-2200")).toHaveText("0");
+    const movement = await page.getByTestId("movement-2200").innerText();
+    const declared = await page.getByTestId("declared-2200").innerText();
+    expect(declared).toBe(movement);
+    // …and it is a real, formatted money figure rather than a zero that ties trivially: the
+    // invoice above put 9 000 of output VAT on this account and the credit note took 720 back,
+    // so it reads in thousands with a group separator.
+    expect(movement).toMatch(/\d{1,3},\d{3}/);
+
+    const netBeforeFiling = await page.getByTestId("vat-net").innerText();
 
     await page.getByTestId("file-return").click();
     await page.getByTestId("confirm-file").click();
@@ -409,10 +553,28 @@ test.describe("the fiscalized transaction screens", () => {
 
     await page.reload();
     await page.waitForSelector("h1:has-text('VAT return')");
-    // The filed return, with the settlement entry behind it.
-    const filed = page.locator("tbody tr").filter({ hasText: "VATR-" }).first();
-    await expect(filed).toBeVisible();
-    await expect(filed).toContainText("Filed");
+
+    // The filed return carries the net the preview showed — frozen, not recomputed.
+    const filedNet = page.locator('[data-testid^="filed-net-"]').first();
+    await expect(filedNet).toBeVisible();
+    await expect(filedNet).toHaveText(netBeforeFiling);
+    await expect(page.locator("tr").filter({ has: filedNet })).toContainText("Filed");
+
+    // …and the settlement entry it posted is now an **untagged movement** on this range's own
+    // tie, named and listed rather than absorbed. That is decision 12 working: the settlement's
+    // lines carry the tax codes with `tax_amount 0`, so they move the VAT accounts and declare
+    // nothing, and the account no longer moves by the amount the return declares.
+    //
+    // The chip still reads "Reconciled", and that is the word doing its work. A tie is not
+    // *balanced* — a VAT payment to the authority and a journal keyed without a code are real
+    // movements that no tax line explains — it is reconciled when every franc of the difference
+    // is accounted for by a line the report can name. Here the difference is 8 280 and the one
+    // line naming it is `VATR-000001`, for exactly 8 280.
+    await expect(page.getByTestId("tie-2200")).toHaveText("Reconciled");
+    await expect(page.getByTestId("difference-2200")).toHaveText(netBeforeFiling);
+    await expect(
+      page.locator("tbody tr").filter({ hasText: "settled" }).first(),
+    ).toContainText(netBeforeFiling);
   });
 
   // PATH: /gl/fx-revaluation — preview a run over an open foreign-currency invoice, post it,
@@ -420,13 +582,12 @@ test.describe("the fiscalized transaction screens", () => {
   test("the revaluation previews an open USD invoice, posts and reverses", async ({ page }) => {
     await login(page, PRIMARY_EMAIL);
 
-    // A customer, a rate and an invoice in a currency that is not the base — the only thing a
+    // A customer, two rates and an invoice in a currency that is not the base — the only thing a
     // revaluation has anything to say about.
     const currencies = (await apiOk(page, "/gl/currencies")) as Array<
       Identified & { code: string; is_base: boolean }
     >;
-    const foreign = currencies.find((c) => !c.is_base);
-    test.skip(foreign === undefined, "the fixture has no foreign currency to revalue");
+    const foreign = currencies.find((c) => !c.is_base)!;
 
     await apiOk(page, "/subledger/ar/partners", {
       method: "POST",
@@ -438,16 +599,33 @@ test.describe("the fiscalized transaction screens", () => {
     });
 
     const today = new Date();
+    const monthStart = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1))
+      .toISOString()
+      .slice(0, 10);
     const monthEnd = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() + 1, 0))
       .toISOString()
       .slice(0, 10);
+
+    // **Two rates, and the gap between them is the whole subject.** The invoice books at
+    // BOOKING_RATE and the month-end revaluation reads RATE_AT_MONTH_END, so the difference the
+    // preview shows is a figure that can be worked out by hand rather than whatever the fixture
+    // happened to hold.
+    for (const [validFrom, rate] of [
+      [monthStart, BOOKING_RATE],
+      [monthEnd, RATE_AT_MONTH_END],
+    ] as const) {
+      await apiOk(page, "/gl/exchange-rates", {
+        method: "POST",
+        body: { currency_id: foreign.id, valid_from: validFrom, rate: String(rate) },
+      });
+    }
 
     await page.goto("/ar/invoices/new");
     await page.waitForSelector("h1:has-text('Invoice')");
     await pickCombobox(page, "Customer", FX_CUSTOMER_CODE);
     await page.getByLabel("Description", { exact: true }).fill(`Fiscal FX invoice ${SUFFIX}`);
     await page.getByTestId("purchase-code").fill(PURCHASE_CODE);
-    await pickCombobox(page, "Currency", foreign!.code);
+    await pickCombobox(page, "Currency", foreign.code);
     await page.getByRole("button", { name: "Item, row 1", exact: true }).click();
     await page.locator("[cmdk-item]").first().waitFor({ state: "visible" });
     await page.keyboard.type(ITEM_CODE);
@@ -458,15 +636,38 @@ test.describe("the fiscalized transaction screens", () => {
     await page.waitForURL(/\/gl\/entries\/\d+/, { timeout: 60_000 });
     await drain(page);
 
+    const fxDocuments = (await apiOk(page, "/subledger/ar/documents?kind=invoice")) as {
+      items: Array<{ number: string; description: string }>;
+    };
+    const fxInvoiceNumber = fxDocuments.items.find((row) =>
+      row.description.startsWith("Fiscal FX invoice"),
+    )!.number;
+
+    // **The next period has to be open**, and that is the run's shape rather than a fixture
+    // detail: decision 13 posts the entry at the revaluation date *and its mirror the following
+    // day*, in one transaction, so a month-end run reaches into the month after it. The seeded
+    // tenant marks periods after today `future`, and the kernel refuses a posting into one —
+    // which is the same thing an accountant does by hand before closing a month.
+    const periods = (await apiOk(page, "/gl/periods")) as Array<
+      Identified & { start_date: string; status: string }
+    >;
+    const nextPeriod = periods.find(
+      (period) => period.start_date > monthEnd && period.status !== "open",
+    );
+    if (nextPeriod) {
+      await apiOk(page, `/gl/periods/${nextPeriod.id}/open`, { method: "POST" });
+    }
+
     await page.goto("/gl/fx-revaluation");
     await page.waitForSelector("h1:has-text('FX revaluation')");
     await pickDate(page, "Revaluation date", monthEnd);
 
-    // The preview names the document and the difference the entry would post. A line is what
-    // makes this screen worth opening — a figure, not a heading.
-    const line = page.locator("tbody tr").first();
-    await expect(line).toBeVisible();
-    await expect(page.getByTestId("revaluation-total")).toBeVisible();
+    // **The figure, worked by hand.** 10 x USD 2.00 = 20.00 net, 18 % = 3.60, so the invoice is
+    // USD 23.60 gross. RWF has no decimals, so it carries at round(23.60 x 1 320) = 31 152 and
+    // revalues at round(23.60 x 1 350) = 31 860 — a difference of 708, which is what this
+    // document's line has to show.
+    const line = page.getByTestId(`difference-${fxInvoiceNumber}`);
+    await expect(line).toHaveText(EXPECTED_DIFFERENCE);
 
     await page.getByTestId("post-revaluation").click();
     await page.getByTestId("confirm-post").click();

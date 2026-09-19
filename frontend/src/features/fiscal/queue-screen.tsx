@@ -407,7 +407,11 @@ export function FiscalQueueScreen() {
             </div>
           )}
           <div className="mt-4 flex justify-end">
-            <Button variant="ghost" onClick={() => setOpenRowId(null)}>
+            <Button
+              variant="ghost"
+              data-testid="close-row"
+              onClick={() => setOpenRowId(null)}
+            >
               {t("close")}
             </Button>
           </div>

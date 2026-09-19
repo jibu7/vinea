@@ -242,10 +242,22 @@ export function VatReturnScreen() {
               </StatusChip>
             </div>
             <dl className="grid grid-cols-4 gap-3 pt-2 text-xs">
-              <Figure label={t("movement")} value={money(tie.movement)} testId={`movement-${tie.code}`} />
-              <Figure label={t("declared")} value={money(tie.declared_in_range)} />
+              <Figure
+                label={t("movement")}
+                value={money(tie.movement)}
+                testId={`movement-${tie.code}`}
+              />
+              <Figure
+                label={t("declared")}
+                value={money(tie.declared_in_range)}
+                testId={`declared-${tie.code}`}
+              />
               <Figure label={t("lateTotal")} value={money(tie.late_total)} />
-              <Figure label={t("difference")} value={money(tie.difference)} />
+              <Figure
+                label={t("difference")}
+                value={money(tie.difference)}
+                testId={`difference-${tie.code}`}
+              />
             </dl>
             {tie.untagged.length > 0 && (
               <div className="pt-2">
