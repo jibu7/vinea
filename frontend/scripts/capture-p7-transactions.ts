@@ -76,11 +76,22 @@ async function login(page: Page, email: string) {
 }
 
 async function shoot(page: Page, name: string, theme: "light" | "dark") {
-  if (!wanted(name)) return;
   await page.evaluate((t) => document.documentElement.setAttribute("data-theme", t), theme);
   await page.waitForTimeout(400);
   await page.screenshot({ path: `${OUT}/${name}-${theme}.png` });
   console.log("captured", `${name}-${theme}`);
+}
+
+/**
+ * One screen: drive it, then photograph it — or skip both when `ONLY` excludes it.
+ *
+ * The skip has to wrap the **navigation**, not just the screenshot. A filter that only skipped
+ * the `screenshot()` call still walked every screen, so `ONLY=1-invoice` could fail on shot
+ * seven's fixture — which is the opposite of what a subset re-capture is for.
+ */
+async function shot(name: string, drive: () => Promise<void>): Promise<void> {
+  if (!wanted(name)) return;
+  await drive();
 }
 
 async function apiCall(
@@ -304,86 +315,106 @@ async function main() {
 
   for (const theme of ["light", "dark"] as const) {
     // 1 — the Invoice capture screen with its Fiscalization section, on a customer with a TIN.
-    await page.goto(`${BASE}/ar/invoices/new`);
-    await page.waitForSelector("h1:has-text('Invoice')");
-    await page.getByRole("button", { name: "Customer", exact: true }).click();
-    await page.locator("[cmdk-item]").first().waitFor({ state: "visible" });
-    await page.keyboard.type(CUSTOMER_CODE);
-    await page.locator(`[cmdk-item]:has-text("${CUSTOMER_CODE}")`).first().click();
-    await page.getByTestId("purchase-code").waitFor({ state: "visible" });
-    await page.getByTestId("purchase-code").fill(PURCHASE_CODE);
-    await page.waitForTimeout(300);
-    await shoot(page, "1-invoice-fiscal-section", theme);
+    await shot("1-invoice-fiscal-section", async () => {
+      await page.goto(`${BASE}/ar/invoices/new`);
+      await page.waitForSelector("h1:has-text('Invoice')");
+      await page.getByRole("button", { name: "Customer", exact: true }).click();
+      await page.locator("[cmdk-item]").first().waitFor({ state: "visible" });
+      await page.keyboard.type(CUSTOMER_CODE);
+      await page.locator(`[cmdk-item]:has-text("${CUSTOMER_CODE}")`).first().click();
+      await page.getByTestId("purchase-code").waitFor({ state: "visible" });
+      await page.getByTestId("purchase-code").fill(PURCHASE_CODE);
+      await page.waitForTimeout(300);
+      await shoot(page, "1-invoice-fiscal-section", theme);
+    });
 
     // 2 — the Credit note's Refund of picker, offering the partner's fiscalized invoices.
-    await page.goto(`${BASE}/ar/credit-notes/new`);
-    await page.waitForSelector("h1:has-text('Credit note')");
-    await page.getByRole("button", { name: "Customer", exact: true }).click();
-    await page.locator("[cmdk-item]").first().waitFor({ state: "visible" });
-    await page.keyboard.type(CUSTOMER_CODE);
-    await page.locator(`[cmdk-item]:has-text("${CUSTOMER_CODE}")`).first().click();
-    const fiscal = page.getByTestId("document-fiscal");
-    await fiscal.getByRole("button", { name: "Refund of", exact: true }).click();
-    await page.locator("[cmdk-item]").first().waitFor({ state: "visible" });
-    await page.waitForTimeout(300);
-    await shoot(page, "2-credit-note-refund-of", theme);
-    await page.keyboard.press("Escape");
+    await shot("2-credit-note-refund-of", async () => {
+      await page.goto(`${BASE}/ar/credit-notes/new`);
+      await page.waitForSelector("h1:has-text('Credit note')");
+      await page.getByRole("button", { name: "Customer", exact: true }).click();
+      await page.locator("[cmdk-item]").first().waitFor({ state: "visible" });
+      await page.keyboard.type(CUSTOMER_CODE);
+      await page.locator(`[cmdk-item]:has-text("${CUSTOMER_CODE}")`).first().click();
+      const fiscal = page.getByTestId("document-fiscal");
+      await fiscal.getByRole("button", { name: "Refund of", exact: true }).click();
+      await page.locator("[cmdk-item]").first().waitFor({ state: "visible" });
+      await page.waitForTimeout(300);
+      await shoot(page, "2-credit-note-refund-of", theme);
+      await page.keyboard.press("Escape");
+    });
 
     // 3 — the document detail: the fiscal panel, the receipt, Copy print, Print enabled.
-    await page.goto(`${BASE}/ar/documents/${invoiceId}`);
-    await page.getByTestId("fiscal-receipt-number").waitFor({ state: "visible" });
-    await page.waitForTimeout(300);
-    await shoot(page, "3-document-fiscal-panel", theme);
+    await shot("3-document-fiscal-panel", async () => {
+      await page.goto(`${BASE}/ar/documents/${invoiceId}`);
+      await page.getByTestId("fiscal-receipt-number").waitFor({ state: "visible" });
+      await page.waitForTimeout(300);
+      await shoot(page, "3-document-fiscal-panel", theme);
+    });
 
     // 4 — the CIS receipt itself. Print media, because that is the only state it exists in.
-    await page.emulateMedia({ media: "print" });
-    await page.getByTestId("cis-receipt").waitFor({ state: "visible" });
-    await page.waitForTimeout(400);
-    await shoot(page, "4-cis-receipt-print", theme);
-    await page.emulateMedia({ media: "screen" });
+    await shot("4-cis-receipt-print", async () => {
+      await page.emulateMedia({ media: "print" });
+      await page.getByTestId("cis-receipt").waitFor({ state: "visible" });
+      await page.waitForTimeout(400);
+      await shoot(page, "4-cis-receipt-print", theme);
+      await page.emulateMedia({ media: "screen" });
+    });
 
     // 5 — the fiscal queue: the device card and the rows behind it.
-    await page.goto(`${BASE}/fiscal/queue`);
-    await page.waitForSelector("h1:has-text('Fiscal queue')");
-    await page.locator("tbody tr").first().waitFor({ state: "visible" });
-    await page.waitForTimeout(300);
-    await shoot(page, "5-fiscal-queue", theme);
+    await shot("5-fiscal-queue", async () => {
+      await page.goto(`${BASE}/fiscal/queue`);
+      await page.waitForSelector("h1:has-text('Fiscal queue')");
+      await page.locator("tbody tr").first().waitFor({ state: "visible" });
+      await page.waitForTimeout(300);
+      await shoot(page, "5-fiscal-queue", theme);
+    });
 
     // 6 — a row's request and response, redacted, with its action log.
-    await page.locator("tbody tr").first().getByRole("button", { name: "Inspect" }).click();
-    await page.getByTestId("row-request").waitFor({ state: "visible" });
-    await page.waitForTimeout(300);
-    await shoot(page, "6-queue-row-payload", theme);
-    await page.getByTestId("close-row").click();
+    await shot("6-queue-row-payload", async () => {
+      await page.locator("tbody tr").first().getByRole("button", { name: "Inspect" }).click();
+      await page.getByTestId("row-request").waitFor({ state: "visible" });
+      await page.waitForTimeout(300);
+      await shoot(page, "6-queue-row-payload", theme);
+      await page.getByTestId("close-row").click();
+    });
 
     // 7 — the purchase feed, with one undecided purchase.
-    await page.goto(`${BASE}/fiscal/purchases`);
-    await page.waitForSelector("h1:has-text('EBM purchases')");
-    await page.locator("tbody tr").first().waitFor({ state: "visible" });
-    await page.waitForTimeout(300);
-    await shoot(page, "7-ebm-purchases", theme);
+    await shot("7-ebm-purchases", async () => {
+      await page.goto(`${BASE}/fiscal/purchases`);
+      await page.waitForSelector("h1:has-text('EBM purchases')");
+      await page.locator("tbody tr").first().waitFor({ state: "visible" });
+      await page.waitForTimeout(300);
+      await shoot(page, "7-ebm-purchases", theme);
+    });
 
     // 8 — the import declarations, waiting to be matched to a Vinea item.
-    await page.goto(`${BASE}/fiscal/imports`);
-    await page.waitForSelector("h1:has-text('Import declarations')");
-    await page.locator("tbody tr").first().waitFor({ state: "visible" });
-    await page.waitForTimeout(300);
-    await shoot(page, "8-import-declarations", theme);
+    await shot("8-import-declarations", async () => {
+      await page.goto(`${BASE}/fiscal/imports`);
+      await page.waitForSelector("h1:has-text('Import declarations')");
+      await page.locator("tbody tr").first().waitFor({ state: "visible" });
+      await page.waitForTimeout(300);
+      await shoot(page, "8-import-declarations", theme);
+    });
 
     // 9 — the VAT return, with the tie under it.
-    await page.goto(`${BASE}/tax/vat-return`);
-    await page.waitForSelector("h1:has-text('VAT return')");
-    await page.getByTestId("vat-net").waitFor({ state: "visible" });
-    await page.waitForTimeout(300);
-    await shoot(page, "9-vat-return", theme);
+    await shot("9-vat-return", async () => {
+      await page.goto(`${BASE}/tax/vat-return`);
+      await page.waitForSelector("h1:has-text('VAT return')");
+      await page.getByTestId("vat-net").waitFor({ state: "visible" });
+      await page.waitForTimeout(300);
+      await shoot(page, "9-vat-return", theme);
+    });
 
     // 10 — the revaluation preview, per open document.
-    await page.goto(`${BASE}/gl/fx-revaluation`);
-    await page.waitForSelector("h1:has-text('FX revaluation')");
-    await page.getByTestId("revaluation-total").waitFor({ state: "visible" });
-    await page.locator("tbody tr").first().waitFor({ state: "visible" });
-    await page.waitForTimeout(300);
-    await shoot(page, "10-fx-revaluation", theme);
+    await shot("10-fx-revaluation", async () => {
+      await page.goto(`${BASE}/gl/fx-revaluation`);
+      await page.waitForSelector("h1:has-text('FX revaluation')");
+      await page.getByTestId("revaluation-total").waitFor({ state: "visible" });
+      await page.locator("tbody tr").first().waitFor({ state: "visible" });
+      await page.waitForTimeout(300);
+      await shoot(page, "10-fx-revaluation", theme);
+    });
   }
 
   await browser.close();
