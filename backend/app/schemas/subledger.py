@@ -478,6 +478,11 @@ class DocumentSummary(ApiModel):
     status: str
     reference: str | None
     description: str
+    #: The receipt RRA signed, or `None`. On the summary as well as the detail because the
+    #: credit note's *Refund of* picker is a listing: it offers the partner's **fiscalized**
+    #: invoices, and the only other way to know which those are is `/fiscal/receipts`, which
+    #: an AR clerk cannot read (P7 step 7).
+    fiscal_receipt_id: int | None = None
 
 
 # --- Allocations ---------------------------------------------------------------------------

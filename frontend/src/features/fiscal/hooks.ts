@@ -3,13 +3,24 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { FiscalOutboxStatus } from "@/lib/api-enums";
 import type {
+  AttachReceiptPayload,
   DeviceCreatePayload,
   DeviceSyncResult,
+  FeedDecisionResult,
   FiscalCode,
   FiscalDevice,
+  FiscalDocumentContext,
   FiscalItemClass,
+  FiscalReceipt,
+  ImportDeclaration,
   ItemRegistration,
+  PurchaseFeedRow,
+  QueueDevice,
+  QueueRow,
+  QueueRowDetail,
+  ReceiptBlock,
   TinLookup,
 } from "./types";
 
@@ -158,5 +169,288 @@ export function useVerifyTin() {
   return useMutation({
     mutationFn: ({ deviceId, tin }: { deviceId: number; tin: string }) =>
       api.get<TinLookup>(`/fiscal/devices/${deviceId}/lookup-tin?tin=${encodeURIComponent(tin)}`),
+  });
+}
+
+// --- What a posting screen needs (P7 step 7) -------------------------------------------------
+
+/**
+ * Whether this company fiscalizes, and what a refund may give as its reason.
+ *
+ * The only fiscal read the Invoice and Credit-note screens make, and it takes **no fiscal
+ * permission** — the seeded Sales Manager role holds `ar:transactions_post` and neither
+ * `fiscal:setup_manage` nor `fiscal:reports_view`, so answering "is a purchase code required
+ * here" out of the device listing would mean handing every sales manager the authority to
+ * reconfigure the devices.
+ *
+ * Long `staleTime`: a device is activated once and RRA's §4.16 table changes when RRA
+ * republishes it, neither of which happens while somebody is keying an invoice.
+ */
+export function useFiscalDocumentContext() {
+  return useQuery({
+    queryKey: [ROOT, "document-context"],
+    queryFn: () => api.get<FiscalDocumentContext>("/fiscal/document-context"),
+    staleTime: 5 * 60_000,
+  });
+}
+
+// --- The queue (decision 4) ------------------------------------------------------------------
+
+/** Every device and what its queue holds. `refetchInterval` because this is a *watch* screen:
+ * the worker drains every fifteen seconds and a person staring at a blocked device needs the
+ * page to notice when it clears, without pressing anything. */
+export function useFiscalQueue(deviceId?: number | null) {
+  return useQuery({
+    queryKey: [ROOT, "queue", deviceId ?? "all"],
+    queryFn: () =>
+      api.get<QueueDevice[]>(
+        deviceId ? `/fiscal/queue?device_id=${deviceId}` : "/fiscal/queue",
+      ),
+    refetchInterval: 15_000,
+  });
+}
+
+/**
+ * The rows in queue order — which is send order. `documentId` is the read-only per-document
+ * history the document detail shows.
+ *
+ * **Polls only while something can still move.** The queue screen is a watch screen and wants
+ * the page to notice when a stuck device clears, without anybody pressing anything. The
+ * document detail is not: a posted document's rows are a closed set, and once they are all
+ * terminal there is nothing left to see — so a non-fiscalized company would otherwise poll an
+ * endpoint every fifteen seconds, forever, on every document anybody opened.
+ */
+export function useFiscalQueueRows(
+  filters: {
+    deviceId?: number | null;
+    status?: string;
+    documentId?: number | null;
+    /** `false` on a closed set: stop once every row has reached a terminal state. */
+    watch?: boolean;
+  } = {},
+) {
+  const query = new URLSearchParams();
+  if (filters.deviceId) query.set("device_id", String(filters.deviceId));
+  if (filters.status) query.set("status", filters.status);
+  if (filters.documentId) query.set("document_id", String(filters.documentId));
+  const suffix = query.toString() ? `?${query}` : "";
+  const watch = filters.watch ?? true;
+  return useQuery({
+    queryKey: [ROOT, "queue-rows", suffix],
+    queryFn: () => api.get<QueueRow[]>(`/fiscal/queue/rows${suffix}`),
+    refetchInterval: (query) =>
+      watch || (query.state.data ?? []).some((row) => !TERMINAL_STATUSES.has(row.status))
+        ? 15_000
+        : false,
+  });
+}
+
+/** A row in one of these will not change again by itself. `cancelled` is terminal too: the
+ * document it reported was reversed before RRA ever held it. */
+const TERMINAL_STATUSES: ReadonlySet<string> = new Set([
+  FiscalOutboxStatus.SENT,
+  FiscalOutboxStatus.CANCELLED,
+]);
+
+export function useFiscalQueueRow(rowId: number | null) {
+  return useQuery({
+    queryKey: [ROOT, "queue-row", rowId],
+    queryFn: () => api.get<QueueRowDetail>(`/fiscal/queue/rows/${rowId}`),
+    enabled: rowId !== null,
+  });
+}
+
+/** Put a `failed` or backing-off row at the front of its queue, due now. Never offered for
+ * `unknown` or `needs_receipt`: RRA may already hold the sale, and a retry on those is exactly
+ * the duplicate the policy exists to prevent — the screen hides the button and the endpoint
+ * refuses it. */
+export function useRetryQueueRow() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (rowId: number) => api.post<QueueRow>(`/fiscal/queue/rows/${rowId}/retry`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: [ROOT] }),
+  });
+}
+
+/** Ask the device what it holds and let its counters decide: below ours means RRA never saw
+ * the row (back to `queued`), at or above means it did (`needs_receipt`). */
+export function useVerifyQueueRow() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (rowId: number) => api.post<QueueRow>(`/fiscal/queue/rows/${rowId}/verify`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: [ROOT] }),
+  });
+}
+
+/** A receipt read off MyRRA and attached by a person who says so — audited with their note,
+ * because it is a human assertion about what a revenue authority is holding. */
+export function useAttachQueueReceipt() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ rowId, payload }: { rowId: number; payload: AttachReceiptPayload }) =>
+      api.post<FiscalReceipt>(`/fiscal/queue/rows/${rowId}/attach-receipt`, payload),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: [ROOT] }),
+  });
+}
+
+// --- The receipt a document prints (decision 11) ----------------------------------------------
+
+/**
+ * What this document prints, `null` when it is not a fiscal receipt at all.
+ *
+ * Three answers, not two, and the screen needs all three: a block is "print the CIS layout",
+ * `null` is "this company does not fiscalize, print the P4 layout", and a
+ * `fiscal_receipt_pending` refusal is "it does, and RRA has not signed yet" — which is why the
+ * error is kept rather than swallowed. `retry: false` so a refusal is shown rather than asked
+ * for three more times.
+ */
+export function useDocumentReceipt(documentId: number | null) {
+  return useQuery({
+    queryKey: [ROOT, "document-receipt", documentId],
+    queryFn: () => api.get<ReceiptBlock | null>(`/fiscal/documents/${documentId}/receipt`),
+    enabled: documentId !== null,
+    retry: false,
+  });
+}
+
+/** A reprint: `COPY` under the header, the counter incremented and audited, and **nothing sent
+ * to RRA** — a copy is a print of a sale already declared (§11, §15). */
+export function usePrintReceiptCopy() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (documentId: number) =>
+      api.post<ReceiptBlock>(`/fiscal/documents/${documentId}/receipt/copy`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: [ROOT] }),
+  });
+}
+
+// --- The purchase feed and the import register (decision 9) ------------------------------------
+
+export function usePurchaseFeed(filters: { deviceId?: number | null; decision?: string } = {}) {
+  const query = new URLSearchParams();
+  if (filters.deviceId) query.set("device_id", String(filters.deviceId));
+  if (filters.decision) query.set("decision", filters.decision);
+  const suffix = query.toString() ? `?${query}` : "";
+  return useQuery({
+    queryKey: [ROOT, "purchase-feed", suffix],
+    queryFn: () => api.get<PurchaseFeedRow[]>(`/fiscal/purchase-feed${suffix}`),
+    staleTime: 30_000,
+  });
+}
+
+/** Pull what RRA is holding since the device's watermark. A feed nobody can refresh is a feed
+ * that is always yesterday's, which is why the screen carries its own Fetch. */
+export function useFetchPurchaseFeed() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (deviceId: number) =>
+      api.post<DeviceSyncResult>(`/fiscal/devices/${deviceId}/fetch-purchase-feed`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: [ROOT] }),
+  });
+}
+
+/**
+ * Confirm a purchase RRA is holding, optionally linking the AP document it became.
+ *
+ * `Idempotency-Key` because the decision claims an `FIP` number and queues a row: a
+ * double-click would otherwise spend a number on a confirmation nobody asked for twice.
+ */
+export function useAcceptPurchaseFeedRow() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      rowId,
+      apDocumentId,
+      idempotencyKey,
+    }: {
+      rowId: number;
+      apDocumentId: number | null;
+      idempotencyKey: string;
+    }) =>
+      api.post<FeedDecisionResult>(
+        `/fiscal/purchase-feed/${rowId}/accept`,
+        { ap_document_id: apDocumentId },
+        { "Idempotency-Key": idempotencyKey },
+      ),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: [ROOT] }),
+  });
+}
+
+export function useRejectPurchaseFeedRow() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ rowId, idempotencyKey }: { rowId: number; idempotencyKey: string }) =>
+      api.post<FeedDecisionResult>(`/fiscal/purchase-feed/${rowId}/reject`, undefined, {
+        "Idempotency-Key": idempotencyKey,
+      }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: [ROOT] }),
+  });
+}
+
+export function useImportDeclarations(filters: { deviceId?: number | null; status?: string } = {}) {
+  const query = new URLSearchParams();
+  if (filters.deviceId) query.set("device_id", String(filters.deviceId));
+  if (filters.status) query.set("status", filters.status);
+  const suffix = query.toString() ? `?${query}` : "";
+  return useQuery({
+    queryKey: [ROOT, "import-declarations", suffix],
+    queryFn: () => api.get<ImportDeclaration[]>(`/fiscal/import-declarations${suffix}`),
+    staleTime: 30_000,
+  });
+}
+
+export function useFetchImports() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (deviceId: number) =>
+      api.post<DeviceSyncResult>(`/fiscal/devices/${deviceId}/fetch-imports`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: [ROOT] }),
+  });
+}
+
+/** Acknowledge a declared line, naming the Vinea item it became. It moves no stock and posts
+ * nothing (decision 9) — the goods reached the ledger through a goods receipt, and saying so
+ * twice would double them. */
+export function useApproveImportDeclaration() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      declarationId,
+      itemId,
+      note,
+      idempotencyKey,
+    }: {
+      declarationId: number;
+      itemId: number;
+      note: string | null;
+      idempotencyKey: string;
+    }) =>
+      api.post<ImportDeclaration>(
+        `/fiscal/import-declarations/${declarationId}/approve`,
+        { item_id: itemId, note },
+        { "Idempotency-Key": idempotencyKey },
+      ),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: [ROOT] }),
+  });
+}
+
+export function useRejectImportDeclaration() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      declarationId,
+      note,
+      idempotencyKey,
+    }: {
+      declarationId: number;
+      note: string | null;
+      idempotencyKey: string;
+    }) =>
+      api.post<ImportDeclaration>(
+        `/fiscal/import-declarations/${declarationId}/reject`,
+        { note },
+        { "Idempotency-Key": idempotencyKey },
+      ),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: [ROOT] }),
   });
 }

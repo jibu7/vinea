@@ -100,86 +100,26 @@ NO_UI: dict[str, str] = {
     # **Every one was deleted by a screen a person can open and press**, not by a hook written
     # to satisfy the matcher — the standard P6 set for its own twenty, and the reason
     # `useReverseStockDocument` (C.1.7) is remembered as a defect rather than as a pass.
-    # --- GAP (P7, step 7): the purchase feed and the import register ---------------------------
+    # --- P7 step 7 cleared fourteen lines ---------------------------------------------------
     #
-    # Six lines. The screens are **Transactions → Tax → EBM purchases** (`/fiscal/purchases`:
-    # the feed, with Accept, Reject and the AP-document link) and **Import declarations**
-    # (`/fiscal/imports`: the list, with the item picker, Approve and Reject). Each carries its
-    # own Fetch, because a feed nobody can refresh is a feed that is always yesterday's.
+    # Six for the purchase feed and the import register, four for the VAT return and the FX
+    # revaluation, four for the queue actions and the copy print. The screens are **Transactions
+    # → Tax** — Fiscal queue (`/fiscal/queue`), EBM purchases (`/fiscal/purchases`), Import
+    # declarations (`/fiscal/imports`), VAT return (`/tax/vat-return`) — and **Transactions →
+    # General Ledger → FX revaluation** (`/gl/fx-revaluation`), plus Copy print on the AR/AP
+    # document detail.
     #
-    # Nothing here registers a purchase or reports stock: those are written by the posting that
-    # caused them, in its own transaction, and have no endpoint at all — which is the design
-    # rather than a gap (decision 4).
-    "POST /api/v1/fiscal/devices/{device_id}/fetch-purchase-feed": (
-        "GAP (P7, step 7) — deleted by Fetch on the EBM purchases screen."
-    ),
-    "POST /api/v1/fiscal/purchase-feed/{row_id}/accept": (
-        "GAP (P7, step 7) — deleted by Accept on the EBM purchases screen, which links the AP "
-        "document the purchase became."
-    ),
-    "POST /api/v1/fiscal/purchase-feed/{row_id}/reject": (
-        "GAP (P7, step 7) — deleted by Reject on the EBM purchases screen."
-    ),
-    "POST /api/v1/fiscal/devices/{device_id}/fetch-imports": (
-        "GAP (P7, step 7) — deleted by Fetch on the Import declarations screen."
-    ),
-    "POST /api/v1/fiscal/import-declarations/{declaration_id}/approve": (
-        "GAP (P7, step 7) — deleted by Approve on the Import declarations screen, which names "
-        "the Vinea item the declared line became."
-    ),
-    "POST /api/v1/fiscal/import-declarations/{declaration_id}/reject": (
-        "GAP (P7, step 7) — deleted by Reject on the Import declarations screen."
-    ),
-    # --- GAP (P7, step 7): the VAT return and the FX revaluation --------------------------------
+    # Two of those routes are not where the step-3 and step-5 comments guessed: the prompt's
+    # step-7 list names `/tax/vat-return` and `/gl/fx-revaluation`, singular, and puts the FX
+    # screen under Transactions → General Ledger rather than under a Period-end group that does
+    # not exist. The prompt is the contract; those comments were written before the screens were
+    # placed. The step-5 comment also said "five lines" for a block that held four — worth
+    # naming, because a count in a comment is the kind of thing a reader trusts.
     #
-    # Five lines. The screens are **Transactions → Tax → VAT returns** (`/tax/vat-returns`: the
-    # preview with its tie and late entries, File, Reverse, and the two annex downloads) and
-    # **General Ledger → Period end → FX revaluation** (`/gl/fx-revaluations`: the preview per
-    # open document, Post, Reverse).
-    #
-    # The previews, the listings and the annex CSVs are reads and need no exemption; only the
-    # four acts below do.
-    "POST /api/v1/tax/vat-returns": (
-        "GAP (P7, step 7) — deleted by File on the VAT returns screen, which freezes the "
-        "figures and posts the settlement entry."
-    ),
-    "POST /api/v1/tax/vat-returns/{return_id}/reverse": (
-        "GAP (P7, step 7) — deleted by Reverse on the VAT return detail, which reopens the "
-        "range so it can be filed again."
-    ),
-    "POST /api/v1/gl/fx-revaluations": (
-        "GAP (P7, step 7) — deleted by Post on the FX revaluation screen, which posts the run "
-        "and its next-day mirror."
-    ),
-    "POST /api/v1/gl/fx-revaluations/{revaluation_id}/reverse": (
-        "GAP (P7, step 7) — deleted by Reverse on the FX revaluation detail."
-    ),
-    # --- GAP (P7, step 7): the queue screen's three actions and the copy print ------------------
-    #
-    # The screens are **Transactions → Tax → Fiscal queue** (`/fiscal/queue`: per device, rows
-    # by status, Retry now / Verify with device / Attach receipt manually, the row's request and
-    # response, the action log) and the **document detail's Copy print**.
-    #
-    # The queue listing, the row detail, the receipts enquiry and the item registrations are
-    # reads and need no exemption. These four are acts: two of them tell the authority
-    # something, and the other two are a person asserting what the authority holds and a second
-    # piece of paper leaving the building.
-    "POST /api/v1/fiscal/queue/rows/{row_id}/retry": (
-        "GAP (P7, step 7) — deleted by Retry now on the Fiscal queue screen, which releases a "
-        "failed or backing-off row."
-    ),
-    "POST /api/v1/fiscal/queue/rows/{row_id}/verify": (
-        "GAP (P7, step 7) — deleted by Verify with device on the Fiscal queue screen, which "
-        "asks the device what it holds and decides from its counters."
-    ),
-    "POST /api/v1/fiscal/queue/rows/{row_id}/attach-receipt": (
-        "GAP (P7, step 7) — deleted by Attach receipt manually on the Fiscal queue screen, "
-        "which records a receipt read off MyRRA against a row that needs one."
-    ),
-    "POST /api/v1/fiscal/documents/{document_id}/receipt/copy": (
-        "GAP (P7, step 7) — deleted by Copy print on the document detail, which increments the "
-        "receipt's copy counter and prints the COPY layout. Nothing is sent to RRA."
-    ),
+    # Every one was deleted by a screen a person can open and press, which is the standard the
+    # P6 set for its own twenty and the reason `useReverseStockDocument` (C.1.7) is remembered
+    # as a defect rather than as a pass. `POST /fiscal/outbox/drain` stays exempt and always
+    # will — it is the scheduler's hook, `by design` for the same reason `jobs/sweep` is.
     # --- GAP (P7, step 8): closing the fiscal day ----------------------------------------------
     #
     # The screen is **Transactions → Tax → Close day**, which shows the X and offers the Z. The

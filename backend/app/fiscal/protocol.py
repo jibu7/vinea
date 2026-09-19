@@ -148,6 +148,36 @@ class DeclaredClassTotals:
 
 
 @dataclass(frozen=True)
+class DeclaredLine:
+    """One line of a receipt, as the authority received it.
+
+    The printed receipt's lines are **the declaration's**, not the document's, and on a
+    foreign-currency invoice that is the whole point: a document keyed in USD is declared in
+    RWF from its frozen base amounts (decision 3), so a receipt that printed the document's own
+    line amounts would print dollars under a franc total. These come out of the stored request,
+    which is what the authority holds.
+
+    They also carry the item's **name**, which the ledger line often does not: a line keyed with
+    an item and no typed description has `description = NULL`, and CIS §4 e requires a
+    description on the paper.
+    """
+
+    sequence: int
+    name: str
+    quantity: Decimal
+    #: The VAT-**inclusive** unit price the wire carried, at two decimals (decision 6).
+    unit_price: Decimal
+    discount_percent: Decimal
+    discount_amount: Decimal
+    #: The line's declared taxable amount — `splyAmt − dcAmt`, which is what the receipt prints
+    #: against the line and what the class totals are the sum of.
+    taxable: Decimal
+    tax: Decimal
+    #: `A`–`D`, so the line can print the class label §5 gives it.
+    tax_class: str
+
+
+@dataclass(frozen=True)
 class DeclaredTotals:
     """What one receipt **declared**, normalised out of the payload it was issued against.
 
@@ -350,6 +380,19 @@ class FiscalizationAdapter(Protocol):
 
         `None` when the payload is not a sale or refund: a stock or purchase row declared no
         receipt and is no part of anybody's till.
+        """
+        ...
+
+    def normalize_declared_lines(
+        self, request: dict[str, Any] | None
+    ) -> tuple[DeclaredLine, ...]:
+        """The receipt's lines, in neutral vocabulary, out of the payload it was issued against.
+
+        The other half of what a printed receipt needs, and it reads the **request** only:
+        no sales response echoes a line, so there is nothing to prefer an answer over.
+
+        Empty when the payload declared no receipt, which is the same rule
+        `normalize_declared_totals` follows.
         """
         ...
 

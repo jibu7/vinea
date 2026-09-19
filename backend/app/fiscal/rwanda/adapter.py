@@ -44,6 +44,7 @@ from app.fiscal.mapping import (
 )
 from app.fiscal.protocol import (
     DeclaredClassTotals,
+    DeclaredLine,
     DeclaredTotals,
     DeviceIdentity,
     FiscalReceiptData,
@@ -568,6 +569,41 @@ class RwandaEbmAdapter:
             discount=sum((_wire_money(line.get("dcAmt")) for line in lines), _WIRE_ZERO),
             classes=tuple(classes),
             countersigned=bool(signed),
+        )
+
+    def normalize_declared_lines(
+        self, request: dict[str, Any] | None
+    ) -> tuple[DeclaredLine, ...]:
+        """The lines of a stored sale or refund, neutral, out of the request.
+
+        The request only, because no sales response echoes a line: RRA countersigns three
+        totals and returns nothing else (see `normalize_declared_totals`).
+
+        Read with `.get()` over the stored JSONB rather than through `SalesItem`, for the same
+        reason its sibling is: these rows were frozen months ago, and a receipt that refused to
+        reprint because an old payload no longer validates against today's model would be a
+        receipt somebody cannot hand to an inspector.
+
+        `taxblAmt` and not `splyAmt` is what the line prints: on a discounted line the wire's
+        taxable amount is `splyAmt − dcAmt`, and it is the figure the class totals are the sum
+        of, so a receipt whose lines did not add up to its own totals would be the defect this
+        is written to avoid.
+        """
+        if not request or "rcptTyCd" not in request:
+            return ()
+        return tuple(
+            DeclaredLine(
+                sequence=int(line.get("itemSeq") or index + 1),
+                name=str(line.get("itemNm") or ""),
+                quantity=_wire_money(line.get("qty")),
+                unit_price=_wire_money(line.get("prc")),
+                discount_percent=_wire_money(line.get("dcRt")),
+                discount_amount=_wire_money(line.get("dcAmt")),
+                taxable=_wire_money(line.get("taxblAmt")),
+                tax=_wire_money(line.get("taxAmt")),
+                tax_class=str(line.get("taxTyCd") or ""),
+            )
+            for index, line in enumerate(request.get("itemList") or [])
         )
 
     def register_purchase(

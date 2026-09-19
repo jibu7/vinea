@@ -140,6 +140,18 @@ export const navIntents: NavIntent[] = [
     items: [
       { label: "Journal batches", module: "General Ledger", permission: "gl:journal_post", href: "/gl/journal-batches/new" },
       { label: "Cashbook batches", module: "General Ledger", permission: "gl:journal_post", href: "/gl/cashbook-batches/new" },
+      // P7 step 7, Appendix C.1.12. Not in the owner's tree, and the reason it belongs in
+      // Transactions rather than Reports is what it does: a revaluation *posts* — an entry at
+      // the date and its mirror the day after, in one transaction. The report over a posted run
+      // is step 8's, under Reports → General Ledger. Its own permission, because revaluing is
+      // a month-end act an accountant performs and not something everyone who reads the ledger
+      // should be able to press.
+      {
+        label: "FX revaluation",
+        module: "General Ledger",
+        permission: "gl:fx_revalue",
+        href: "/gl/fx-revaluation",
+      },
       // Appendix C's AR block, in the owner's order, plus Receipt (the settlement side of
       // the same subledger) and "Account receivable batches" — the spec lists AR batches and
       // both are P4 screens, so they belong in the tree from the start rather than appearing
@@ -231,6 +243,51 @@ export const navIntents: NavIntent[] = [
       // has: one that moved no value has no journal entry to be found through.
       // Appendix C.1.7, on the same footing as C.1.6's post-dated screens.
       { label: "Documents", module: "Inventory", permission: "inv:reports_view", href: "/inventory/documents" },
+      // P7 step 7, Appendix C.1.11 — the **Transactions → Tax** block, and the C.2 promise
+      // ("fiscalization status/queue screens (P7)") made good. The owner's tree has Tax under
+      // Maintenance only; these four are not maintenance. A queue row is a declaration in
+      // flight, a feed row is a purchase somebody has to say yes or no to, an import
+      // declaration is an acknowledgment RRA is waiting for, and a VAT return posts a
+      // settlement entry — every one of them is a transaction, done on a day, by a person.
+      //
+      // They sit after Inventory and before the two phase-tagged modules, which keeps the
+      // live blocks together and leaves the owner's own tail (Bill of Materials, Point of
+      // Sale) where it is. A block the appendix does not carry is appended rather than
+      // interleaved into the owner's ordering — the same treatment C.1.8's two Order Entry
+      // blocks got.
+      //
+      // The three fiscal screens read on either fiscal permission — `_require_view` in the API
+      // accepts exactly that pair — so a clerk watching a stuck queue does not need the
+      // authority to reconfigure a device. The acts on them are `fiscal:queue_manage` and are
+      // gated on the buttons, not on the row.
+      {
+        label: "Fiscal queue",
+        module: "Tax",
+        permission: ["fiscal:setup_manage", "fiscal:reports_view"],
+        href: "/fiscal/queue",
+      },
+      {
+        label: "EBM purchases",
+        module: "Tax",
+        permission: ["fiscal:setup_manage", "fiscal:reports_view"],
+        href: "/fiscal/purchases",
+      },
+      {
+        label: "Import declarations",
+        module: "Tax",
+        permission: ["fiscal:setup_manage", "fiscal:reports_view"],
+        href: "/fiscal/imports",
+      },
+      // Reading the return and filing it are two permissions and one screen: the endpoint
+      // behind the preview accepts `tax:vat_return_view`, and File checks
+      // `tax:vat_return_file` on the button. An accountant who may look at the return and not
+      // submit it is a real arrangement, and the nav gates on what opens the screen.
+      {
+        label: "VAT return",
+        module: "Tax",
+        permission: ["tax:vat_return_view", "tax:vat_return_file"],
+        href: "/tax/vat-return",
+      },
       { label: "Manufacture process", module: "Bill of Materials", phase: "P12" },
       { label: "Sales", module: "Point of Sale", phase: "P11" },
       { label: "Returns", module: "Point of Sale", phase: "P11" },

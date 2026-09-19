@@ -29,18 +29,27 @@ import {
 } from "@/features/order-entry/hooks";
 import { useOrderLineSupport } from "@/features/order-entry/order-support";
 import type { PreparedLine } from "@/features/order-entry/types";
+import { useFiscalDocumentContext } from "@/features/fiscal/hooks";
 import { useAccounts, useBranches, useCurrencies, useProjects, useTaxCodes } from "@/features/gl/hooks";
 import { toOptions } from "@/features/gl/lookups";
 import { isApiError } from "@/features/auth/hooks";
 import { clearDraft, loadDraft, newDraftId, saveDraft } from "@/lib/drafts";
 import { formatMoney, formatQuantity, nowIso, todayIso, trimDecimalString } from "@/lib/format";
 import { useApiErrorToast } from "@/lib/use-api-error-toast";
-import { ControlType } from "@/lib/api-enums";
+import { ControlType, DocumentKind, DocumentStatus, PaymentMethod } from "@/lib/api-enums";
 import { dueDateFor } from "./due-date";
 import type { DocumentScreenSpec } from "./document-kinds";
-import { usePartnerEnquiry, usePartners, usePaymentTerms, usePostDocument, useSalesReps } from "./hooks";
+import {
+  useDocumentPage,
+  usePartnerEnquiry,
+  usePartners,
+  usePaymentTerms,
+  usePostDocument,
+  useSalesReps,
+} from "./hooks";
 import {
   INSTRUMENT_TYPES,
+  PAYMENT_METHODS,
   partnerCode,
   type DocumentCreatePayload,
   type DocumentLinePayload,
@@ -79,6 +88,13 @@ interface DocumentDraft {
   cashAccountId: string;
   instrumentType: InstrumentType;
   maturityDate: string;
+  // --- P7 fiscalization (decision 7) ---------------------------------------------------------
+  /** Empty means "let the server default it from the payment terms" — `credit` with them,
+   * `cash` without. A blank is a real choice here, not a missing one. */
+  paymentMethod: PaymentMethod | "";
+  purchaseCode: string;
+  refundOfDocumentId: string;
+  refundReason: string;
 }
 
 function blankDraft(): DocumentDraft {
@@ -101,6 +117,10 @@ function blankDraft(): DocumentDraft {
     cashAccountId: "",
     instrumentType: "bank",
     maturityDate: "",
+    paymentMethod: "",
+    purchaseCode: "",
+    refundOfDocumentId: "",
+    refundReason: "",
   };
 }
 
@@ -162,6 +182,32 @@ export function DocumentScreen({ spec }: { spec: DocumentScreenSpec }) {
 
   const partnerId = form.partnerId ? Number(form.partnerId) : null;
   const enquiry = usePartnerEnquiry(role, partnerId, form.documentDate || undefined);
+
+  // --- P7: what this company declares, and what a refund may say for itself ---------------
+  //
+  // One read, and it takes no fiscal permission on purpose (`useFiscalDocumentContext`): the
+  // seeded Sales Manager role keys invoices and holds neither fiscal permission, so the screen
+  // cannot find out whether a purchase code is required by reading the device list.
+  const fiscal = useFiscalDocumentContext();
+  const fiscalized = fiscal.data?.fiscalized ?? false;
+  const isCreditNote = kind === "credit_note";
+  /** The invoices this credit note could be refunding: the partner's own, **fiscalized**,
+   * still standing. Posted rather than open — the service refuses on cumulative refunded
+   * quantity (`refund_exceeds_original`), not on whether the invoice has been paid, and a
+   * picker that hid a settled invoice would make a legitimate credit note unkeyable. */
+  const refundCandidates = useDocumentPage(role, {
+    partnerId: partnerId ?? undefined,
+    kind: DocumentKind.INVOICE,
+    status: DocumentStatus.POSTED,
+    enabled: role === "ar" && isCreditNote && fiscalized && partnerId !== null,
+  });
+  const refundOptions = useMemo(
+    () =>
+      (refundCandidates.data?.items ?? [])
+        .filter((row) => row.fiscal_receipt_id !== null)
+        .map((row) => ({ value: String(row.id), label: `${row.number} · ${row.document_date}` })),
+    [refundCandidates.data],
+  );
 
   // --- prepared from an order or a receipt ----------------------------------------------
   useEffect(() => {
@@ -390,7 +436,17 @@ export function DocumentScreen({ spec }: { spec: DocumentScreenSpec }) {
             instrument_type: form.instrumentType,
             maturity_date: form.maturityDate || null,
           }
-        : { lines }),
+        : {
+            lines,
+            // Unset means "derive it from the terms" (decision 7), which is why a blank is
+            // sent as null rather than as a guess made here.
+            payment_method: form.paymentMethod || null,
+            purchase_code: form.purchaseCode.trim() || null,
+            refund_of_document_id: form.refundOfDocumentId
+              ? Number(form.refundOfDocumentId)
+              : null,
+            refund_reason: form.refundReason || null,
+          }),
     };
 
     try {
@@ -416,6 +472,9 @@ export function DocumentScreen({ spec }: { spec: DocumentScreenSpec }) {
 
   const selectedPartner = (partners.data ?? []).find((p) => String(p.id) === form.partnerId);
   const headroom = enquiry.data?.credit_available;
+  /** RRA requires a purchase code for a *business* customer, and a TIN is what makes one a
+   * business. No TIN, no field — rather than a field that is only ever left blank. */
+  const partnerHasTin = Boolean(selectedPartner?.tin);
 
   return (
     <DocumentWorkspaceShell
@@ -615,6 +674,105 @@ export function DocumentScreen({ spec }: { spec: DocumentScreenSpec }) {
           />
         </Field>
       </section>
+
+      {/* --- P7 fiscalization (decision 7) ---------------------------------------------------
+          Four fields, each on the screen only where it means something.
+
+          **Payment method** is on every invoice and credit note of both roles, because RRA
+          reports on it for sales *and* purchases and because it is the one field here that is
+          useful to a company with no device at all — how a supplier invoice was settled is
+          ordinary bookkeeping. Blank is a real answer: the service derives `credit` from the
+          payment terms and `cash` without them, and a screen that defaulted it would put the
+          same answer on every document.
+
+          **Purchase code** appears once the partner has a TIN, because that is exactly when
+          RRA requires one (v1.0.5: mandatory for business customers, `881`–`883` otherwise),
+          and it is marked required only on a fiscalized company. The refusal itself is the
+          server's — `purchase_code_required`, inline on this field — because whether it is
+          needed depends on the company's devices and the partner's TIN, neither of which a
+          form can be certain of at keying time.
+
+          **Refund of** and **Reason** are the credit note's, and only when this company
+          fiscalizes. A credit note whose lines carry `returns_line_id`s already names its
+          original and the picker is left empty; one keyed from nothing must say which invoice
+          it refunds, and RRA registers a refund against exactly one. */}
+      {!isSettlement && (
+        <section
+          data-testid="document-fiscal"
+          className="grid grid-cols-1 gap-3 rounded-[var(--radius-card)] border border-[var(--vinea-border)] bg-[var(--vinea-surface-raised)] p-4 sm:grid-cols-3"
+        >
+          <h2 className="sm:col-span-3 text-xs font-medium uppercase tracking-wide text-[var(--vinea-ink-subtle)]">
+            {t("fiscalSection")}
+          </h2>
+
+          {/* A `Combobox`, not a `Select`, and the reason is the blank. Radix's Select treats an
+              empty value as *no value* and shows its placeholder, so "From the payment terms"
+              could be read but never chosen again once a method had been picked — and leaving
+              it unset is a real answer here, the one that lets the service derive `credit` from
+              the terms and `cash` without them. The picker beside it offers its own blank the
+              same way. */}
+          <Field label={t("paymentMethod")} error={fieldErrors.payment_method?.[0]}>
+            <Combobox
+              options={[
+                { value: "", label: t("paymentMethodDefault") },
+                ...PAYMENT_METHODS.map((value) => ({
+                  value,
+                  label: t(`paymentMethodLabel.${value}`),
+                })),
+              ]}
+              value={form.paymentMethod}
+              onValueChange={(v) => patch({ paymentMethod: v as PaymentMethod | "" })}
+              placeholder={t("paymentMethodDefault")}
+            />
+          </Field>
+
+          {role === "ar" && partnerHasTin && (
+            <Field
+              label={fiscalized ? t("purchaseCodeRequired") : t("purchaseCode")}
+              error={fieldErrors.purchase_code?.[0]}
+            >
+              <Input
+                value={form.purchaseCode}
+                onChange={(e) => patch({ purchaseCode: e.target.value.toUpperCase() })}
+                maxLength={6}
+                data-testid="purchase-code"
+                className="font-mono uppercase"
+                placeholder={t("purchaseCodePlaceholder")}
+              />
+            </Field>
+          )}
+
+          {role === "ar" && isCreditNote && fiscalized && (
+            <>
+              <Field label={t("refundOf")} error={fieldErrors.refund_of_document_id?.[0]}>
+                <Combobox
+                  options={[{ value: "", label: t("refundOfFromLines") }, ...refundOptions]}
+                  value={form.refundOfDocumentId}
+                  onValueChange={(v) => patch({ refundOfDocumentId: v })}
+                  placeholder={t("refundOfFromLines")}
+                />
+              </Field>
+              <Field label={t("refundReason")} error={fieldErrors.refund_reason?.[0]}>
+                <Combobox
+                  options={(fiscal.data?.refund_reasons ?? []).map((reason) => ({
+                    value: reason.code,
+                    label: `${reason.code} · ${reason.name}`,
+                  }))}
+                  value={form.refundReason}
+                  onValueChange={(v) => patch({ refundReason: v })}
+                  placeholder={t("refundReasonPlaceholder")}
+                />
+              </Field>
+            </>
+          )}
+
+          {role === "ar" && partnerHasTin && fiscalized && (
+            <p className="sm:col-span-3 text-xs text-[var(--vinea-ink-subtle)]">
+              {t("purchaseCodeNote")}
+            </p>
+          )}
+        </section>
+      )}
 
       {isSettlement ? (
         <section className="grid grid-cols-1 gap-3 rounded-[var(--radius-card)] border border-[var(--vinea-border)] bg-[var(--vinea-surface-raised)] p-4 sm:grid-cols-4">

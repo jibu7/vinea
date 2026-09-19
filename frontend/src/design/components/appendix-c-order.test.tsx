@@ -118,8 +118,38 @@ import { navIntents, type IntentLabel } from "@/design/nav-tree";
  * on screens that already exist** — the EBM class on Tax types, the RRA quantity unit on
  * Units of measure, a Fiscal section on Items, Verify TIN on Customers and Suppliers, and the
  * tax block on GL Defaults — none of which is a navigable row and none of which belongs here.
- * Step 7 brings the **Transactions → Tax** block (C.1.10) and the FX revaluation row under
- * Transactions → GL (C.1.11), and pins both the same way.
+ * Step 7 brings the **Transactions → Tax** block and the FX revaluation row under
+ * Transactions → GL, and pins both the same way. (Written before step 6 turned out to need an
+ * entry of its own, which took C.1.10; step 7's two are C.1.11 and C.1.12 — the Master Plan's
+ * own note on the numbering says so.)
+ *
+ * Amended at P7 step 7 with the **Transactions → Tax** block — Fiscal queue, EBM purchases,
+ * Import declarations, VAT return — recorded in the plan as **Appendix C.1.11**, and with
+ * **"FX revaluation"** under Transactions → General Ledger as **Appendix C.1.12**.
+ *
+ * Neither is in the owner's tree, and C.1.11 is the C.2 promise made good: Appendix C.2 has
+ * always said "fiscalization status/queue screens (P7)" without saying where they hang. The
+ * owner's tree carries Tax under **Maintenance only**, which is right for what was there —
+ * tax types, and now a device. These four are not maintenance. A queue row is a declaration in
+ * flight, a feed row is a purchase somebody has to say yes or no to, an import declaration is
+ * an acknowledgment the authority is waiting for, and a VAT return posts a settlement entry
+ * through the kernel. Every one is a transaction: done on a day, by a person, with a
+ * consequence in the ledger or at the authority.
+ *
+ * C.1.12 is one row and the same reasoning in miniature. A revaluation **posts** — an entry at
+ * the date and its mirror the day after, in one transaction — so it belongs beside Journal
+ * batches and Cashbook batches rather than under Reports. The *report* over a posted run is
+ * step 8's, and lands under Reports → General Ledger.
+ *
+ * Position: both blocks go after Inventory and before the phase-tagged Bill of Materials and
+ * Point of Sale rows, which keeps the live modules together and leaves the owner's own tail
+ * where it is. Same footing as C.1.5's additions and C.1.8's two blocks — a change to the
+ * contract belongs in the document the contract lives in, which is why the Master Plan carries
+ * both entries too.
+ *
+ * Nothing outside the five new rows moved, and no P7 tag is left in the tree: the phase's
+ * remaining screens (the two Tax enquiries and the five Tax/GL reports) are step 8's and have
+ * no row to be tagged yet, exactly as step 6's columns and sections had none.
  *
  * Amended before P6 step 1 with **"Documents"** under Transactions → AR and → AP, the other
  * half of that same C.1.7 entry. The appendix already recorded it: "the same hole is open in
@@ -171,6 +201,7 @@ const APPENDIX_C: Record<IntentLabel, Array<[string, string, string | null]>> = 
   "Transactions": [
     ["General Ledger", "Journal batches", null],
     ["General Ledger", "Cashbook batches", null],
+    ["General Ledger", "FX revaluation", null],
     ["Accounts Receivable", "Invoice", null],
     ["Accounts Receivable", "Credit note", null],
     ["Accounts Receivable", "Receipt", null],
@@ -195,6 +226,10 @@ const APPENDIX_C: Record<IntentLabel, Array<[string, string, string | null]>> = 
     ["Inventory", "Adjustments", null],
     ["Inventory", "Counts", null],
     ["Inventory", "Documents", null],
+    ["Tax", "Fiscal queue", null],
+    ["Tax", "EBM purchases", null],
+    ["Tax", "Import declarations", null],
+    ["Tax", "VAT return", null],
     ["Bill of Materials", "Manufacture process", "P12"],
     ["Point of Sale", "Sales", "P11"],
     ["Point of Sale", "Returns", "P11"],
@@ -256,12 +291,13 @@ describe("the Appendix C navigation contract", () => {
     );
   });
 
-  it("has no P4, P5 or P6 tag left anywhere in the tree", () => {
-    // All three phases are complete in the nav: P4 at its step 9, P5 at step 8, P6 at step 7.
-    // A tag left on a screen that exists is a row nobody can reach, which is exactly how such
-    // a row goes unnoticed — the table above would still pass, because it pins the tag it
-    // finds.
-    const done = new Set(["P4", "P5", "P6"]);
+  it("has no P4, P5, P6 or P7 tag left anywhere in the tree", () => {
+    // All four phases are complete in the nav: P4 at its step 9, P5 at step 8, P6 at step 7,
+    // P7 at step 7 — every P7 row it will ever carry is live, and steps 8 and 9 add enquiries
+    // and reports under existing modules rather than tagged placeholders. A tag left on a
+    // screen that exists is a row nobody can reach, which is exactly how such a row goes
+    // unnoticed — the table above would still pass, because it pins the tag it finds.
+    const done = new Set(["P4", "P5", "P6", "P7"]);
     const stillTagged = navIntents.flatMap((intent) =>
       intent.items
         .filter((item) => item.phase !== undefined && done.has(item.phase))

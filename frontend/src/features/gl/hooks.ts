@@ -15,6 +15,10 @@ import type {
   ExchangeRate,
   FiscalTaxType,
   FiscalYear,
+  FxRevaluation,
+  FxRevaluationDetail,
+  FxRevaluationPreview,
+  FxRevaluationRole,
   GLAccount,
   GLSettings,
   GLSettingsPayload,
@@ -562,3 +566,75 @@ export function useActivateMember() {
   });
 }
 
+
+// --- Unrealized FX revaluation (P7 decision 13) -----------------------------------------------
+
+/**
+ * What a run would post, document by document, without posting it.
+ *
+ * Deliberately permissive about the date — the endpoint previews a day that could not be
+ * posted, because a preview of a day that would be refused is still worth reading and the
+ * refusals belong where they can be acted on (the Post button).
+ *
+ * `enabled` on the date, so the screen does not ask for a revaluation of nothing before
+ * anybody has chosen one.
+ */
+export function useFxRevaluationPreview(revaluationDate: string, role: FxRevaluationRole) {
+  return useQuery({
+    queryKey: ["gl", "fx-revaluation-preview", revaluationDate, role],
+    queryFn: () =>
+      api.get<FxRevaluationPreview>(
+        `/gl/fx-revaluations/preview?revaluation_date=${revaluationDate}&role=${role}`,
+      ),
+    enabled: Boolean(revaluationDate),
+  });
+}
+
+export function useFxRevaluations() {
+  return useQuery({
+    queryKey: ["gl", "fx-revaluations"],
+    queryFn: () => api.get<FxRevaluation[]>("/gl/fx-revaluations"),
+    staleTime: 30_000,
+  });
+}
+
+export function useFxRevaluation(revaluationId: number | null) {
+  return useQuery({
+    queryKey: ["gl", "fx-revaluation", revaluationId],
+    queryFn: () => api.get<FxRevaluationDetail>(`/gl/fx-revaluations/${revaluationId}`),
+    enabled: revaluationId !== null,
+  });
+}
+
+/** Post the run **and its next-day mirror** in one transaction. `Idempotency-Key` is required
+ * by the endpoint: the run claims an `FXR` number and posts two entries, and a double-click
+ * while the ledger is busy would otherwise spend a second number on the same day. */
+export function usePostFxRevaluation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      revaluationDate,
+      role,
+      idempotencyKey,
+    }: {
+      revaluationDate: string;
+      role: FxRevaluationRole;
+      idempotencyKey: string;
+    }) =>
+      api.post<FxRevaluation>(
+        "/gl/fx-revaluations",
+        { revaluation_date: revaluationDate, role },
+        { "Idempotency-Key": idempotencyKey },
+      ),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["gl"] }),
+  });
+}
+
+export function useReverseFxRevaluation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ revaluationId, reason }: { revaluationId: number; reason: string }) =>
+      api.post<FxRevaluation>(`/gl/fx-revaluations/${revaluationId}/reverse`, { reason }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["gl"] }),
+  });
+}
