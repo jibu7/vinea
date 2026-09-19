@@ -199,10 +199,6 @@ async function seed(page: Page): Promise<{ invoiceId: number; deviceId: number }
     ).id;
 
   // --- the partners -----------------------------------------------------------------------
-  const customers = (await get(page, "/subledger/ar/partners")) as Array<{
-    id: number;
-    customer_code: string | null;
-  }>;
   for (const [role, code, tin, name] of [
     ["ar", CUSTOMER_CODE, CUSTOMER_TIN, "Umucyo Traders"],
     ["ap", SUPPLIER_CODE, SUPPLIER_TIN, "Kivu Supplies"],
@@ -216,18 +212,17 @@ async function seed(page: Page): Promise<{ invoiceId: number; deviceId: number }
     if (existing.some((p) => p[field] === code)) continue;
     await apiOk(page, `/subledger/${role}/partners`, { name, [field]: code, tin });
   }
-  const afterCustomers = (await get(page, "/subledger/ar/partners")) as Array<{
+  const customers = (await get(page, "/subledger/ar/partners")) as Array<{
     id: number;
     customer_code: string | null;
   }>;
-  const customer = afterCustomers.find((p) => p.customer_code === CUSTOMER_CODE)!;
-  const fxCustomer = afterCustomers.find((p) => p.customer_code === FX_CUSTOMER_CODE)!;
+  const customer = customers.find((p) => p.customer_code === CUSTOMER_CODE)!;
+  const fxCustomer = customers.find((p) => p.customer_code === FX_CUSTOMER_CODE)!;
   const suppliers = (await get(page, "/subledger/ap/partners")) as Array<{
     id: number;
     supplier_code: string | null;
   }>;
   const supplier = suppliers.find((p) => p.supplier_code === SUPPLIER_CODE)!;
-  void customers;
 
   // --- stock, so a fiscalized sale is not refused by the `block` policy -------------------
   const warehouses = (await get(page, "/inventory/warehouses")) as Named[];
