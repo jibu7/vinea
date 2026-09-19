@@ -705,8 +705,14 @@ export function DocumentScreen({ spec }: { spec: DocumentScreenSpec }) {
             {t("fiscalSection")}
           </h2>
 
+          {/* A `Combobox`, not a `Select`, and the reason is the blank. Radix's Select treats an
+              empty value as *no value* and shows its placeholder, so "From the payment terms"
+              could be read but never chosen again once a method had been picked — and leaving
+              it unset is a real answer here, the one that lets the service derive `credit` from
+              the terms and `cash` without them. The picker beside it offers its own blank the
+              same way. */}
           <Field label={t("paymentMethod")} error={fieldErrors.payment_method?.[0]}>
-            <Select
+            <Combobox
               options={[
                 { value: "", label: t("paymentMethodDefault") },
                 ...PAYMENT_METHODS.map((value) => ({
@@ -716,6 +722,7 @@ export function DocumentScreen({ spec }: { spec: DocumentScreenSpec }) {
               ]}
               value={form.paymentMethod}
               onValueChange={(v) => patch({ paymentMethod: v as PaymentMethod | "" })}
+              placeholder={t("paymentMethodDefault")}
             />
           </Field>
 
