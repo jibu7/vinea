@@ -6,12 +6,15 @@ import { Edit2, Plus, Ruler } from "lucide-react";
 import { Button } from "@/design/components/button";
 import { QueryState } from "@/design/components/query-state";
 import { Dialog, DialogContent } from "@/design/components/dialog";
+import { Combobox } from "@/design/components/combobox";
 import { Field, Input } from "@/design/components/input";
 import { MaintenanceCard, MaintenancePage } from "@/design/components/maintenance-page";
 import { StatusChip } from "@/design/components/status-chip";
 import { TBody, TD, TH, THead, TR, Table } from "@/design/components/table";
 import { useToast } from "@/design/components/toast";
 import { useHasPermission } from "@/features/auth/hooks";
+import { useFiscalCodes } from "@/features/fiscal/hooks";
+import { CODE_CLASS } from "@/features/fiscal/types";
 import {
   useCreateUom,
   useCreateUomCategory,
@@ -59,6 +62,15 @@ export default function UomCategoriesPage() {
   const [uomName, setUomName] = useState("");
   const [factor, setFactor] = useState("");
   const [decimals, setDecimals] = useState("0");
+  /** The authority's quantity-unit code. `""` is "not mapped", and a fiscalized line on an
+   * unmapped unit is refused (`fiscal_uom_unmapped`) rather than sent under a guess. */
+  const [quantityUnit, setQuantityUnit] = useState("");
+
+  /** §4.6, synced from the device rather than typed: these are the authority's codes, they
+   * are revised, and a hand-kept copy is a copy that goes stale without saying so. An empty
+   * list means no device has synced yet — the picker then offers only "not mapped", which is
+   * the truth rather than a stale menu. */
+  const quantityUnits = useFiscalCodes(CODE_CLASS.QUANTITY_UNIT);
 
   function startCreateCategory() {
     setEditingCategory(null);
@@ -83,6 +95,7 @@ export default function UomCategoriesPage() {
     setUomName("");
     setFactor("");
     setDecimals("0");
+    setQuantityUnit("");
     setUomOpen(true);
   }
 
@@ -93,6 +106,7 @@ export default function UomCategoriesPage() {
     setUomName(uom.name);
     setFactor(trimDecimalString(uom.factor_to_base));
     setDecimals(String(uom.decimal_places));
+    setQuantityUnit(uom.fiscal_quantity_unit ?? "");
     setUomOpen(true);
   }
 
@@ -128,6 +142,9 @@ export default function UomCategoriesPage() {
             // only what a non-base unit can actually change.
             ...(editingUom.is_base ? {} : { factor_to_base: factor }),
             decimal_places: Number(decimals),
+            ...(quantityUnit
+              ? { fiscal_quantity_unit: quantityUnit }
+              : { clear_fiscal_quantity_unit: true }),
           },
         });
         toast.show({ title: t("uomUpdated"), tone: "success" });
@@ -138,6 +155,7 @@ export default function UomCategoriesPage() {
           name: uomName,
           factor_to_base: factor,
           decimal_places: Number(decimals),
+          fiscal_quantity_unit: quantityUnit || null,
         });
         toast.show({ title: t("uomCreated"), tone: "success" });
       }
@@ -230,6 +248,7 @@ export default function UomCategoriesPage() {
                   <TH>{tc("name")}</TH>
                   <TH className="w-40 text-right">{t("factorToBase")}</TH>
                   <TH className="w-24 text-right">{t("decimalPlaces")}</TH>
+                  <TH className="w-36">{t("quantityUnit")}</TH>
                   <TH className="w-32 text-right">{tc("status")}</TH>
                 </TR>
               </THead>
@@ -250,6 +269,15 @@ export default function UomCategoriesPage() {
                     </TD>
                     <TD className="text-right font-mono text-xs text-[var(--vinea-ink-muted)]">
                       {uom.decimal_places}
+                    </TD>
+                    <TD className="text-xs">
+                      {uom.fiscal_quantity_unit ? (
+                        <StatusChip tone="info">{uom.fiscal_quantity_unit}</StatusChip>
+                      ) : (
+                        <span className="text-[11px] text-[var(--vinea-ink-subtle)]">
+                          {t("quantityUnitNone")}
+                        </span>
+                      )}
                     </TD>
                     <TD className="text-right">
                       <div className="flex items-center justify-end gap-2">
@@ -378,6 +406,25 @@ export default function UomCategoriesPage() {
                 />
               </Field>
             </div>
+            <Field label={t("quantityUnit")}>
+              <Combobox
+                options={[
+                  { value: "", label: t("quantityUnitNone") },
+                  ...(quantityUnits.data ?? []).map((row) => ({
+                    value: row.code,
+                    label: dotted(row.code, row.name),
+                  })),
+                ]}
+                value={quantityUnit}
+                onValueChange={setQuantityUnit}
+                // The list is synced from the device; a unit mapped before a sync, or to a
+                // code the authority has since retired, still has to render as what it holds
+                // rather than as the "not mapped" placeholder.
+                fallbackLabel={quantityUnit}
+                placeholder={t("chooseQuantityUnit")}
+              />
+            </Field>
+            <p className="text-xs text-[var(--vinea-ink-subtle)]">{t("quantityUnitNote")}</p>
             <div className="flex justify-end gap-2 pt-3">
               <Button variant="ghost" onClick={() => setUomOpen(false)}>
                 {tc("cancel")}

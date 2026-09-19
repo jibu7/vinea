@@ -84,32 +84,22 @@ NO_UI: dict[str, str] = {
     # every one of the eighteen was deleted by a screen a person can open and press, not by a
     # hook written to satisfy the matcher.
     #
-    # --- GAP (P7, step 6): the EBM device setup, whose screens arrive with step 6 --------------
+    # --- P7 step 6 carried five lines. It carries none. ----------------------------------------
     #
-    # Five lines, each naming the step that deletes it. P7 builds its services in steps 1-5 and
-    # its screens in steps 6-8, so between those points the endpoints exist and nothing calls
-    # them — the same shape as P6's twenty, which step 6 and step 7 cleared down to nothing.
+    # They were `POST /fiscal/devices`, `/{id}/initialize`, `/{id}/suspend`, `/{id}/sync-codes`
+    # and `/{id}/sync-item-classes`, each naming the step that would delete it. **Maintenance →
+    # Tax → EBM devices** (`/maintenance/ebm-devices`) deleted all five: Register, Initialize,
+    # Suspend and one Sync codes button that drives both syncs, because an operator who
+    # refreshed the code tables and not the classification would have a Tax-types screen
+    # offering A-D and an Items screen whose class typeahead found nothing.
     #
-    # The screen is **Maintenance → Tax → EBM devices** (`/maintenance/ebm-devices`): register,
-    # Initialize, Suspend, Sync codes. `lookup-tin` is a GET and needs no line; so do the two
-    # listings this file does not enumerate.
-    "POST /api/v1/fiscal/devices": (
-        "GAP (P7, step 6) — deleted by the EBM devices screen, which registers a device "
-        "against a branch."
-    ),
-    "POST /api/v1/fiscal/devices/{device_id}/initialize": (
-        "GAP (P7, step 6) — deleted by Initialize on the EBM devices screen."
-    ),
-    "POST /api/v1/fiscal/devices/{device_id}/suspend": (
-        "GAP (P7, step 6) — deleted by Suspend on the EBM devices screen."
-    ),
-    "POST /api/v1/fiscal/devices/{device_id}/sync-codes": (
-        "GAP (P7, step 6) — deleted by Sync codes on the EBM devices screen."
-    ),
-    "POST /api/v1/fiscal/devices/{device_id}/sync-item-classes": (
-        "GAP (P7, step 6) — deleted by Sync codes on the EBM devices screen, which syncs the "
-        "item classification beside the code tables."
-    ),
+    # `lookup-tin` never needed a line — it is a GET — and it is called now anyway, by Verify
+    # TIN on Customers and Suppliers. So are `/fiscal/codes`, `/fiscal/item-classes` and
+    # `/fiscal/items`, by the Units-of-measure, Items and Defaults screens.
+    #
+    # **Every one was deleted by a screen a person can open and press**, not by a hook written
+    # to satisfy the matcher — the standard P6 set for its own twenty, and the reason
+    # `useReverseStockDocument` (C.1.7) is remembered as a defect rather than as a pass.
     # --- GAP (P7, step 7): the purchase feed and the import register ---------------------------
     #
     # Six lines. The screens are **Transactions → Tax → EBM purchases** (`/fiscal/purchases`:

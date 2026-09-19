@@ -765,3 +765,126 @@ def test_branches_tax_codes_currencies_are_listable(api: Api) -> None:
     other_branches = other.get("/api/v1/gl/branches").json()
     assert {b["code"] for b in other_branches} >= {"MAIN"}
     assert {b["id"] for b in other_branches}.isdisjoint({b["id"] for b in branches})
+
+
+# --- P7 step 6: the settings and the tax class the Maintenance screens write ----------------
+
+
+def test_p7_settings_round_trip_and_refuse_the_wrong_class(api: Api) -> None:
+    """The five accounts and the purchase class the Defaults screen owns.
+
+    They were seeded by the Rwanda pack at step 1 and had nowhere to be *set* until this
+    screen: a tenant that did not come from the pack had a VAT return that refused to file
+    (`required_setting` on `vat_settlement_account_id`) and no way in the product to fix it.
+
+    The class restriction is the half worth a test of its own. Every key here names a side of
+    the balance sheet or the P&L, and a settings key that could hold any postable account is
+    one an operator can point at the wrong side — where neither the filing nor the revaluation
+    would notice until it had posted.
+    """
+    seeded = api.client.get("/api/v1/gl/settings").json()
+    assert seeded["vat_settlement_account_id"] == api.accounts["2250"]
+    assert seeded["ar_revaluation_account_id"] == api.accounts["1290"]
+    assert seeded["ap_revaluation_account_id"] == api.accounts["2190"]
+    assert seeded["unrealized_fx_gain_account_id"] == api.accounts["4410"]
+    assert seeded["unrealized_fx_loss_account_id"] == api.accounts["6955"]
+
+    # A write, and a read back from the server rather than from the response that sent it.
+    written = api.client.put(
+        "/api/v1/gl/settings",
+        json={
+            "vat_settlement_account_id": api.accounts["2300"],
+            "fiscal_default_purchase_class_code": "5059690800",
+        },
+    )
+    assert written.status_code == 200, written.text
+    after = api.client.get("/api/v1/gl/settings").json()
+    assert after["vat_settlement_account_id"] == api.accounts["2300"]
+    assert after["fiscal_default_purchase_class_code"] == "5059690800"
+    # …and the keys the body left out are untouched, not blanked.
+    assert after["ar_revaluation_account_id"] == api.accounts["1290"]
+
+    # An asset where a liability belongs. 1370 is Landed Cost Clearing — postable, active,
+    # **not** a control account, and the wrong side of the balance sheet entirely. Chosen
+    # deliberately over Cash on Hand: 1110 is a control account, so the older check would
+    # refuse it and this test would pass without the class rule existing at all.
+    wrong_class = api.client.put(
+        "/api/v1/gl/settings", json={"vat_settlement_account_id": api.accounts["1370"]}
+    )
+    assert wrong_class.status_code == 409, wrong_class.text
+    assert wrong_class.json()["code"] == "invalid_gl_setting_account_class"
+
+    # The AR revaluation contra may not be the AR **control** account: a control account's
+    # balance is the sum of open items at their booking rates, which a revaluation would break
+    # (P7 decision 13). It is an asset, so only the control check can refuse it.
+    control = api.client.put(
+        "/api/v1/gl/settings", json={"ar_revaluation_account_id": api.accounts["1200"]}
+    )
+    assert control.status_code == 409, control.text
+    assert control.json()["code"] == "invalid_gl_setting_account"
+
+    # Neither refusal left anything behind.
+    unchanged = api.client.get("/api/v1/gl/settings").json()
+    assert unchanged["vat_settlement_account_id"] == api.accounts["2300"]
+    assert unchanged["ar_revaluation_account_id"] == api.accounts["1290"]
+
+    # The class code clears explicitly; `null` on a PATCH-shaped body cannot mean "unset".
+    api.client.put(
+        "/api/v1/gl/settings", json={"clear_fiscal_default_purchase_class_code": True}
+    )
+    assert api.client.get("/api/v1/gl/settings").json()[
+        "fiscal_default_purchase_class_code"
+    ] is None
+
+
+def test_tax_code_carries_its_ebm_class(api: Api) -> None:
+    """The Tax-types screen's EBM column (P7 decision 8).
+
+    **Not** locked by postings the way the rate is, and the difference matters: the rate
+    decides what was charged and a change would restate it, while the class only decides which
+    bucket of RRA's own report the line lands in. A company that mapped B where it meant C has
+    to be able to correct it — the receipts already issued carry the class they were sent
+    with, and `fiscal_receipts` is append-only.
+    """
+    seeded = {t["code"]: t for t in api.client.get("/api/v1/gl/tax-codes").json()}
+    assert seeded["VAT-OUT-18"]["fiscal_tax_type"] == "B"
+    assert seeded["VAT-EXEMPT"]["fiscal_tax_type"] == "A"
+    assert seeded["VAT-ZERO"]["fiscal_tax_type"] == "C"
+
+    created = api.client.post(
+        "/api/v1/gl/tax-codes",
+        json={
+            "code": "VAT-OUT-0",
+            "name": "Outside the VAT system",
+            "nature": "exempt",
+            "rate_pct": "0",
+            "valid_from": f"{YEAR}-01-01",
+            "fiscal_tax_type": "D",
+        },
+    )
+    assert created.status_code == 201, created.text
+    code_id = created.json()["id"]
+    assert created.json()["fiscal_tax_type"] == "D"
+
+    api.client.patch(f"/api/v1/gl/tax-codes/{code_id}", json={"fiscal_tax_type": "A"})
+    reread = {t["id"]: t for t in api.client.get("/api/v1/gl/tax-codes").json()}
+    assert reread[code_id]["fiscal_tax_type"] == "A"
+
+    api.client.patch(f"/api/v1/gl/tax-codes/{code_id}", json={"clear_fiscal_tax_type": True})
+    cleared = {t["id"]: t for t in api.client.get("/api/v1/gl/tax-codes").json()}
+    assert cleared[code_id]["fiscal_tax_type"] is None
+
+    # An unmapped class is a real state, not a blank to be filled: a company that never
+    # fiscalizes never maps one, and a fiscalized sale on this code is refused at post with
+    # `tax_class_unmapped` rather than reported under a class RRA would then act on.
+    plain = api.client.post(
+        "/api/v1/gl/tax-codes",
+        json={
+            "code": "VAT-OUT-9",
+            "name": "Nine percent",
+            "nature": "output",
+            "rate_pct": "9",
+            "valid_from": f"{YEAR}-01-01",
+        },
+    )
+    assert plain.status_code == 201 and plain.json()["fiscal_tax_type"] is None

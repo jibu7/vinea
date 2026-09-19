@@ -61,7 +61,7 @@ test.describe("Inventory maintenance", () => {
     await expect(baseRow.locator("td").nth(2)).toHaveText("1");
 
     await countCard.getByRole("button", { name: /Add unit/ }).click();
-    await dialog(page).getByLabel("Code").fill(`CS${SUFFIX}`);
+    await dialog(page).getByLabel("Code", { exact: true }).fill(`CS${SUFFIX}`);
     await dialog(page).getByLabel("Name", { exact: true }).fill("Case of 6");
     await dialog(page).getByLabel("Units per base").fill("6");
     await dialog(page).getByRole("button", { name: "Save", exact: true }).click();
@@ -75,7 +75,12 @@ test.describe("Inventory maintenance", () => {
     await page.goto("/maintenance/inventory-items");
     await page.waitForSelector("h1:has-text('Inventory items')");
     await page.getByRole("button", { name: /New item/i }).click();
-    await dialog(page).getByLabel("Code").fill(ITEM_CODE);
+    // `exact`, and it is load-bearing: `getByLabel` matches on **substring**, and P7 step 6
+    // added a "Class code" field to this dialog's Fiscal section. A loose "Code" then resolved
+    // to two elements and three specs in two shards went red at once — a good failure, loud
+    // and precise, but one that costs an e2e run to see. The sibling `Name` lookup below has
+    // always been exact; this is the same rule applied to the field beside it.
+    await dialog(page).getByLabel("Code", { exact: true }).fill(ITEM_CODE);
     await dialog(page).getByLabel("Name", { exact: true }).fill(`E2E Wine ${SUFFIX}`);
     await pick(page, /Unit category/, "COUNT");
     await pick(page, /Base unit/, "EA");
@@ -202,7 +207,7 @@ test.describe("Inventory maintenance", () => {
     await page.goto("/maintenance/inventory-items");
     await page.waitForSelector("h1:has-text('Inventory items')");
     await page.getByRole("button", { name: /New item/i }).click();
-    await dialog(page).getByLabel("Code").fill(code);
+    await dialog(page).getByLabel("Code", { exact: true }).fill(code);
     await dialog(page).getByLabel("Name", { exact: true }).fill(`E2E Rename ${SUFFIX}`);
     await pick(page, /Unit category/, "COUNT");
     await pick(page, /Base unit/, "EA");

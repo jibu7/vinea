@@ -510,3 +510,106 @@ def test_the_barcode_listing_needs_an_inventory_permission(
     clerk = _clerk(client, db, company_id)
 
     assert clerk.get("/api/v1/inventory/barcodes").status_code == 403
+
+
+# --- P7 step 6: the fiscal fields the Maintenance screens write -----------------------------
+
+
+def test_a_unit_carries_the_authoritys_quantity_code(client: TestClient) -> None:
+    """Units of measure gains the RRA quantity-unit code (§4.6).
+
+    Vinea's own `code` is the company's — `EA`, `KG`, whatever the catalogue calls it. This is
+    the one RRA reads, and the two are deliberately separate columns: a fiscalized line whose
+    unit has no mapping is refused at post with `fiscal_uom_unmapped` rather than sent under a
+    guess, and a guess here is a wrong quantity on a receipt the authority keeps.
+    """
+    _signup(client)
+    category = _count_category(client)
+    base_uom_id = category["uoms"][0]["id"]
+
+    # Seeded units start unmapped: a company that never fiscalizes never needs one.
+    assert category["uoms"][0]["fiscal_quantity_unit"] is None
+
+    created = client.post(
+        "/api/v1/inventory/uoms",
+        json={
+            "category_id": category["id"],
+            "code": "BOX6",
+            "name": "Case of six",
+            "factor_to_base": "6",
+            "fiscal_quantity_unit": "BX",
+        },
+    )
+    assert created.status_code == 201, created.text
+    assert created.json()["fiscal_quantity_unit"] == "BX"
+
+    mapped = client.patch(
+        f"/api/v1/inventory/uoms/{base_uom_id}", json={"fiscal_quantity_unit": "U"}
+    )
+    assert mapped.status_code == 200, mapped.text
+    reread = _count_category(client)
+    assert next(u for u in reread["uoms"] if u["id"] == base_uom_id)["fiscal_quantity_unit"] == "U"
+
+    # A PATCH that says nothing about it leaves it alone — the P4 convention, so renaming a
+    # unit cannot silently unmap it.
+    client.patch(f"/api/v1/inventory/uoms/{base_uom_id}", json={"name": "Each (unit)"})
+    after = _count_category(client)
+    assert next(u for u in after["uoms"] if u["id"] == base_uom_id)["fiscal_quantity_unit"] == "U"
+
+    client.patch(
+        f"/api/v1/inventory/uoms/{base_uom_id}", json={"clear_fiscal_quantity_unit": True}
+    )
+    cleared = _count_category(client)
+    assert (
+        next(u for u in cleared["uoms"] if u["id"] == base_uom_id)["fiscal_quantity_unit"] is None
+    )
+
+
+def test_an_item_carries_the_four_fields_the_authority_registers_it_by(
+    client: TestClient,
+) -> None:
+    """The Items screen's Fiscal section (P7 decision 8).
+
+    **None of the four is locked by history**, and that is the decision rather than an
+    oversight. `registration_hash` in `app/fiscal/items.py` notices a change and re-registers
+    *the same* `item_cd` with the new attributes on the item's next fiscal use — which is the
+    whole point of minting the code once, since a second code would orphan every receipt
+    already issued against the first. Refusing the edit would leave a miscategorised item
+    miscategorised for good.
+    """
+    _signup(client)
+
+    created = _create_item(
+        client,
+        fiscal_class_code="5059690800",
+        fiscal_origin_country="RW",
+        fiscal_package_unit="BX",
+        fiscal_item_type="2",
+    )
+    assert created["fiscal_class_code"] == "5059690800"
+    assert created["fiscal_origin_country"] == "RW"
+    assert created["fiscal_package_unit"] == "BX"
+    assert created["fiscal_item_type"] == "2"
+
+    # Changed, not refused.
+    changed = client.patch(
+        f"/api/v1/inventory/items/{created['id']}",
+        json={"fiscal_class_code": "5022130000", "fiscal_origin_country": "KE"},
+    )
+    assert changed.status_code == 200, changed.text
+    assert changed.json()["fiscal_class_code"] == "5022130000"
+    assert changed.json()["fiscal_origin_country"] == "KE"
+    # …and a field the body did not name is untouched.
+    assert changed.json()["fiscal_package_unit"] == "BX"
+
+    # An emptied text input sends `""`. Storing that would leave the item "classified" as
+    # nothing at all, which reads as classified everywhere that asks — so it is absence.
+    blanked = client.patch(
+        f"/api/v1/inventory/items/{created['id']}", json={"fiscal_class_code": ""}
+    )
+    assert blanked.status_code == 200, blanked.text
+    assert blanked.json()["fiscal_class_code"] is None
+
+    plain = _create_item(client, code="WINE-002", name="Rugari White 750ml")
+    assert plain["fiscal_class_code"] is None
+    assert plain["fiscal_item_type"] is None

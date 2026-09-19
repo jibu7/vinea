@@ -6,6 +6,7 @@ from typing import Annotated, Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.models.fiscalization import FiscalItemTypeCode
 from app.models.inventory import ItemType, NegativeStockPolicy
 from app.schemas.common import ApiModel
 
@@ -48,6 +49,10 @@ class UomCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     factor_to_base: Factor
     decimal_places: int = Field(default=0, ge=0, le=6)
+    #: The authority's quantity-unit code (RRA §4.6), from the synced `fiscal_codes` table.
+    #: Vinea's own unit codes are the company's; this is the one RRA reads, and a fiscalized
+    #: line whose unit has none is refused with `fiscal_uom_unmapped` rather than guessed at.
+    fiscal_quantity_unit: str | None = Field(default=None, max_length=5)
 
 
 class UomUpdate(BaseModel):
@@ -55,6 +60,8 @@ class UomUpdate(BaseModel):
     factor_to_base: Factor | None = None
     decimal_places: int | None = Field(default=None, ge=0, le=6)
     is_active: bool | None = None
+    fiscal_quantity_unit: str | None = Field(default=None, max_length=5)
+    clear_fiscal_quantity_unit: bool = False
 
 
 class UomRead(ApiModel):
@@ -66,6 +73,7 @@ class UomRead(ApiModel):
     decimal_places: int
     is_base: bool
     is_active: bool
+    fiscal_quantity_unit: str | None
 
 
 class UomCategoryWithUnits(UomCategoryRead):
@@ -91,6 +99,17 @@ class ItemCreate(BaseModel):
     selling_price: NonNegativeMoney = Decimal(0)
     price_includes_tax: bool = False
     weight_per_base_unit: PositiveQuantity | None = None
+    # --- P7 fiscalization (decision 8) ----------------------------------------------------
+    #: The authority's classification. No default and no guess: a class is a claim about what
+    #: the thing *is* and RRA reports on it, so a fiscalized sale of an item without one is
+    #: refused with `fiscal_class_missing`.
+    fiscal_class_code: str | None = Field(default=None, max_length=20)
+    #: ISO-3166 alpha-2. Defaults to `RW` at registration when unset.
+    fiscal_origin_country: str | None = Field(default=None, min_length=2, max_length=2)
+    fiscal_package_unit: str | None = Field(default=None, max_length=5)
+    #: Overrides what the item type would register as — a stock item is a finished product and
+    #: a service is a service unless the catalogue says otherwise.
+    fiscal_item_type: FiscalItemTypeCode | None = None
 
 
 class ItemUpdate(BaseModel):
@@ -122,6 +141,14 @@ class ItemUpdate(BaseModel):
     selling_price: NonNegativeMoney | None = None
     price_includes_tax: bool | None = None
     is_active: bool | None = None
+    fiscal_class_code: str | None = Field(default=None, max_length=20)
+    clear_fiscal_class_code: bool = False
+    fiscal_origin_country: str | None = Field(default=None, min_length=2, max_length=2)
+    clear_fiscal_origin_country: bool = False
+    fiscal_package_unit: str | None = Field(default=None, max_length=5)
+    clear_fiscal_package_unit: bool = False
+    fiscal_item_type: FiscalItemTypeCode | None = None
+    clear_fiscal_item_type: bool = False
 
 
 class ItemRead(ApiModel):
@@ -142,6 +169,10 @@ class ItemRead(ApiModel):
     price_includes_tax: bool
     weight_per_base_unit: Decimal | None
     is_active: bool
+    fiscal_class_code: str | None
+    fiscal_origin_country: str | None
+    fiscal_package_unit: str | None
+    fiscal_item_type: FiscalItemTypeCode | None
 
 
 class KitComponentIn(BaseModel):

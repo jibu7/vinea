@@ -70,6 +70,18 @@ export const navIntents: NavIntent[] = [
       { label: "Company details", module: "Common", permission: "company:read", href: "/maintenance/company-details" },
       { label: "Foreign currency", module: "Common", permission: "common:setup_currencies", href: "/maintenance/currencies" },
       { label: "Tax types", module: "Tax", permission: "common:setup_taxes", href: "/maintenance/taxes" },
+      // P7 step 6. Appendix C's Maintenance → Tax block carries "Tax types" alone; the owner's
+      // tree has Tax under Maintenance only, and an EBM device is a *maintenance* object —
+      // registered once per branch and then left alone. It reads on either fiscal permission
+      // because the device list is also what the queue dashboard shows, and requiring the
+      // setup permission to look at a stuck queue would mean a clerk needed the authority to
+      // reconfigure it. `_require_view` in the API accepts exactly this pair.
+      {
+        label: "EBM devices",
+        module: "Tax",
+        permission: ["fiscal:setup_manage", "fiscal:reports_view"],
+        href: "/maintenance/ebm-devices",
+      },
       { label: "Chart of accounts", module: "General Ledger", permission: "gl:setup_manage", href: "/maintenance/chart-of-accounts" },
       { label: "Branches", module: "General Ledger", permission: "common:setup_branches", href: "/maintenance/branches" },
       { label: "Transaction types", module: "General Ledger", permission: "gl:setup_manage", href: "/maintenance/transaction-types" },

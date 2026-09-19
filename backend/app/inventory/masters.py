@@ -23,6 +23,7 @@ from app.kernel.accounts import get_account
 from app.kernel.errors import LedgerStateError
 from app.kernel.posting import gl_settings_for
 from app.models.company import Branch, Company
+from app.models.fiscalization import FiscalItemTypeCode
 from app.models.gl import ControlType, GLAccount, GLSettings
 from app.models.inventory import (
     UOM_CONVERSION_SCALE,
@@ -244,6 +245,7 @@ def create_uom(
     name: str,
     factor_to_base: Decimal,
     decimal_places: int = 0,
+    fiscal_quantity_unit: str | None = None,
     actor: User,
     request: Request | None = None,
 ) -> Uom:
@@ -264,6 +266,7 @@ def create_uom(
         name=name,
         factor_to_base=factor_to_base,
         decimal_places=decimal_places,
+        fiscal_quantity_unit=fiscal_quantity_unit,
         is_base=False,
         is_active=True,
     )
@@ -289,6 +292,7 @@ def update_uom(
     name: str | None = None,
     factor_to_base: Decimal | None = None,
     decimal_places: int | None = None,
+    fiscal_quantity_unit: str | None | object = ...,
     is_active: bool | None = None,
     actor: User,
     request: Request | None = None,
@@ -297,6 +301,7 @@ def update_uom(
         "name": uom.name,
         "factor_to_base": str(uom.factor_to_base),
         "decimal_places": uom.decimal_places,
+        "fiscal_quantity_unit": uom.fiscal_quantity_unit,
         "is_active": uom.is_active,
     }
     if name is not None:
@@ -318,6 +323,8 @@ def update_uom(
         uom.factor_to_base = factor_to_base
     if decimal_places is not None:
         uom.decimal_places = decimal_places
+    if fiscal_quantity_unit is not ...:
+        uom.fiscal_quantity_unit = fiscal_quantity_unit  # type: ignore[assignment]
     if is_active is not None:
         if not is_active and uom.is_base:
             raise LedgerStateError(
@@ -330,6 +337,7 @@ def update_uom(
         "name": uom.name,
         "factor_to_base": str(uom.factor_to_base),
         "decimal_places": uom.decimal_places,
+        "fiscal_quantity_unit": uom.fiscal_quantity_unit,
         "is_active": uom.is_active,
     }
     if after != before:
@@ -387,6 +395,13 @@ class ItemInput:
     selling_price: Decimal = Decimal(0)
     price_includes_tax: bool = False
     weight_per_base_unit: Decimal | None = None
+    # P7 decision 8 — what the authority is told this item is. Never derived from the
+    # accounts: the class is a claim about the goods, and `fiscal_class_missing` refuses the
+    # sale rather than inventing one.
+    fiscal_class_code: str | None = None
+    fiscal_origin_country: str | None = None
+    fiscal_package_unit: str | None = None
+    fiscal_item_type: FiscalItemTypeCode | None = None
 
 
 def list_items(
@@ -551,6 +566,10 @@ def create_item(
         selling_price=data.selling_price,
         price_includes_tax=data.price_includes_tax,
         weight_per_base_unit=data.weight_per_base_unit,
+        fiscal_class_code=data.fiscal_class_code,
+        fiscal_origin_country=data.fiscal_origin_country,
+        fiscal_package_unit=data.fiscal_package_unit,
+        fiscal_item_type=data.fiscal_item_type,
         is_active=True,
     )
     db.add(item)
@@ -620,6 +639,10 @@ def update_item(
     selling_price: Decimal | None = None,
     price_includes_tax: bool | None = None,
     weight_per_base_unit: Decimal | None | object = ...,
+    fiscal_class_code: str | None | object = ...,
+    fiscal_origin_country: str | None | object = ...,
+    fiscal_package_unit: str | None | object = ...,
+    fiscal_item_type: FiscalItemTypeCode | None | object = ...,
     is_active: bool | None = None,
     actor: User,
     request: Request | None = None,
@@ -709,6 +732,19 @@ def update_item(
                 field_errors={"weight_per_base_unit": ["must be greater than zero"]},
             )
         item.weight_per_base_unit = weight_per_base_unit  # type: ignore[assignment]
+    # The four registered fields, and none of them is locked by history. `registration_hash`
+    # in `app/fiscal/items.py` notices the change and re-registers **the same** `item_cd`
+    # with the new attributes on the item's next fiscal use — which is the whole point of
+    # minting the code once. Refusing the edit would leave a miscategorised item
+    # miscategorised for good.
+    for field, value in (
+        ("fiscal_class_code", fiscal_class_code),
+        ("fiscal_origin_country", fiscal_origin_country),
+        ("fiscal_package_unit", fiscal_package_unit),
+        ("fiscal_item_type", fiscal_item_type),
+    ):
+        if value is not ...:
+            setattr(item, field, value)
     if is_active is not None:
         item.is_active = is_active
     db.flush()

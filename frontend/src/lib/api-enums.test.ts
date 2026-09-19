@@ -36,14 +36,52 @@ const GUARDED_FIELDS: ReadonlyArray<readonly [field: string, enumName: string]> 
   ["control_type", "ControlType"],
   ["item_type", "ItemType"],
   ["negative_stock_policy", "NegativeStockPolicy"],
+  // P7 step 6: a device's profile and environment. Both field names are unambiguous across
+  // the app — nothing else on the wire is called either — so they are safe to match globally.
+  ["profile", "FiscalProfile"],
+  ["environment", "FiscalEnvironment"],
+  ["fiscal_tax_type", "FiscalTaxType"],
+  ["fiscal_item_type", "FiscalItemTypeCode"],
   // `kind` is deliberately absent: four modules use that field name for four different enums
   // (a cashbook line's receipt/payment, a subledger `DocumentKind`, an inventory transaction
   // kind), so matching on it would flag `kind: "receipt"` as a bad InventoryTransactionKind.
   // The type-name rule below catches the inventory one precisely.
+  //
+  // `status` is absent for the same reason and a sharper one: eight enums in this product use
+  // it, and one of `FiscalDeviceStatus`'s three values is the string `"active"` — which every
+  // `is_active` comparison in the app is about. Matching it globally would fire on dozens of
+  // lines that are not wrong. It is scoped instead, below.
+];
+
+/**
+ * Field names guarded only inside the files that own them.
+ *
+ * `status` is the case this exists for. `FiscalDeviceStatus` is `pending | active |
+ * suspended`, and a global rule on `status` would flag every `status: "posted"` in the
+ * subledger and every `"active"` anywhere. Inside the fiscal screens there is exactly one
+ * enum called `status` on a device, so the rule is exact there and silent everywhere else —
+ * which is the same reasoning that keeps `kind` out of the global list rather than a
+ * weaker version of it.
+ */
+const SCOPED_FIELDS: ReadonlyArray<
+  readonly [field: string, enumName: string, pathPrefix: string]
+> = [
+  ["status", "FiscalDeviceStatus", "src/app/(shell)/maintenance/ebm-devices/"],
+  ["status", "FiscalDeviceStatus", "src/features/fiscal/"],
 ];
 
 /** Type names, to catch `useState<ItemType>("stock")` and `ItemType[] = ["stock", …]`. */
-const GUARDED_TYPES = ["ControlType", "ItemType", "NegativeStockPolicy", "InventoryTransactionKind"] as const;
+const GUARDED_TYPES = [
+  "ControlType",
+  "ItemType",
+  "NegativeStockPolicy",
+  "InventoryTransactionKind",
+  "FiscalProfile",
+  "FiscalEnvironment",
+  "FiscalDeviceStatus",
+  "FiscalTaxType",
+  "FiscalItemTypeCode",
+] as const;
 
 function filesUnder(path: string): string[] {
   const full = join(process.cwd(), path);
@@ -101,6 +139,23 @@ describe("wire enum values live in one generated module", () => {
     }
   });
 
+  it("catches a device status spelled by hand, and only in the fiscal screens", () => {
+    // The line a screen would ship if it compared the wire value instead of the enum. The
+    // scoped rule has to fire on it inside the fiscal files…
+    const shipped = `  if (device.status === "active") return "success";`;
+    expect(literalNear(shipped, "status")).toBe("active");
+    expect(keyOf("FiscalDeviceStatus", "active")).toBe("ACTIVE");
+    // …and the whole reason it is scoped is this line, which is correct and is everywhere.
+    const innocent = `  const rows = items.filter((i) => i.status === "posted");`;
+    expect(keyOf("FiscalDeviceStatus", literalNear(innocent, "status")!)).toBeNull();
+    // Both scopes name a real directory, so a rename cannot silently switch the rule off.
+    for (const [, , prefix] of SCOPED_FIELDS) {
+      expect(FILES.some((file) => file.replace(`${process.cwd()}/`, "").startsWith(prefix))).toBe(
+        true,
+      );
+    }
+  });
+
   it("is actually capable of catching the defect it was written for", () => {
     // The exact line P5 step 6 shipped. A guard nobody has watched fail is an assertion about
     // itself, so this one is shown failing on the real thing before it is trusted.
@@ -118,6 +173,16 @@ describe("wire enum values live in one generated module", () => {
         .split("\n")
         .forEach((line, index) => {
           for (const [field, enumName] of GUARDED_FIELDS) {
+            const found = literalNear(line, field);
+            if (found === null) continue;
+            const key = keyOf(enumName, found);
+            offences.push(
+              `line ${index + 1}: "${found}" beside \`${field}\` — use ` +
+                (key ? `${enumName}.${key}` : `a ${enumName} member ("${found}" is not one)`),
+            );
+          }
+          for (const [field, enumName, prefix] of SCOPED_FIELDS) {
+            if (!relative.startsWith(prefix)) continue;
             const found = literalNear(line, field);
             if (found === null) continue;
             const key = keyOf(enumName, found);

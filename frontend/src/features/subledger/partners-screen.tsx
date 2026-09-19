@@ -16,7 +16,9 @@ import { TBody, TD, TH, THead, TR, Table } from "@/design/components/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/design/components/tabs";
 import { useToast } from "@/design/components/toast";
 import { useHasPermission } from "@/features/auth/hooks";
+import { useFiscalDevices, useVerifyTin } from "@/features/fiscal/hooks";
 import { useCurrencies } from "@/features/gl/hooks";
+import { FiscalDeviceStatus } from "@/lib/api-enums";
 import { byId, toOptions } from "@/features/gl/lookups";
 import { useApiErrorToast } from "@/lib/use-api-error-toast";
 import { useCreatePartner, usePartners, useUpdatePartner } from "./hooks";
@@ -35,6 +37,72 @@ interface DetailsForm {
 }
 
 const BLANK: DetailsForm = { name: "", code: "", tin: "", email: "", phone: "", notes: "", currencyId: "" };
+
+/**
+ * **Verify TIN** — the authority's opinion of a taxpayer number, beside the field that holds
+ * it.
+ *
+ * A button rather than a live check, and that is the point: the lookup is a `GET` that stores
+ * nothing, and what it returns is an answer *at a moment* rather than a fact about the
+ * partner. Firing it on every keystroke would ask RRA about `1`, `10`, `100`… and firing it
+ * on blur would cache an answer that is not a property of the row.
+ *
+ * `found: false` is an **answer**, not a failure — the authority's own "no such taxpayer"
+ * (884) arrives that way, and it is the one a clerk most needs to see before invoicing.
+ *
+ * The lookup goes through a device, because it is the device the authority answers. A company
+ * with no active device is told so rather than shown a button that can only 422.
+ */
+function VerifyTin({ tin }: { tin: string }) {
+  // `tTin`, not `t`: the screen below declares its own `t` on `arap.partners`, and two aliases
+  // of the same name in one file is exactly what `i18n-coverage.test.ts` cannot tell apart.
+  const tTin = useTranslations("fiscal.tin");
+  const devices = useFiscalDevices();
+  const verify = useVerifyTin();
+  const [result, setResult] = useState<{ found: boolean; text: string } | null>(null);
+
+  const device = (devices.data ?? []).find((d) => d.status === FiscalDeviceStatus.ACTIVE);
+  const trimmed = tin.trim();
+
+  async function handleVerify() {
+    if (!device) return;
+    setResult(null);
+    try {
+      const lookup = await verify.mutateAsync({ deviceId: device.id, tin: trimmed });
+      setResult({
+        found: lookup.found,
+        text: lookup.found
+          ? lookup.status
+            ? tTin("found", { name: lookup.name ?? trimmed, status: lookup.status })
+            : tTin("foundNoStatus", { name: lookup.name ?? trimmed })
+          : tTin("notFound"),
+      });
+    } catch {
+      // The authority's own refusal text is already carried through by the API error; what
+      // this line says is the thing the operator can act on — try again, or ring them.
+      setResult({ found: false, text: tTin("failed") });
+    }
+  }
+
+  if (!device) {
+    return <p className="pt-1 text-[11px] text-[var(--vinea-ink-subtle)]">{tTin("noDevice")}</p>;
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-2 pt-1">
+      <Button
+        variant="ghost"
+        onClick={handleVerify}
+        disabled={!trimmed || verify.isPending}
+        className="text-xs"
+      >
+        {verify.isPending ? tTin("verifying") : tTin("verify")}
+      </Button>
+      {result ? (
+        <StatusChip tone={result.found ? "success" : "warning"}>{result.text}</StatusChip>
+      ) : null}
+    </div>
+  );
+}
 
 /**
  * Customers and Suppliers are one screen: `partners` is one table with `is_customer` /
@@ -311,6 +379,7 @@ export function PartnersScreen({ role }: { role: PartnerRole }) {
                   onChange={(e) => setForm({ ...form, tin: e.target.value })}
                   className="font-mono"
                 />
+                <VerifyTin tin={form.tin} />
               </Field>
               <Field label={t("currency")}>
                 <Combobox
@@ -386,6 +455,7 @@ export function PartnersScreen({ role }: { role: PartnerRole }) {
                       onChange={(e) => setDetailsForm({ ...detailsForm, tin: e.target.value })}
                       className="font-mono"
                     />
+                    <VerifyTin tin={detailsForm.tin} />
                   </Field>
                   <Field label={t("currency")}>
                     <Combobox

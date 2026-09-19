@@ -522,7 +522,7 @@
     "taxCodeUpdateFailed": "Couldn't update tax code",
     "renameAccountSubtitle": "Update an account code while keeping its full ledger history and linkages intact",
     "selectAccountToRename": "Select account to rename",
-    "chooseAccount": "Choose account…",
+    "chooseAccount": "Choose an account",
     "account": "Account",
     "newCodePlaceholder": "e.g. 6150",
     "renameKeepsHistoryNote": "Existing journal lines stay tied to this account; only the visible code is updated.",
@@ -632,7 +632,21 @@
     "revokeInvitationBody": "The link in {email}'s invitation stops working immediately. You can invite them again afterwards.",
     "revokeInvitation": "Revoke invitation",
     "invitationRevoked": "Invitation revoked",
-    "invitationRevokeFailed": "Could not revoke the invitation"
+    "invitationRevokeFailed": "Could not revoke the invitation",
+    "ebmDevices": "EBM devices",
+    "ebmTaxClass": "EBM class",
+    "ebmTaxClassNote": "Which of the authority's four tax classes (A exempt, B standard, C zero-rated, D non-VAT) a line carrying this code is reported under. A fiscalized sale on an unmapped code is refused.",
+    "ebmTaxClassNone": "Not mapped",
+    "taxDefaults": "Tax and revaluation",
+    "vatSettlementAccount": "VAT settlement",
+    "arRevaluationAccount": "AR revaluation",
+    "apRevaluationAccount": "AP revaluation",
+    "unrealizedFxGainAccount": "Unrealized FX gain",
+    "unrealizedFxLossAccount": "Unrealized FX loss",
+    "defaultPurchaseClass": "Default purchase class",
+    "defaultPurchaseClassNote": "The class a purchase line with no item is registered under — rent, freight, a consultant's fee. The authority requires a class on every line and Vinea does not require an item, so one default bridges the two.",
+    "taxDefaultsNote": "None of these may be a control account, and the revaluation contras are deliberately not the AR/AP control accounts: a control account's balance is the sum of open items at their booking rates, which a revaluation would break.",
+    "searchItemClass": "Search the authority's classification"
   },
   "arap": {
     "role": {
@@ -1419,7 +1433,27 @@
       "tabBarcodes": "Barcodes",
       "purchaseAccount": "Purchase account",
       "weightPerBaseUnit": "Weight per base unit",
-      "weightNote": "Weight is only read by a landed cost split on the weight basis, which refuses a target item that has none."
+      "weightNote": "Weight is only read by a landed cost split on the weight basis, which refuses a target item that has none.",
+      "fiscalSection": "Fiscal",
+      "fiscalClassCode": "Class code",
+      "chooseFiscalClass": "Search the authority's classification",
+      "fiscalOrigin": "Country of origin",
+      "chooseOrigin": "Defaults to Rwanda",
+      "fiscalPackageUnit": "Packaging unit",
+      "choosePackageUnit": "Defaults to unpackaged",
+      "fiscalItemType": "Product type",
+      "chooseFiscalItemType": "From the item type",
+      "fiscalItemTypeLabel": {
+        "1": "Raw material",
+        "2": "Finished product",
+        "3": "Service"
+      },
+      "registrationStatus": "Registration",
+      "registered": "Registered",
+      "registeredPending": "Queued",
+      "notRegistered": "Not registered",
+      "itemCd": "Item code",
+      "fiscalNote": "An item is registered with the authority on its first fiscal use, and re-registered under the same code whenever one of these four changes. A sale of an item with no class code is refused."
     },
     "barcodes": {
       "title": "Barcodes",
@@ -1493,7 +1527,11 @@
       "saveFailed": "Could not save the category",
       "updateFailed": "Could not update the category",
       "uomSaveFailed": "Could not save the unit",
-      "baseNote": "The base unit is created with its category and is always 1. Every other unit says how many base units it is worth."
+      "baseNote": "The base unit is created with its category and is always 1. Every other unit says how many base units it is worth.",
+      "quantityUnit": "RRA quantity unit",
+      "quantityUnitNone": "Not mapped",
+      "chooseQuantityUnit": "Search the authority's units",
+      "quantityUnitNote": "The authority's own quantity-unit code (§4.6), synced from the device. A fiscalized line whose unit has none is refused rather than guessed at."
     },
     "defaults": {
       "title": "Inventory defaults",
@@ -1895,6 +1933,84 @@
       "note": "Saved as one definition, not row by row: a kit is only meaningful as a set. Editing it changes what the next order line explodes into and restates nothing already ordered.",
       "explodesTo": "One kit explodes into {count} lines.",
       "editDefinition": "Edit definition"
+    }
+  },
+  "fiscal": {
+    "common": {
+      "status": "Status",
+      "cancel": "Cancel",
+      "create": "Register",
+      "save": "Save",
+      "saving": "Saving…",
+      "emptyValue": "—",
+      "notSet": "Not set"
+    },
+    "devices": {
+      "title": "EBM devices",
+      "subtitle": "One electronic billing machine per branch, and what the authority knows about it",
+      "cardTitle": "Devices",
+      "empty": "No device is registered. A company with no active device is not fiscalized, and nothing it posts is declared.",
+      "register": "Register device",
+      "registerTitle": "Register an EBM device",
+      "registerNote": "Registering records the device here. It is not declared to the authority, and issues no receipts, until it is initialized.",
+      "registered": "Device registered",
+      "registerFailed": "The device could not be registered",
+      "branch": "Branch",
+      "chooseBranch": "Choose a branch",
+      "profile": "Profile",
+      "profileLabel": {
+        "vsdc": "VSDC",
+        "osdc": "OSDC"
+      },
+      "environment": "Environment",
+      "environmentLabel": {
+        "test": "Test",
+        "production": "Production"
+      },
+      "statusLabel": {
+        "pending": "Not initialized",
+        "active": "Active",
+        "suspended": "Suspended"
+      },
+      "baseUrl": "Base URL",
+      "baseUrlPlaceholder": "https://…",
+      "deviceSerial": "Device serial",
+      "deviceSerialPlaceholder": "The serial registered on the authority's portal",
+      "bhfIdLabel": "Authority branch id",
+      "bhfId": "Branch {value}",
+      "identity": "Device identity",
+      "mrcNo": "MRC {value}",
+      "serial": "Serial {value}",
+      "lastSuccess": "Last success",
+      "offline": "Never reached",
+      "keysHeld": "Keys held",
+      "keysAbsent": "No keys",
+      "keysNote": "A device's keys are never shown, exported or logged: no response model has a field for one. What is shown is whether the device is holding them.",
+      "activationNote": "Initialize is the only way a device becomes active, and re-initializing is how a suspended one is brought back — there is no separate Activate.",
+      "initialize": "Initialize",
+      "reinitialize": "Re-initialize",
+      "initialized": "Device initialized and active",
+      "initializeFailed": "The device could not be initialized",
+      "suspend": "Suspend",
+      "suspendTitle": "Suspend this device",
+      "suspendNote": "A suspended device stops fiscalizing and its branch cannot invoice. Its receipts stay the authority's record; bring it back by re-initializing it.",
+      "suspendReason": "Reason",
+      "suspended": "Device suspended",
+      "suspendFailed": "The device could not be suspended",
+      "syncCodes": "Sync codes",
+      "synced": "Code tables synced",
+      "syncedRows": "{codes} codes, {classes} item classes",
+      "syncFailed": "The code tables could not be synced",
+      "actions": "Actions"
+    },
+    "tin": {
+      "verify": "Verify TIN",
+      "verifying": "Asking the authority…",
+      "found": "{name} · {status}",
+      "foundNoStatus": "{name}",
+      "notFound": "The authority holds no taxpayer with this number",
+      "failed": "The authority could not be reached",
+      "noDevice": "Verifying a TIN asks an active EBM device; this company has none."
     }
   },
   "orderEntry": {
