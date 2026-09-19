@@ -173,18 +173,21 @@ frontend:  30 files changed,  5585 insertions(+),  25 deletions(-)
 docs:      23 files changed,   283 insertions(+),   1 deletion(-)   (20 of them screenshots)
 ```
 
-Checks, all run against that commit:
+Checks. The backend suite ran at `91db681` and **no backend file has changed since** — the
+four commits after it are the frontend and the docs (`git diff --name-only 91db681..HEAD --
+backend` is empty), which is why the count below is quoted against that hash rather than the
+branch head. Everything else ran against the head.
 
 | check | result |
 |---|---|
 | `make be-lint` | `All checks passed!` |
-| `make be-test` (`-n 4`, in the container) | *filled in below* |
+| `make be-test` (`-n 4`, in the container) | `1355 passed, 7 warnings in 1286.10s (0:21:26)` |
 | `tests/test_api_has_a_caller.py` | 15 passed — the fourteen lines gone, `POST /fiscal/outbox/drain` exempt `by design` |
 | `npx tsc --noEmit` | clean |
 | `npm run lint` | clean (pre-existing `react-hooks/exhaustive-deps` warnings only) |
 | `npx vitest run` | 391 passed, 16 files |
 | `npm run build` | compiled; the five new routes built |
-| `e2e/p7-transactions.spec.ts` + `e2e/p7-maintenance.spec.ts` | 17 passed, on a reset database with the sandbox up |
+| `e2e/p7-transactions.spec.ts` + `p7-maintenance` + `ar-ap-documents` | 19 passed, on a reset database with the sandbox up |
 | `e2e/accessibility-transactions.spec.ts` | 32 passed, including the four new Tax rows and the FX row |
 
 ## What step 8 owes
