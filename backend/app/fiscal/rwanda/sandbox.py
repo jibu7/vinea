@@ -372,6 +372,24 @@ def create_sandbox_router(state: SandboxState) -> APIRouter:
                             {"cd": "06", "cdNm": "MOBILE MONEY", "useYn": "Y", "srtOrd": 6},
                         ],
                     },
+                    # §4.16, published in full rather than sampled: this is the one code table
+                    # an **operator** picks from directly (the reason on a credit note), so a
+                    # sandbox that published three of the thirteen would leave the picker
+                    # looking complete and refusing the other ten at post.
+                    {
+                        "cdCls": codes.CLASS_REFUND_REASON,
+                        "cdClsNm": "Refund Reason",
+                        "useYn": "Y",
+                        "dtlList": [
+                            {
+                                "cd": reason.value,
+                                "cdNm": codes.REFUND_REASON_NAMES[reason],
+                                "useYn": "Y",
+                                "srtOrd": index,
+                            }
+                            for index, reason in enumerate(codes.RefundReason, start=1)
+                        ],
+                    },
                 ]
             },
         )

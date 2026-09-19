@@ -23,6 +23,8 @@ export function ReportPage({
   backHref = "/",
   filters,
   onExportCsv,
+  actions,
+  printDisabledReason,
   children,
 }: {
   title: string;
@@ -33,6 +35,18 @@ export function ReportPage({
   backHref?: string;
   filters?: React.ReactNode;
   onExportCsv?: () => void;
+  /** Buttons this page adds beside Print — the document detail's **Copy print**, which is a
+   * second piece of paper leaving the building and therefore an act of its own. */
+  actions?: React.ReactNode;
+  /**
+   * Why this page may not be printed, or nothing when it may.
+   *
+   * P7 decision 11: a fiscalized document whose queue row RRA has not signed has **nothing to
+   * print** — the paper carries a receipt number the authority issued, and there is no draft
+   * form of one (CIS §10). The button says why instead of producing a receipt that is not one,
+   * and the reason it carries is the row's own status.
+   */
+  printDisabledReason?: string;
   children: React.ReactNode;
 }) {
   const t = useTranslations("reports");
@@ -59,7 +73,15 @@ export function ReportPage({
               <Download className="size-3.5" /> {t("exportCsv")}
             </Button>
           )}
-          <Button variant="primary" onClick={() => window.print()} className="gap-1.5 text-xs">
+          {actions}
+          <Button
+            variant="primary"
+            onClick={() => window.print()}
+            disabled={printDisabledReason !== undefined}
+            title={printDisabledReason}
+            data-testid="report-print"
+            className="gap-1.5 text-xs"
+          >
             <Printer className="size-3.5" /> {t("print")}
           </Button>
           <ThemeToggle />

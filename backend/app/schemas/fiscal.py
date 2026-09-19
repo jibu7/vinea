@@ -447,3 +447,34 @@ class ReceiptBlockRead(BaseModel):
     #: True on every print after the first: the template adds `COPY` and the warning line.
     is_copy: bool
     copy_count: int
+
+
+# --- What a posting screen needs, and nothing more (P7 step 7) -------------------------------
+
+
+class RefundReasonRead(BaseModel):
+    """One of the authority's published refund reasons, as a code and a name.
+
+    Read out of `fiscal_codes` rather than off the Rwanda enum, so the picker on a credit note
+    is fed by the same synced table every other code picker reads and no country's vocabulary
+    leaves `app/fiscal/`.
+    """
+
+    code: str
+    name: str
+
+
+class DocumentContextRead(BaseModel):
+    """The two facts an AR/AP posting screen needs before it can draw its fiscal fields.
+
+    Deliberately its own endpoint rather than a corner of the device listing. Keying an invoice
+    is not a fiscal-setup job and not a fiscal-reporting one: the seeded **Sales Manager** role
+    holds `ar:transactions_post` and neither `fiscal:setup_manage` nor `fiscal:reports_view`, so
+    reading the device list to find out whether a purchase code is required would mean handing
+    every sales manager the authority to reconfigure the devices. What is here instead is what
+    the screen asks — does this company fiscalize, and what may a refund say for itself — and
+    neither answer is a secret.
+    """
+
+    fiscalized: bool
+    refund_reasons: list[RefundReasonRead]

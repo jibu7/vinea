@@ -1,7 +1,11 @@
 /** Mirrors backend/app/schemas/gl.py — snake_case, matching the raw JSON wire shape. */
-import type { FiscalTaxType } from "@/lib/api-enums";
+import type {
+  FiscalTaxType,
+  FxRevaluationRole,
+  FxRevaluationStatus,
+} from "@/lib/api-enums";
 
-export type { FiscalTaxType };
+export type { FiscalTaxType, FxRevaluationRole, FxRevaluationStatus };
 
 export interface GLAccount {
   id: number;
@@ -339,4 +343,55 @@ export interface CompanyMember {
   roles: Role[];
   invited_at: string | null;
   accepted_at: string | null;
+}
+
+// --- Unrealized FX revaluation (P7 decision 13) -----------------------------------------------
+
+/**
+ * One open foreign-currency partner document in a run.
+ *
+ * Every figure is the one the run **used**, not a recomputation: a later correction to
+ * `exchange_rates` must not restate a posted revaluation, so the lines are stored and read
+ * back rather than derived on the way to the screen.
+ */
+export interface FxRevaluationLine {
+  document_id: number;
+  document_number: string;
+  role: string;
+  partner_id: number;
+  partner_name: string;
+  currency_id: number;
+  currency_code: string;
+  /** Signed by the control account's side — an AR invoice positive, an AP invoice negative. */
+  open_amount: string;
+  booking_rate: string;
+  carrying_base: string;
+  rate_at_date: string;
+  revalued_base: string;
+  difference: string;
+}
+
+export interface FxRevaluationPreview {
+  revaluation_date: string;
+  role: FxRevaluationRole;
+  total_difference: string;
+  lines: FxRevaluationLine[];
+}
+
+export interface FxRevaluation {
+  id: number;
+  number: string;
+  revaluation_date: string;
+  role: FxRevaluationRole;
+  journal_entry_id: number | null;
+  /** The next-day reversal posted in the same transaction as the entry — the balance sheet at
+   * the date carries the revaluation and the next period does not. */
+  mirror_entry_id: number | null;
+  /** The counter-entry that undid the whole run, when one was posted. */
+  reversal_entry_id: number | null;
+  status: FxRevaluationStatus;
+}
+
+export interface FxRevaluationDetail extends FxRevaluation {
+  lines: FxRevaluationLine[];
 }

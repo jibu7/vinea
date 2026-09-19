@@ -235,3 +235,27 @@ def test_the_code_and_item_class_listings_start_empty_and_are_tenant_scoped(
     here, and a listing that invented rows would be worse than one that did not."""
     assert client.get("/api/v1/fiscal/codes").json() == []
     assert client.get("/api/v1/fiscal/item-classes").json() == []
+
+
+# --- What a posting screen may read (P7 step 7) ---------------------------------------------
+
+
+def test_the_document_context_is_readable_without_any_fiscal_permission(
+    client: TestClient, db: Session, signed_in, branch_id: int
+) -> None:
+    """The one fiscal read a **sales manager** makes, and the reason it is its own endpoint.
+
+    Keying an invoice on a fiscalized company needs two facts: whether a purchase code is
+    required, and what a credit note may give as its reason. Reading them off `/fiscal/devices`
+    or `/fiscal/codes` would mean granting `fiscal:reports_view` to everyone who sells — so
+    those still refuse the clerk here, and this one does not.
+    """
+    register(client, branch_id)
+    clerk = _invite_clerk(client, db, signed_in.company.id)
+
+    assert clerk.get("/api/v1/fiscal/devices").status_code == 403
+    assert clerk.get("/api/v1/fiscal/codes").status_code == 403
+
+    response = clerk.get("/api/v1/fiscal/document-context")
+    assert response.status_code == 200, response.text
+    assert response.json() == {"fiscalized": False, "refund_reasons": []}

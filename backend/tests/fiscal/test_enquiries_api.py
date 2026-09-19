@@ -19,6 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import set_actor, set_tenant
+from app.fiscal import devices as device_service
 from app.fiscal import drainer
 from app.fiscal import feed as feed_service
 from app.fiscal import imports as import_service
@@ -615,3 +616,74 @@ def test_the_import_register_listing_answers_with_the_declaration(
         ).json()
         == []
     )
+
+
+# --- What a posting screen may read (P7 step 7) ---------------------------------------------
+
+
+def test_the_document_context_says_the_company_fiscalizes_and_lists_the_refund_reasons(
+    client: TestClient, db: Session, signed_in: FiscalPosting, sandbox_client: httpx.Client
+) -> None:
+    """The two facts the Invoice and Credit-note screens draw their fiscal fields from.
+
+    `fiscalized` is decision 2's own definition — at least one **active** device — and the
+    reasons are read out of the synced `fiscal_codes` table, so the picker on a credit note is
+    RRA's published §4.16 list rather than thirteen strings typed into a screen.
+    """
+    device_service.sync_codes(
+        db,
+        signed_in.company_id,
+        signed_in.device,
+        actor=signed_in.owner,
+        client=sandbox_client,
+    )
+    db.commit()
+
+    response = client.get("/api/v1/fiscal/document-context")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["fiscalized"] is True
+    assert [row["code"] for row in body["refund_reasons"]] == [
+        f"{n:02d}" for n in range(1, 14)
+    ]
+    # RRA's own name, verbatim — the picker shows what an EBM report will show.
+    assert {row["code"]: row["name"] for row in body["refund_reasons"]}["06"] == "Refund"
+
+
+def test_a_suspended_device_leaves_the_company_unfiscalized(
+    client: TestClient, db: Session, signed_in: FiscalPosting
+) -> None:
+    """Sensitivity for the flag: with the only device suspended the screens must stop asking
+    for a purchase code, because nothing that posts is declared any more."""
+    device_service.suspend(
+        db,
+        signed_in.company_id,
+        signed_in.device,
+        reason="Returned to the supplier",
+        actor=signed_in.owner,
+    )
+    db.commit()
+
+    assert client.get("/api/v1/fiscal/document-context").json()["fiscalized"] is False
+
+
+def test_a_document_summary_carries_the_receipt_the_refund_of_picker_filters_on(
+    client: TestClient, db: Session, signed_in: FiscalPosting
+) -> None:
+    """The credit note's *Refund of* picker is a **listing**, and this is what it filters on.
+
+    `/fiscal/receipts` would answer the same question and needs `fiscal:reports_view`, which an
+    AR clerk does not hold; the document listing needs `ar:reports_view`, which they do. So the
+    summary carries the receipt id and the picker offers exactly the partner's fiscalized
+    invoices.
+    """
+    response = client.get("/api/v1/subledger/ar/documents?kind=invoice")
+
+    assert response.status_code == 200, response.text
+    items = response.json()["items"]
+    assert items, "the fixture posted and drained one invoice"
+    fiscalized = [row for row in items if row["fiscal_receipt_id"] is not None]
+    assert len(fiscalized) == 1
+    receipt = db.get(FiscalReceipt, fiscalized[0]["fiscal_receipt_id"])
+    assert receipt is not None and receipt.document_id == fiscalized[0]["id"]
