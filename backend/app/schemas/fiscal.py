@@ -410,6 +410,21 @@ class ReceiptClassLineRead(BaseModel):
     used: bool
 
 
+class ReceiptLineRead(BaseModel):
+    """One line of the receipt, as the authority received it — **in base currency**, because
+    that is what was declared."""
+
+    sequence: int
+    name: str
+    quantity: Decimal
+    unit_price: Decimal
+    discount_percent: Decimal
+    discount_amount: Decimal
+    taxable: Decimal
+    tax: Decimal
+    tax_class: str
+
+
 class ReceiptBlockRead(BaseModel):
     """What the CIS §13/§14 layout prints. The template is step 7's; these are the facts."""
 
@@ -444,6 +459,7 @@ class ReceiptBlockRead(BaseModel):
     tax_total: Decimal
     gross_total: Decimal
     classes: list[ReceiptClassLineRead]
+    lines: list[ReceiptLineRead]
     #: True on every print after the first: the template adds `COPY` and the warning line.
     is_copy: bool
     copy_count: int

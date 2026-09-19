@@ -33,6 +33,7 @@ from starlette.requests import Request
 from app.core.errors import NotFoundError
 from app.fiscal import outbox as outbox_service
 from app.fiscal import registry
+from app.fiscal.protocol import DeclaredLine
 from app.kernel.errors import LedgerStateError
 from app.models.company import Branch, Company
 from app.models.fiscalization import (
@@ -103,6 +104,11 @@ class ReceiptBlock:
     tax_total: Decimal
     gross_total: Decimal
     classes: tuple[ReceiptClassLine, ...]
+    #: What the receipt sold, as the authority received it. **The declaration's lines, not the
+    #: document's**: a USD invoice is declared in RWF from its frozen base amounts (decision 3),
+    #: so printing the document's own line amounts would put dollars under a franc total. They
+    #: also carry the item's name, which a ledger line keyed with no typed description does not.
+    lines: tuple[DeclaredLine, ...]
     #: True on every print after the first. The template adds `COPY` and
     #: `THIS IS NOT AN OFFICIAL RECEIPT`; the count is what the Z reports.
     is_copy: bool
@@ -273,6 +279,7 @@ def _block(
     )
     adapter = registry.adapter_for(company.fiscal_country if company else None)
     declared = adapter.normalize_declared_totals(receipt.request, receipt.response)
+    declared_lines = adapter.normalize_declared_lines(receipt.request)
 
     classes = _class_lines(declared)
     original = (
@@ -321,6 +328,7 @@ def _block(
         tax_total=declared.tax if declared else MONEY_ZERO,
         gross_total=declared.gross if declared else MONEY_ZERO,
         classes=classes,
+        lines=declared_lines,
         is_copy=as_copy or receipt.copy_count > 0,
         copy_count=receipt.copy_count,
     )

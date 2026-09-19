@@ -192,6 +192,14 @@ export function PartnerDocumentDetailScreen({
     );
   }
 
+  /** The company's own money. A fiscal receipt is declared and printed in it whatever the
+   * document was keyed in (decision 3), so the CIS layout never sees the document's currency. */
+  const base = (currencies.data ?? []).find((c) => c.is_base);
+  const baseLike = {
+    code: base?.code ?? "",
+    decimalPlaces: base?.decimal_places ?? 0,
+    symbol: base?.symbol ?? null,
+  };
   const currency = currencyById.get(data.currency_id);
   const currencyLike = {
     code: currency?.code ?? "",
@@ -242,6 +250,7 @@ export function PartnerDocumentDetailScreen({
       backHref={`/${role}/documents`}
       asOfLabel={formatDate(data.document_date)}
       printDisabledReason={printBlocked}
+      printMasthead={receipt === null}
       actions={
         receipt ? (
           <Button
@@ -259,9 +268,7 @@ export function PartnerDocumentDetailScreen({
           prescribed layout an inspector reads, not a decorated document detail — so when there
           is one, the panels below are hidden at print time and this is what leaves the
           printer. */}
-      {receipt && (
-        <CisReceiptLayout block={receipt} document={data} currency={currencyLike} />
-      )}
+      {receipt && <CisReceiptLayout block={receipt} baseCurrency={baseLike} />}
 
       <div className={receipt ? "space-y-4 print:hidden" : "space-y-4"}>
       <ReportPanel>

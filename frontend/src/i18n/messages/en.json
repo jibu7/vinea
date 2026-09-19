@@ -2126,7 +2126,7 @@
       "clientId": "Client ID: {value}",
       "purchaseCode": "Purchase code: {value}",
       "unitTimesQuantity": "{price} x {quantity}",
-      "lineDiscount": "Discount {percent}%",
+      "lineDiscount": "Discount {percent}% ({amount})",
       "total": "TOTAL",
       "totalClass": "TOTAL {code}-{rate}%",
       "totalTaxClass": "TOTAL TAX {code}",

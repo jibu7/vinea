@@ -3,7 +3,6 @@
 import { useTranslations } from "next-intl";
 import { QRCodeSVG } from "qrcode.react";
 import { formatMoney, formatQuantity } from "@/lib/format";
-import type { PartnerDocumentDetail } from "@/features/subledger/types";
 import type { ReceiptBlock } from "./types";
 
 /**
@@ -34,12 +33,12 @@ import type { ReceiptBlock } from "./types";
  */
 export function CisReceiptLayout({
   block,
-  document,
-  currency,
+  baseCurrency,
 }: {
   block: ReceiptBlock;
-  document: PartnerDocumentDetail;
-  currency: { code: string; decimalPlaces: number; symbol: string | null };
+  /** The **base** currency, and only ever that: a receipt declares in the country's own money
+   * whatever the document was keyed in. */
+  baseCurrency: { code: string; decimalPlaces: number; symbol: string | null };
 }) {
   const t = useTranslations("fiscal.receipt");
   const isRefund = block.refund_of_tot_rcpt_no !== null;
@@ -47,12 +46,12 @@ export function CisReceiptLayout({
    * negative (§14). One sign convention on the wire, another on the paper. */
   const sign = isRefund ? -1 : 1;
   const money = (value: string | number) =>
-    formatMoney(sign * Number(value), currency, { showCode: false });
+    formatMoney(sign * Number(value), baseCurrency, { showCode: false });
 
   return (
     <div
       data-testid="cis-receipt"
-      className="hidden font-mono text-[11px] leading-tight text-black print:block"
+      className="mx-auto hidden w-[76mm] font-mono text-[10px] leading-tight text-black print:block"
     >
       {block.is_copy && (
         <p
@@ -87,26 +86,36 @@ export function CisReceiptLayout({
         {block.purchase_code && <p>{t("purchaseCode", { value: block.purchase_code })}</p>}
       </div>
 
-      {/* --- The lines, §4 e–h ---------------------------------------------------------- */}
+      {/* --- The lines, §4 e–h ----------------------------------------------------------
+          The **declaration's** lines: the item's name (a ledger line keyed with an item and no
+          typed description carries none), the VAT-inclusive unit price the wire carried, and
+          the taxable amount the class totals are the sum of. The tax label beside each line is
+          §5's, so a reader can see which rate produced which total. */}
       <table className="w-full border-b border-black py-2">
         <tbody>
-          {document.lines.map((line) => (
-            <tr key={line.id} className="align-top">
+          {block.lines.map((line) => (
+            <tr key={line.sequence} className="align-top">
               <td className="py-0.5">
-                <p>{line.description ?? ""}</p>
+                <p>{line.name}</p>
                 <p className="pl-2">
                   {t("unitTimesQuantity", {
-                    price: formatMoney(Number(line.unit_price), currency, { showCode: false }),
+                    price: formatMoney(Number(line.unit_price), baseCurrency, { showCode: false }),
                     quantity: formatQuantity(Number(line.quantity), 2),
                   })}
                 </p>
                 {Number(line.discount_percent) !== 0 && (
                   <p className="pl-2">
-                    {t("lineDiscount", { percent: formatQuantity(Number(line.discount_percent), 2) })}
+                    {t("lineDiscount", {
+                      percent: formatQuantity(Number(line.discount_percent), 2),
+                      amount: money(line.discount_amount),
+                    })}
                   </p>
                 )}
               </td>
-              <td className="py-0.5 text-right tabular-nums">{money(line.gross_amount)}</td>
+              <td className="py-0.5 pl-2 text-right tabular-nums">
+                {money(line.taxable)}
+                <span className="pl-2">{line.tax_class}</span>
+              </td>
             </tr>
           ))}
         </tbody>

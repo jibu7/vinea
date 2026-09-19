@@ -4,6 +4,7 @@ import { useCallback, useState } from "react";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { ArrowLeft, Download, Printer } from "lucide-react";
+import { cn } from "@/lib/cn";
 import { Button } from "./button";
 import { ThemeToggle } from "./theme-toggle";
 
@@ -25,6 +26,7 @@ export function ReportPage({
   onExportCsv,
   actions,
   printDisabledReason,
+  printMasthead = true,
   children,
 }: {
   title: string;
@@ -47,6 +49,15 @@ export function ReportPage({
    * and the reason it carries is the row's own status.
    */
   printDisabledReason?: string;
+  /**
+   * Whether the printed page carries the report masthead (company, title, as-of date).
+   *
+   * On by default, and turned off by exactly one screen: a fiscal receipt is a **prescribed
+   * layout** — CIS §13 says what is at the top of it, and the taxpayer block is already there.
+   * A masthead above it would add a second company name and a second document number to a
+   * piece of paper an inspector reads against a specification.
+   */
+  printMasthead?: boolean;
   children: React.ReactNode;
 }) {
   const t = useTranslations("reports");
@@ -91,7 +102,12 @@ export function ReportPage({
       <main className="flex-1 overflow-auto px-6 py-6 print:overflow-visible print:px-0 print:py-0">
         <div className="mx-auto max-w-6xl space-y-4 print:max-w-none print:space-y-3">
           {/* Print-only masthead: a page that leaves the screen must carry its own context. */}
-          <div className="hidden border-b-2 border-black pb-3 print:block">
+          <div
+            className={cn(
+              "hidden border-b-2 border-black pb-3",
+              printMasthead && "print:block",
+            )}
+          >
             {companyName && <p className="text-lg font-semibold">{companyName}</p>}
             <p className="text-base">{title}</p>
             {asOfLabel && <p className="text-xs">{asOfLabel}</p>}

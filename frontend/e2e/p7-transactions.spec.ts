@@ -68,6 +68,23 @@ const BOOKING_RATE = 1320;
 const RATE_AT_MONTH_END = 1350;
 const EXPECTED_DIFFERENCE = "708";
 
+/**
+ * `yyyy-mm-dd` in **local** time, the way `lib/format`'s `todayIso()` does it.
+ *
+ * Not `toISOString()`, which renders UTC: at 00:30 in Kigali that is the previous day, so a
+ * document would be dated into yesterday — a different accounting period at a month boundary
+ * and a different fiscal year at a year boundary. `src/lib/no-utc-dates.test.ts` scans `e2e/`
+ * for exactly this, because CI runs in UTC and could never tell the two apart.
+ */
+function iso(date: Date): string {
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+const today = () => iso(new Date());
+const monthStart = () => iso(new Date(new Date().getFullYear(), new Date().getMonth(), 1));
+const monthEnd = () => iso(new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0));
+
 interface Identified {
   id: number;
 }
@@ -276,7 +293,7 @@ test.describe("the fiscalized transaction screens", () => {
       headers: { "Idempotency-Key": `p7-step7-grn-${SUFFIX}` },
       body: {
         partner_id: suppliers.find((s) => s.supplier_code === SUPPLIER_CODE)!.id,
-        grn_date: new Date().toISOString().slice(0, 10),
+        grn_date: today(),
         description: `Fiscal opening stock ${SUFFIX}`,
         warehouse_id: warehouses[0].id,
         lines: [{ item_id: itemId, quantity: "100", unit_cost: "1000" }],
@@ -598,21 +615,14 @@ test.describe("the fiscalized transaction screens", () => {
       },
     });
 
-    const today = new Date();
-    const monthStart = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1))
-      .toISOString()
-      .slice(0, 10);
-    const monthEnd = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() + 1, 0))
-      .toISOString()
-      .slice(0, 10);
 
     // **Two rates, and the gap between them is the whole subject.** The invoice books at
     // BOOKING_RATE and the month-end revaluation reads RATE_AT_MONTH_END, so the difference the
     // preview shows is a figure that can be worked out by hand rather than whatever the fixture
     // happened to hold.
     for (const [validFrom, rate] of [
-      [monthStart, BOOKING_RATE],
-      [monthEnd, RATE_AT_MONTH_END],
+      [monthStart(), BOOKING_RATE],
+      [monthEnd(), RATE_AT_MONTH_END],
     ] as const) {
       await apiOk(page, "/gl/exchange-rates", {
         method: "POST",
@@ -652,7 +662,7 @@ test.describe("the fiscalized transaction screens", () => {
       Identified & { start_date: string; status: string }
     >;
     const nextPeriod = periods.find(
-      (period) => period.start_date > monthEnd && period.status !== "open",
+      (period) => period.start_date > monthEnd() && period.status !== "open",
     );
     if (nextPeriod) {
       await apiOk(page, `/gl/periods/${nextPeriod.id}/open`, { method: "POST" });
@@ -660,7 +670,7 @@ test.describe("the fiscalized transaction screens", () => {
 
     await page.goto("/gl/fx-revaluation");
     await page.waitForSelector("h1:has-text('FX revaluation')");
-    await pickDate(page, "Revaluation date", monthEnd);
+    await pickDate(page, "Revaluation date", monthEnd());
 
     // **The figure, worked by hand.** 10 x USD 2.00 = 20.00 net, 18 % = 3.60, so the invoice is
     // USD 23.60 gross. RWF has no decimals, so it carries at round(23.60 x 1 320) = 31 152 and

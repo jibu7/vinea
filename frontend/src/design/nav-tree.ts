@@ -140,7 +140,7 @@ export const navIntents: NavIntent[] = [
     items: [
       { label: "Journal batches", module: "General Ledger", permission: "gl:journal_post", href: "/gl/journal-batches/new" },
       { label: "Cashbook batches", module: "General Ledger", permission: "gl:journal_post", href: "/gl/cashbook-batches/new" },
-      // P7 step 7, Appendix C.1.11. Not in the owner's tree, and the reason it belongs in
+      // P7 step 7, Appendix C.1.12. Not in the owner's tree, and the reason it belongs in
       // Transactions rather than Reports is what it does: a revaluation *posts* — an entry at
       // the date and its mirror the day after, in one transaction. The report over a posted run
       // is step 8's, under Reports → General Ledger. Its own permission, because revaluing is
@@ -243,7 +243,7 @@ export const navIntents: NavIntent[] = [
       // has: one that moved no value has no journal entry to be found through.
       // Appendix C.1.7, on the same footing as C.1.6's post-dated screens.
       { label: "Documents", module: "Inventory", permission: "inv:reports_view", href: "/inventory/documents" },
-      // P7 step 7, Appendix C.1.10 — the **Transactions → Tax** block, and the C.2 promise
+      // P7 step 7, Appendix C.1.11 — the **Transactions → Tax** block, and the C.2 promise
       // ("fiscalization status/queue screens (P7)") made good. The owner's tree has Tax under
       // Maintenance only; these four are not maintenance. A queue row is a declaration in
       // flight, a feed row is a purchase somebody has to say yes or no to, an import

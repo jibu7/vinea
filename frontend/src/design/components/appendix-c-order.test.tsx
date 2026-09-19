@@ -118,14 +118,16 @@ import { navIntents, type IntentLabel } from "@/design/nav-tree";
  * on screens that already exist** — the EBM class on Tax types, the RRA quantity unit on
  * Units of measure, a Fiscal section on Items, Verify TIN on Customers and Suppliers, and the
  * tax block on GL Defaults — none of which is a navigable row and none of which belongs here.
- * Step 7 brings the **Transactions → Tax** block (C.1.10) and the FX revaluation row under
- * Transactions → GL (C.1.11), and pins both the same way.
+ * Step 7 brings the **Transactions → Tax** block and the FX revaluation row under
+ * Transactions → GL, and pins both the same way. (Written before step 6 turned out to need an
+ * entry of its own, which took C.1.10; step 7's two are C.1.11 and C.1.12 — the Master Plan's
+ * own note on the numbering says so.)
  *
  * Amended at P7 step 7 with the **Transactions → Tax** block — Fiscal queue, EBM purchases,
- * Import declarations, VAT return — recorded in the plan as **Appendix C.1.10**, and with
- * **"FX revaluation"** under Transactions → General Ledger as **Appendix C.1.11**.
+ * Import declarations, VAT return — recorded in the plan as **Appendix C.1.11**, and with
+ * **"FX revaluation"** under Transactions → General Ledger as **Appendix C.1.12**.
  *
- * Neither is in the owner's tree, and C.1.10 is the C.2 promise made good: Appendix C.2 has
+ * Neither is in the owner's tree, and C.1.11 is the C.2 promise made good: Appendix C.2 has
  * always said "fiscalization status/queue screens (P7)" without saying where they hang. The
  * owner's tree carries Tax under **Maintenance only**, which is right for what was there —
  * tax types, and now a device. These four are not maintenance. A queue row is a declaration in
@@ -134,7 +136,7 @@ import { navIntents, type IntentLabel } from "@/design/nav-tree";
  * through the kernel. Every one is a transaction: done on a day, by a person, with a
  * consequence in the ledger or at the authority.
  *
- * C.1.11 is one row and the same reasoning in miniature. A revaluation **posts** — an entry at
+ * C.1.12 is one row and the same reasoning in miniature. A revaluation **posts** — an entry at
  * the date and its mirror the day after, in one transaction — so it belongs beside Journal
  * batches and Cashbook batches rather than under Reports. The *report* over a posted run is
  * step 8's, and lands under Reports → General Ledger.

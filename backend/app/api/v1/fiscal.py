@@ -73,6 +73,7 @@ from app.schemas.fiscal import (
     QueueStatusCountRead,
     ReceiptBlockRead,
     ReceiptClassLineRead,
+    ReceiptLineRead,
     ReceiptRead,
     RefundReasonRead,
     TinLookupRead,
@@ -880,7 +881,8 @@ def list_item_registrations(
 
 def _block_read(block: printing_service.ReceiptBlock) -> ReceiptBlockRead:
     fields = vars(block) | {
-        "classes": [ReceiptClassLineRead(**vars(line)) for line in block.classes]
+        "classes": [ReceiptClassLineRead(**vars(line)) for line in block.classes],
+        "lines": [ReceiptLineRead(**vars(line)) for line in block.lines],
     }
     return ReceiptBlockRead(**fields)
 

@@ -319,6 +319,29 @@ export interface ReceiptClassLine {
   used: boolean;
 }
 
+/**
+ * One line of the receipt, as the authority received it.
+ *
+ * **In base currency**, always: a document keyed in USD is declared in RWF from its frozen base
+ * amounts (decision 3), so the receipt's lines are the declaration's and not the document's — a
+ * layout that printed the document's own line amounts would put dollars under a franc total.
+ *
+ * `taxable` rather than a gross: on a discounted line the wire's taxable amount is
+ * `splyAmt − dcAmt`, and it is what the class totals are the sum of.
+ */
+export interface ReceiptLine {
+  sequence: number;
+  name: string;
+  quantity: string;
+  /** The VAT-**inclusive** unit price, at two decimals (decision 6). */
+  unit_price: string;
+  discount_percent: string;
+  discount_amount: string;
+  taxable: string;
+  tax: string;
+  tax_class: string;
+}
+
 /** Everything the CIS §13/§14 layout prints, with nobody's field names in it. */
 export interface ReceiptBlock {
   document_id: number;
@@ -354,6 +377,7 @@ export interface ReceiptBlock {
   tax_total: string;
   gross_total: string;
   classes: ReceiptClassLine[];
+  lines: ReceiptLine[];
   /** True on every print after the first: the template adds `COPY` and the warning line. */
   is_copy: boolean;
   copy_count: number;
