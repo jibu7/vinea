@@ -165,16 +165,27 @@ rediscovered:
 
 ## Tree state
 
+Against `main`, at `91db681`:
+
 ```
-backend:  13 files changed,  376 insertions(+),  78 deletions(-)
-frontend
- + docs:  29 files changed, 5181 insertions(+),  23 deletions(-)
+backend:   13 files changed,   376 insertions(+),  78 deletions(-)
+frontend:  30 files changed,  5585 insertions(+),  25 deletions(-)
+docs:      23 files changed,   283 insertions(+),   1 deletion(-)   (20 of them screenshots)
 ```
 
-`make be-lint` clean, the backend suite green, `npx tsc --noEmit` clean, `npm run lint` clean
-(pre-existing `react-hooks/exhaustive-deps` warnings only), `npx vitest run` 391 passed,
-`npm run build` clean, and `tests/test_api_has_a_caller.py` green with the fourteen lines gone
-and only `POST /fiscal/outbox/drain` exempt `by design`.
+Checks, all run against that commit:
+
+| check | result |
+|---|---|
+| `make be-lint` | `All checks passed!` |
+| `make be-test` (`-n 4`, in the container) | *filled in below* |
+| `tests/test_api_has_a_caller.py` | 15 passed — the fourteen lines gone, `POST /fiscal/outbox/drain` exempt `by design` |
+| `npx tsc --noEmit` | clean |
+| `npm run lint` | clean (pre-existing `react-hooks/exhaustive-deps` warnings only) |
+| `npx vitest run` | 391 passed, 16 files |
+| `npm run build` | compiled; the five new routes built |
+| `e2e/p7-transactions.spec.ts` + `e2e/p7-maintenance.spec.ts` | 17 passed, on a reset database with the sandbox up |
+| `e2e/accessibility-transactions.spec.ts` | 32 passed, including the four new Tax rows and the FX row |
 
 ## What step 8 owes
 
