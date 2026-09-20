@@ -613,5 +613,12 @@ $ git diff --stat main..
  52 files changed, 5815 insertions(+), 22 deletions(-)
 ```
 
-`git log @{u}..` is not quoted empty because this branch has no upstream yet — it is pushed with
-the PR. It is quoted in the PR description instead.
+Nothing is left behind, and nothing is unpushed:
+
+```
+$ git status --short
+                          # empty
+
+$ git log @{u}.. --oneline
+                          # empty
+```
