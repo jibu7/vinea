@@ -40,7 +40,6 @@ from app.fiscal import registry
 from app.fiscal.protocol import DeclaredTotals, FiscalizationAdapter
 from app.kernel.errors import LedgerStateError
 from app.kernel.sequences import DocType, claim_number
-from app.models.company import Company
 from app.models.fiscalization import (
     FiscalDailyReport,
     FiscalDevice,
@@ -405,12 +404,11 @@ def _absorb(
 def _adapter_for(db: Session, company_id: int) -> FiscalizationAdapter:
     """The company's own adapter, because only it can read its own payloads.
 
-    No transport is given to it: every call this module makes is a pure translation of a stored
-    row, and a daily report that could reach the authority over the network would be a report
-    that fails when the line is down.
+    One line, kept as a name because this module reads it twice and because the *reason* it
+    takes no transport belongs somewhere — `registry.adapter_for_company` is where, now that
+    the receipts listing needs the same thing for the same reason.
     """
-    company = db.get(Company, company_id)
-    return registry.adapter_for(company.fiscal_country if company is not None else None)
+    return registry.adapter_for_company(db, company_id)
 
 
 def _documents_of(

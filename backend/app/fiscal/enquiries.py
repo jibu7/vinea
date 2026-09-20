@@ -24,7 +24,7 @@ for that entity. A row that recorded its own history would be a second copy to k
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, time
 from decimal import Decimal
 from typing import Any
 
@@ -46,8 +46,8 @@ from app.models.fiscalization import (
     FiscalReceiptType,
 )
 from app.models.inventory import Item
-from app.models.partner import Partner
-from app.models.subledger import PartnerDocument
+from app.models.partner import Partner, PartnerRole
+from app.models.subledger import DocumentKind, PartnerDocument
 from app.models.user import User
 
 #: The audit actions a queue row can carry. Named here rather than matched by prefix so that a
@@ -701,6 +701,336 @@ def item_registrations(
     ]
 
 
+# --- The receipts listing: the tie between EBM and the sales ledger (P7 step 8) ------------
+#
+# The one screen on this phase that is **not** a listing of receipts. A listing of receipts is
+# what the enquiry above is for; this is the report an accountant closes a month with, and its
+# job is to put two independently-derived figures beside each other and name every document
+# that is on one side and not the other.
+#
+# **The two sides are derived differently on purpose.** The receipts side reads
+# `fiscal_receipts.request` through the adapter, exactly as the Z does, so a day's listing and
+# that day's Z are the same arithmetic over the same rows and must agree to the cent. The
+# ledger side reads `partner_documents`, which knows nothing about RRA. Agreeing is therefore
+# evidence; a tie whose two sides came from one query would agree whatever had gone wrong.
+#
+# **They are also indexed differently, and that is not a defect.** A receipt belongs to the day
+# the *device signed it* (`sdc_datetime` — the same axis a Z is cut on), and a document belongs
+# to the day it is *dated* (`document_date`). A sale keyed on the 31st and drained on the 1st
+# sits on opposite sides of a month end, and so does the `NR` receipt for a reversal of an
+# invoice from last week (decision 3: RRA cannot un-sign a sale, so the reversal is signed
+# today against a document dated then). Both land in the asymmetry lists below with the reason
+# showing, which is the answer an accountant needs; an axis fudged to make the totals match
+# would hide exactly the rows worth looking at.
+
+
+@dataclass(frozen=True)
+class ListingReceipt:
+    """One signed receipt on the listing, with what it declared."""
+
+    receipt_id: int
+    document_id: int
+    document_number: str
+    document_date: date
+    partner_name: str
+    receipt_type: FiscalReceiptType
+    receipt_number: str
+    invc_no: int
+    sdc_datetime: datetime
+    declared_gross: Decimal
+    declared_tax: Decimal
+    #: The ledger's own figure for the same document, or `None` when the document is gone.
+    #: Beside the declaration rather than instead of it — the two differ by the wire residue
+    #: `DailyFigures.declared_less_posted` names, and a reader comparing a row to the sales
+    #: ledger wants both numbers rather than a subtraction somebody else performed.
+    posted_base_total: Decimal | None
+    #: Set when this receipt's document is **not** in the ledger side of this range, with why.
+    outside_range: str | None = None
+
+
+@dataclass(frozen=True)
+class ListingDocument:
+    """One sales-ledger document with no receipt in this range, and what it is waiting on."""
+
+    document_id: int
+    number: str
+    document_date: date
+    partner_name: str
+    kind: DocumentKind
+    base_total_amount: Decimal
+    #: The queue row's status (`queued`, `failed`, `unknown`, `needs_receipt`, `cancelled`), or
+    #: `unqueued` when nothing was ever enqueued for it. The word an operator acts on: a
+    #: `failed` row is somebody's decision, a `queued` one is a drain away.
+    reason: str
+
+
+@dataclass(frozen=True)
+class ReceiptListing:
+    """Per device, per range: what RRA signed, what the ledger holds, and the difference."""
+
+    device_id: int
+    device_label: str
+    sdc_id: str | None
+    mrc_no: str | None
+    date_from: date
+    date_to: date
+    ns_count: int
+    ns_gross: Decimal
+    ns_tax: Decimal
+    nr_count: int
+    nr_gross: Decimal
+    nr_tax: Decimal
+    ledger_invoice_count: int
+    ledger_invoice_total: Decimal
+    ledger_credit_note_count: int
+    ledger_credit_note_total: Decimal
+    receipts: tuple[ListingReceipt, ...]
+    only_in_ledger: tuple[ListingDocument, ...]
+    only_on_receipts: tuple[ListingReceipt, ...]
+
+    @property
+    def declared_net(self) -> Decimal:
+        """Sales less refunds, as declared — the figure a day's Z calls `net_gross`."""
+        return self.ns_gross - self.nr_gross
+
+    @property
+    def ledger_net(self) -> Decimal:
+        return self.ledger_invoice_total - self.ledger_credit_note_total
+
+    @property
+    def difference(self) -> Decimal:
+        """Declared less posted. Zero is the happy month; the lists below explain the rest."""
+        return self.declared_net - self.ledger_net
+
+
+def receipt_listing(
+    db: Session,
+    company_id: int,
+    device_id: int,
+    *,
+    date_from: date,
+    date_to: date,
+) -> ReceiptListing:
+    """The listing and its tie, for one device over one closed date range.
+
+    One device rather than all of them, because the counters this report states are per device
+    (decision 5) and a total across two devices is a number with no receipt behind it. The
+    ledger side is narrowed to the device's **branch** for the same reason: a device is a
+    branch's, so the sales it is answerable for are that branch's sales.
+    """
+    device = db.scalar(
+        select(FiscalDevice).where(
+            FiscalDevice.company_id == company_id, FiscalDevice.id == device_id
+        )
+    )
+    if device is None:
+        raise NotFoundError("Fiscal device not found")
+    branch = db.scalar(
+        select(Branch).where(Branch.company_id == company_id, Branch.id == device.branch_id)
+    )
+
+    from_at = datetime.combine(date_from, time.min, tzinfo=UTC)
+    to_at = datetime.combine(date_to, time.max, tzinfo=UTC)
+    signed = list(
+        db.scalars(
+            select(FiscalReceipt)
+            .where(
+                FiscalReceipt.company_id == company_id,
+                FiscalReceipt.device_id == device_id,
+                FiscalReceipt.sdc_datetime >= from_at,
+                FiscalReceipt.sdc_datetime <= to_at,
+            )
+            .order_by(FiscalReceipt.tot_rcpt_no, FiscalReceipt.id)
+        )
+    )
+
+    documents = _documents(db, company_id, {receipt.document_id for receipt in signed})
+    ledger = _sales_ledger(
+        db, company_id, branch_id=device.branch_id, date_from=date_from, date_to=date_to
+    )
+    partners = _partners(
+        db,
+        company_id,
+        {document.partner_id for document in documents.values()}
+        | {document.partner_id for document in ledger},
+    )
+    reader = registry.adapter_for_company(db, company_id)
+
+    in_ledger = {document.id for document in ledger}
+    rows: list[ListingReceipt] = []
+    counted: dict[FiscalReceiptType, list[Decimal]] = {
+        FiscalReceiptType.NORMAL_SALE: [Decimal(0), Decimal(0), Decimal(0)],
+        FiscalReceiptType.NORMAL_REFUND: [Decimal(0), Decimal(0), Decimal(0)],
+    }
+    for receipt in signed:
+        declared = reader.normalize_declared_totals(receipt.request, receipt.response)
+        document = documents.get(receipt.document_id)
+        bucket = counted.setdefault(receipt.receipt_type, [Decimal(0), Decimal(0), Decimal(0)])
+        bucket[0] += 1
+        bucket[1] += Decimal(0) if declared is None else declared.gross
+        bucket[2] += Decimal(0) if declared is None else declared.tax
+        rows.append(
+            ListingReceipt(
+                receipt_id=receipt.id,
+                document_id=receipt.document_id,
+                document_number="" if document is None else document.number,
+                document_date=(
+                    receipt.sdc_datetime.date() if document is None else document.document_date
+                ),
+                partner_name=(
+                    "" if document is None else partners.get(document.partner_id, "")
+                ),
+                receipt_type=receipt.receipt_type,
+                receipt_number=receipt_number(receipt),
+                invc_no=receipt.invc_no,
+                sdc_datetime=receipt.sdc_datetime,
+                declared_gross=Decimal(0) if declared is None else declared.gross,
+                declared_tax=Decimal(0) if declared is None else declared.tax,
+                posted_base_total=None if document is None else document.base_total_amount,
+                outside_range=_outside_range(document, in_ledger, date_from, date_to),
+            )
+        )
+
+    with_receipts = {receipt.document_id for receipt in signed}
+    missing = [document for document in ledger if document.id not in with_receipts]
+    statuses = _outbox_statuses(db, company_id, [document.id for document in missing])
+    sale = counted[FiscalReceiptType.NORMAL_SALE]
+    refund = counted[FiscalReceiptType.NORMAL_REFUND]
+    return ReceiptListing(
+        device_id=device.id,
+        device_label="" if branch is None else f"{branch.code} — {branch.name}",
+        sdc_id=device.sdc_id,
+        mrc_no=device.mrc_no,
+        date_from=date_from,
+        date_to=date_to,
+        ns_count=int(sale[0]),
+        ns_gross=sale[1],
+        ns_tax=sale[2],
+        nr_count=int(refund[0]),
+        nr_gross=refund[1],
+        nr_tax=refund[2],
+        ledger_invoice_count=sum(1 for d in ledger if d.kind is DocumentKind.INVOICE),
+        ledger_invoice_total=sum(
+            (d.base_total_amount for d in ledger if d.kind is DocumentKind.INVOICE), Decimal(0)
+        ),
+        ledger_credit_note_count=sum(
+            1 for d in ledger if d.kind is DocumentKind.CREDIT_NOTE
+        ),
+        ledger_credit_note_total=sum(
+            (
+                d.base_total_amount
+                for d in ledger
+                if d.kind is DocumentKind.CREDIT_NOTE
+            ),
+            Decimal(0),
+        ),
+        receipts=tuple(rows),
+        only_in_ledger=tuple(
+            ListingDocument(
+                document_id=document.id,
+                number=document.number,
+                document_date=document.document_date,
+                partner_name=partners.get(document.partner_id, ""),
+                kind=document.kind,
+                base_total_amount=document.base_total_amount,
+                reason=statuses.get(document.id, "unqueued"),
+            )
+            for document in missing
+        ),
+        only_on_receipts=tuple(row for row in rows if row.outside_range is not None),
+    )
+
+
+def _outside_range(
+    document: PartnerDocument | None,
+    in_ledger: set[int],
+    date_from: date,
+    date_to: date,
+) -> str | None:
+    """Why this receipt's document is not on the ledger side, or `None` when it is.
+
+    Three ways a receipt can have no counterpart, and they are different problems:
+    `document_gone` is a receipt whose document no longer resolves, `dated_outside` is the
+    ordinary month-end straddle and the refund of an older invoice, and `other_branch` is a
+    device that signed for a sale posted on a branch it does not answer for — which should
+    never happen and is worth a line on the screen if it ever does.
+    """
+    if document is None:
+        return "document_gone"
+    if document.id in in_ledger:
+        return None
+    if not (date_from <= document.document_date <= date_to):
+        return "dated_outside"
+    return "other_branch"
+
+
+def _sales_ledger(
+    db: Session,
+    company_id: int,
+    *,
+    branch_id: int,
+    date_from: date,
+    date_to: date,
+) -> list[PartnerDocument]:
+    """The AR invoices and credit notes a branch posted in a range — the ledger's own answer.
+
+    **Reversed documents are included.** A reversed invoice was posted, was signed, and its
+    reversal is a second document with an `NR` receipt of its own; dropping it would take the
+    sale off the ledger side while leaving both receipts on the other, and turn a tie that
+    balances into one that does not.
+    """
+    return list(
+        db.scalars(
+            select(PartnerDocument)
+            .where(
+                PartnerDocument.company_id == company_id,
+                PartnerDocument.role == PartnerRole.AR,
+                PartnerDocument.kind.in_(
+                    (DocumentKind.INVOICE, DocumentKind.CREDIT_NOTE)
+                ),
+                PartnerDocument.branch_id == branch_id,
+                PartnerDocument.document_date >= date_from,
+                PartnerDocument.document_date <= date_to,
+            )
+            .order_by(PartnerDocument.document_date, PartnerDocument.id)
+        )
+    )
+
+
+def _outbox_statuses(
+    db: Session, company_id: int, document_ids: Sequence[int]
+) -> dict[int, str]:
+    """The **latest** queue row's status per document, for the documents with no receipt.
+
+    Latest rather than any: a sale that failed, was reversed and had its row cancelled has two
+    rows, and the one that says what is true now is the last. `max(id)` is the send order the
+    outbox is written in.
+    """
+    if not document_ids:
+        return {}
+    latest = (
+        select(
+            FiscalOutboxRow.source_doc_id.label("document_id"),
+            func.max(FiscalOutboxRow.id).label("row_id"),
+        )
+        .where(
+            FiscalOutboxRow.company_id == company_id,
+            FiscalOutboxRow.source_doc_type.in_(
+                (outbox_service.DOCUMENT_SOURCE, outbox_service.REVERSAL_SOURCE)
+            ),
+            FiscalOutboxRow.source_doc_id.in_(list(document_ids)),
+        )
+        .group_by(FiscalOutboxRow.source_doc_id)
+        .subquery()
+    )
+    rows = db.execute(
+        select(latest.c.document_id, FiscalOutboxRow.status).join(
+            FiscalOutboxRow, FiscalOutboxRow.id == latest.c.row_id
+        )
+    ).all()
+    return {int(document_id): str(status) for document_id, status in rows}
+
+
 # --- Shared lookups ------------------------------------------------------------------------
 
 
@@ -733,16 +1063,20 @@ def _partners(db: Session, company_id: int, ids: set[int]) -> dict[int, str]:
 
 __all__ = [
     "ItemRegistrationView",
+    "ListingDocument",
+    "ListingReceipt",
     "QueueActionEntry",
     "QueueDeviceView",
     "QueueRowDetail",
     "QueueRowView",
+    "ReceiptListing",
     "ReceiptView",
     "item_registrations",
     "queue_row",
     "queue_rows",
     "queue_summary",
     "receipt_detail",
+    "receipt_listing",
     "receipt_number",
     "receipts",
 ]

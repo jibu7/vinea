@@ -27,7 +27,7 @@ from app.kernel.events import (
 from app.models.audit import AuditLog
 from app.models.currency import Currency, ExchangeRate
 from app.models.fiscal import AccountingPeriod, FiscalYear, PeriodStatus
-from app.models.fiscalization import FxRevaluation, FxRevaluationRole
+from app.models.fiscalization import FxRevaluation, FxRevaluationRole, VatReturn
 from app.models.gl import AccountClass, GLSettings
 from app.models.inventory import INVENTORY_MODULE, InventoryDocument
 from app.models.journal import JournalEntry
@@ -124,6 +124,7 @@ def _entry_read(db: Session, entry: JournalEntry) -> JournalEntryRead:
     data.reversed_by_entry_id = rvd_by_id
     data.reversed_by_number = rvd_by_num
     _resolve_landed_cost_pair(db, loaded, data)
+    _resolve_p7_document_pair(db, loaded, data)
     (
         data.module_document_id,
         data.module_document_number,
@@ -188,6 +189,98 @@ def _entry_number(db: Session, company_id: int, entry_id: int) -> str | None:
             JournalEntry.company_id == company_id, JournalEntry.id == entry_id
         )
     )
+
+
+# --- The two P7 documents that post from outside a subledger --------------------------------
+#
+# A filed VAT return and an FX revaluation run both post through the kernel and neither has a
+# row in `MODULE_DOCUMENT_TABLES`: `tax` has no document table at all, and `gl` is every manual
+# journal ever posted, so keying on the module would buy a wasted query on every ordinary
+# journal entry anybody opens. They are keyed on the **doc type** instead, which is exactly the
+# two families of entry that can belong to one.
+#
+# Each table names the columns that point at an entry. `mirror_entry_id` is FX's alone: a
+# revaluation posts its entry *and* the next-day mirror in one transaction (decision 13), and
+# the mirror is an `FXR-` entry a person can open like any other.
+
+#: `doc_type` → (table, the columns naming an entry, the routing key).
+_P7_DOCUMENTS: dict[str, tuple[type, tuple[str, ...], str]] = {
+    "VAT": (VatReturn, ("journal_entry_id", "reversal_entry_id"), order_sources.VAT_RETURN),
+    "FXR": (
+        FxRevaluation,
+        ("journal_entry_id", "mirror_entry_id", "reversal_entry_id"),
+        order_sources.FX_REVALUATION,
+    ),
+}
+
+
+def _p7_document(db: Session, entry: JournalEntry):  # noqa: ANN202 - the row or None
+    """The return or run an entry belongs to, or `None`.
+
+    **Two hops, and the second is what makes it complete.** Four of the six entries these two
+    documents can produce are named by a column on the document itself. The other two are not:
+    reversing an FX run posts a counter-entry *and a mirror of that counter*, and only the
+    counter is stored (`fx_revaluations.reversal_entry_id`). That mirror is an `FXR-` numbered
+    entry with no source link and no column pointing at it — so it is resolved through the one
+    thing it does carry, `reverses_entry_id`, on the rule that a mirror belongs wherever its
+    original belongs.
+    """
+    table, columns, _target = _P7_DOCUMENTS[entry.doc_type]
+    candidates = [entry.id]
+    if entry.reverses_entry_id is not None:
+        candidates.append(entry.reverses_entry_id)
+    return db.scalar(
+        select(table).where(
+            table.company_id == entry.company_id,
+            or_(*(getattr(table, column).in_(candidates) for column in columns)),
+        )
+    )
+
+
+def _resolve_p7_document_pair(
+    db: Session, entry: JournalEntry, data: JournalEntryRead
+) -> None:
+    """Fill the reversal pair for a `VATR-` or `FXR-` entry that the kernel's column cannot.
+
+    Same hole as `_resolve_landed_cost_pair`, one phase later and only on one side of it.
+
+    A **VAT return** reverses as a true mirror (`ReversalRequested` under
+    `module_reversal("tax")`), so `journal_entries.reverses_entry_id` is written by the kernel
+    and both directions already stand. Nothing here touches it, and
+    `test_a_filed_return_pairs_without_the_document` is what keeps that true rather than
+    assumed.
+
+    An **FX revaluation** does not. Reversing a run posts a counter-entry of *negated lines*
+    rather than a mirror — see `app/subledger/revaluation.py::reverse_revaluation` — because
+    the run's own next-day mirror already occupies the `reverses_entry_id` slot on the entry it
+    reverses, and one entry cannot be mirrored twice (`uq_journal_entries_reverses_entry_id`).
+    So the counter-entry is a reversal the ledger renders with nothing to say about what it
+    reversed, which is the P4 failure mode rule 13 is written against: the row is there, the
+    link is not, and nothing fails.
+
+    **Filled only where the column is null**, which is the whole difference from the landed-cost
+    resolver and is not a detail. The run's entry already has a `reversed_by` — its mirror, the
+    next-day frozen-base reversal — and that is the honest answer to "what took this back out
+    of the balance sheet". Overwriting it with the counter-entry would replace a true statement
+    with a different true statement and lose the first.
+    """
+    if entry.doc_type not in _P7_DOCUMENTS:
+        return
+    document = _p7_document(db, entry)
+    if document is None:
+        return
+    if data.reverses_entry_id is None and document.reversal_entry_id == entry.id:
+        if document.journal_entry_id is not None:
+            data.reverses_entry_id = document.journal_entry_id
+            data.reverses_entry_number = _entry_number(
+                db, entry.company_id, document.journal_entry_id
+            )
+    elif data.reversed_by_entry_id is None and document.journal_entry_id == entry.id:
+        if document.reversal_entry_id is not None:
+            data.reversed_by_entry_id = document.reversal_entry_id
+            data.reversed_by_number = _entry_number(
+                db, entry.company_id, document.reversal_entry_id
+            )
 
 
 #: Where each module keeps the documents it posts, keyed by the module that posted the entry.
@@ -259,6 +352,17 @@ def _module_document(
         resolved = order_sources.resolve(db, entry.company_id, [ref]).get(ref)
         if resolved is not None:
             return resolved.source_doc_id, resolved.number, resolved.target
+
+    # P7's two, last, and the order matters here too. A settlement entry and a run entry both
+    # carry a source link and would be answered above; the entries that reach this line are the
+    # **mirrors and the counter-entry**, posted as `ReversalRequested` or with no source of
+    # their own, which have no source link to follow and a perfectly findable document.
+    # Without it, half of every `VATR-`/`FXR-` pair opened from the GL was a page that named
+    # its own reversal and could not say what document either of them belonged to.
+    if entry.doc_type in _P7_DOCUMENTS:
+        document = _p7_document(db, entry)
+        if document is not None:
+            return document.id, document.number, _P7_DOCUMENTS[entry.doc_type][2]
     return None, None, None
 
 
