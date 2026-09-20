@@ -503,12 +503,77 @@ the `ebm-sandbox` container, and every one was opened and read before it was com
 Non-gate step. The changed specs and the guard tests were run locally; CI is the record for the
 branch head.
 
-<!-- CHECKS TABLE -->
+| check | result |
+|---|---|
+| `make be-lint` | `All checks passed!` |
+| `make be-test` (`-n 4`, in the container) | *filled below, run last and alone* |
+| `tests/test_api_has_a_caller.py` | 14 passed — the close-day line gone, `POST /fiscal/outbox/drain` the only P7 entry left |
+| `tests/tax/test_entry_drill.py` | 7 passed |
+| `tests/fiscal/test_receipt_listing.py` | 7 passed |
+| `tests/fiscal/test_daily_report.py` | 14 passed (13 + the empty-range refusal) |
+| `npx tsc --noEmit` | clean |
+| `npm run lint` | clean (pre-existing `react-hooks/exhaustive-deps` warnings only) |
+| `npx vitest run` | **407 passed** — 403 in the container plus the two workflow files (12 tests) on the host, which read `../.github/workflows` and cannot see it from `/app`. Both fail the same way on `main`; both pass on the host, which is what proves `p7-enquiries-reports.spec.ts` is covered by the shard filter and named by no group |
+| `npm run build` | compiled; all eight new routes built |
+| `e2e/p7-enquiries-reports.spec.ts` | **11 passed** |
+| `gl-reversal`, `journal-flow`, `idempotent-post`, `unbalanced-journal`, `closed-period`, `gl-cashbook`, `gl-inline-errors` | 9 passed — every spec that opens `/gl/entries/{id}`, because `_entry_read` gained a resolver that runs on every entry read |
+| `ar-ap-documents`, `ar-ap-reports`, `ar-ap-corrections`, `p6-enquiries-reports`, `inventory-reports` | 30 passed, including P6's *"every P6 entry leads back to its own document"* — the closest neighbour to the resolver change |
+| `p7-transactions` | 14 passed |
+| `p7-maintenance` | 7 passed **alone**; see below |
+
+### `p7-maintenance` and the sandbox nobody resets
+
+Run immediately after the screenshot capture, `p7-maintenance` failed on *"Device initialized and
+active"*. It is not this step's change, and it is worth a line because step 9 will meet it.
+
+`make db-reset` drops and re-seeds the **database**. The `ebm-sandbox` keeps its ledger — invoice
+numbers, receipt counters, the taxpayers it has heard of — in the **container's memory**, and
+nothing in `db-reset` touches it. `p7-transactions` and `p7-enquiries-reports` both call
+`/_sandbox/reset` first, for exactly this reason; `p7-maintenance` does not (`grep -c` says zero),
+so it inherits whatever the last thing to talk to the authority left behind.
+
+Reset the sandbox and run it alone: **7 passed**. In CI it is the first thing to touch a fresh
+container, so it never sees this. Locally, after a capture, it does.
 
 ### The count moved, and here is both sides
 
-<!-- COUNTS -->
+`main` collects **1358**; this branch collects **1372**, from `pytest --collect-only` on each, so
+neither side is an estimate. 1358 − 1 + 15 = 1372.
+
+**Gone — 1.** `test_every_exemption_states_which_kind_it_is` runs once per `NO_UI` entry, so
+deleting the `close-day` register line deletes one case. The test itself is untouched and still
+passes over the entries that remain.
+
+**New — 15:**
+
+`tests/tax/test_entry_drill.py` (7):
+
+* `test_the_drill_keys_are_the_strings_the_posters_actually_write`
+* `test_a_settlement_entry_drills_to_the_return_it_filed`
+* `test_a_returns_reversal_drills_to_the_return_although_it_carries_no_source`
+* `test_a_filed_return_pairs_without_the_document`
+* `test_a_run_and_its_mirror_both_drill_to_the_run`
+* `test_the_counter_entry_and_its_own_mirror_both_drill_to_the_run`
+* `test_the_counter_entry_says_what_it_reversed_and_the_run_keeps_its_mirror`
+
+`tests/fiscal/test_receipt_listing.py` (7):
+
+* `test_the_counters_and_the_totals_are_what_the_receipts_declared`
+* `test_the_ledger_side_is_the_documents_counted_the_ledgers_own_way`
+* `test_the_tie_reconciles_rather_than_balances`
+* `test_a_sale_the_queue_still_holds_is_named_with_the_word_that_fixes_it`
+* `test_a_receipt_signed_outside_its_documents_range_says_dated_outside`
+* `test_every_row_carries_the_declaration_and_the_posting_side_by_side`
+* `test_the_listing_reaches_a_signed_in_accountant_over_http`
+
+`tests/fiscal/test_daily_report.py` (1):
+
+* `test_a_second_close_at_the_same_instant_is_refused`
+
+**Frontend**: `document-route.test.ts` gains 2 cases (the two new routing keys) and its key-set
+assertion now names seven. `appendix-c-order.test.tsx` is unchanged in count — it is parametrised
+by intent — and its four tables gained six rows.
 
 ## Gates
 
-<!-- GATES -->
+*Filled with the suite run, which is the last thing done and is done alone.*
