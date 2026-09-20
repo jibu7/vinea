@@ -28,11 +28,11 @@ describe("document routing keys", () => {
     ["ap_document", "/ap/documents/7"],
     ["goods_received_note", "/oe/goods-received/7"],
     ["landed_cost_document", "/oe/landed-costs/7"],
-    // P7's two go to the **report** routes, which take an id for exactly this reason. An
-    // entry opened from the trial balance lands on the return or the run it belongs to rather
-    // than on a picker asking which one was meant.
-    ["vat_return", "/tax/reports/vat-return/7"],
-    ["fx_revaluation", "/gl/reports/fx-revaluation/7"],
+    // P7's two go to the **document** screens, not to the reports over them: the entry page's
+    // link is "reverse via the module's document", and Reverse lives there. A report has no
+    // Reverse button.
+    ["vat_return", "/tax/vat-returns/7"],
+    ["fx_revaluation", "/gl/fx-revaluations/7"],
   ])("sends %s to %s", (target, href) => {
     expect(documentHref(target, 7)).toBe(href);
   });

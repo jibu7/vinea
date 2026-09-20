@@ -34,13 +34,13 @@ import { useCompanyDetails, useCurrencies, useFxRevaluation, useFxRevaluations }
  * The rates are quantities, not money: a rate is `NUMERIC(20,10)` and `formatMoney` would put
  * a currency code on a number that is not an amount of anything.
  */
-export function FxRevaluationReport({ revaluationId }: { revaluationId?: number }) {
+export function FxRevaluationReport() {
   const t = useTranslations("gl.fxRevaluationReport");
   const tf = useTranslations("gl.fxRevaluation");
   const tr = useTranslations("reports");
 
   const runs = useFxRevaluations();
-  const [chosenId, setChosenId] = useState<number | null>(revaluationId ?? null);
+  const [chosenId, setChosenId] = useState<number | null>(null);
   const effective = chosenId ?? runs.data?.[0]?.id ?? null;
   const detail = useFxRevaluation(effective);
   const run = detail.data;

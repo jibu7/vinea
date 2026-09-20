@@ -447,6 +447,27 @@ test.describe("the tax enquiries and reports", () => {
     );
     await expect(page.getByTestId("day-queued-rows")).toHaveText(String(inFlight));
 
+    // --- and the queue history can reach it, which is the whole reason the picker changed ---
+    //
+    // **This is the witness for a defect the tests could not have caught.** The picker was first
+    // fed by `/fiscal/receipts`, and a receipt exists only once RRA has signed — so a list built
+    // that way offers every document *except* the ones still queued, failed, `unknown` or
+    // waiting on a person, which are exactly the documents somebody opens a queue history to ask
+    // about. It reads the queue rows now, and the only way to prove that is to open a document
+    // that has **no receipt**. It has one for a few more lines, so it is opened here rather than
+    // in the enquiry's own test, where everything has long since drained.
+    await page.goto("/fiscal/enquiries/queue-history");
+    await page.waitForSelector("h1:has-text('Fiscal queue history')");
+    await page.getByRole("combobox", { name: "Document", exact: true }).click();
+    await page.getByRole("option").last().click();
+    await expect(page.getByTestId("history-status").first()).toHaveText("Queued", {
+      timeout: 30_000,
+    });
+    await expect(page.getByTestId("history-sequence").first()).toHaveText(/^\d+$/);
+
+    await page.goto("/tax/reports/daily-fiscal");
+    await page.waitForSelector("h1:has-text('Daily fiscal report')");
+
     // --- closed **over** the row, and the Z carries the count ------------------------------
     //
     // Two screens, one count: what the X warned about, and what the Z recorded on its face.
@@ -588,7 +609,10 @@ test.describe("the tax enquiries and reports", () => {
     // **The residue, named.** Declared 15,919.38 against a ledger of 15,919 — the +0.46 on
     // INV-A, the −0.26 on INV-B and the +0.18 the refund adds back. Nobody's defect, and the
     // one figure on the page that an accountant would otherwise spend a morning on.
-    await expect(page.getByTestId("day-posted")).toHaveText("15,919.00");
+    // The ledger's own figure at the ledger's own scale — RWF has no decimals (rule 6), and
+    // `15,919.00` would claim a precision the ledger does not have. Declared at two decimals,
+    // posted at zero, visibly different: that *is* the report's subject.
+    await expect(page.getByTestId("day-posted")).toHaveText("15,919");
     await expect(page.getByTestId("day-residue")).toHaveText("0.38");
 
     // --- and the day is closed, so the X starts again from nothing -------------------------
@@ -753,7 +777,10 @@ test.describe("the tax enquiries and reports", () => {
     })) as Identified & { number: string; net_payable: string };
     expect(filed.number, "shape, never a literal — the VAT run is shared").toMatch(/^VATR-\d+$/);
 
-    await page.goto(`/tax/reports/vat-return/${filed.id}`);
+    // The **report**, by its own route — it has no `{id}` any more. The drill from a journal
+    // entry lands on `/tax/vat-returns/{id}`, where Reverse is; this screen is for ranges and
+    // opens the most recent filed return, which is the one just filed above.
+    await page.goto("/tax/reports/vat-return");
     await page.waitForSelector("h1:has-text('VAT return')");
     await expect(page.getByTestId("report-return-number")).toHaveText(filed.number);
 
@@ -796,7 +823,7 @@ test.describe("the tax enquiries and reports", () => {
     }
   });
 
-  // PATH: /gl/reports/fx-revaluation/{id} -> GET /gl/fx-revaluations/{id}. CANNOT SEE: the
+  // PATH: /gl/reports/fx-revaluation -> GET /gl/fx-revaluations/{id}. CANNOT SEE: the
   // posting map — `tests/tax/test_returns_api.py` and the backend tape assert the accounts.
   test("the FX revaluation report shows a run's lines and names its three entries", async ({
     page,
@@ -814,7 +841,7 @@ test.describe("the tax enquiries and reports", () => {
     const run = runs[0];
     expect(run.number, "shape, never a literal — the FXR run is shared").toMatch(/^FXR-\d+$/);
 
-    await page.goto(`/gl/reports/fx-revaluation/${run.id}`);
+    await page.goto("/gl/reports/fx-revaluation");
     await page.waitForSelector("h1:has-text('FX revaluation')");
     await expect(page.getByTestId("fx-run-number")).toHaveText(run.number);
     // Rule 13, both halves: a quantity (how many documents this run touched) and money.
@@ -859,13 +886,15 @@ test.describe("the tax enquiries and reports", () => {
     expect(entry.module_document_id).toBe(filed.id);
     expect(entry.module_document_number).toBe(filed.number);
 
-    // On the screen, not only in the payload. A `VATR-` entry is module-owned (`tax`), so it
-    // carries the "reverse via the module's document" link the GL has offered since P6.
+    // **On the screen, and pointed at the document rather than the report.** A `VATR-` entry is
+    // module-owned (`tax`), so it carries the "reverse via the module's document" link the GL
+    // has offered since P6 — and that link has to land where Reverse actually is. Asserted as an
+    // href, so a repoint at a report (which has no Reverse button) fails here.
     await page.goto(`/gl/entries/${filed.journal_entry_id}`);
     await page.waitForSelector("h1");
     await expect(page.getByTestId("reverse-via-module")).toHaveAttribute(
       "href",
-      `/tax/reports/vat-return/${filed.id}`,
+      `/tax/vat-returns/${filed.id}`,
     );
 
     const runs = (await apiOk(page, "/gl/fx-revaluations")) as Array<
@@ -888,12 +917,13 @@ test.describe("the tax enquiries and reports", () => {
 
     // **And on the screen.** An `FXR-` entry's module is `gl`, so it takes neither the
     // module-owned branch nor its link — the server resolved the document and the page dropped
-    // it, which is the P4 failure mode exactly. `entry-source-document` is what step 8 added.
+    // it, which is the P4 failure mode exactly. `entry-source-document` is what step 8 added,
+    // and it points at the run's own screen, not at the report over it.
     await page.goto(`/gl/entries/${run!.mirror_entry_id}`);
     await page.waitForSelector("h1");
     await expect(page.getByTestId("entry-source-document")).toHaveAttribute(
       "href",
-      `/gl/reports/fx-revaluation/${run!.id}`,
+      `/gl/fx-revaluations/${run!.id}`,
     );
   });
 

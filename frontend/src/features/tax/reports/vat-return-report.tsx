@@ -37,14 +37,14 @@ import { useVatReturn, useVatReturns } from "../hooks";
  * data no screen holds; rebuilding them in TypeScript would be a second implementation of a
  * filing. `downloadFromApi` fetches the real CSV, with the filename the server chose.
  */
-export function VatReturnReport({ returnId }: { returnId?: number }) {
+export function VatReturnReport() {
   const t = useTranslations("tax.vatReturnReport");
   const tv = useTranslations("tax.vatReturn");
   const tr = useTranslations("reports");
   const showApiError = useApiErrorToast();
 
   const returns = useVatReturns();
-  const [chosenId, setChosenId] = useState<number | null>(returnId ?? null);
+  const [chosenId, setChosenId] = useState<number | null>(null);
   const effective = chosenId ?? returns.data?.[0]?.id ?? null;
   const detail = useVatReturn(effective);
   const filed = detail.data;

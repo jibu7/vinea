@@ -99,15 +99,30 @@ export function DailyFiscalReport() {
   );
 
   const base = (currencies.data ?? []).find((c) => c.is_base);
-  /** The **declared** scale: two decimals, whatever the currency's own places are. See the
-   * class docstring — this is where the wire's precision is preserved on purpose. */
+  /**
+   * **Two scales, and putting a declared figure on the ledger's scale is a defect either way.**
+   *
+   * `declaredLike` is the wire's: two decimals, whatever the currency's own places are, because
+   * that is the precision on the paper in an inspector's hand and rounding it to the franc here
+   * would erase the residue this report exists to show.
+   *
+   * `ledgerLike` is the currency's own — RWF has **none** (rule 6). `posted_net` is a ledger
+   * figure and printing it as `15,919.00` claims a precision the ledger does not have; P5 found
+   * the same shape of defect the other way round, as `8500.000000` on an RWF price.
+   *
+   * The two side by side and *visibly different* is the point: 15,919.38 declared against
+   * 15,919 posted, and the 0.38 between them named underneath.
+   */
   const declaredLike = {
     code: base?.code ?? "",
     decimalPlaces: 2,
     symbol: base?.symbol ?? null,
   };
+  const ledgerLike = { ...declaredLike, decimalPlaces: base?.decimal_places ?? 0 };
   const money = (value: string | number) =>
     formatMoney(Number(value), declaredLike, { showCode: false });
+  const posted = (value: string | number) =>
+    formatMoney(Number(value), ledgerLike, { showCode: false });
 
   const shown: DailyReport | undefined =
     tab === "x" ? x.data : (zs.data ?? []).find((z) => z.report_no === openZ) ?? zs.data?.[0];
@@ -343,7 +358,7 @@ export function DailyFiscalReport() {
           )}
 
           {figures ? (
-            <DayFigures figures={figures} report={shown} money={money} />
+            <DayFigures figures={figures} report={shown} money={money} posted={posted} />
           ) : (
             <ReportPanel>
               <QueryState query={tab === "x" ? x : zs} isEmpty empty={t("noZ")} testId="query" />
@@ -361,10 +376,14 @@ function DayFigures({
   figures,
   report,
   money,
+  posted,
 }: {
   figures: DailyFigures;
   report: DailyReport | undefined;
+  /** The wire's scale — two decimals. */
   money: (value: string | number) => string;
+  /** The ledger's own — none, on RWF. */
+  posted: (value: string | number) => string;
 }) {
   const t = useTranslations("fiscal.daily");
 
@@ -405,7 +424,7 @@ function DayFigures({
 
       <ReportPanel>
         <dl className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <Figure label={t("postedNet")} value={money(figures.posted_net)} testId="day-posted" />
+          <Figure label={t("postedNet")} value={posted(figures.posted_net)} testId="day-posted" />
           <Figure
             label={t("residue")}
             value={money(figures.declared_less_posted)}

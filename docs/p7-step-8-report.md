@@ -99,12 +99,17 @@ the ones with no source link of their own.
 | `partner_document` | P4 | `ar_document` / `ap_document` | `/ar/documents/{id}`, `/ap/documents/{id}` |
 | `goods_received_note` | P6 | `goods_received_note` | `/oe/goods-received/{id}` |
 | `landed_cost_document` | P6 | `landed_cost_document` | `/oe/landed-costs/{id}` |
-| **`vat_return`** | `app/tax/vat.py` | `vat_return` | `/tax/reports/vat-return/{id}` |
-| **`fx_revaluation`** | `app/subledger/revaluation.py` | `fx_revaluation` | `/gl/reports/fx-revaluation/{id}` |
+| **`vat_return`** | `app/tax/vat.py` | `vat_return` | `/tax/vat-returns/{id}` |
+| **`fx_revaluation`** | `app/subledger/revaluation.py` | `fx_revaluation` | `/gl/fx-revaluations/{id}` |
 
-Both land on a **report** rather than on a transaction screen, and the report routes take an id
-for exactly this: `/tax/vat-returns` files a return and `/gl/fx-revaluations` posts a run, and
-somebody arriving from a journal entry is reading, not acting.
+Both land on the **document** screen, like every other key in the table — not on the report over
+it. A first pass pointed them at the reports, on the reasoning that somebody arriving from a
+journal entry is reading rather than acting. That was wrong, and the entry page says why: its link
+for a module-owned entry is **"reverse via the `tax` document"** (P5 step 9's kernel rule — such
+an entry reverses through its module, never from the general ledger). A report has no Reverse
+button, so landing that link on one is a dead end with a good excuse. The document screens gained
+an `{id}` route and open that row's detail on arrival; `/tax/reports/vat-return` and
+`/gl/reports/fx-revaluation` stay, for ranges.
 
 ### Six entries, and only four are named by a column
 
@@ -192,34 +197,44 @@ what decision 11 stores `queued_rows` for.
 Then the authority comes back, the queue drains, and the next Z carries that sale with
 `queued_rows` **0** — the warning's claim made good rather than asserted.
 
-### A receipt signed in the second a Z is taken is counted by neither
+### A receipt can belong to no Z at all — a gap, reachable under clock skew
 
-Found by writing the test above, and worth carrying because step 9's DoD asserts Z totals.
+Found by writing the test above. **Not a test artefact**, and the first draft of this section said
+it was — on the assumption that only a test is fast enough to reach it. That assumes one clock,
+and there are two.
 
-A Z's bounds are floored to a second (`_floor_second`), because `sdcDateTime` has no finer
-resolution, and a range is `from_at <` … `<= to_at`. Close a day and drain **within the same
-second**, and the receipt that comes back is stamped inside the closed Z's range — whose figures
-are already frozen — while the next Z opens *exclusively* at that same instant. Observed exactly
-once, in a run fast enough to do both in 18 seconds:
+A Z's range is cut on **`sdc_datetime`** — the *authority's* clock, the stamp RRA put on the
+receipt — while the close's `to_at` is `datetime.now(UTC)`, **Vinea's**. Both floored to a second,
+and the range is `from_at <` … `<= to_at`. So with RRA's clock running 30 s behind, a row in
+flight when the day is closed comes back stamped *before* the close: it lands inside a range whose
+figures are already frozen, and the next Z opens exclusively after it. On neither. In production,
+on any day the line was slow.
+
+Observed here in a run fast enough to do both in 18 seconds:
 
 | | range | `ns_count` |
 |---|---|---|
 | `Z-000001` | 21:13:06 → **21:13:11** | 1 |
 | `Z-000002` | **21:13:11** → 21:13:13 | 0 |
 
-The receipt was signed at 21:13:11 and is on neither.
+The receipt was stamped 21:13:11 and is on neither.
 
-**Not filed as a defect, and no code was changed for it.** The tiling property decision 11 wants —
-closes cover a device's whole life with no gap and no overlap — holds over *ranges*; what cannot
-be made exact is which side a receipt issued in the boundary second falls, because the stamp has
-no finer resolution to ask. A real device signs and closes minutes apart. Only a test is fast
-enough to land on it, which is why the backend's own boundary test
-(`test_a_second_z_covers_only_what_came_after_the_first`) sleeps 2.05 s rather than pretending
-otherwise, and why this file's e2e now waits past the close's second before draining — with that
-reason written next to the wait, so nobody later deletes it as a flake patch.
+**The shape is a VAT late entry**, and P7 already has the answer for that one: membership by
+**high-water mark**. A Z should own every receipt *inserted* up to its close — `fiscal_receipts.id`
+is monotonic, as `journal_entries.id` is for the return's `high_water_entry_id` — with the
+`sdc_datetime` range kept and shown for information, because it is what the authority's paper
+says. Then `assert_fiscal_invariants` can carry the clause that makes it checkable: **every
+receipt belongs to exactly one closed Z, or to the open X.** Today nothing asserts that, which is
+why this was found by a screenshot and not by the suite.
 
-**For step 9**: the tape closes days and drains around them. If it asserts a Z total straight
-after a close, it has to be past that second first.
+**Not in this PR.** It is a backend change on `daily.py` and it is decision-11 territory — this
+step's rule was that the backend does not move. It goes to **step 9** as a backend item, with tape
+rows 9 and 14 re-checked against it.
+
+**Meanwhile both scripts wait past the close's second**, with that reason written beside the wait
+so it is not deleted later as a flake patch. The backend's own boundary test
+(`test_a_second_z_covers_only_what_came_after_the_first`) sleeps 2.05 s for the same reason. That
+is a way of not tripping over the gap; it is not a fix for it.
 
 ### The second close
 
@@ -265,7 +280,7 @@ one can.
 | Daily fiscal report — the Z's sales total, summed by the server | **17,688.20** |
 | Z refunds | 1,768.82 |
 | Z net | **15,919.38** |
-| Z posted in the ledger | 15,919.00 |
+| Z posted in the ledger | 15,919 |
 | Z declared less posted | **0.38** |
 
 The two sides are computed differently: the Z is the server absorbing every receipt in its range
@@ -278,9 +293,14 @@ both sides together still fails.
 It is not a defect and never will be — two correct rounding rules meeting — and the screen names
 it rather than leaving a month-end reconciliation to discover an unexplained franc.
 
-**Declared figures print at two decimals** on both fiscal reports although the base currency has
-none. Rounding the wire's figure to the franc on screen would erase the very difference these
-reports exist to show, and the number on the paper in an inspector's hand has the centimes on it.
+**Two scales, side by side.** Declared figures print at **two** decimals on both fiscal reports
+although the base currency has none: rounding the wire's figure to the franc would erase the very
+difference these reports exist to show, and the paper in an inspector's hand has the centimes on
+it. Ledger figures print at the **currency's own** places — RWF has none (rule 6) — because
+`15,919.00` claims a precision the ledger does not have, which is P5's `8500.000000` defect the
+other way round. A first pass put `posted_net` on the wire's scale and the screen read
+`15,919.00`; it reads **15,919** now, against **15,919.38** declared, with the **0.38** named
+underneath. The two being visibly different *is* the subject.
 
 ### And the tape's row 14, through the screen
 
@@ -425,10 +445,11 @@ away — four `FXR-` numbers on the trial balance belonging, as far as a reader 
 nothing. The P4 failure mode rule 13 is written against, in the one place this step was supposed
 to be closing it.
 
-*Guard*: `entry-source-document`, asserted on the screen in
-`p7-enquiries-reports.spec.ts` for an `FXR-` mirror and `reverse-via-module` for the `VATR-`
-settlement — both as **hrefs**, so a link pointing at the wrong kind of page fails rather than
-rendering.
+*Guard*: `entry-source-document`, asserted on the screen in `p7-enquiries-reports.spec.ts` for an
+`FXR-` mirror and `reverse-via-module` for the `VATR-` settlement — both as **hrefs**, so a link
+pointing at the wrong kind of page fails rather than rendering. Those two assertions are also what
+pin the ruling above: they name `/tax/vat-returns/{id}` and `/gl/fx-revaluations/{id}`, and a
+future repoint at a report fails them.
 
 Found by writing the e2e against the *screen* rather than against the endpoint. The API-level
 assertion (`module_document_target === "fx_revaluation"`) passed the whole time.
@@ -444,8 +465,11 @@ for.** A receipt exists only once RRA has signed, so a picker built from `/fisca
 offer every document *except* the ones still queued, failed, `unknown` or waiting on a person —
 which are exactly the documents somebody opens a *queue history* to ask about. It now reads the
 queue rows themselves, which carry the document number and the partner and cover every document
-ever sent for. Caught by reading the screen back, not by a failing test; the test that would have
-caught it is the one that opens a history for a stuck document, and step 9's tape should have one.
+ever sent for. Caught by reading the screen back rather than by a failing test — so it has one now, in this PR
+rather than in step 9's: the close-day test opens the queue history for the sale the authority
+never got, **while it is still stuck**, and asserts the row is listed as `Queued`. A document with
+no receipt is the only thing that can tell the two picker sources apart, and by the time the
+enquiry's own test runs everything has long since drained.
 
 ### And one thing the tests corrected in the writing
 
@@ -524,11 +548,19 @@ zero-decimal currency, deliberately. Anything step 9 adds that shows a declared 
 the same, or the residue disappears from the screen while staying in the data — which is the
 quietest possible version of the P4 failure mode.
 
-**8. And the tie's axis.** `sdc_datetime` for receipts, `document_date` for documents. If step 9's
+**8. A backend item: Z membership by high-water mark.** The gap above — a receipt that belongs to
+no Z under clock skew, because the range is cut on the authority's stamp and the close on Vinea's
+clock. Change membership to `fiscal_receipts.id` up to the close, keep and show the `sdc_datetime`
+range, and add the clause to `assert_fiscal_invariants`: every receipt belongs to exactly one
+closed Z or to the open X. Re-check tape rows 9 and 14 against it. Until then, anything that
+closes and drains in the same second has to wait past it.
+
+**8b. And the tie's axis.** `sdc_datetime` for receipts, `document_date` for documents. If step 9's
 tape asserts a listing total over a range, it has to cut the range on the axis it means.
 
-**9. `make db-reset` does not reset the sandbox**, and `p7-maintenance.spec.ts` does not reset it
-either. The authority's ledger lives in the container's memory. Step 9's tape talks to it more
+**9. `make db-reset` does not reset the sandbox.** `p7-maintenance.spec.ts` now resets it itself,
+as the other two P7 specs already did — a spec that passes only on a fresh container is a test
+about the container. The authority's ledger lives in the container's memory. Step 9's tape talks to it more
 than any spec so far, and the failure mode is a `994: the invoice number is already registered`
 on a database whose sequences have just restarted — the sandbox behaving correctly and the
 fixture being stale, which is a distinction worth not having to make at two in the morning.
@@ -579,7 +611,7 @@ branch head.
 | `tests/fiscal/test_daily_report.py` | 14 passed (13 + the empty-range refusal) |
 | `npx tsc --noEmit` | clean |
 | `npm run lint` | clean (pre-existing `react-hooks/exhaustive-deps` warnings only) |
-| `npx vitest run` | **407 passed** — 403 in the container plus the two workflow files (12 tests) on the host, which read `../.github/workflows` and cannot see it from `/app`. Both fail the same way on `main`; both pass on the host, which is what proves `p7-enquiries-reports.spec.ts` is covered by the shard filter and named by no group |
+| `npx vitest run` | **407 tests, 407 passing.** 403 of them pass in the container; the other **4** read `../.github/workflows`, which is not visible from `/app` (the container's root is `frontend/`), and they pass on the host. Both affected files fail the same way on `main`, so this is the container's layout and not this branch. Running them on the host is what proves `p7-enquiries-reports.spec.ts` is covered by the shard filter and named by no group |
 | `npm run build` | compiled; all eight new routes built |
 | `e2e/p7-enquiries-reports.spec.ts` | **11 passed** |
 | `gl-reversal`, `journal-flow`, `idempotent-post`, `unbalanced-journal`, `closed-period`, `gl-cashbook`, `gl-inline-errors` | 9 passed — every spec that opens `/gl/entries/{id}`, because `_entry_read` gained a resolver that runs on every entry read |
@@ -666,7 +698,7 @@ The **frontend** did move after that hash: the Close-day warning was rewritten t
 in flight down by status and to say where those sales go, which touched
 `daily-report.tsx`, `en.json`, the spec, the capture script and two screenshots — and nothing
 under `backend/`. Every frontend and e2e result quoted above was re-taken at the new head:
-`npx vitest run` 403 + 4 (the two host-only files), `npm run build` compiled,
+`npx vitest run` 407 (403 in the container, 4 on the host), `npm run build` compiled,
 `npx tsc --noEmit` and `npm run lint` clean, and `p7-enquiries-reports.spec.ts` **11 passed**.
 
 ```

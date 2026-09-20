@@ -23,13 +23,15 @@ const ROUTES: Record<string, string> = {
   ap_document: "/ap/documents",
   goods_received_note: "/oe/goods-received",
   landed_cost_document: "/oe/landed-costs",
-  // P7's two, and both land on a **report** rather than on a transaction screen. That is not
-  // an accident of routing: `/tax/vat-returns` files a return and `/gl/fx-revaluations` posts
-  // a run, and somebody arriving from a journal entry is reading, not acting. The report route
-  // takes an id for exactly this — a `VATR-` or `FXR-` entry opens the document it belongs to
-  // instead of a picker that asks which one they meant.
-  vat_return: "/tax/reports/vat-return",
-  fx_revaluation: "/gl/reports/fx-revaluation",
+  // P7's two, and they land on the **document** screen like every other key here — not on the
+  // report over it. A journal entry drills to the thing that owns it and carries its actions,
+  // and for these two that matters more than usual: the entry page's link is "reverse via the
+  // `tax` document" (P5 step 9's kernel rule — a module-owned entry reverses through its
+  // module, never from the general ledger), so it has to land where Reverse is. A report has
+  // no Reverse button, and landing a reverse-via-module link on one is a dead end with a good
+  // excuse. `/tax/reports/vat-return` and `/gl/reports/fx-revaluation` stay, for ranges.
+  vat_return: "/tax/vat-returns",
+  fx_revaluation: "/gl/fx-revaluations",
 };
 
 /** The href for one resolved source, or `null` when this phase has no page for it. */

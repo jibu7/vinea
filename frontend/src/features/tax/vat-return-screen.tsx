@@ -58,7 +58,16 @@ function monthOf(today: string): { from: string; to: string } {
  * figures. It is refused over a range that overlaps a posted return (`vat_period_filed`) —
  * reverse that one first, which is what Reverse on the detail is for.
  */
-export function VatReturnScreen() {
+/**
+ * `openId` pre-opens one row's detail, and it exists for the **drill**.
+ *
+ * `sources.py` resolves a ``VATR-`` journal entry to its filed return, and the entry page's
+ * "reverse via the module's document" link has to land where Reverse actually is — which is
+ * here, not on the report. The report answers "what did we declare over this range"; this screen
+ * owns the document and its actions (P5 step 9's kernel rule: a module-owned entry reverses
+ * through its module's document, never from the general ledger).
+ */
+export function VatReturnScreen({ openId }: { openId?: number } = {}) {
   const t = useTranslations("tax.vatReturn");
   const toast = useToast();
   const showApiError = useApiErrorToast();
@@ -69,7 +78,7 @@ export function VatReturnScreen() {
   const [periodTo, setPeriodTo] = useState(defaults.to);
   const [fileOpen, setFileOpen] = useState(false);
   const [fileError, setFileError] = useState<string | null>(null);
-  const [openReturnId, setOpenReturnId] = useState<number | null>(null);
+  const [openReturnId, setOpenReturnId] = useState<number | null>(openId ?? null);
   const [reverseReason, setReverseReason] = useState("");
   const [reverseError, setReverseError] = useState<string | null>(null);
 
