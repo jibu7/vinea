@@ -103,7 +103,11 @@ test.describe("age analysis", () => {
 
     await expect(page.getByText("Grand total")).toBeVisible();
     await expect(page.getByRole("button", { name: "Export CSV" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Print" })).toBeVisible();
+    // `exact`, because a ReportPage can carry a second print control beside this one: the
+    // fiscalized document detail adds **Copy print**, and `name` matching is loose and
+    // case-insensitive. This page has no receipt and so no second button today — the guard is
+    // against the day a report gains one (P7 step 7).
+    await expect(page.getByRole("button", { name: "Print", exact: true })).toBeVisible();
   });
 });
 

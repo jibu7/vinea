@@ -890,13 +890,22 @@ def _block_read(block: printing_service.ReceiptBlock) -> ReceiptBlockRead:
 @router.get("/documents/{document_id}/receipt")
 def read_document_receipt(
     document_id: int,
+    receipt_id: int | None = Query(default=None),
     auth: AuthContext = Depends(get_tenant_context),
     db: Session = Depends(get_db),
 ) -> ReceiptBlockRead | None:
     """What this document prints, `null` when it is not a fiscal receipt at all, and
-    `fiscal_receipt_pending` when the authority has not signed it yet (CIS §10)."""
+    `fiscal_receipt_pending` when the authority has not signed it yet (CIS §10).
+
+    `receipt_id` names **which** of the document's receipts to print. A sale that was reversed
+    holds two — the `NS` it was declared under and the `NR` that reversed it (decision 7) — and
+    both are legal documents the customer is owed. Left out, the latest is printed, which is
+    the refund when there is one.
+    """
     _require_view(auth)
-    block = printing_service.receipt_block(db, auth.company_id, document_id)
+    block = printing_service.receipt_block(
+        db, auth.company_id, document_id, receipt_id=receipt_id
+    )
     return None if block is None else _block_read(block)
 
 
@@ -904,13 +913,23 @@ def read_document_receipt(
 def print_document_receipt_copy(
     document_id: int,
     request: Request,
+    receipt_id: int | None = Query(default=None),
     auth: AuthContext = permissions.require(permissions.FISCAL_REPORTS_VIEW),
     db: Session = Depends(get_db),
 ) -> ReceiptBlockRead:
     """A reprint: `COPY` under the header, the counter incremented and audited, and **nothing
-    sent to RRA** — a copy is a print of a sale already declared (§11, §15)."""
+    sent to RRA** — a copy is a print of a sale already declared (§11, §15).
+
+    The counter is per **receipt**, so copying the refund does not make the sale look reprinted
+    and the Z's copy count stays the count of pieces of paper.
+    """
     block = printing_service.record_copy(
-        db, auth.company_id, document_id, actor=auth.user, request=request
+        db,
+        auth.company_id,
+        document_id,
+        actor=auth.user,
+        request=request,
+        receipt_id=receipt_id,
     )
     db.commit()
     return _block_read(block)

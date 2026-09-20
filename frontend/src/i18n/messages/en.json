@@ -2111,7 +2111,11 @@
       "confirmCopy": "Print copy",
       "copyFailed": "The copy could not be printed",
       "refundReason": "Refund reason",
-      "refundReasonPlaceholder": "Choose a reason"
+      "refundReasonPlaceholder": "Choose a reason",
+      "receipts": "Receipts the authority issued",
+      "receiptLabel": "Label",
+      "printsThis": "Print produces this",
+      "printThis": "Print this one"
     },
     "receipt": {
       "copy": "COPY",

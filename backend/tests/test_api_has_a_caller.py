@@ -103,23 +103,33 @@ NO_UI: dict[str, str] = {
     # --- P7 step 7 cleared fourteen lines ---------------------------------------------------
     #
     # Six for the purchase feed and the import register, four for the VAT return and the FX
-    # revaluation, four for the queue actions and the copy print. The screens are **Transactions
-    # → Tax** — Fiscal queue (`/fiscal/queue`), EBM purchases (`/fiscal/purchases`), Import
-    # declarations (`/fiscal/imports`), VAT return (`/tax/vat-return`) — and **Transactions →
-    # General Ledger → FX revaluation** (`/gl/fx-revaluation`), plus Copy print on the AR/AP
-    # document detail.
+    # revaluation, four for the queue actions and the copy print. The block above this one used
+    # to say "Five lines" over four entries, which is where 6 + 5 + 4 = 15 came from; the
+    # register held fourteen endpoints and the prose was one out. Corrected here rather than
+    # carried, because a count in a comment is the kind of thing a reader trusts.
     #
-    # Two of those routes are not where the step-3 and step-5 comments guessed: the prompt's
-    # step-7 list names `/tax/vat-return` and `/gl/fx-revaluation`, singular, and puts the FX
-    # screen under Transactions → General Ledger rather than under a Period-end group that does
-    # not exist. The prompt is the contract; those comments were written before the screens were
-    # placed. The step-5 comment also said "five lines" for a block that held four — worth
-    # naming, because a count in a comment is the kind of thing a reader trusts.
+    # The screens are **Transactions → Tax** — Fiscal queue (`/fiscal/queue`), EBM purchases
+    # (`/fiscal/purchases`), Import declarations (`/fiscal/imports`), VAT returns
+    # (`/tax/vat-returns`) — and **Transactions → General Ledger → FX revaluation**
+    # (`/gl/fx-revaluations`, after Cashbook batches), plus Copy print on the AR/AP document
+    # detail.
     #
-    # Every one was deleted by a screen a person can open and press, which is the standard the
-    # P6 set for its own twenty and the reason `useReverseStockDocument` (C.1.7) is remembered
-    # as a defect rather than as a pass. `POST /fiscal/outbox/drain` stays exempt and always
-    # will — it is the scheduler's hook, `by design` for the same reason `jobs/sweep` is.
+    # The routes are the **plural** ones this register already named, which is the repo's own
+    # listing convention (`/ar/documents`, `/inventory/documents`, `/oe/sales-orders`): a
+    # screen that lists rows and opens one is plural, and the P7 prompt's singular was not.
+    # What the earlier comment got wrong was the **placement** — there is no "Period end" group
+    # under General Ledger in the owner's tree, and the FX revaluation row sits directly after
+    # Cashbook batches under Transactions → GL.
+    #
+    # Every one was deleted by a screen a person can open and press — the standard P6 set for
+    # its own twenty, and the reason `useReverseStockDocument` (C.1.7) is remembered as a defect
+    # rather than as a pass. Not one of them is called from a hook written to satisfy the
+    # matcher: **Verify with device** and **Attach receipt manually** in particular are pressed
+    # by `e2e/p7-transactions.spec.ts`, which drives the sandbox to `accept_then_timeout` to
+    # produce the `unknown` row they exist for.
+    #
+    # `POST /fiscal/outbox/drain` stays exempt and always will — it is the scheduler's hook,
+    # `by design` for the same reason `jobs/sweep` is.
     # --- GAP (P7, step 8): closing the fiscal day ----------------------------------------------
     #
     # The screen is **Transactions → Tax → Close day**, which shows the X and offers the Z. The

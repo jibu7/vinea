@@ -414,12 +414,12 @@ The owner's original menu ordering (software_interface docx) is **adopted as the
 | Maintenance → AR / AP | Customers, Sales reps, Suppliers, Transaction types, Defaults, Rename | P4 |
 | Maintenance → Inventory | Items, Warehouses, Trans types, Variable barcodes, UoM categories, Defaults, Rename Item Code | P5 |
 | Maintenance → Order entry / BOM / POS | **Order defaults** / BOM items+defaults / Tills+types+defaults | P6 (live, `/maintenance/order-defaults`) / P12 / P11 |
-| Transactions → GL | Cashbook batches, Journal batches, **FX revaluation** (`/gl/fx-revaluation`, C.1.12) | P2 (banking depth P8) · revaluation P7 |
+| Transactions → GL | Cashbook batches, Journal batches, **FX revaluation** (`/gl/fx-revaluations`, C.1.12) | P2 (banking depth P8) · revaluation P7 |
 | Transactions → AR | Credit note, Invoice, Receipt (C.1.5), AR batches, Documents (C.1.7); Sales order | P4; SO in P6 |
 | Transactions → AP *(mislabeled "Account Receivable" in spec — see C.1)* | **GRV** (`/oe/goods-received`), **Purchase order** (`/oe/purchase-orders`) — both P6, see C.1.5 — Supplier invoice, Return to supplier, Payment, Allocate (C.1.3), Post-dated payments (C.1.6), AP batches, Documents (C.1.7) | P4 · P6 |
 | Transactions → Inventory | Journal batches, Transfers, Adjustments, Counts, Documents (C.1.7) (+ CN/GRV/Invoice/RTS stock impacts) | P5 (impacts via P4/P6 events) |
 | Transactions → OE | **Sales order** (`/oe/sales-orders`), **Breakup** (`/oe/breakup`), **Landed cost** (`/oe/landed-costs`) | P6 — all three live |
-| Transactions → Tax *(C.1.11 — not in the owner's tree)* | **Fiscal queue** (`/fiscal/queue`), **EBM purchases** (`/fiscal/purchases`), **Import declarations** (`/fiscal/imports`), **VAT return** (`/tax/vat-return`) | P7 — all four live |
+| Transactions → Tax *(C.1.11 — not in the owner's tree)* | **Fiscal queue** (`/fiscal/queue`), **EBM purchases** (`/fiscal/purchases`), **Import declarations** (`/fiscal/imports`), **VAT return** (`/tax/vat-returns`) | P7 — all four live |
 | Transactions → BOM / POS | Manufacture process, Breakup / Sales, Returns, Transaction | P12 / P11 |
 | Reports → GL | Account transaction (P2), Trial Balance (P2), Chart of account (P3), **Bank reconciliation (P8)**, **Cashbooks (P8)**, Balance sheet (P10), Income statement (P10) | as noted |
 | Reports → AR / AP | Age analyses, Allocation, Listings, Statements, Transaction listing (C.1.4) — each for both modules | P4 |
@@ -506,7 +506,7 @@ The owner's original menu ordering (software_interface docx) is **adopted as the
    | **Fiscal queue** | `/fiscal/queue` | per device: status counts, the oldest queued age, the `offline` flag and the head row everything is waiting on; the rows in send order; **Retry now**, **Verify with device**, **Attach receipt manually**; a row's request, response and action log |
    | **EBM purchases** | `/fiscal/purchases` | the authority's purchase feed, with **Fetch**, **Accept** (linking the AP document the purchase became) and **Reject** |
    | **Import declarations** | `/fiscal/imports` | the import register, with **Fetch**, **Approve** against a Vinea item, and **Reject** |
-   | **VAT return** | `/tax/vat-return` | the range, the sections, the tie with its untagged movements, the late entries, **File**, and the filed returns with **Reverse** on detail |
+   | **VAT return** | `/tax/vat-returns` | the range, the sections, the tie with its untagged movements, the late entries, **File**, and the filed returns with **Reverse** on detail |
 
    This is **C.2's "fiscalization status/queue screens (P7)" made good**: the addition was
    promised there without a home, and this is the home.
@@ -522,7 +522,7 @@ The owner's original menu ordering (software_interface docx) is **adopted as the
    and needs no row: the Fiscalization section on Invoice and Credit note, the fiscal panel and
    the CIS receipt layout on the document detail, and the refund reason in the reversal dialog.
 
-12. **Transactions → GL gains FX revaluation** — `/gl/fx-revaluation`, after Cashbook batches
+12. **Transactions → GL gains FX revaluation** — `/gl/fx-revaluations`, after Cashbook batches
    (P7 step 7). Not in the owner's tree, and it belongs under Transactions rather than Reports
    because of what it does: a revaluation **posts** — an entry at the revaluation date and its
    mirror the following day, in one transaction — so it sits beside Journal batches and

@@ -15,6 +15,7 @@ import { formatDate } from "@/lib/format";
 import { useApiErrorToast } from "@/lib/use-api-error-toast";
 import {
   useAttachQueueReceipt,
+  useDocumentReceipts,
   useFiscalQueueRows,
   useRetryQueueRow,
   useVerifyQueueRow,
@@ -72,9 +73,12 @@ export const ATTACH_FIELDS = [
 export function DocumentFiscalPanel({
   documentId,
   receipt,
+  onSelectReceipt,
 }: {
   documentId: number;
   receipt: ReceiptBlock | null;
+  /** Choose which receipt the screen shows and Print produces. `null` means the latest. */
+  onSelectReceipt: (receiptId: number | null) => void;
 }) {
   const t = useTranslations("fiscal.document");
   const tq = useTranslations("fiscal.queue");
@@ -85,6 +89,7 @@ export function DocumentFiscalPanel({
   // `watch: false` — a posted document's rows are a closed set, so the panel stops asking
   // once every one of them is terminal.
   const rows = useFiscalQueueRows({ documentId, watch: false });
+  const receipts = useDocumentReceipts(documentId);
   const retry = useRetryQueueRow();
   const verify = useVerifyQueueRow();
   const attach = useAttachQueueReceipt();
@@ -95,13 +100,14 @@ export function DocumentFiscalPanel({
   const [attachError, setAttachError] = useState<string | null>(null);
 
   const queueRows = rows.data ?? [];
+  const receiptRows = receipts.data ?? [];
   // The sale or the refund — the row that decides whether there is a receipt. Stock and item
   // rows sit in the same queue and are no part of what this document prints.
   const declaration = queueRows.find(
     (row) => row.kind === FiscalOutboxKind.SALE || row.kind === FiscalOutboxKind.REFUND,
   );
 
-  if (queueRows.length === 0 && receipt === null) return null;
+  if (queueRows.length === 0 && receipt === null && receiptRows.length === 0) return null;
 
   async function act(
     run: () => Promise<unknown>,
@@ -176,6 +182,61 @@ export function DocumentFiscalPanel({
         </dl>
       ) : (
         <p className="py-2 text-xs text-[var(--vinea-ink-subtle)]">{t("noReceiptYet")}</p>
+      )}
+
+      {/* **Both receipts, when there are two.** Reversing a fiscalized invoice queues a full
+          refund rather than cancelling the sale (decision 7), so a reversed sale holds the `NS`
+          it was declared under *and* the `NR` that reversed it — and the customer is owed the
+          second piece of paper as much as the first. The block above shows what Print will
+          produce, which is the latest; this is where the other one is reachable from the
+          document it belongs to. */}
+      {receiptRows.length > 1 && (
+        <div className="pt-4">
+          <h3 className="pb-1 text-xs font-semibold text-[var(--vinea-ink-muted)]">
+            {t("receipts")}
+          </h3>
+          <Table>
+            <THead>
+              <TR>
+                <TH className="w-24">{t("receiptLabel")}</TH>
+                <TH className="w-32">{t("receiptNumber")}</TH>
+                <TH className="w-24 text-right">{t("invcNo")}</TH>
+                <TH className="w-28">{t("sdcDateTime")}</TH>
+                <TH>{" "}</TH>
+              </TR>
+            </THead>
+            <TBody>
+              {receiptRows.map((row) => (
+                <TR key={row.receipt_id}>
+                  <TD className="text-xs">{row.receipt_type}</TD>
+                  <TD
+                    className="font-mono text-xs"
+                    data-testid={`receipt-${row.receipt_type}`}
+                  >
+                    {row.receipt_number}
+                  </TD>
+                  <TD className="text-right font-mono text-xs tabular-nums">{row.invc_no}</TD>
+                  <TD className="text-xs text-[var(--vinea-ink-muted)]">
+                    {formatDate(row.sdc_datetime)}
+                  </TD>
+                  <TD className="text-xs">
+                    {row.receipt_id === receipt?.receipt_id ? (
+                      <StatusChip tone="info">{t("printsThis")}</StatusChip>
+                    ) : (
+                      <Button
+                        variant="ghost"
+                        data-testid={`print-${row.receipt_type}`}
+                        onClick={() => onSelectReceipt(row.receipt_id)}
+                      >
+                        {t("printThis")}
+                      </Button>
+                    )}
+                  </TD>
+                </TR>
+              ))}
+            </TBody>
+          </Table>
+        </div>
       )}
 
       {declaration?.last_error && (

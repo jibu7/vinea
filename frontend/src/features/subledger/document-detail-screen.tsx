@@ -83,7 +83,12 @@ export function PartnerDocumentDetailScreen({
   // refusal is "it does, and the authority has not signed yet" — which is why the query's error
   // is read rather than swallowed. `field_errors.fiscal_status` carries the queue row's own
   // status, so the disabled Print button says which kind of waiting this is.
-  const receiptQuery = useDocumentReceipt(documentId);
+  // Which of the document's receipts the screen is showing and Print will produce. `null` is
+  // "the latest", which is the refund on a reversed sale — what the document most recently
+  // became. The panel's own table switches it, so the `NS` a reversed sale was declared under
+  // stays printable rather than becoming unreachable.
+  const [printReceiptId, setPrintReceiptId] = useState<number | null>(null);
+  const receiptQuery = useDocumentReceipt(documentId, printReceiptId);
   const printCopy = usePrintReceiptCopy();
   const receipt = receiptQuery.data ?? null;
   const receiptError = receiptQuery.error instanceof ApiError ? receiptQuery.error : null;
@@ -231,7 +236,7 @@ export function PartnerDocumentDetailScreen({
 
   async function handleCopyPrint() {
     try {
-      await printCopy.mutateAsync(documentId);
+      await printCopy.mutateAsync({ documentId, receiptId: printReceiptId });
       setCopyOpen(false);
       // Print *after* the counter has moved, so the sheet that comes out is the one the
       // authority's copy count describes. Nothing is sent to RRA — a copy is a print of a sale
@@ -575,7 +580,11 @@ export function PartnerDocumentDetailScreen({
           person can do when it has not answered. Renders nothing at all for a document that
           was never declared, which is every document on a company with no device. */}
       <div className="print:hidden">
-        <DocumentFiscalPanel documentId={documentId} receipt={receipt} />
+        <DocumentFiscalPanel
+          documentId={documentId}
+          receipt={receipt}
+          onSelectReceipt={setPrintReceiptId}
+        />
       </div>
 
       <Dialog open={copyOpen} onOpenChange={setCopyOpen}>

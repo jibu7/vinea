@@ -20,10 +20,10 @@ revalue a currency. Those fourteen lines are gone.
 | Fiscal queue | `/fiscal/queue` | a card per device with status counts, the oldest queued age, the offline flag and the head row; the rows in send order; **Retry now**, **Verify with device**, **Attach receipt manually**, and a row's request, response and action log |
 | EBM purchases | `/fiscal/purchases` | the feed by decision, **Fetch**, **Accept** (with the AP document the purchase became) and **Reject** |
 | Import declarations | `/fiscal/imports` | the register by status, **Fetch**, **Approve** against a Vinea item, **Reject** |
-| VAT return | `/tax/vat-return` | the range, the sections, the tie, the late entries, **File**, and the filed returns with **Reverse** on detail |
+| VAT return | `/tax/vat-returns` | the range, the sections, the tie, the late entries, **File**, and the filed returns with **Reverse** on detail |
 
 **One new screen under Transactions → General Ledger** (Appendix C.1.12): **FX revaluation**
-(`/gl/fx-revaluation`) — date, role, the preview per open foreign-currency document, **Post**,
+(`/gl/fx-revaluations`) — date, role, the preview per open foreign-currency document, **Post**,
 and the runs with **Reverse**.
 
 **Four screens gained what a fiscalized company needs to key on them:**
@@ -114,7 +114,7 @@ into the phase report if it is still outstanding at step 9.
 
 ## Plan deviations
 
-* **`/tax/vat-return` and `/gl/fx-revaluation`, singular**, and the FX screen under
+* **`/tax/vat-returns` and `/gl/fx-revaluations`, singular**, and the FX screen under
   Transactions → General Ledger. The step-3 and step-5 `NO_UI` comments guessed `/tax/vat-returns`,
   `/gl/fx-revaluations` and a "General Ledger → Period end" group that does not exist. The
   prompt's step-7 list is the contract and those comments predate the screens being placed. The

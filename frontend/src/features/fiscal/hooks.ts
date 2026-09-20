@@ -296,6 +296,23 @@ export function useAttachQueueReceipt() {
 // --- The receipt a document prints (decision 11) ----------------------------------------------
 
 /**
+ * **Every** receipt this document holds, in the order the authority issued them.
+ *
+ * Usually one. A signed sale that was reversed holds **two** — the `NS` it was declared under
+ * and the `NR` that reversed it (decision 7: reversing a fiscalized invoice queues a full
+ * refund rather than cancelling the sale) — and the customer is owed the second piece of paper
+ * as much as the first. A screen that showed only the latest would make the original receipt
+ * unreachable from the document it belongs to.
+ */
+export function useDocumentReceipts(documentId: number | null) {
+  return useQuery({
+    queryKey: [ROOT, "document-receipts", documentId],
+    queryFn: () => api.get<FiscalReceipt[]>(`/fiscal/receipts?document_id=${documentId}`),
+    enabled: documentId !== null,
+  });
+}
+
+/**
  * What this document prints, `null` when it is not a fiscal receipt at all.
  *
  * Three answers, not two, and the screen needs all three: a block is "print the CIS layout",
@@ -304,10 +321,12 @@ export function useAttachQueueReceipt() {
  * error is kept rather than swallowed. `retry: false` so a refusal is shown rather than asked
  * for three more times.
  */
-export function useDocumentReceipt(documentId: number | null) {
+export function useDocumentReceipt(documentId: number | null, receiptId?: number | null) {
+  const suffix = receiptId ? `?receipt_id=${receiptId}` : "";
   return useQuery({
-    queryKey: [ROOT, "document-receipt", documentId],
-    queryFn: () => api.get<ReceiptBlock | null>(`/fiscal/documents/${documentId}/receipt`),
+    queryKey: [ROOT, "document-receipt", documentId, receiptId ?? "latest"],
+    queryFn: () =>
+      api.get<ReceiptBlock | null>(`/fiscal/documents/${documentId}/receipt${suffix}`),
     enabled: documentId !== null,
     retry: false,
   });
@@ -318,8 +337,16 @@ export function useDocumentReceipt(documentId: number | null) {
 export function usePrintReceiptCopy() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (documentId: number) =>
-      api.post<ReceiptBlock>(`/fiscal/documents/${documentId}/receipt/copy`),
+    mutationFn: ({
+      documentId,
+      receiptId,
+    }: {
+      documentId: number;
+      receiptId?: number | null;
+    }) =>
+      api.post<ReceiptBlock>(
+        `/fiscal/documents/${documentId}/receipt/copy${receiptId ? `?receipt_id=${receiptId}` : ""}`,
+      ),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: [ROOT] }),
   });
 }

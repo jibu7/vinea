@@ -150,7 +150,9 @@ const monthEnd = () => iso(new Date(new Date().getFullYear(), new Date().getMont
  * deliberately *not* in the places it cannot: a second run against the same database posts a
  * second invoice, which is a fuller screenshot rather than a wrong one.
  */
-async function seed(page: Page): Promise<{ invoiceId: number; deviceId: number }> {
+async function seed(
+  page: Page,
+): Promise<{ invoiceId: number; reversedId: number; deviceId: number }> {
   await apiOk(page, "/company", { tin: COMPANY_TIN }, "PATCH");
 
   // The authority forgets, so a repeated run does not meet `994` on an invoice number Vinea's
@@ -298,11 +300,31 @@ async function seed(page: Page): Promise<{ invoiceId: number; deviceId: number }
   // Signed, so the document detail photographs a receipt rather than a queue row.
   await apiOk(page, "/fiscal/outbox/drain");
 
+  // **A second invoice, reversed**, so shot 11 has two receipts to show. Reversing a fiscalized
+  // invoice queues a full refund rather than cancelling the sale (decision 7), and the document
+  // then holds the `NS` it was declared under and the `NR` that reversed it. `06` is RRA's own
+  // "Refund", the reason the dialog asks for.
+  const reversed = (await apiOk(page, "/subledger/ar/documents", {
+    kind: "invoice",
+    partner_id: customer.id,
+    document_date: today(),
+    description: "Fiscal demo invoice, reversed",
+    purchase_code: PURCHASE_CODE,
+    lines: [{ item_id: itemId, quantity: "4", unit_price: "2000", tax_code_id: outputVat.id }],
+  })) as { id: number };
+  await apiOk(page, "/fiscal/outbox/drain");
+  await apiOk(page, `/subledger/ar/documents/${reversed.id}/reverse`, {
+    on_date: today(),
+    reason: "Reversed for the P7 step 7 screenshot",
+    refund_reason: "06",
+  });
+  await apiOk(page, "/fiscal/outbox/drain");
+
   // --- what the authority is holding ------------------------------------------------------
   await apiOk(page, `/fiscal/devices/${deviceId}/fetch-purchase-feed`);
   await apiOk(page, `/fiscal/devices/${deviceId}/fetch-imports`);
 
-  return { invoiceId: invoice.id, deviceId };
+  return { invoiceId: invoice.id, reversedId: reversed.id, deviceId };
 }
 
 async function main() {
@@ -311,7 +333,7 @@ async function main() {
   const page = await context.newPage();
 
   await login(page, OWNER);
-  const { invoiceId } = await seed(page);
+  const { invoiceId, reversedId } = await seed(page);
 
   for (const theme of ["light", "dark"] as const) {
     // 1 — the Invoice capture screen with its Fiscalization section, on a customer with a TIN.
@@ -372,7 +394,7 @@ async function main() {
 
     // 6 — a row's request and response, redacted, with its action log.
     await shot("6-queue-row-payload", async () => {
-      await page.locator("tbody tr").first().getByRole("button", { name: "Inspect" }).click();
+      await page.locator("tbody tr").first().getByRole("button", { name: "Inspect", exact: true }).click();
       await page.getByTestId("row-request").waitFor({ state: "visible" });
       await page.waitForTimeout(300);
       await shoot(page, "6-queue-row-payload", theme);
@@ -399,7 +421,7 @@ async function main() {
 
     // 9 — the VAT return, with the tie under it.
     await shot("9-vat-return", async () => {
-      await page.goto(`${BASE}/tax/vat-return`);
+      await page.goto(`${BASE}/tax/vat-returns`);
       await page.waitForSelector("h1:has-text('VAT return')");
       await page.getByTestId("vat-net").waitFor({ state: "visible" });
       await page.waitForTimeout(300);
@@ -408,12 +430,22 @@ async function main() {
 
     // 10 — the revaluation preview, per open document.
     await shot("10-fx-revaluation", async () => {
-      await page.goto(`${BASE}/gl/fx-revaluation`);
+      await page.goto(`${BASE}/gl/fx-revaluations`);
       await page.waitForSelector("h1:has-text('FX revaluation')");
       await page.getByTestId("revaluation-total").waitFor({ state: "visible" });
       await page.locator("tbody tr").first().waitFor({ state: "visible" });
       await page.waitForTimeout(300);
       await shoot(page, "10-fx-revaluation", theme);
+    });
+
+    // 11 — a reversed sale, holding both receipts: the NS it was declared under and the NR
+    // that reversed it, with the one Print produces marked.
+    await shot("11-document-both-receipts", async () => {
+      await page.goto(`${BASE}/ar/documents/${reversedId}`);
+      await page.getByTestId("receipt-NR").waitFor({ state: "visible" });
+      await page.getByTestId("receipt-NR").scrollIntoViewIfNeeded();
+      await page.waitForTimeout(300);
+      await shoot(page, "11-document-both-receipts", theme);
     });
   }
 

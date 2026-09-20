@@ -150,7 +150,7 @@ export const navIntents: NavIntent[] = [
         label: "FX revaluation",
         module: "General Ledger",
         permission: "gl:fx_revalue",
-        href: "/gl/fx-revaluation",
+        href: "/gl/fx-revaluations",
       },
       // Appendix C's AR block, in the owner's order, plus Receipt (the settlement side of
       // the same subledger) and "Account receivable batches" — the spec lists AR batches and
@@ -286,7 +286,7 @@ export const navIntents: NavIntent[] = [
         label: "VAT return",
         module: "Tax",
         permission: ["tax:vat_return_view", "tax:vat_return_file"],
-        href: "/tax/vat-return",
+        href: "/tax/vat-returns",
       },
       { label: "Manufacture process", module: "Bill of Materials", phase: "P12" },
       { label: "Sales", module: "Point of Sale", phase: "P11" },

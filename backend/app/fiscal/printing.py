@@ -116,7 +116,12 @@ class ReceiptBlock:
 
 
 def receipt_block(
-    db: Session, company_id: int, document_id: int, *, as_copy: bool = False
+    db: Session,
+    company_id: int,
+    document_id: int,
+    *,
+    as_copy: bool = False,
+    receipt_id: int | None = None,
 ) -> ReceiptBlock | None:
     """What this document prints, or `None` when it is not a fiscal receipt at all.
 
@@ -125,7 +130,7 @@ def receipt_block(
     does, and the authority has not signed yet".
     """
     document = _document(db, company_id, document_id)
-    receipt = _receipt(db, company_id, document)
+    receipt = _receipt(db, company_id, document, receipt_id)
     if receipt is None:
         _refuse_or_pass(db, company_id, document)
         return None
@@ -139,6 +144,7 @@ def record_copy(
     *,
     actor: User,
     request: Request | None = None,
+    receipt_id: int | None = None,
 ) -> ReceiptBlock:
     """A reprint. The counter moves, the audit records who, and RRA hears nothing.
 
@@ -147,7 +153,7 @@ def record_copy(
     editable.
     """
     document = _document(db, company_id, document_id)
-    receipt = _receipt(db, company_id, document)
+    receipt = _receipt(db, company_id, document, receipt_id)
     if receipt is None:
         _refuse_or_pass(db, company_id, document)
         raise LedgerStateError(
@@ -190,33 +196,31 @@ def _document(db: Session, company_id: int, document_id: int) -> PartnerDocument
 
 
 def _receipt(
-    db: Session, company_id: int, document: PartnerDocument
+    db: Session, company_id: int, document: PartnerDocument, receipt_id: int | None = None
 ) -> FiscalReceipt | None:
-    """The receipt this document prints — its **latest**, which is the refund when it has one.
+    """The receipt to print — a named one, or by default the document's **latest**.
 
-    A signed sale that was reversed holds two receipts (the `NS` and the `NR` that reversed it),
-    and the thing to print is what the document most recently became. `fiscal_receipt_id` on the
-    document points at whichever the drainer wrote last, and is preferred so that the print and
-    the document detail can never name different receipts.
+    A signed sale that was reversed holds two receipts: the `NS` it was declared under and the
+    `NR` that reversed it (decision 7 — reversing a fiscalized invoice queues a full refund
+    rather than cancelling the sale). Both are legal documents the customer is owed, and
+    **both are printable**: the screen lists them and prints whichever is chosen.
+
+    The default is the latest, which is the refund when there is one, because that is what the
+    document most recently became. It is deliberately **not** `document.fiscal_receipt_id`:
+    that column is the document's own receipt — the sale — and the drainer leaves it pointing
+    at the `NS` on purpose, so the subledger's link and the open-item history keep naming the
+    sale. The two answer different questions and only one of them is "what comes out of the
+    printer now".
+
+    A `receipt_id` that is not this document's is `None` rather than somebody else's receipt.
     """
-    if document.fiscal_receipt_id is not None:
-        found = db.scalar(
-            select(FiscalReceipt).where(
-                FiscalReceipt.company_id == company_id,
-                FiscalReceipt.id == document.fiscal_receipt_id,
-            )
-        )
-        if found is not None:
-            return found
-    return db.scalars(
-        select(FiscalReceipt)
-        .where(
-            FiscalReceipt.company_id == company_id,
-            FiscalReceipt.document_id == document.id,
-        )
-        .order_by(FiscalReceipt.tot_rcpt_no.desc())
-        .limit(1)
-    ).first()
+    query = select(FiscalReceipt).where(
+        FiscalReceipt.company_id == company_id,
+        FiscalReceipt.document_id == document.id,
+    )
+    if receipt_id is not None:
+        return db.scalars(query.where(FiscalReceipt.id == receipt_id)).first()
+    return db.scalars(query.order_by(FiscalReceipt.tot_rcpt_no.desc()).limit(1)).first()
 
 
 def _refuse_or_pass(db: Session, company_id: int, document: PartnerDocument) -> None:
