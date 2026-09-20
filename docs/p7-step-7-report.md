@@ -300,31 +300,32 @@ rediscovered:
 
 ## Tree state
 
-Against `main`, at `91db681`:
+Against `main`, at `15e6583`:
 
 ```
-backend:   13 files changed,   376 insertions(+),  78 deletions(-)
-frontend:  30 files changed,  5585 insertions(+),  25 deletions(-)
-docs:      23 files changed,   283 insertions(+),   1 deletion(-)   (20 of them screenshots)
+backend:   16 files changed, 643 insertions(+), 106 deletions(-)
+frontend:  31 files changed, 6278 insertions(+), 26 deletions(-)
+docs:      25 files changed, 491 insertions(+), 1 deletion(-)   (22 of them screenshots)
 ```
 
-Checks. The backend suite ran at `91db681` and **no backend file has changed since** — the
-four commits after it are the frontend and the docs (`git diff --name-only 91db681..HEAD --
-backend` is empty), which is why the count below is quoted against that hash rather than the
-branch head. Everything else ran against the head.
+Checks, every one against `15e6583` — the branch head, the tree that ships.
+
+The backend suite was run three times before this and quoted none of them: two I killed myself
+by running `make db-reset` under them (exit 137 — a sequencing error on my part, not a flake),
+and one was superseded by a change to `app/tax/vat.py` after it had started. The suite has to be
+the last thing, alone. It was.
 
 | check | result |
 |---|---|
 | `make be-lint` | `All checks passed!` |
-| `make be-test` (`-n 4`, in the container) | `1355 passed, 7 warnings in 1286.10s (0:21:26)` |
+| `make be-test` (`-n 4`, in the container) | `1357 passed, 7 warnings in 1080.71s (0:18:00)`, `PYTEST_EXIT=0` |
 | `tests/test_api_has_a_caller.py` | 15 passed — the fourteen lines gone, `POST /fiscal/outbox/drain` exempt `by design` |
 | `npx tsc --noEmit` | clean |
 | `npm run lint` | clean (pre-existing `react-hooks/exhaustive-deps` warnings only) |
 | `npx vitest run` | 391 passed, 16 files |
 | `npm run build` | compiled; the five new routes built |
-| `e2e/p7-transactions.spec.ts` | 14 passed, on a reset database with the sandbox up |
-| every spec that opens a screen this step touched | 59 passed — `ar-ap-{acceptance,allocation,corrections,documents,reports}`, `dated-rate`, `empty-state-vs-failure`, `p6-{cycle-tape,enquiries-reports,orders,maintenance}`, `p7-maintenance` |
-| `e2e/accessibility-transactions.spec.ts` | 32 passed, including the four new Tax rows and the FX row |
+| `e2e/p7-transactions.spec.ts` + `p7-maintenance` + `accessibility-transactions` | 53 passed, on a reset database with the sandbox up |
+| every spec that opens a screen this step touched | 52 passed — `ar-ap-{acceptance,allocation,corrections,documents,reports}`, `dated-rate`, `empty-state-vs-failure`, `p6-{cycle-tape,enquiries-reports,orders,maintenance}` |
 
 ## Screenshots
 
