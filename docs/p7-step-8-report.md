@@ -469,6 +469,14 @@ quietest possible version of the P4 failure mode.
 **8. And the tie's axis.** `sdc_datetime` for receipts, `document_date` for documents. If step 9's
 tape asserts a listing total over a range, it has to cut the range on the axis it means.
 
+**9. `make db-reset` does not reset the sandbox**, and `p7-maintenance.spec.ts` does not reset it
+either. The authority's ledger lives in the container's memory. Step 9's tape talks to it more
+than any spec so far, and the failure mode is a `994: the invoice number is already registered`
+on a database whose sequences have just restarted — the sandbox behaving correctly and the
+fixture being stale, which is a distinction worth not having to make at two in the morning.
+`curl -X POST localhost:8100/_sandbox/reset`, or `sandboxReset()` as the two P7 specs that do it
+already call it.
+
 ## What this step did **not** do
 
 * **No migration.** Nothing new is stored. The tie is a query over `fiscal_receipts` and
@@ -506,7 +514,7 @@ branch head.
 | check | result |
 |---|---|
 | `make be-lint` | `All checks passed!` |
-| `make be-test` (`-n 4`, in the container) | *filled below, run last and alone* |
+| `make be-test` (`-n 4`, in the container) | `1372 passed, 7 warnings in 1565.02s (0:26:05)`, `PYTEST_EXIT=0` |
 | `tests/test_api_has_a_caller.py` | 14 passed — the close-day line gone, `POST /fiscal/outbox/drain` the only P7 entry left |
 | `tests/tax/test_entry_drill.py` | 7 passed |
 | `tests/fiscal/test_receipt_listing.py` | 7 passed |
@@ -576,4 +584,34 @@ by intent — and its four tables gained six rows.
 
 ## Gates
 
-*Filled with the suite run, which is the last thing done and is done alone.*
+The suite is the last thing, run **alone**, with nothing touching the stack — no Playwright, no
+capture script, and `pg_stat_activity` showing **0** connections to `vinea_test` before it
+started. `-n 4` rather than `-n auto`: `auto` exhausts Postgres's lock table on this machine and
+produces hundreds of setup errors that are an environment limit and not breakage. Redirected to a
+file rather than piped, because a pipe eats the exit code — `PYTEST_EXIT=0` is read from the
+redirect.
+
+**The hash the suite ran at is `ed9bb13`**, and nothing has moved since:
+
+```
+$ git rev-parse --short HEAD
+ed9bb13
+
+$ git status --short
+                          # empty
+
+$ git diff --name-only ed9bb13..HEAD -- backend
+                          # empty
+```
+
+So `1372 passed` is a statement about the tree that ships, not about a tree that existed while it
+was running. The e2e and frontend results above were taken at the same head for application code:
+the only commit after them is this report.
+
+```
+$ git diff --stat main..
+ 52 files changed, 5815 insertions(+), 22 deletions(-)
+```
+
+`git log @{u}..` is not quoted empty because this branch has no upstream yet — it is pushed with
+the PR. It is quoted in the PR description instead.
