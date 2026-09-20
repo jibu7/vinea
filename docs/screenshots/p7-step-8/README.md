@@ -35,8 +35,14 @@ nothing to report.
 | 2 | **Fiscal queue history** (Enquiries → Tax) | one document's rows in send order, and the action log open under them | `2-queue-history-{light,dark}.png` |
 | 3 | **VAT return** (Reports → Tax) | the sections as filed, the tie with every untagged movement named, and both annex buttons | `3-vat-return-report-{light,dark}.png` |
 | 4 | **Daily fiscal report — X**, with a sale still in flight | the warning **before** the button, and Close day still pressable — decision 11 on the screen | `4-daily-x-close-day-{light,dark}.png` |
-| 5 | **Daily fiscal report — the day's figures** | declared, posted beside it, and the residue named; the classes and the payment methods, sales and refunds never netted | `5-daily-figures-{light,dark}.png` |
+| 5 | **Daily fiscal report — the Z tab** | the closed day with its §19.1 figures: declared, posted beside it, the residue named, the classes, and the payment methods with sales and refunds never netted | `5-daily-z-figures-{light,dark}.png` |
 | 6 | **Fiscal receipts listing — the tie** (Reports → Tax) | declared against the ledger, the difference, and the one document that is in the ledger and not signed with `queued` against it | `6-receipts-listing-tie-{light,dark}.png` |
 | 7 | **FX revaluation** (Reports → General Ledger) | a run's lines per open foreign-currency document, with the run and its next-day mirror named | `7-fx-revaluation-report-{light,dark}.png` |
+
+Shots 4 and 5 are the same screen on its two tabs, and the seed closes the day between them so
+they are not the same picture: the Z holds the three signed documents, and the X that follows it
+holds nothing but the sale the authority could not be reached for. A first pass captured both
+full-page from the X tab and produced the same image **to the byte** — which is the sort of
+thing a screenshot pass exists to catch, and only catches if somebody looks.
 
 Every shot was opened and read before it was committed.

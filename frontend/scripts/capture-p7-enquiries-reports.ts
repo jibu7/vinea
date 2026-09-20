@@ -252,6 +252,20 @@ async function seed(page: Page): Promise<{ deviceId: number; documentId: number 
     lines: [{ item_id: itemId, quantity: "200", unit_cost: "1000" }],
   });
 
+  // **A purchase.** Without one the VAT return's input side is zero and its tie shows `1400`
+  // reconciling 0 against 0 — which is true, and a picture of a report with nothing to
+  // reconcile. The screen is worth photographing with both accounts carrying a movement.
+  const inputVat = taxCodes.find((t) => t.code === "VAT-IN-18")!;
+  await apiOk(page, "/subledger/ap/documents", {
+    kind: "invoice",
+    partner_id: supplier.id,
+    document_date: today(),
+    description: "Fiscal demo purchase",
+    lines: [
+      { item_id: itemId, quantity: "20", unit_price: "1000", tax_code_id: inputVat.id },
+    ],
+  });
+
   // --- the three signed documents ---------------------------------------------------------
   const invoice = (await apiOk(page, "/subledger/ar/documents", {
     kind: "invoice",
@@ -292,6 +306,16 @@ async function seed(page: Page): Promise<{ deviceId: number; documentId: number 
     ],
   });
   await apiOk(page, "/fiscal/outbox/drain");
+
+  // --- the day is closed here, between the two groups --------------------------------------
+  //
+  // Not at the end, and the position is the whole difference between two useful screenshots and
+  // one. A Z holds what was signed since the previous close and an X holds what has been signed
+  // since the last one — so closing after *everything* leaves the X with nothing but the stuck
+  // row, and shot 4 becomes a picture of a warning over a column of zeros. Closing here gives
+  // the Z the three documents above (shot 5) and leaves the USD sale below to fill the X, which
+  // then carries figures **and** the warning (shot 4).
+  await apiOk(page, `/fiscal/devices/${deviceId}/close-day`);
 
   // --- a posted revaluation, so the FX report has a run to open ---------------------------
   //
@@ -383,8 +407,13 @@ async function main() {
     await shot("2-queue-history", async () => {
       await page.goto(`${BASE}/fiscal/enquiries/queue-history`);
       await page.waitForSelector("h1:has-text('Fiscal queue history')");
+      // The **last** option is the sale the authority never got — posted after the drain, with
+      // the sandbox down. It is the document somebody opens a queue history to ask about, and
+      // it is only in this list at all because the picker reads the queue rather than the
+      // receipts: a receipt exists once RRA has signed, so a receipts-fed list offers every
+      // document except the ones still in flight.
       await page.getByRole("combobox", { name: "Document", exact: true }).click();
-      await page.getByRole("option").nth(1).click();
+      await page.getByRole("option").last().click();
       await page.getByTestId("history-sequence").first().waitFor({ state: "visible" });
       await page.getByTestId("history-inspect").first().click();
       await page.waitForTimeout(400);
@@ -410,14 +439,21 @@ async function main() {
       await shoot(page, "4-daily-x-close-day", theme);
     });
 
-    // 5 — the day's figures: the declaration, the ledger beside it, and the residue named.
-    await shot("5-daily-figures", async () => {
+    // 5 — the **Z** tab: the closed days, and the §19.1 figures of the one that is open.
+    //
+    // Not a second shot of the X. `fullPage` already puts the day's figures in shot 4, so a
+    // second full-page capture of the same screen produced the same image to the byte — which
+    // is the sort of thing a screenshot pass exists to catch and only catches if somebody
+    // looks.
+    await shot("5-daily-z-figures", async () => {
       await page.goto(`${BASE}/tax/reports/daily-fiscal`);
       await page.waitForSelector("h1:has-text('Daily fiscal report')");
+      await page.getByRole("tab", { name: /Z —/ }).click();
+      await page.getByTestId("z-number").first().waitFor({ state: "visible" });
+      await page.getByTestId("open-z").first().click();
       await page.getByTestId("day-residue").waitFor({ state: "visible" });
-      await page.getByTestId("day-residue").scrollIntoViewIfNeeded();
-      await page.waitForTimeout(300);
-      await shoot(page, "5-daily-figures", theme);
+      await page.waitForTimeout(400);
+      await shoot(page, "5-daily-z-figures", theme);
     });
 
     // 6 — the tie. Declared against the ledger, the difference, and the one document that is
