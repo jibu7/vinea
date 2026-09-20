@@ -390,6 +390,35 @@ def test_the_x_report_endpoint_renders_the_day(client, signed_in_owner: FiscalPo
     assert "declared_less_posted" in body["figures"]
 
 
+def test_a_second_close_at_the_same_instant_is_refused(
+    db: Session, a_day: FiscalPosting
+) -> None:
+    """The same day cannot be closed twice — and "the same day" means the same **second**.
+
+    A Z's range runs from the previous close to now, and both bounds are floored to a second
+    because that is the resolution `sdcDateTime` has (`_floor_second`). So a second close taken
+    at the same instant has a range of zero length and nothing in it, which is not a day and is
+    refused.
+
+    **Asserted here rather than through the screen.** P7 step 8's e2e drives Close day on the
+    X view, and pressing it twice is not a reliable way to ask this question: the second press
+    costs a tab switch and a render, and if a second has elapsed the range is no longer empty —
+    the close then succeeds and stores a Z with nothing in it, which is also correct. A test
+    that is right only when the machine is fast is a test about the machine. The clock is
+    injectable at this level, so this is where the question has an answer that does not move.
+    """
+    first = daily.close_day(db, a_day.company_id, a_day.device.id, actor=a_day.owner, now=_later())
+    db.flush()
+
+    with pytest.raises(LedgerStateError) as refused:
+        daily.close_day(
+            db, a_day.company_id, a_day.device.id, actor=a_day.owner, now=first.to_at
+        )
+
+    assert refused.value.code == "fiscal_z_empty_range"
+    assert "device_id" in refused.value.field_errors
+
+
 def test_closing_the_day_over_the_api_stores_a_z_and_lists_it(
     client, signed_in_owner: FiscalPosting  # noqa: ANN001
 ) -> None:

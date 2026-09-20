@@ -435,7 +435,8 @@
       "totalDifference": "Net gain / loss",
       "lineCount": "Documents revalued",
       "noLines": "This run revalued nothing."
-    }
+    },
+    "openSourceDocument": "Open {number}"
   },
   "maintenance": {
     "companyDetails": "Company details",
@@ -2367,7 +2368,7 @@
       "title": "Fiscal queue history",
       "subtitle": "Everything that has ever been sent for one document, and what became of it",
       "pickDocument": "Document",
-      "pickDocumentHint": "Search a receipt, an invoice number or a customer, then open the document's history.",
+      "pickDocumentHint": "Filter by document number or customer, then open the document's history.",
       "readOnly": "Read-only. Retry, verify and attach live on the Fiscal queue, where the device that is blocked can be seen beside them.",
       "noDocument": "Choose a document to see what has been sent for it.",
       "noRows": "Nothing has been queued for this document.",
@@ -2493,7 +2494,11 @@
         "dated_outside": "Dated outside the range",
         "other_branch": "Posted on another branch",
         "document_gone": "Document no longer resolves"
-      }
+      },
+      "invoiceCount": "Invoices",
+      "invoiceTotal": "Invoices total",
+      "creditNoteCount": "Credit notes",
+      "creditNoteTotal": "Credit notes total"
     }
   },
   "orderEntry": {

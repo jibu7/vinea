@@ -134,18 +134,20 @@ async function pendingRows(page: Page): Promise<number> {
 }
 
 /**
- * Drain until the device is holding nothing, pressing **Retry now** on anything that is waiting
- * out a backoff.
+ * Drain until the device is holding nothing, clearing the backoff on anything that is waiting.
  *
- * A drain alone is not enough and the reason is the design working: a row the authority refused
+ * A drain alone is not enough, and the reason is the design working: a row the authority refused
  * or could not be reached for is due again in 1, then 5, then 15 minutes, and `drain_company`
  * picks up only what is **due**. So after the sandbox comes back, the rows it rejected while it
- * was down are still sitting on a timer, and a test that only drained would wait six minutes to
- * find out. Retry is the button an operator presses for exactly this, and it clears the timer.
+ * was down are still on a timer, and a helper that only drained would wait six minutes to find
+ * out. Retry is what clears the timer.
  *
- * Through the screen rather than through a `fetch`, as step 7's own helper does: that button is
- * one of the fourteen rule-14 lines step 7 deleted, and a test that released the queue behind
- * its back would leave it a button nobody had ever pressed.
+ * **Through the API here, deliberately, and unlike step 7's version of this helper.** That
+ * button's caller is step 7's to own and `p7-transactions.spec.ts` presses it; this is fixture
+ * hygiene. Driving it from the queue screen means a click loop over a list that refetches every
+ * fifteen seconds — the row under the pointer can be replaced between `count()` and `click()`,
+ * and Playwright then waits on a detached node until the test times out. That is a flake bought
+ * for nothing, and it cost this file two runs before it was named.
  *
  * Bounded rather than `while`: a queue that never clears is a failure to report, not a loop to
  * spin in.
@@ -155,13 +157,13 @@ async function drainUntilClear(page: Page): Promise<void> {
     if ((await pendingRows(page)) === 0) return;
     await drain(page);
     if ((await pendingRows(page)) === 0) return;
-    await page.goto("/fiscal/queue");
-    await page.waitForSelector("h1:has-text('Fiscal queue')");
-    const buttons = page.getByRole("button", { name: "Retry now", exact: true });
-    const count = await buttons.count();
-    for (let index = 0; index < count; index += 1) {
-      const button = buttons.nth(index);
-      if (await button.isEnabled()) await button.click();
+    const rows = (await apiOk(page, "/fiscal/queue/rows")) as Array<{
+      row_id: number;
+      status: string;
+    }>;
+    for (const row of rows) {
+      if (row.status === "sent" || row.status === "cancelled") continue;
+      await pageFetch(page, `/fiscal/queue/rows/${row.row_id}/retry`, { method: "POST" });
     }
     await drain(page);
   }
@@ -315,17 +317,89 @@ test.describe("the tax enquiries and reports", () => {
     const suppliers = (await apiOk(page, "/subledger/ap/partners")) as Array<
       Identified & { supplier_code: string | null }
     >;
+    const supplierId = suppliers.find((s) => s.supplier_code === SUPPLIER_CODE)!.id;
     await apiOk(page, "/oe/goods-received-notes", {
       method: "POST",
       headers: { "Idempotency-Key": `p7-step8-grn-${SUFFIX}` },
       body: {
-        partner_id: suppliers.find((s) => s.supplier_code === SUPPLIER_CODE)!.id,
+        partner_id: supplierId,
         grn_date: today(),
         description: `P8 opening stock ${SUFFIX}`,
         warehouse_id: warehouses[0].id,
         lines: [{ item_id: itemId, quantity: "200", unit_cost: "1000" }],
       },
     });
+
+    // **A purchase, so the purchases annex has a row and not a header on its own.** The annex
+    // is the authority's listing of what this taxpayer bought, and a test that asserted only a
+    // header would pass over an annex that never found a document — which is the same shape of
+    // pass the rule-14 register exists to prevent, one file over.
+    await apiOk(page, "/subledger/ap/documents", {
+      method: "POST",
+      headers: { "Idempotency-Key": `p7-step8-sin-${SUFFIX}` },
+      body: {
+        kind: "invoice",
+        partner_id: supplierId,
+        document_date: today(),
+        description: `P8 purchase ${SUFFIX}`,
+        lines: [
+          {
+            item_id: itemId,
+            quantity: "20",
+            unit_price: "1000",
+            tax_code_id: taxCodes.find((code) => code.code === "VAT-IN-18")!.id,
+          },
+        ],
+      },
+    });
+
+    // --- and one open USD receivable, so the revaluation has something to revalue -----------
+    //
+    // The mirror posts the day **after** the revaluation date, so a month-end run reaches into
+    // the next period and the seeded tenant marks that one `future`. Opening it is what an
+    // accountant does by hand before closing a month, and the run is refused without it.
+    const currencies = (await apiOk(page, "/gl/currencies")) as Array<
+      Identified & { code: string; is_base: boolean }
+    >;
+    const usd = currencies.find((c) => !c.is_base)!;
+    const rates = (await apiOk(page, `/gl/exchange-rates?currency_id=${usd.id}`)) as Array<{
+      valid_from: string;
+    }>;
+    for (const [validFrom, rate] of [
+      [monthStart(), "1320"],
+      [monthEnd(), "1350"],
+    ] as const) {
+      if (rates.some((r) => r.valid_from === validFrom)) continue;
+      await apiOk(page, "/gl/exchange-rates", {
+        method: "POST",
+        body: { currency_id: usd.id, valid_from: validFrom, rate },
+      });
+    }
+    await apiOk(page, "/subledger/ar/documents", {
+      method: "POST",
+      headers: { "Idempotency-Key": `p7-step8-usd-${SUFFIX}` },
+      body: {
+        kind: "invoice",
+        partner_id: customerId,
+        document_date: today(),
+        description: `P8 USD invoice ${SUFFIX}`,
+        purchase_code: PURCHASE_CODE,
+        currency_id: usd.id,
+        lines: [{ item_id: itemId, quantity: "10", unit_price: "2" }],
+      },
+    });
+
+    const periods = (await apiOk(page, "/gl/periods")) as Array<
+      Identified & { start_date: string; status: string }
+    >;
+    const next = periods.find((p) => p.start_date > monthEnd() && p.status !== "open");
+    if (next) await apiOk(page, `/gl/periods/${next.id}/open`, { method: "POST" });
+    await apiOk(page, "/gl/fx-revaluations", {
+      method: "POST",
+      headers: { "Idempotency-Key": `p7-step8-fxr-${SUFFIX}` },
+      body: { revaluation_date: monthEnd(), role: "both" },
+    });
+
     await drainUntilClear(page);
   });
 
@@ -415,8 +489,10 @@ test.describe("the tax enquiries and reports", () => {
     // --- the receipts side, summed from the rows ------------------------------------------
     await page.goto("/tax/reports/receipts");
     await page.waitForSelector("h1:has-text('Fiscal receipts listing')");
-    await page.getByLabel("From", { exact: true }).fill(today());
-    await page.getByLabel("To", { exact: true }).fill(today());
+    // The default range is month-to-date, which already covers everything signed today. Left
+    // alone on purpose: the rows below are asserted individually, so a wider range is a fuller
+    // screen rather than a different answer — and driving the two calendars to today would be
+    // ceremony that could only break.
 
     // Each receipt's own declaration, on its own row. The wire's figures, at the wire's two
     // decimals — a screen that rounded them to the franc would be a screen that could not show
@@ -469,13 +545,22 @@ test.describe("the tax enquiries and reports", () => {
     await expect(page.getByTestId("day-posted")).toHaveText("15,919.00");
     await expect(page.getByTestId("day-residue")).toHaveText("0.38");
 
-    // --- and the same day, closed twice ---------------------------------------------------
-    // A Z's range runs from the previous close to **now**, floored to the second, so a second
-    // close in the same second has an empty range and is refused. (The resolution is a second
-    // because `sdcDateTime` has no finer one — `tests/fiscal/test_daily_report.py` waits two
-    // seconds for the same reason where it wants a real boundary.)
-    await page.getByTestId("close-day").click();
-    await expect(page.getByText(/already closed at this instant/i).first()).toBeVisible();
+    // --- and the day is closed, so the X starts again from nothing -------------------------
+    //
+    // **Back to the X tab**, which is where Close day lives — a Z is a thing that happened, the
+    // X is the day you are still in. Worth pressing back to because the coupling is invisible
+    // from the source: the first close switched the screen to Z and took the button with it.
+    //
+    // What is *not* asserted here is the second close being refused. It is real — a Z's range
+    // runs from the previous close to now, both floored to the second, so an immediate second
+    // close has a range of zero length — but pressing the button twice is not a reliable way to
+    // ask: the tab switch and the render cost more than the question's resolution, and once a
+    // second has elapsed the close succeeds and stores an empty Z, which is also correct. A
+    // test that is right only when the machine is fast is a test about the machine. The clock
+    // is injectable at the service level, so the refusal is pinned there instead —
+    // `tests/fiscal/test_daily_report.py::test_a_second_close_at_the_same_instant_is_refused`.
+    await page.getByRole("tab", { name: /X —/ }).click();
+    await expect(page.getByTestId("day-ns-count")).toHaveText("0");
   });
 
   // PATH: /ar/documents/{id} -> POST /subledger/ar/documents/{id}/reverse, then back to the
@@ -496,9 +581,14 @@ test.describe("the tax enquiries and reports", () => {
     await page.getByLabel("Reason", { exact: true }).fill(`P8 reversal ${SUFFIX}`);
     await pickCombobox(page, "Refund reason", REFUND_REASON);
     await page.getByTestId("confirm-reverse").click();
-    await expect(page.getByTestId("receipt-NR")).toBeVisible({ timeout: 30_000 });
-
+    // The dialog closes on success. **The `NR` does not exist yet** — reversing queues a
+    // refund and RRA has not signed it, which is decision 7 working rather than a delay: there
+    // is no draft form of a receipt (CIS §10). So drain first, then look.
+    await expect(page.getByTestId("confirm-reverse")).toHaveCount(0, { timeout: 30_000 });
     await drainUntilClear(page);
+
+    await page.reload();
+    await expect(page.getByTestId("receipt-NR")).toBeVisible({ timeout: 30_000 });
 
     await page.goto("/tax/reports/daily-fiscal");
     await page.waitForSelector("h1:has-text('Daily fiscal report')");
@@ -582,9 +672,12 @@ test.describe("the tax enquiries and reports", () => {
     await page.goto("/fiscal/enquiries/queue-history");
     await page.waitForSelector("h1:has-text('Fiscal queue history')");
 
-    await page.getByLabel(/Search a receipt/, { exact: false }).first().fill(`P8 inv-a ${SUFFIX}`);
+    // The picker is fed by the **queue**, not by the receipts: a receipt exists only once RRA
+    // has signed, so a list built from receipts could not offer the documents somebody opens a
+    // queue history to ask about.
+    await page.getByLabel(/Filter by document number/, { exact: false }).first().fill("INV-");
     await page.getByRole("combobox", { name: "Document", exact: true }).click();
-    await page.getByRole("option").filter({ hasText: SUFFIX }).first().click();
+    await page.getByRole("option").filter({ hasText: "INV-" }).first().click();
 
     await expect(page.getByTestId("history-sequence").first()).toHaveText(/^\d+$/, {
       timeout: 30_000,
@@ -667,7 +760,10 @@ test.describe("the tax enquiries and reports", () => {
     const runs = (await apiOk(page, "/gl/fx-revaluations")) as Array<
       Identified & { number: string; journal_entry_id: number | null }
     >;
-    test.skip(runs.length === 0, "no revaluation has been posted on this fixture");
+    // Not `test.skip`: this file posts the run itself, in its own setup, precisely so that this
+    // screen is opened **with data in it** (rule 13). A report that skipped when the fixture
+    // happened to be empty would be a report nothing had ever opened.
+    expect(runs.length, "this file's own setup posts a run").toBeGreaterThan(0);
 
     const run = runs[0];
     expect(run.number, "shape, never a literal — the FXR run is shared").toMatch(/^FXR-\d+$/);
@@ -701,10 +797,14 @@ test.describe("the tax enquiries and reports", () => {
     >;
     const filed = returns.find((row) => row.journal_entry_id !== null)!;
 
+    // The **endpoint** is `/gl/journal-entries/{id}`; `/gl/entries/{id}` is the screen in front
+    // of it. Worth spelling out because this test wants both, and reaching for the page's path
+    // in a `fetch` is a 404 that reads like a missing entry.
+
     // Before this step the settlement entry was a `VATR-` number on the trial balance with
     // nothing behind it: `tax` is in no module document table and the entry page had nowhere
     // to look. `sources.py` now carries the key.
-    const entry = (await apiOk(page, `/gl/entries/${filed.journal_entry_id}`)) as {
+    const entry = (await apiOk(page, `/gl/journal-entries/${filed.journal_entry_id}`)) as {
       module_document_id: number | null;
       module_document_number: string | null;
       module_document_target: string | null;
@@ -713,33 +813,53 @@ test.describe("the tax enquiries and reports", () => {
     expect(entry.module_document_id).toBe(filed.id);
     expect(entry.module_document_number).toBe(filed.number);
 
+    // On the screen, not only in the payload. A `VATR-` entry is module-owned (`tax`), so it
+    // carries the "reverse via the module's document" link the GL has offered since P6.
     await page.goto(`/gl/entries/${filed.journal_entry_id}`);
     await page.waitForSelector("h1");
-    await expect(page.getByText(filed.number).first()).toBeVisible();
+    await expect(page.getByTestId("reverse-via-module")).toHaveAttribute(
+      "href",
+      `/tax/reports/vat-return/${filed.id}`,
+    );
 
     const runs = (await apiOk(page, "/gl/fx-revaluations")) as Array<
       Identified & { number: string; journal_entry_id: number | null; mirror_entry_id: number | null }
     >;
     const run = runs.find((row) => row.mirror_entry_id !== null);
-    if (!run) return;
+    expect(run, "the setup posts a run, and a run always mirrors").toBeDefined();
 
     // **The mirror is the one with nothing of its own.** Posted as a `ReversalRequested`, so no
     // `source_doc_type` at all — it resolves through `fx_revaluations.mirror_entry_id`, and
     // before this step it was an `FXR-` entry on the trial balance belonging to nothing.
-    for (const entryId of [run.journal_entry_id, run.mirror_entry_id]) {
-      const resolved = (await apiOk(page, `/gl/entries/${entryId}`)) as {
+    for (const entryId of [run!.journal_entry_id, run!.mirror_entry_id]) {
+      const resolved = (await apiOk(page, `/gl/journal-entries/${entryId}`)) as {
         module_document_id: number | null;
         module_document_target: string | null;
       };
       expect(resolved.module_document_target).toBe("fx_revaluation");
-      expect(resolved.module_document_id).toBe(run.id);
+      expect(resolved.module_document_id).toBe(run!.id);
     }
+
+    // **And on the screen.** An `FXR-` entry's module is `gl`, so it takes neither the
+    // module-owned branch nor its link — the server resolved the document and the page dropped
+    // it, which is the P4 failure mode exactly. `entry-source-document` is what step 8 added.
+    await page.goto(`/gl/entries/${run!.mirror_entry_id}`);
+    await page.waitForSelector("h1");
+    await expect(page.getByTestId("entry-source-document")).toHaveAttribute(
+      "href",
+      `/gl/reports/fx-revaluation/${run!.id}`,
+    );
   });
 
   test("the device is suspended, and the company is not fiscalized again", async ({ page }) => {
     await login(page, PRIMARY_EMAIL);
     await drainUntilClear(page);
-    await apiOk(page, `/fiscal/devices/${deviceId}/suspend`, { method: "POST" });
+    // Suspending takes a **reason**: a device going out of service is an event somebody has to
+    // be able to explain later, so the payload is required rather than defaulted.
+    await apiOk(page, `/fiscal/devices/${deviceId}/suspend`, {
+      method: "POST",
+      body: { reason: `P7 step 8 e2e finished ${SUFFIX}` },
+    });
 
     const context = (await apiOk(page, "/fiscal/document-context")) as { fiscalized: boolean };
     expect(context.fiscalized, "the fixture is put back for whatever runs next").toBe(false);

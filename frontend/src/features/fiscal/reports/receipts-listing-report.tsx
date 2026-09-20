@@ -167,22 +167,22 @@ export function FiscalReceiptsListingReport() {
                 </h2>
                 <dl className="grid grid-cols-2 gap-3">
                   <Figure
-                    label={t("invoices")}
+                    label={t("invoiceCount")}
                     value={String(data.ledger_invoice_count)}
                     testId="tie-invoice-count"
                   />
                   <Figure
-                    label={t("creditNotes")}
+                    label={t("creditNoteCount")}
                     value={String(data.ledger_credit_note_count)}
                     testId="tie-credit-note-count"
                   />
                   <Figure
-                    label={t("invoices")}
+                    label={t("invoiceTotal")}
                     value={posted(data.ledger_invoice_total)}
                     testId="tie-invoice-total"
                   />
                   <Figure
-                    label={t("creditNotes")}
+                    label={t("creditNoteTotal")}
                     value={posted(data.ledger_credit_note_total)}
                   />
                 </dl>

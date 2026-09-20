@@ -13,7 +13,7 @@ import { useCompanyDetails } from "@/features/gl/hooks";
 import { exportToCsv } from "@/lib/csv";
 import { formatDate } from "@/lib/format";
 import { QUEUE_STATUS_TONE } from "../document-fiscal-panel";
-import { useFiscalQueueRow, useFiscalQueueRows, useFiscalReceipts } from "../hooks";
+import { useFiscalQueueRow, useFiscalQueueRows } from "../hooks";
 
 /**
  * Enquiries → Tax → **Fiscal queue history** (P7 step 8) — per document, and read-only.
@@ -42,9 +42,17 @@ export function FiscalQueueHistoryEnquiry() {
   const [documentId, setDocumentId] = useState("");
 
   const company = useCompanyDetails();
-  /** The picker is fed by the receipts search, which is the same one box the Fiscal receipts
-   * enquiry uses — a person looking up a document's history is holding the same paper. */
-  const candidates = useFiscalReceipts({ search: search.trim() || undefined });
+  /**
+   * **The picker is fed by the queue, not by the receipts.**
+   *
+   * The obvious source is `/fiscal/receipts`, which is what the Fiscal receipts enquiry
+   * searches — and it would have been wrong here, quietly. A receipt exists only once RRA has
+   * signed, so a picker built from receipts can offer every document except the ones still
+   * queued, failed or waiting on a person — which are precisely the documents somebody opens a
+   * *queue history* to ask about. The rows themselves carry the document number and the
+   * partner, so the list is every document that has ever been sent for, in send order.
+   */
+  const everyRow = useFiscalQueueRows({ watch: false });
   const chosen = documentId ? Number(documentId) : null;
   const rows = useFiscalQueueRows({ documentId: chosen, watch: false });
   const queueRows = chosen === null ? [] : (rows.data ?? []);
@@ -52,20 +60,29 @@ export function FiscalQueueHistoryEnquiry() {
   const [openRow, setOpenRow] = useState<number | null>(null);
   const detail = useFiscalQueueRow(openRow);
 
+  const term = search.trim().toLowerCase();
   const options = [
     { value: "", label: t("noDocument") },
     ...Array.from(
       new Map(
-        (candidates.data ?? []).map((row) => [
-          row.document_id,
-          {
-            value: String(row.document_id),
-            label: t("documentLabel", {
-              number: row.document_number,
-              partner: row.partner_name,
-            }),
-          },
-        ]),
+        (everyRow.data ?? [])
+          .filter((row) => row.document_id !== null)
+          .filter(
+            (row) =>
+              term === "" ||
+              (row.document_number ?? "").toLowerCase().includes(term) ||
+              (row.partner_name ?? "").toLowerCase().includes(term),
+          )
+          .map((row) => [
+            row.document_id,
+            {
+              value: String(row.document_id),
+              label: t("documentLabel", {
+                number: row.document_number ?? String(row.document_id),
+                partner: row.partner_name ?? "",
+              }),
+            },
+          ]),
       ).values(),
     ),
   ];
