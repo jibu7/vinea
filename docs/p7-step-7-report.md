@@ -84,26 +84,45 @@ Published in **full** rather than sampled, deliberately: this is the one code ta
 *operator* picks from directly, and a sandbox offering three of thirteen would leave the picker
 looking complete and refusing the other ten at post.
 
-## The reversal's refund, moved here from step 8
+## The reversal's refund, moved here from step 8 — and what `_receipt()` decides
 
 Decision 7: reversing a fiscalized invoice queues a **full refund** rather than cancelling the
 sale, so the document ends up holding two receipts — the `NS` it was declared under and the `NR`
 that reversed it. The `NR` has no document of its own. If it is not reachable from the invoice it
-is not reachable at all, and it is a legal document the customer is owed.
+is not reachable at all, and it is a legal document the customer is owed. So the panel lists
+both and either prints.
 
-`_receipt()` in `app/fiscal/printing.py` already **documented** returning "the latest, which is
-the refund when it has one", and returned the `NS`: it preferred `document.fiscal_receipt_id`,
-which the drainer deliberately leaves pointing at the sale so the subledger's link and the
-open-item history keep naming it. The two answer different questions and only one of them is
-"what comes out of the printer now". The code now matches its own docstring, `receipt_id` names a
-specific receipt on both the read and the copy, and the panel lists every receipt with the print
-target marked and the others one press away — so the sale stays printable rather than becoming
-unreachable. Copying the refund does not make the sale look reprinted, which keeps the Z's copy
-count a count of pieces of paper.
+**Changing `_receipt()`'s default is a semantic change, not a UI one**, and the first attempt at
+this got it wrong: it returned the latest, which made a reversed invoice's own detail screen
+report the refund's counters as though they were its own — a panel saying something true about
+the wrong receipt, the defect class rule 13 exists for. The default is the document's **own**
+receipt. This document *is* an invoice; the refund is a receipt *about* it.
 
-The drainer's own comment scheduling this for step 8 is what named the requirement; it is
-satisfied where it stands, and the e2e posts an invoice, reverses it with a §4.16 reason, and
-asserts both counters on the page and that Print is pointed at the `NR`.
+**The audit — every reader of a document's receipts, and what each one sees:**
+
+| reader | resolves it how | what a reversed invoice gives it |
+|---|---|---|
+| Document detail header, print gate, CIS layout (`printing.receipt_block`) | `_receipt()` | the **sale** — `n/m NS`, after the reversal as before it |
+| Copy counter (`printing.record_copy`) | `_receipt()` | whichever is being reprinted, each with its own `copy_count` |
+| Receipts enquiry / the panel's list (`enquiries.receipts`) | joins `FiscalReceipt.document_id` | **both**, in the order the authority issued them |
+| VAT sales annex (`tax/annexes.py`) | reads `PartnerDocument.fiscal_receipt_id` **directly** | the **sale's** counters, which is what decision 12 asks of it |
+| The *Refund of* picker (`schemas/subledger.py`) | the same column | the sale, which is what makes the invoice offerable |
+
+Those are the only five. `_receipt()` itself has exactly **two** callers, both in `printing.py`;
+nothing in `enquiries.py` or `annexes.py` goes through it, so neither silently flipped. The audit
+is in the function's own docstring, where the next reader of it will find it.
+
+`test_a_reversed_sale_keeps_its_own_receipt_and_prints_the_refund_separately` in
+`tests/fiscal/test_reversal.py` asserts those separately rather than asserting that one function
+returns one row: the header is the `NS`; the refund prints as its own receipt naming the sale it
+refunds (§14); **copy counters are per receipt** — reprinting the sale after the reversal moves
+the sale's count and not the refund's, and queues **no outbox row**, because a copy is a print of
+a sale already declared; the enquiry returns both; and the annex names the sale. **Proven
+sensitive**: flipping the default back to "latest" fails it on the first assertion
+(`assert 'NR' == 'NS'`).
+
+The e2e asserts the screen half — both counters on the page, Print pointed at the `NS`, the `NR`
+one press away and selectable.
 
 ## Decisions worth review
 
@@ -177,7 +196,8 @@ Figures read off the page, per rule 13:
 | VAT return | the `2200` movement matched franc-for-franc against what the return declares of it, and the settlement entry named as the untagged movement afterwards |
 | FX revaluation | **708** — 10 x USD 2.00 + 18 % = USD 23.60, carried at 1 320 and revalued at 1 350 |
 | Verify / Attach | the sandbox is driven to `accept_then_timeout`, the row goes `unknown`, **Retry is disabled**, **Verify with device** moves it to `needs_receipt`, and **Attach receipt manually** is keyed with the six fields read off the authority's own ledger — its counters, not ours |
-| A reversed sale | both receipts listed, and Print pointed at the `NR` |
+| A reversed sale | both counters listed, Print pointed at the **`NS`** (the document's own), and the `NR` selectable |
+| The reversal dialog's refusals | `fiscal_refund_irreversible` on a signed credit note and `fiscal_status_unresolved` on a row driven to `unknown` — both read off the **disabled button** before anything is pressed, and the second lifts once the row is resolved through Verify and Attach |
 
 Three things the run taught, each now written into the spec rather than left to be
 rediscovered:
@@ -203,9 +223,29 @@ rediscovered:
 * **Every spec that opens a screen this step touched was run** — eleven files, 59 tests, not
   just the ones with "fiscal" in the name. That is how the FX literal was caught disagreeing
   with `dated-rate.spec.ts`, which seeds USD rates of its own: the invoice booked at 1 400 and
-  the hand-worked 708 became −1 180. The booking rate is now typed on the document and the rate
-  in force at the revaluation date is asserted before the figure is, so the arithmetic is this
-  test's own rather than the fixture's.
+  the hand-worked 708 became −1 180.
+* **A spec that only passes on a given database state is a spec about that database** (the P5
+  step-9 rule), so asserting the rate before computing was not enough — it turns a silent wrong
+  into a loud failure without making the spec independent. `exchange_rates` rows are append-only
+  per date and there is **no update endpoint**, so no upsert was available: the FX test now
+  brings its **own currency**, created per run (`X` + two digits — the ISO 4217 prefix reserved
+  for non-currencies, which is what it is), seeds the rate at the booking date and at the
+  revaluation date, asserts both are in force, and only then computes. Nothing is typed into
+  Exchange rate: the document is dated the first of the month and the **dated lookup** is the
+  thing under test on that line. It passes cold, after `dated-rate.spec.ts`, and in whichever
+  shard it lands.
+* **The VAT spec seeds its own tagged postings** — the invoice and the credit note keyed earlier
+  in the same file — but it does not and cannot own the range. A return is a company-wide
+  aggregate over a date range on a shared fixture: another spec posting a taxed AR document this
+  month moves the sections, and one posting an untagged journal against `2200` moves the
+  difference. Isolating it would take a company of its own, which the fiscal device precludes.
+  So **it asserts no total**. It asserts the claim the screen exists to make, which holds for any
+  set of postings: every franc of movement on a VAT account is either declared by the return or
+  named by a line the report lists. The arithmetic runs across two panels of the same page —
+  `2200`'s difference against the sum of the untagged rows under it — so it is a figure read off
+  the screen rather than a constant that happens to match today. Said here rather than left to be
+  discovered, because "it leans on `ar-ap-acceptance` rows" is the honest failure mode and this
+  one does not.
 * **`toISOString()` is banned in `e2e/` too**, and the first draft tripped it three times.
   `src/lib/no-utc-dates.test.ts` caught it: CI runs in UTC and could never have told a UTC
   rendering from a local one, while a run in Kigali between midnight and 02:00 would have dated
@@ -235,9 +275,30 @@ branch head. Everything else ran against the head.
 | `npm run lint` | clean (pre-existing `react-hooks/exhaustive-deps` warnings only) |
 | `npx vitest run` | 391 passed, 16 files |
 | `npm run build` | compiled; the five new routes built |
-| `e2e/p7-transactions.spec.ts` | 13 passed, on a reset database with the sandbox up |
+| `e2e/p7-transactions.spec.ts` | 14 passed, on a reset database with the sandbox up |
 | every spec that opens a screen this step touched | 59 passed — `ar-ap-{acceptance,allocation,corrections,documents,reports}`, `dated-rate`, `empty-state-vs-failure`, `p6-{cycle-tape,enquiries-reports,orders,maintenance}`, `p7-maintenance` |
 | `e2e/accessibility-transactions.spec.ts` | 32 passed, including the four new Tax rows and the FX row |
+
+## Screenshots
+
+`docs/screenshots/p7-step-7/` — **22 files**, eleven screens in light and dark, plus a `README.md`
+giving the capture command, the `ONLY` filter and what each shot is for. Captured by
+`frontend/scripts/capture-p7-transactions.ts` in a single pass on a reset database against the
+`ebm-sandbox` container, and every one was opened and read before it was committed.
+
+| # | screen | what it has rows of |
+|---|---|---|
+| 1 | Invoice, the Fiscalization section | a customer with a TIN, "Purchase code (required)", the authority's note |
+| 2 | Credit note, the *Refund of* picker open | the partner's fiscalized invoices |
+| 3 | Document detail, the fiscal panel | receipt `1/1 NS`, `SDC010000005`, Copy print, Print enabled |
+| 4 | **The CIS receipt**, print media | the line, the totals by class, the SDC block, the dashed signature, the QR, the MRC |
+| 5 | Fiscal queue | the device card with its counts, and the rows in send order |
+| 6 | A sale row's declared payload | `totAmt 59000`, `taxAmtB 9000`, the receipt block — and no key |
+| 7 | EBM purchases | the authority's one purchase, 11,800 taxable, undecided |
+| 8 | Import declarations | the declared line, 240 |
+| 9 | VAT return | the sections, and the tie with `2200`'s movement beside what the return declares |
+| 10 | FX revaluation | the preview at 708 **and** a posted run with its entry and its next-day mirror |
+| 11 | A reversed sale | both receipts, Print pointed at the `NS` |
 
 ## What step 8 owes
 
