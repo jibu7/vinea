@@ -27,11 +27,11 @@ OUT=../docs/screenshots/p7-step-7 ONLY=4-cis-receipt-print npx tsx scripts/captu
 | 3 | Document detail, the fiscal panel with the receipt and Copy print | `3-document-fiscal-panel-{light,dark}.png` |
 | 4 | **The CIS receipt**, print media — the SDC block, the counters and the QR | `4-cis-receipt-print-{light,dark}.png` |
 | 5 | Fiscal queue, the device card and its rows in send order | `5-fiscal-queue-{light,dark}.png` |
-| 6 | A queue row's request and response, redacted, with its action log | `6-queue-row-payload-{light,dark}.png` |
+| 6 | A **sale** row's declared payload, redacted — an item row's response is `{}`, so it would show the redaction over nothing | `6-queue-row-payload-{light,dark}.png` |
 | 7 | EBM purchases, one undecided purchase the authority is holding | `7-ebm-purchases-{light,dark}.png` |
 | 8 | Import declarations, waiting to be matched to a Vinea item | `8-import-declarations-{light,dark}.png` |
 | 9 | VAT return, the figures with the tie under them | `9-vat-return-{light,dark}.png` |
-| 10 | FX revaluation, the preview per open foreign-currency document | `10-fx-revaluation-{light,dark}.png` |
+| 10 | FX revaluation: the preview per open document **and** a posted run with its entry and its next-day mirror | `10-fx-revaluation-{light,dark}.png` |
 | 11 | A reversed sale holding **both** receipts, with the one Print produces marked | `11-document-both-receipts-{light,dark}.png` |
 
 ## Shot 4 is taken under `emulateMedia({ media: "print" })`

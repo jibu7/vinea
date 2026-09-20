@@ -320,6 +320,24 @@ async function seed(
   });
   await apiOk(page, "/fiscal/outbox/drain");
 
+  // --- a posted revaluation, so shot 10's runs panel has rows and not an empty state -------
+  //
+  // The mirror posts the day after the revaluation date, so a month-end run reaches into the
+  // month after it and the seeded tenant marks that one `future`. Opening it is what an
+  // accountant does by hand before closing a month.
+  const periods = (await get(page, "/gl/periods")) as Array<
+    Named & { start_date: string; status: string }
+  >;
+  const next = periods.find((period) => period.start_date > monthEnd() && period.status !== "open");
+  if (next) await apiOk(page, `/gl/periods/${next.id}/open`);
+  const runs = (await get(page, "/gl/fx-revaluations")) as unknown[];
+  if (runs.length === 0) {
+    await apiOk(page, "/gl/fx-revaluations", {
+      revaluation_date: monthEnd(),
+      role: "both",
+    });
+  }
+
   // --- what the authority is holding ------------------------------------------------------
   await apiOk(page, `/fiscal/devices/${deviceId}/fetch-purchase-feed`);
   await apiOk(page, `/fiscal/devices/${deviceId}/fetch-imports`);
@@ -393,8 +411,19 @@ async function main() {
     });
 
     // 6 — a row's request and response, redacted, with its action log.
+    //
+    // The **sale** row, not the first one: an item registration's response is `{}`, so it shows
+    // the redaction over nothing. A sale's response carries the receipt the authority signed,
+    // which is both the more useful picture and the stronger claim — a payload with content in
+    // it, and still no key anywhere.
+    //
+    // Navigates for itself, so `ONLY=6-queue-row-payload` does not depend on shot 5 having run.
     await shot("6-queue-row-payload", async () => {
-      await page.locator("tbody tr").first().getByRole("button", { name: "Inspect", exact: true }).click();
+      await page.goto(`${BASE}/fiscal/queue`);
+      await page.waitForSelector("h1:has-text('Fiscal queue')");
+      const saleRow = page.locator("tbody tr").filter({ hasText: "Sale" }).first();
+      await saleRow.waitFor({ state: "visible" });
+      await saleRow.getByRole("button", { name: "Inspect", exact: true }).click();
       await page.getByTestId("row-request").waitFor({ state: "visible" });
       await page.waitForTimeout(300);
       await shoot(page, "6-queue-row-payload", theme);
