@@ -417,3 +417,61 @@ def test_a_late_entry_is_declared_once_and_not_by_every_return_after_it(
     )
     assert may.late_entries == (), "April already declared it; May must not see it again"
     assert may.output_vat == Decimal(0)
+
+
+def _as_read(view: vat.VatReturnView) -> dict:
+    """The return as a reader sees it: the figures **and** the explanation beside them."""
+    return {
+        "sections": view.as_filed()["sections"],
+        "ties": [
+            {
+                "account": tie.code,
+                "movement": str(tie.movement),
+                "declared_in_range": str(tie.declared_in_range),
+                "difference": str(tie.difference),
+                "reconciled": tie.reconciled,
+                "untagged": [
+                    (line.entry_number, str(line.base_amount)) for line in tie.untagged
+                ],
+            }
+            for tie in view.ties
+        ],
+    }
+
+
+def test_filing_and_reversing_leaves_the_return_it_found(
+    db: Session, month: FiscalPosting  # noqa: F811
+) -> None:
+    """Filing and then reversing must hand the range back **as it was**, list included.
+
+    Both acts post into the range they are about: the settlement moves 2200, 1400 and 2250 on a
+    date inside the month, and the reversal posts its mirror. Those are movements on the very
+    accounts the tie reads, so "the figures come back" is not enough — two rows that net to zero
+    still leave a reader an explanation that did not exist before, and a tie that balances over
+    them is self-consistent and wrong.
+
+    So this compares the whole read, sections and untagged lists together, before the first
+    filing and after the last reversal.
+    """
+    before = _as_read(
+        vat.compute(db, month.company_id, period_from=MARCH_FROM, period_to=MARCH_TO)
+    )
+
+    filed = vat.file_return(
+        db, month.company_id, period_from=MARCH_FROM, period_to=MARCH_TO, actor=month.owner
+    )
+    db.flush()
+    vat.reverse_return(
+        db, month.company_id, filed.id, reason="Handing the range back", actor=month.owner
+    )
+    db.flush()
+
+    after = _as_read(
+        vat.compute(db, month.company_id, period_from=MARCH_FROM, period_to=MARCH_TO)
+    )
+
+    assert after["sections"] == before["sections"], "the figures a re-filing would declare"
+    assert after["ties"] == before["ties"], (
+        "the tie a reader sees, explanation included — a settlement and its own reversal "
+        "cancel in the totals and must not survive as two untagged rows"
+    )

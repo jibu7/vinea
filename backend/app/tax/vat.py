@@ -708,7 +708,31 @@ def _untagged(
 ) -> tuple[LineMovement, ...]:
     """Every line on this VAT account in the range that the return does not declare as tax:
     a line with no code, a line carrying a code this account is not the tax account of, and the
-    settlement entries."""
+    settlement entries.
+
+    **A withdrawn settlement is not a movement.** A `VAT` entry that has been reversed and the
+    entry that reversed it are a pair whose net is zero by construction, and listing both tells
+    a reader nothing except that somebody filed and unfiled — while the tie still balances over
+    them, which is self-consistent and wrong. Worse, the pair survives: file and reverse a range
+    twice and its explanation carries four rows that explain nothing. So a reversed settlement
+    and its mirror drop out together.
+
+    A **standing** settlement stays, which is the whole of decision 12's reason for having them
+    in scope: a VAT payment to the authority is exactly the kind of movement the difference
+    exists to surface. Only the pair that cancels is dropped, and only for the `tax` module —
+    an ordinary journal and its reversal are two acts an accountant may well want to see.
+
+    Found by P7 step 7's e2e, which files and reverses to hand the shared fixture's range back:
+    the return it handed back was not the return it found. `test_vat_filing.py::
+    test_filing_and_reversing_leaves_the_return_it_found` is the pin.
+    """
+    # The two halves of every reversed pair in this company: the entries that were reversed,
+    # and the entries that reversed them. A correlated `NOT EXISTS` twice over would say the
+    # same thing and read worse.
+    reversed_pairs = select(JournalEntry.reverses_entry_id).where(
+        JournalEntry.company_id == company_id,
+        JournalEntry.reverses_entry_id.is_not(None),
+    )
     rows = db.execute(
         select(
             JournalLine.id,
@@ -736,6 +760,14 @@ def _untagged(
                 JournalLine.tax_code_id.is_(None),
                 JournalLine.tax_code_id.not_in(tax_code_ids),
                 JournalEntry.module == TAX_MODULE,
+            ),
+            # A settlement that was withdrawn, and the entry that withdrew it, both go.
+            or_(
+                JournalEntry.module != TAX_MODULE,
+                and_(
+                    JournalEntry.reverses_entry_id.is_(None),
+                    JournalEntry.id.not_in(reversed_pairs),
+                ),
             ),
         )
         .order_by(JournalEntry.entry_date, JournalEntry.number, JournalLine.line_no)

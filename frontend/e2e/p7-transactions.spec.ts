@@ -699,6 +699,12 @@ test.describe("the fiscalized transaction screens", () => {
 
     const netBeforeFiling = await page.getByTestId("vat-net").innerText();
 
+    // **The return as it stands, kept for the round trip below.** Read through the preview the
+    // screen itself renders, because what has to come back is the whole read — the figures *and*
+    // the explanation beside them.
+    const range = `period_from=${monthStart()}&period_to=${monthEnd()}`;
+    const returnBefore = await apiOk(page, `/tax/vat-returns/preview?${range}`);
+
     await page.getByTestId("file-return").click();
     await page.getByTestId("confirm-file").click();
     await expect(page.getByText(/VATR-\d+ filed/).first()).toBeVisible();
@@ -774,6 +780,40 @@ test.describe("the fiscalized transaction screens", () => {
       returns.filter((row) => row.status === "posted"),
       "the spec files nothing it does not hand back",
     ).toEqual([]);
+
+    // **The range comes back as it was found, explanation included.**
+    //
+    // Not a formality. Filing posts Dr 2200 / Cr 1400 / net 2250 on a date *inside* the range,
+    // and reversing posts the mirror — movements on the very accounts the tie reads. "The
+    // figures match" is not enough: a settlement and its own reversal net to zero, so the
+    // sections come back either way while the untagged list quietly grows by two rows that
+    // explain nothing, and the tie balances over them. Self-consistent, and wrong.
+    //
+    // This spec found that on `main` (a step-4 defect, not a spec problem) and it is fixed in
+    // `_untagged`: a `VAT` entry that has been reversed and the entry that reversed it drop out
+    // together, while a **standing** settlement stays — which is decision 12's whole reason for
+    // having them in scope. `test_vat_filing.py::test_filing_and_reversing_leaves_the_return_it_found`
+    // is the pin, and it is proven sensitive.
+    const returnAfter = await apiOk(page, `/tax/vat-returns/preview?${range}`);
+
+    // `high_water_entry_id` is the one field that legitimately moves, and it is asserted
+    // separately rather than ignored: it is the journal's own monotonic bookmark, and entries
+    // really were posted — the settlement and the entry that reversed it. Nothing a reader sees
+    // on the return depends on it; what it does is decide lateness for a *filed* return, and
+    // this range ends with none.
+    const { high_water_entry_id: waterAfter, ...restAfter } = returnAfter as Record<
+      string,
+      unknown
+    >;
+    const { high_water_entry_id: waterBefore, ...restBefore } = returnBefore as Record<
+      string,
+      unknown
+    >;
+    expect(restAfter, "the return handed back is the return that was found").toEqual(restBefore);
+    expect(
+      Number(waterAfter),
+      "the ledger moved, so its high-water mark did — that is the only thing that may",
+    ).toBeGreaterThan(Number(waterBefore));
   });
 
   // PATH: /gl/fx-revaluations — preview a run over an open foreign-currency invoice, post it,

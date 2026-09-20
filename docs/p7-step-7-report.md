@@ -124,6 +124,40 @@ sensitive**: flipping the default back to "latest" fails it on the first asserti
 The e2e asserts the screen half — both counters on the page, Print pointed at the `NS`, the `NR`
 one press away and selectable.
 
+## A step-4 defect this step's spec found
+
+Handing the VAT range back turned up a real one on `main`, and it is fixed here rather than
+carried.
+
+Filing posts Dr 2200 / Cr 1400 / net 2250 on a date **inside** the range it is about, and
+reversing posts the mirror. Those are movements on the very accounts the tie reads. The figures
+come back either way — a settlement and its own reversal cancel, and the settlement's lines carry
+`tax_amount 0` so neither is ever counted as tax. But the **untagged list** did not come back:
+
+```
+sections                identical
+ties[1400].untagged     before  []
+                        after   [('VATR-000001', '-9000.000000'),
+                                 ('VATR-000002',  '9000.000000')]
+difference 0 · reconciled True
+```
+
+Two rows that explain nothing, the tie balancing over them, and the pair surviving — file and
+reverse a range twice and the explanation carries four such rows. Self-consistent, and wrong.
+
+The fix is narrow. `_untagged()` drops a `tax`-module entry that has been reversed **together
+with** the entry that reversed it. A **standing** settlement still shows, which is decision 12's
+whole reason for having them in scope — a VAT payment to the authority is exactly the kind of
+movement the difference exists to surface. And it is limited to the `tax` module: an ordinary
+journal and its reversal are two acts an accountant may well want to see.
+
+`tests/tax/test_vat_filing.py::test_filing_and_reversing_leaves_the_return_it_found` is the pin,
+beside the other `test_vat_*` cases rather than only in an e2e. **Proven sensitive** — removing
+the clause reproduces the two rows above. The e2e asserts the same round trip through the
+preview the screen renders, with one field excluded and asserted separately:
+`high_water_entry_id`, which legitimately moves because entries really were posted and which
+nothing a reader sees depends on.
+
 ## Decisions worth review
 
 **The *Refund of* picker offers posted fiscalized invoices, not open ones.** The prompt says
@@ -312,6 +346,27 @@ giving the capture command, the `ONLY` filter and what each shot is for. Capture
 | 9 | VAT return | the sections, and the tie with `2200`'s movement beside what the return declares |
 | 10 | FX revaluation | the preview at 708 **and** a posted run with its entry and its next-day mirror |
 | 11 | A reversed sale | both receipts, Print pointed at the `NS` |
+
+## What step 9 has to know about this spec
+
+`p7-transactions.spec.ts` runs on the **shared** Rugari Wines E2E company and consumes document
+numbers there. Measured after one clean run:
+
+| run | consumed | what is left standing |
+|---|---|---|
+| `VAT` | 1–4 | `VATR-000001` and `VATR-000003`, both **reversed**; 000002 and 000004 went to the two reversing *entries* — the run counts every `VAT` entry, which `test_reversing_a_return_reopens_its_range` already documents |
+| `FXR` | 1–4 | `FXR-000001`, **reversed** — the run, its next-day mirror, the reversal's counter-entry and that counter's mirror |
+| `FIS` | next 8 | per branch |
+| `FSAR` / `FITM` / `FIP` | next 9 / 2 / 2 | |
+
+So **step 9's tape through the screens must not assert `VATR-000001` or `FXR-000001` by
+literal** on this company: whichever of the two specs lands first in a shard takes them, and the
+chain would fail the first time it ran after this one. Either assert the shape (`/VATR-\d+/`, as
+this spec does), or give the tape a company of its own — which is the expensive option and the
+right one if step 9 wants hand-worked numbers.
+
+Nothing this spec files is left posted: both returns are reversed and the revaluation run is
+reversed, so the range and the date are free for whatever runs next.
 
 ## What step 8 owes
 
