@@ -76,6 +76,16 @@ const SDC_ID = "SDC010000005";
 const BOOKING_RATE = 1320;
 const RATE_AT_MONTH_END = 1350;
 const EXPECTED_DIFFERENCE = "708";
+/**
+ * The revaluation test's **own** currency, created per run.
+ *
+ * `exchange_rates` rows are append-only per date — there is no update endpoint, by design — so
+ * a spec that posted USD rates could not guarantee what USD is worth on a given day once
+ * `dated-rate.spec.ts` had seeded its own. A test that only passes on a given database state is
+ * a test about that database (the P5 step-9 rule), so this one brings a currency nobody else
+ * touches. `X` is the ISO 4217 prefix reserved for non-currencies, which is what this is.
+ */
+const FX_CURRENCY = `X${SUFFIX.slice(-2)}`;
 
 /**
  * `yyyy-mm-dd` in **local** time, the way `lib/format`'s `todayIso()` does it.
@@ -91,6 +101,7 @@ function iso(date: Date): string {
 }
 
 const today = () => iso(new Date());
+const monthStart = () => iso(new Date(new Date().getFullYear(), new Date().getMonth(), 1));
 const monthEnd = () => iso(new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0));
 
 interface Identified {
@@ -653,27 +664,37 @@ test.describe("the fiscalized transaction screens", () => {
     await page.waitForSelector("h1:has-text('VAT return')");
     await page.waitForSelector("[data-testid='vat-output']");
 
-    // **The figures asserted here are the tie itself**, not a total.
+    // **The figures asserted here are the tie itself**, not a total — and that is what makes
+    // this spec independent rather than merely lucky.
     //
-    // A return's sections are an aggregate over everything posted in the range, and this
-    // fixture is shared: another spec in the same shard posting a taxed AR document this month
-    // would move them. What is *not* movable is the claim this screen exists to make — that
-    // every franc of movement on a VAT account is accounted for by the return. So the two
-    // figures read off the page are the account's own movement and what the return declares of
-    // it, and they are asserted to be the same number.
+    // This test seeds its **own** tagged postings: the invoice and the credit note keyed
+    // earlier in this file, 9 000 of output VAT less 720. But a return is a company-wide
+    // aggregate over a date range on a shared fixture, and it cannot be made exclusive without
+    // a company of its own — another spec posting a taxed AR document this month moves the
+    // sections, and one posting an untagged journal against `2200` moves the difference. So
+    // nothing here asserts a total.
     //
-    // 2200 is VAT output and 1400 VAT input; `difference` is what is left over, which is where
-    // an untagged movement — a VAT payment to the authority, a journal keyed without a code —
-    // would show up rather than being swallowed.
+    // What it asserts instead is the claim the screen exists to make, which holds for any set
+    // of postings: **every franc of movement on a VAT account is either declared by the return
+    // or named by a line the report lists.** The arithmetic is done across two panels of the
+    // same page — the account's own difference against the sum of the untagged rows under it —
+    // so it is a figure read off the screen, not a constant that happens to match today.
     await expect(page.getByTestId("tie-2200")).toHaveText("Reconciled");
     await expect(page.getByTestId("tie-1400")).toHaveText("Reconciled");
-    await expect(page.getByTestId("difference-2200")).toHaveText("0");
+
+    const money = (text: string) => Number(text.replace(/[^0-9.-]/g, ""));
+    const difference = money(await page.getByTestId("difference-2200").innerText());
+    const untagged = await page
+      .locator('[data-testid="untagged-2200"] [data-testid="untagged-amount"]')
+      .allInnerTexts();
+    expect(
+      untagged.reduce((total, row) => total + money(row), 0),
+      "the untagged lines listed under 2200 account for its whole difference",
+    ).toBe(difference);
+
+    // …and the return is not vacuous: it declares the output VAT this file's own invoice and
+    // credit note put on the account, so the movement reads in thousands.
     const movement = await page.getByTestId("movement-2200").innerText();
-    const declared = await page.getByTestId("declared-2200").innerText();
-    expect(declared).toBe(movement);
-    // …and it is a real, formatted money figure rather than a zero that ties trivially: the
-    // invoice above put 9 000 of output VAT on this account and the credit note took 720 back,
-    // so it reads in thousands with a group separator.
     expect(movement).toMatch(/\d{1,3},\d{3}/);
 
     const netBeforeFiling = await page.getByTestId("vat-net").innerText();
@@ -699,10 +720,9 @@ test.describe("the fiscalized transaction screens", () => {
     // The chip still reads "Reconciled", and that is the word doing its work. A tie is not
     // *balanced* — a VAT payment to the authority and a journal keyed without a code are real
     // movements that no tax line explains — it is reconciled when every franc of the difference
-    // is accounted for by a line the report can name. Here the difference is 8 280 and the one
-    // line naming it is `VATR-000001`, for exactly 8 280.
+    // is accounted for by a line the report can name. The line naming this one is the return
+    // that was just filed, for exactly the net it was filed at.
     await expect(page.getByTestId("tie-2200")).toHaveText("Reconciled");
-    await expect(page.getByTestId("difference-2200")).toHaveText(netBeforeFiling);
     await expect(
       page.locator("tbody tr").filter({ hasText: "settled" }).first(),
     ).toContainText(netBeforeFiling);
@@ -713,12 +733,26 @@ test.describe("the fiscalized transaction screens", () => {
   test("the revaluation previews an open USD invoice, posts and reverses", async ({ page }) => {
     await login(page, PRIMARY_EMAIL);
 
-    // A customer, two rates and an invoice in a currency that is not the base — the only thing a
-    // revaluation has anything to say about.
-    const currencies = (await apiOk(page, "/gl/currencies")) as Array<
-      Identified & { code: string; is_base: boolean }
+    // **Its own currency, its own rates.** `exchange_rates` rows are append-only per date and
+    // there is no update endpoint, so a spec that used USD could not guarantee what USD is
+    // worth on a given day once `dated-rate.spec.ts` had seeded its own — which is exactly what
+    // happened: the invoice booked at 1 400 and the hand-worked 708 came out −1 180. Asserting
+    // the rate before computing turns that silent wrong into a loud one; bringing a currency
+    // nobody else touches is what makes the spec pass cold, after `dated-rate`, and in whichever
+    // shard it lands.
+    const existingCurrencies = (await apiOk(page, "/gl/currencies")) as Array<
+      Identified & { code: string }
     >;
-    const foreign = currencies.find((c) => !c.is_base)!;
+    const currency =
+      existingCurrencies.find((row) => row.code === FX_CURRENCY) ??
+      ((await apiOk(page, "/gl/currencies", {
+        method: "POST",
+        body: {
+          code: FX_CURRENCY,
+          name: `P7 step 7 revaluation currency ${SUFFIX}`,
+          decimal_places: 2,
+        },
+      })) as Identified);
 
     await apiOk(page, "/subledger/ar/partners", {
       method: "POST",
@@ -729,52 +763,61 @@ test.describe("the fiscalized transaction screens", () => {
       },
     });
 
-
-    // **One rate, and it is the one the revaluation reads.** The booking rate is typed on the
-    // document below, so the only thing this has to establish is what the currency is worth at
-    // the revaluation date — and the gap between the two is the whole subject.
-    //
-    // Posted only when the day has no row (`rate_exists` is a 409, and re-running a spec
-    // against a database somebody has already used is not a failure), and then *asserted*: the
-    // effective rate is the latest row on or before the date, this fixture is shared, and a
-    // hand-worked 708 that silently became something else is exactly what this guards.
-    const rates = (await apiOk(
-      page,
-      `/gl/exchange-rates?currency_id=${foreign.id}`,
-    )) as Array<{ valid_from: string; rate: string }>;
-    if (!rates.some((row) => row.valid_from === monthEnd())) {
+    // The booking date and the revaluation date, each with the rate this test works its figure
+    // from. Two distinct days in the open period: the first of the month and its last.
+    for (const [validFrom, rate] of [
+      [monthStart(), BOOKING_RATE],
+      [monthEnd(), RATE_AT_MONTH_END],
+    ] as const) {
       await apiOk(page, "/gl/exchange-rates", {
         method: "POST",
-        body: { currency_id: foreign.id, valid_from: monthEnd(), rate: String(RATE_AT_MONTH_END) },
+        body: { currency_id: currency.id, valid_from: validFrom, rate: String(rate) },
       });
     }
-    const effective = [
-      ...((await apiOk(page, `/gl/exchange-rates?currency_id=${foreign.id}`)) as Array<{
-        valid_from: string;
-        rate: string;
-      }>),
-    ]
-      .filter((row) => row.valid_from <= monthEnd())
-      .sort((a, b) => a.valid_from.localeCompare(b.valid_from))
-      .pop();
-    expect(
-      Number(effective?.rate),
-      "the rate in force at the revaluation date — the 708 below is worked from it",
-    ).toBe(RATE_AT_MONTH_END);
+
+    // Asserted before anything is computed from them: the rate in force on a date is the latest
+    // row on or before it, and a figure worked by hand from a rate nobody checked is a figure
+    // about whatever the fixture happened to hold.
+    const seeded = (await apiOk(
+      page,
+      `/gl/exchange-rates?currency_id=${currency.id}`,
+    )) as Array<{ valid_from: string; rate: string }>;
+    const inForce = (on: string) =>
+      Number(
+        [...seeded]
+          .filter((row) => row.valid_from <= on)
+          .sort((a, b) => a.valid_from.localeCompare(b.valid_from))
+          .pop()?.rate,
+      );
+    expect(inForce(monthStart()), "the booking rate").toBe(BOOKING_RATE);
+    expect(inForce(monthEnd()), "the rate at the revaluation date").toBe(RATE_AT_MONTH_END);
+
+    // **The next period has to be open**, and that is the run's shape rather than a fixture
+    // detail: decision 13 posts the entry at the revaluation date *and its mirror the following
+    // day*, in one transaction, so a month-end run reaches into the month after it. The seeded
+    // tenant marks periods after today `future`, and the kernel refuses a posting into one —
+    // which is the same thing an accountant does by hand before closing a month.
+    const periods = (await apiOk(page, "/gl/periods")) as Array<
+      Identified & { start_date: string; status: string }
+    >;
+    const nextPeriod = periods.find(
+      (period) => period.start_date > monthEnd() && period.status !== "open",
+    );
+    if (nextPeriod) {
+      await apiOk(page, `/gl/periods/${nextPeriod.id}/open`, { method: "POST" });
+    }
 
     await page.goto("/ar/invoices/new");
     await page.waitForSelector("h1:has-text('Invoice')");
     await pickCombobox(page, "Customer", FX_CUSTOMER_CODE);
     await page.getByLabel("Description", { exact: true }).fill(`Fiscal FX invoice ${SUFFIX}`);
     await page.getByTestId("purchase-code").fill(PURCHASE_CODE);
-    await pickCombobox(page, "Currency", foreign.code);
-    // **The booking rate is typed, not looked up**, and that is not a convenience. The dated
-    // lookup reads `exchange_rates` at the document date, and this fixture is shared:
-    // `dated-rate.spec.ts` seeds USD rates of its own, so a run after it booked at 1 400 and
-    // the hand-worked 708 became −1 180. What the revaluation compares is *this document's*
-    // booking rate against the rate at the revaluation date, so pinning the first one makes the
-    // arithmetic this test's own.
-    await page.getByLabel("Exchange rate").fill(String(BOOKING_RATE));
+    await pickDate(page, "Document date", monthStart());
+    await pickCombobox(page, "Currency", FX_CURRENCY);
+    // **Nothing is typed into Exchange rate**, deliberately: the dated lookup is the thing under
+    // test on this line. The document is dated the first of the month, the rate seeded for that
+    // day is BOOKING_RATE, and the assertion above has already proved that is what is in force —
+    // so the booking is the product's own arithmetic rather than a number this test handed it.
     await page.getByRole("button", { name: "Item, row 1", exact: true }).click();
     await page.locator("[cmdk-item]").first().waitFor({ state: "visible" });
     await page.keyboard.type(ITEM_CODE);
@@ -791,21 +834,6 @@ test.describe("the fiscalized transaction screens", () => {
     const fxInvoiceNumber = fxDocuments.items.find((row) =>
       row.description.startsWith("Fiscal FX invoice"),
     )!.number;
-
-    // **The next period has to be open**, and that is the run's shape rather than a fixture
-    // detail: decision 13 posts the entry at the revaluation date *and its mirror the following
-    // day*, in one transaction, so a month-end run reaches into the month after it. The seeded
-    // tenant marks periods after today `future`, and the kernel refuses a posting into one —
-    // which is the same thing an accountant does by hand before closing a month.
-    const periods = (await apiOk(page, "/gl/periods")) as Array<
-      Identified & { start_date: string; status: string }
-    >;
-    const nextPeriod = periods.find(
-      (period) => period.start_date > monthEnd() && period.status !== "open",
-    );
-    if (nextPeriod) {
-      await apiOk(page, `/gl/periods/${nextPeriod.id}/open`, { method: "POST" });
-    }
 
     await page.goto("/gl/fx-revaluations");
     await page.waitForSelector("h1:has-text('FX revaluation')");
@@ -836,10 +864,10 @@ test.describe("the fiscalized transaction screens", () => {
   });
 
   // PATH: reversing a fiscalized invoice — the NR it queues, both receipts on the document, and
-  // which one Print produces.
+  // which one Print produces by default.
   // CANNOT SEE: the printed NR's paper. `pdftotext` is step 9's; what this asserts is that the
   // layout the Print button is pointed at is the refund's.
-  test("a reversed sale holds both receipts, and prints the refund", async ({ page }) => {
+  test("a reversed sale holds both receipts, and prints either", async ({ page }) => {
     await login(page, PRIMARY_EMAIL);
 
     const invoice = (await apiOk(page, "/subledger/ar/documents", {
@@ -876,14 +904,103 @@ test.describe("the fiscalized transaction screens", () => {
     await expect(page.getByTestId("receipt-NS")).toHaveText(/^\d+\/\d+ NS$/);
     await expect(page.getByTestId("receipt-NR")).toHaveText(/^\d+\/\d+ NR$/);
 
-    // **Print produces the NR**, because that is what the document most recently became. The
-    // header block is the refund's, and the sale is one press away rather than gone.
+    // **The document's own receipt is still the sale**, after the reversal as before it. This
+    // document *is* an invoice; the refund is a receipt *about* it, and a header that reported
+    // the refund's counters as the invoice's own would be a panel saying something true about
+    // the wrong receipt. `tests/fiscal/test_reversal.py` pins the same thing four ways —
+    // the header, the copy counter, the receipts enquiry and the VAT sales annex — because
+    // `_receipt()`'s default is a semantic choice and not a rendering one.
+    await expect(page.getByTestId("fiscal-receipt-number")).toHaveText(/ NS$/);
+    await expect(page.getByTestId("report-print")).toBeEnabled();
+
+    // **And the refund prints as its own receipt**, one press away. It has no document of its
+    // own, so this is the only place it is reachable from.
+    await expect(page.getByTestId("print-NR")).toBeVisible();
+    await page.getByTestId("print-NR").click();
     await expect(page.getByTestId("fiscal-receipt-number")).toHaveText(/ NR$/);
     await expect(page.getByTestId("report-print")).toBeEnabled();
-    await expect(page.getByTestId("print-NS")).toBeVisible();
 
+    // Back to the sale, which is where the screen started.
     await page.getByTestId("print-NS").click();
     await expect(page.getByTestId("fiscal-receipt-number")).toHaveText(/ NS$/);
+
+    await releaseTheQueue(page);
+  });
+
+  // PATH: the reversal dialog's two fiscal refusals, said **before** the button — one on a
+  // signed refund, one on a row the authority has not answered for.
+  // CANNOT SEE: the service's own refusal text. These are the screen's, read off the document
+  // before anything is pressed, which is the point: a refusal discovered by pressing is a
+  // refusal the operator met after deciding.
+  test("the reversal dialog refuses a refund and an unresolved row, before the button", async ({
+    page,
+    request,
+  }) => {
+    await login(page, PRIMARY_EMAIL);
+
+    // --- `fiscal_refund_irreversible`: a refund of a refund is not in the vocabulary --------
+    const creditNotes = (await apiOk(
+      page,
+      "/subledger/ar/documents?kind=credit_note&status=posted",
+    )) as { items: Array<Identified & { fiscal_receipt_id: number | null }> };
+    const signedCredit = creditNotes.items.find((row) => row.fiscal_receipt_id !== null);
+    expect(signedCredit, "the credit note keyed earlier was signed by the authority").toBeDefined();
+
+    await page.goto(`/ar/documents/${signedCredit!.id}`);
+    await page.waitForSelector("[data-testid='document-total']");
+    const blockedRefund = page.getByTestId("reverse-blocked");
+    await expect(blockedRefund).toBeVisible();
+    await expect(blockedRefund).toBeDisabled();
+    await expect(blockedRefund).toHaveAttribute("title", /refund cannot be refunded/i);
+
+    // --- `fiscal_status_unresolved`: the authority may be holding it ------------------------
+    await sandboxMode(request, "accept_then_timeout");
+    const pending = (await apiOk(page, "/subledger/ar/documents", {
+      method: "POST",
+      headers: { "Idempotency-Key": `p7-step7-unresolved-${SUFFIX}` },
+      body: {
+        kind: "invoice",
+        partner_id: customerId,
+        document_date: today(),
+        description: `Fiscal unresolved ${SUFFIX}`,
+        purchase_code: PURCHASE_CODE,
+        lines: [{ item_id: itemId, quantity: "1", unit_price: "2000" }],
+      },
+    })) as Identified;
+    await drain(page);
+    await sandboxMode(request, "up");
+
+    await page.goto(`/ar/documents/${pending.id}`);
+    await page.waitForSelector("[data-testid='fiscal-status']");
+    await expect(page.getByTestId("fiscal-status")).toContainText("No answer");
+    const blockedUnknown = page.getByTestId("reverse-blocked");
+    await expect(blockedUnknown).toBeVisible();
+    await expect(blockedUnknown).toBeDisabled();
+    await expect(blockedUnknown).toHaveAttribute("title", /has not answered/i);
+
+    // Resolved, and the refusal lifts — which is what says the guard was about the row's state
+    // and not about the document being new.
+    await page.goto("/fiscal/queue");
+    await page.waitForSelector("h1:has-text('Fiscal queue')");
+    const row = page.locator("tbody tr").filter({ hasText: "No answer" }).first();
+    await row.getByRole("button", { name: "Verify with device", exact: true }).click();
+    await expect(page.getByText("The device was asked what it holds").first()).toBeVisible();
+
+    const needsReceipt = page.locator("tbody tr").filter({ hasText: "Needs a receipt" }).first();
+    const invcNo = Number(await needsReceipt.locator("td").nth(4).innerText());
+    const issued = await sandboxReceipt(request, invcNo);
+    await needsReceipt.getByRole("button", { name: "Attach receipt", exact: true }).click();
+    for (const field of ["rcptNo", "totRcptNo", "intrlData", "rcptSign", "sdcId"] as const) {
+      await page.getByTestId(`attach-${field}`).fill(String(issued[field]));
+    }
+    await page.getByTestId("attach-vsdcRcptPbctDate").fill(String(issued.vsdcRcptPbctDate));
+    await page.getByTestId("attach-note").fill(`Resolved for the refusal test ${SUFFIX}`);
+    await page.getByTestId("confirm-attach").click();
+    await expect(page.getByText("Receipt attached").first()).toBeVisible();
+
+    await page.goto(`/ar/documents/${pending.id}`);
+    await page.waitForSelector("[data-testid='fiscal-receipt-number']");
+    await expect(page.getByTestId("reverse-blocked")).toHaveCount(0);
 
     await releaseTheQueue(page);
   });

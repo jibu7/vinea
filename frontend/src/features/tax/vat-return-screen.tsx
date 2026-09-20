@@ -260,7 +260,7 @@ export function VatReturnScreen() {
               />
             </dl>
             {tie.untagged.length > 0 && (
-              <div className="pt-2">
+              <div className="pt-2" data-testid={`untagged-${tie.code}`}>
                 <p className="pb-1 text-xs text-[var(--vinea-ink-muted)]">{t("untagged")}</p>
                 <Table>
                   <THead>
@@ -287,7 +287,10 @@ export function VatReturnScreen() {
                           {formatDate(line.entry_date)}
                         </TD>
                         <TD className="text-xs">{line.description ?? ""}</TD>
-                        <TD className="text-right font-mono text-xs tabular-nums">
+                        <TD
+                          className="text-right font-mono text-xs tabular-nums"
+                          data-testid="untagged-amount"
+                        >
                           {money(line.base_amount)}
                         </TD>
                       </TR>

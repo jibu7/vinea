@@ -198,19 +198,32 @@ def _document(db: Session, company_id: int, document_id: int) -> PartnerDocument
 def _receipt(
     db: Session, company_id: int, document: PartnerDocument, receipt_id: int | None = None
 ) -> FiscalReceipt | None:
-    """The receipt to print — a named one, or by default the document's **latest**.
+    """The receipt to print — a named one, or by default **the document's own**.
 
     A signed sale that was reversed holds two receipts: the `NS` it was declared under and the
     `NR` that reversed it (decision 7 — reversing a fiscalized invoice queues a full refund
-    rather than cancelling the sale). Both are legal documents the customer is owed, and
-    **both are printable**: the screen lists them and prints whichever is chosen.
+    rather than cancelling the sale). Both are legal documents the customer is owed, and both
+    are printable; `receipt_id` is which.
 
-    The default is the latest, which is the refund when there is one, because that is what the
-    document most recently became. It is deliberately **not** `document.fiscal_receipt_id`:
-    that column is the document's own receipt — the sale — and the drainer leaves it pointing
-    at the `NS` on purpose, so the subledger's link and the open-item history keep naming the
-    sale. The two answer different questions and only one of them is "what comes out of the
-    printer now".
+    **The default is the sale, not the latest**, and that is the load-bearing half. This
+    document *is* an invoice; the refund is a receipt **about** it. A default of "latest" would
+    make a reversed invoice's own detail screen report the refund's counters as though they were
+    its own — a panel saying something true about the wrong receipt, which is the defect class
+    rule 13 exists for. So the document's `fiscal_receipt_id` wins, which is the column the
+    drainer sets for the document's own row and deliberately leaves pointing at the sale.
+
+    **Who this function decides for** — the audit, because changing it is a semantic change and
+    not a UI one. Exactly two callers, both in this module: `receipt_block()` (the document
+    detail's header block, the print gate, and the CIS layout) and `record_copy()` (the copy
+    counter). Nothing else resolves a document's receipt through it:
+
+    * `enquiries.receipts()` joins `FiscalReceipt.document_id` and returns **all** of them —
+      the receipts listing and the per-document list are unaffected by this choice;
+    * `tax/annexes.py` reads `PartnerDocument.fiscal_receipt_id` **directly**, so the VAT sales
+      annex keeps naming the sale's counters for a reversed invoice, which is what decision 12
+      asks of it;
+    * `schemas/subledger.py` exposes the same column, which is what the credit note's *Refund
+      of* picker filters on.
 
     A `receipt_id` that is not this document's is `None` rather than somebody else's receipt.
     """
@@ -220,7 +233,14 @@ def _receipt(
     )
     if receipt_id is not None:
         return db.scalars(query.where(FiscalReceipt.id == receipt_id)).first()
-    return db.scalars(query.order_by(FiscalReceipt.tot_rcpt_no.desc()).limit(1)).first()
+    if document.fiscal_receipt_id is not None:
+        found = db.scalars(query.where(FiscalReceipt.id == document.fiscal_receipt_id)).first()
+        if found is not None:
+            return found
+    # No `fiscal_receipt_id` means the document's own row never produced one — a refund
+    # attached against a document that was reversed before its sale was signed, say. Then the
+    # only receipt there is, is the one to print.
+    return db.scalars(query.order_by(FiscalReceipt.tot_rcpt_no).limit(1)).first()
 
 
 def _refuse_or_pass(db: Session, company_id: int, document: PartnerDocument) -> None:
