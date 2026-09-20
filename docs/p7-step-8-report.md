@@ -649,22 +649,25 @@ produces hundreds of setup errors that are an environment limit and not breakage
 file rather than piped, because a pipe eats the exit code — `PYTEST_EXIT=0` is read from the
 redirect.
 
-**The hash the suite ran at is `ed9bb13`**, and nothing has moved since:
+**The hash the suite ran at is `ed9bb13`, and the backend has not moved since:**
 
 ```
-$ git rev-parse --short HEAD
-ed9bb13
+$ git diff --name-only ed9bb13..HEAD -- backend
+                          # empty
 
 $ git status --short
                           # empty
-
-$ git diff --name-only ed9bb13..HEAD -- backend
-                          # empty
 ```
 
-So `1372 passed` is a statement about the tree that ships, not about a tree that existed while it
-was running. The e2e and frontend results above were taken at the same head for application code:
-the only commit after them is this report.
+So `1372 passed` is a statement about the backend that ships, not about one that existed while it
+was running.
+
+The **frontend** did move after that hash: the Close-day warning was rewritten to break the rows
+in flight down by status and to say where those sales go, which touched
+`daily-report.tsx`, `en.json`, the spec, the capture script and two screenshots — and nothing
+under `backend/`. Every frontend and e2e result quoted above was re-taken at the new head:
+`npx vitest run` 403 + 4 (the two host-only files), `npm run build` compiled,
+`npx tsc --noEmit` and `npm run lint` clean, and `p7-enquiries-reports.spec.ts` **11 passed**.
 
 ```
 $ git diff --stat main..
