@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.kernel import posting
 from app.kernel.errors import LedgerStateError, PostingError
-from app.kernel.events import LineSpec, ManualJournal
+from app.kernel.events import LineSpec, ManualJournal, ReversalRequested
 from app.models.fiscalization import VatReturn, VatReturnStatus
 from app.models.gl import GLAccount
 from app.models.journal import JournalEntry, JournalLine
@@ -475,3 +475,68 @@ def test_filing_and_reversing_leaves_the_return_it_found(
         "the tie a reader sees, explanation included — a settlement and its own reversal "
         "cancel in the totals and must not survive as two untagged rows"
     )
+
+
+def test_a_reversed_ordinary_journal_still_lists_as_two_rows(
+    db: Session, month: FiscalPosting  # noqa: F811
+) -> None:
+    """The **asymmetry**, asserted rather than left for a reader to discover.
+
+    `_untagged()` drops a reversed settlement together with its mirror, and drops nothing else.
+    A reversed *ordinary* journal on a VAT account still lists as two rows netting to zero — and
+    that is the intended behaviour, not an oversight the settlement rule forgot to extend.
+
+    The difference is what the two entries *are*. A settlement is the return's own act: it exists
+    because a return was filed, it moves exactly what that return declared, and withdrawing it
+    means the filing never stood. Nothing happened, so nothing is reported. A journal somebody
+    keyed onto a VAT account and later reversed is two decisions a person made, and an
+    accountant reading the tie is entitled to see both — decision 12's rule is that the report
+    *names* what it cannot declare, and "somebody posted this and took it back" is exactly the
+    kind of thing it exists to name.
+
+    This is also the sensitivity guard for the `module == tax` half of the filter: without it,
+    every reversed pair would vanish from the list and this test fails.
+    """
+    accounts = _accounts(db, month.company_id, "2200", "1500")
+    keyed = posting.post(
+        db,
+        ManualJournal(
+            entry_date=LATE_IN_MARCH,
+            description="VAT accrual keyed by hand",
+            lines=(
+                LineSpec(amount=Decimal("-500"), gl_account_id=accounts["2200"]),
+                LineSpec(amount=Decimal("500"), gl_account_id=accounts["1500"]),
+            ),
+        ),
+        company_id=month.company_id,
+        actor=month.owner,
+    )
+    db.flush()
+    posting.post(
+        db,
+        ReversalRequested(
+            entry_date=LATE_IN_MARCH,
+            entry_id=keyed.id,
+            reason="Keyed against the wrong account",
+        ),
+        company_id=month.company_id,
+        actor=month.owner,
+    )
+    db.flush()
+
+    tie = next(
+        tie
+        for tie in vat.compute(
+            db, month.company_id, period_from=MARCH_FROM, period_to=MARCH_TO
+        ).ties
+        if tie.code == "2200"
+    )
+
+    # Both rows, netting to zero, both named. The account did not move and the tie still
+    # reconciles — what changed is that a reader can see what happened.
+    assert [line.base_amount for line in tie.untagged] == [
+        Decimal("-500.000000"),
+        Decimal("500.000000"),
+    ]
+    assert tie.difference == Decimal("0.000000")
+    assert tie.reconciled

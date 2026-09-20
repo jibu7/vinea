@@ -145,15 +145,39 @@ difference 0 · reconciled True
 Two rows that explain nothing, the tie balancing over them, and the pair surviving — file and
 reverse a range twice and the explanation carries four such rows. Self-consistent, and wrong.
 
-The fix is narrow. `_untagged()` drops a `tax`-module entry that has been reversed **together
-with** the entry that reversed it. A **standing** settlement still shows, which is decision 12's
-whole reason for having them in scope — a VAT payment to the authority is exactly the kind of
-movement the difference exists to surface. And it is limited to the `tax` module: an ordinary
-journal and its reversal are two acts an accountant may well want to see.
+The fix is narrow, and it is a **query change only** — no migration, no stored figure, nothing
+posted moves. `_untagged()` drops a `tax`-module entry that has been reversed **together with**
+the entry that reversed it:
 
-`tests/tax/test_vat_filing.py::test_filing_and_reversing_leaves_the_return_it_found` is the pin,
-beside the other `test_vat_*` cases rather than only in an e2e. **Proven sensitive** — removing
-the clause reproduces the two rows above. The e2e asserts the same round trip through the
+```python
+or_(
+    JournalEntry.module != TAX_MODULE,                    # clause A
+    and_(                                                 # clause B
+        JournalEntry.reverses_entry_id.is_(None),
+        JournalEntry.id.not_in(reversed_pairs),
+    ),
+),
+```
+
+**The asymmetry, stated plainly, because it is a reader's first question.** A reversed
+*ordinary* journal on a VAT account **still lists as two rows netting to zero**. That is
+intended. The difference is what the two entries are: a settlement is the return's own act — it
+exists because a return was filed, it moves exactly what that return declared, and withdrawing it
+means the filing never stood, so there is nothing to report. A journal somebody keyed onto a VAT
+account and later reversed is two decisions a person made, and decision 12's rule is that the
+report *names* what it cannot declare. "Somebody posted this and took it back" is exactly the
+kind of thing it exists to name.
+
+**Both clauses are proven separately**, one sensitivity run each:
+
+| probe | what it breaks | what fails |
+|---|---|---|
+| drop **clause A** (`module != tax`) | every reversed pair vanishes, not just settlements | `test_a_reversed_ordinary_journal_still_lists_as_two_rows` — `assert [] == [Decimal('-500…'), Decimal('500…')]` |
+| drop **clause B** (the reversed guard) | every `tax` entry vanishes, standing settlements included | `test_the_settlement_entry_is_not_tax_on_the_next_return` (a pre-existing test, which is the better witness — it was written before this fix existed) |
+
+And the round trip itself: `test_filing_and_reversing_leaves_the_return_it_found`, beside the
+other `test_vat_*` cases rather than only in an e2e, also proven sensitive — removing the whole
+filter reproduces the two rows above verbatim. The e2e asserts the same round trip through the
 preview the screen renders, with one field excluded and asserted separately:
 `high_water_entry_id`, which legitimately moves because entries really were posted and which
 nothing a reader sees depends on.
@@ -308,17 +332,22 @@ frontend:  31 files changed, 6278 insertions(+), 26 deletions(-)
 docs:      25 files changed, 491 insertions(+), 1 deletion(-)   (22 of them screenshots)
 ```
 
-Checks, every one against `15e6583` — the branch head, the tree that ships.
+Checks, every one against `FINAL_HASH` — the branch head, the tree that ships.
 
-The backend suite was run three times before this and quoted none of them: two I killed myself
-by running `make db-reset` under them (exit 137 — a sequencing error on my part, not a flake),
-and one was superseded by a change to `app/tax/vat.py` after it had started. The suite has to be
-the last thing, alone. It was.
+**The backend suite and the head are the same tree**, which is the only form of that claim worth
+making: `git diff --name-only <suite hash>..HEAD -- backend` is empty, and the commits after it
+are the report. An earlier draft quoted the suite at `15e6583` while the head was `34972f1`; that
+diff was the report alone, but the check is the point and it is run rather than argued.
+
+The suite was run three times before the one quoted here and none of those were quoted: two I
+killed myself by running `make db-reset` under them (exit 137 — a sequencing error on my part,
+not a flake), and one was superseded by a change to `app/tax/vat.py` after it had started. The
+suite has to be the last thing, alone.
 
 | check | result |
 |---|---|
 | `make be-lint` | `All checks passed!` |
-| `make be-test` (`-n 4`, in the container) | `1357 passed, 7 warnings in 1080.71s (0:18:00)`, `PYTEST_EXIT=0` |
+| `make be-test` (`-n 4`, in the container) | `SUITE_LINE`, `PYTEST_EXIT=0` |
 | `tests/test_api_has_a_caller.py` | 15 passed — the fourteen lines gone, `POST /fiscal/outbox/drain` exempt `by design` |
 | `npx tsc --noEmit` | clean |
 | `npm run lint` | clean (pre-existing `react-hooks/exhaustive-deps` warnings only) |
@@ -348,6 +377,31 @@ giving the capture command, the `ONLY` filter and what each shot is for. Capture
 | 10 | FX revaluation | the preview at 708 **and** a posted run with its entry and its next-day mirror |
 | 11 | A reversed sale | both receipts, Print pointed at the `NS` |
 
+### The count moved, and here is both sides
+
+`main` collects **1365**; this branch collects **1358**. Itemised from
+`pytest --collect-only` on each, so neither side is an estimate:
+
+**Gone — 14, all parametrised cases of one test.** `test_every_exemption_states_which_kind_it_is`
+runs once per `NO_UI` entry, so deleting fourteen register lines deletes fourteen cases:
+`fiscal/devices/{id}/fetch-purchase-feed`, `fetch-imports`, `purchase-feed/{id}/accept`,
+`/reject`, `import-declarations/{id}/approve`, `/reject`, `queue/rows/{id}/retry`, `/verify`,
+`/attach-receipt`, `documents/{id}/receipt/copy`, `tax/vat-returns`, `tax/vat-returns/{id}/reverse`,
+`gl/fx-revaluations`, `gl/fx-revaluations/{id}/reverse`. The test itself is untouched and still
+passes over the entries that remain.
+
+**New — 7:**
+
+* `tests/fiscal/test_devices_api.py::test_the_document_context_is_readable_without_any_fiscal_permission`
+* `tests/fiscal/test_enquiries_api.py::test_a_document_summary_carries_the_receipt_the_refund_of_picker_filters_on`
+* `tests/fiscal/test_enquiries_api.py::test_a_suspended_device_leaves_the_company_unfiscalized`
+* `tests/fiscal/test_enquiries_api.py::test_the_document_context_says_the_company_fiscalizes_and_lists_the_refund_reasons`
+* `tests/fiscal/test_reversal.py::test_a_reversed_sale_keeps_its_own_receipt_and_prints_the_refund_separately`
+* `tests/tax/test_vat_filing.py::test_a_reversed_ordinary_journal_still_lists_as_two_rows`
+* `tests/tax/test_vat_filing.py::test_filing_and_reversing_leaves_the_return_it_found`
+
+1365 − 14 + 7 = 1358.
+
 ## What step 9 has to know about this spec
 
 `p7-transactions.spec.ts` runs on the **shared** Rugari Wines E2E company and consumes document
@@ -368,6 +422,19 @@ right one if step 9 wants hand-worked numbers.
 
 Nothing this spec files is left posted: both returns are reversed and the revaluation run is
 reversed, so the range and the date are free for whatever runs next.
+
+**Three more things to carry:**
+
+* **The `_receipt()` audit table** above is the one to re-read before touching how a document
+  resolves its receipt. Five readers, three different reasons, and only two of them go through
+  that function.
+* **Four endpoints took their first *pressed* caller here** — Verify with device, Attach receipt
+  manually, Reverse on the VAT return, and Reverse on the FX revaluation. Before this step they
+  had a button in the source and nothing had ever clicked it, which satisfies the rule-14
+  matcher and is not the same as working. Step 9's sensitivity pass should treat them as newly
+  covered rather than long-standing.
+* **`_untagged()`'s two clauses** each have exactly one witness (the table above). A change to
+  that filter should re-run both probes, not just the suite.
 
 ## What step 8 owes
 
