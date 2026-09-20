@@ -324,20 +324,27 @@ rediscovered:
 
 ## Tree state
 
-Against `main`, at `15e6583`:
+Against `main`:
 
 ```
-backend:   16 files changed, 643 insertions(+), 106 deletions(-)
+backend:   16 files changed, 709 insertions(+), 107 deletions(-)
 frontend:  31 files changed, 6278 insertions(+), 26 deletions(-)
-docs:      25 files changed, 491 insertions(+), 1 deletion(-)   (22 of them screenshots)
+docs:      25 files changed, 565 insertions(+), 1 deletion(-)   (22 of them screenshots)
 ```
 
-Checks, every one against `FINAL_HASH` — the branch head, the tree that ships.
+**Which hash each check ran at**, because "the tree that ships" is only worth claiming if it is
+checked rather than argued:
 
-**The backend suite and the head are the same tree**, which is the only form of that claim worth
-making: `git diff --name-only <suite hash>..HEAD -- backend` is empty, and the commits after it
-are the report. An earlier draft quoted the suite at `15e6583` while the head was `34972f1`; that
-diff was the report alone, but the check is the point and it is run rather than argued.
+* **Backend lint and the full suite: `db436d7`**, and **backend untouched since** — the commits
+  after it are this report alone, which `git diff --name-only db436d7..HEAD -- backend frontend`
+  proves empty. (Same form as P7 step 6's report for `4c7f805`.)
+* **Frontend checks and every e2e: `7efd865`.** `git diff --name-only 7efd865..HEAD` is one
+  backend *test* file, this report, and ten screenshots — `git diff --name-only 7efd865..HEAD --
+  backend/app frontend/` is **empty**. No application code and no spec has moved since, so those
+  results are results about this tree.
+
+An earlier draft quoted the suite at `15e6583` while the head was `34972f1`. That diff was the
+report alone and the claim held, but it was not checked at the time; it is now.
 
 The suite was run three times before the one quoted here and none of those were quoted: two I
 killed myself by running `make db-reset` under them (exit 137 — a sequencing error on my part,
@@ -347,7 +354,7 @@ suite has to be the last thing, alone.
 | check | result |
 |---|---|
 | `make be-lint` | `All checks passed!` |
-| `make be-test` (`-n 4`, in the container) | `SUITE_LINE`, `PYTEST_EXIT=0` |
+| `make be-test` (`-n 4`, in the container) | `1358 passed, 7 warnings in 1071.71s (0:17:51)`, `PYTEST_EXIT=0` |
 | `tests/test_api_has_a_caller.py` | 15 passed — the fourteen lines gone, `POST /fiscal/outbox/drain` exempt `by design` |
 | `npx tsc --noEmit` | clean |
 | `npm run lint` | clean (pre-existing `react-hooks/exhaustive-deps` warnings only) |
