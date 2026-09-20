@@ -29,6 +29,7 @@ from app.fiscal.mapping import (
     FiscalSyncResult,
 )
 from app.fiscal.protocol import (
+    DeclaredLine,
     DeclaredTotals,
     DeviceIdentity,
     FiscalReceiptData,
@@ -181,6 +182,12 @@ class NullAdapter:
     ) -> DeclaredTotals | None:
         """Always `None`. Nothing was declared to anybody, so there is no day to total."""
         return None
+
+    def normalize_declared_lines(
+        self, request: dict[str, Any] | None
+    ) -> tuple[DeclaredLine, ...]:
+        """Always empty, for the same reason: a no-op declared no receipt to print."""
+        return ()
 
     def register_purchase(
         self, device: FiscalDevice, purchase: FiscalPurchase, *, cmc_key: str | None = None

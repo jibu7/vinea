@@ -3,10 +3,11 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
-import { ExternalLink } from "lucide-react";
+import { Copy, ExternalLink } from "lucide-react";
 import { Button } from "@/design/components/button";
 import { QueryState } from "@/design/components/query-state";
 import { IsoDatePicker } from "@/design/components/date-picker";
+import { Combobox } from "@/design/components/combobox";
 import { Dialog, DialogContent, DialogTrigger } from "@/design/components/dialog";
 import { Field, Input } from "@/design/components/input";
 import { ReportPage, ReportPanel } from "@/design/components/report-page";
@@ -14,9 +15,17 @@ import { StatusChip } from "@/design/components/status-chip";
 import { TBody, TD, TH, THead, TR, Table } from "@/design/components/table";
 import { useToast } from "@/design/components/toast";
 import { isApiError, useHasPermission } from "@/features/auth/hooks";
+import { DocumentFiscalPanel } from "@/features/fiscal/document-fiscal-panel";
+import {
+  useDocumentReceipt,
+  useFiscalDocumentContext,
+  usePrintReceiptCopy,
+} from "@/features/fiscal/hooks";
+import { CisReceiptLayout } from "@/features/fiscal/receipt-layout";
 import { useAccounts, useCompanyDetails, useCurrencies } from "@/features/gl/hooks";
 import { byId } from "@/features/gl/lookups";
-import { DocumentKind, DocumentStatus } from "@/lib/api-enums";
+import { DocumentKind, DocumentStatus, FiscalOutboxStatus } from "@/lib/api-enums";
+import { ApiError } from "@/lib/api";
 import { newDraftId } from "@/lib/drafts";
 import { dotted, formatDate, formatMoney, formatQuantity, todayIso } from "@/lib/format";
 import { useApiErrorToast } from "@/lib/use-api-error-toast";
@@ -48,6 +57,8 @@ export function PartnerDocumentDetailScreen({
   documentId: number;
 }) {
   const t = useTranslations("arap.documentList");
+  const tf = useTranslations("fiscal.document");
+  const tq = useTranslations("fiscal.queue");
   const tKind = useTranslations(role === "ap" ? "arap.documentList.kindsAp" : "arap.documentList.kinds");
   const toast = useToast();
   const showApiError = useApiErrorToast();
@@ -65,9 +76,36 @@ export function PartnerDocumentDetailScreen({
   const reverse = useReverseDocument(role);
   const unallocate = useUnallocate(role);
 
+  // --- P7: the receipt this document prints, if RRA has signed one ------------------------
+  //
+  // Three answers, and the screen needs all three. A block is "print the CIS layout"; `null` is
+  // "this company does not fiscalize, print the P4 layout"; and a `fiscal_receipt_pending`
+  // refusal is "it does, and the authority has not signed yet" — which is why the query's error
+  // is read rather than swallowed. `field_errors.fiscal_status` carries the queue row's own
+  // status, so the disabled Print button says which kind of waiting this is.
+  // Which of the document's receipts the screen is showing and Print will produce. `null` is
+  // "the latest", which is the refund on a reversed sale — what the document most recently
+  // became. The panel's own table switches it, so the `NS` a reversed sale was declared under
+  // stays printable rather than becoming unreachable.
+  const [printReceiptId, setPrintReceiptId] = useState<number | null>(null);
+  const receiptQuery = useDocumentReceipt(documentId, printReceiptId);
+  const printCopy = usePrintReceiptCopy();
+  const receipt = receiptQuery.data ?? null;
+  const receiptError = receiptQuery.error instanceof ApiError ? receiptQuery.error : null;
+  const receiptPending = receiptError?.code === "fiscal_receipt_pending";
+  /** The queue row's own status, carried on the refusal. `unknown` and `needs_receipt` are the
+   * two that block a reversal (`fiscal_status_unresolved`): RRA may already hold the sale. */
+  const fiscalStatus = receiptError?.fieldErrors?.fiscal_status?.[0] ?? null;
+  const unresolvedFiscalStatus =
+    fiscalStatus === FiscalOutboxStatus.UNKNOWN ||
+    fiscalStatus === FiscalOutboxStatus.NEEDS_RECEIPT;
+  const [copyOpen, setCopyOpen] = useState(false);
+  const fiscalContext = useFiscalDocumentContext();
+
   const [reverseOpen, setReverseOpen] = useState(false);
   const [reversalDate, setReversalDate] = useState(todayIso);
   const [reason, setReason] = useState("");
+  const [refundReason, setRefundReason] = useState("");
   const [reverseError, setReverseError] = useState<string | null>(null);
 
   const [unallocateId, setUnallocateId] = useState<number | null>(null);
@@ -98,6 +136,15 @@ export function PartnerDocumentDetailScreen({
     if (isReversed) return t("alreadyReversed");
     if (Number(data.open_amount) !== Number(data.total_amount)) return t("mustUnallocateFirst");
     if (data.matured_entry_id !== null) return t("instrumentMatured");
+    // P7 decision 7, said **before** the button rather than after it. A refund of a refund is
+    // not in RRA's vocabulary — the correction is a new invoice — and a document whose queue
+    // row is `unknown` or `needs_receipt` cannot be reversed at all until somebody has found
+    // out what the authority holds, because cancelling a row RRA is holding would leave a sale
+    // declared and unrefunded.
+    if (data.kind === DocumentKind.CREDIT_NOTE && data.fiscal_receipt_id !== null) {
+      return t("fiscalRefundIrreversible");
+    }
+    if (receiptPending && unresolvedFiscalStatus) return t("fiscalStatusUnresolved");
     return null;
   }
 
@@ -106,7 +153,10 @@ export function PartnerDocumentDetailScreen({
     try {
       const result = await reverse.mutateAsync({
         documentId,
-        payload: { on_date: reversalDate, reason },
+        // Sent only when the screen asked for it. Reversing a fiscalized invoice whose sale RRA
+        // signed queues a full refund, and a refund carries a §4.16 reason (decision 7); an
+        // ordinary reversal has none and must not invent one.
+        payload: { on_date: reversalDate, reason, refund_reason: refundReason || null },
       });
       setReverseOpen(false);
       // No navigation: the reversal is a *state change on this document*, not a new one to
@@ -147,6 +197,14 @@ export function PartnerDocumentDetailScreen({
     );
   }
 
+  /** The company's own money. A fiscal receipt is declared and printed in it whatever the
+   * document was keyed in (decision 3), so the CIS layout never sees the document's currency. */
+  const base = (currencies.data ?? []).find((c) => c.is_base);
+  const baseLike = {
+    code: base?.code ?? "",
+    decimalPlaces: base?.decimal_places ?? 0,
+    symbol: base?.symbol ?? null,
+  };
   const currency = currencyById.get(data.currency_id);
   const currencyLike = {
     code: currency?.code ?? "",
@@ -157,6 +215,37 @@ export function PartnerDocumentDetailScreen({
     (partners.data ?? []).find((p) => p.id === data.partner_id)?.name ?? String(data.partner_id);
   const allocationRows = allocations.data ?? [];
   const reverseBlocked = reverseBlockedReason();
+  /** A reversal that will queue a refund needs a reason code; every other reversal does not.
+   * The service refuses without one, so asking here is the refusal said where it can be
+   * answered rather than after the dialog has closed. */
+  const needsRefundReason =
+    data.kind === DocumentKind.INVOICE && data.fiscal_receipt_id !== null;
+  const refundReasonSatisfied = !needsRefundReason || refundReason !== "";
+
+  /**
+   * Why this document may not be printed, or nothing when it may.
+   *
+   * CIS §10: a fiscalized document whose queue row RRA has not signed has nothing to print —
+   * the paper carries a receipt number the authority issued, and there is no draft form of one.
+   * A non-fiscalized company has no receipt and no refusal: `receipt_block` returns `null` and
+   * the P4 layout prints, which is the last sentence of decision 11.
+   */
+  const printBlocked = receiptPending
+    ? tf("printPending", { status: fiscalStatus ? tq(`statusLabel.${fiscalStatus}`) : "" })
+    : undefined;
+
+  async function handleCopyPrint() {
+    try {
+      await printCopy.mutateAsync({ documentId, receiptId: printReceiptId });
+      setCopyOpen(false);
+      // Print *after* the counter has moved, so the sheet that comes out is the one the
+      // authority's copy count describes. Nothing is sent to RRA — a copy is a print of a sale
+      // already declared (§11, §15).
+      window.print();
+    } catch (err) {
+      showApiError(err, tf("copyFailed"));
+    }
+  }
 
   return (
     <ReportPage
@@ -165,7 +254,28 @@ export function PartnerDocumentDetailScreen({
       companyName={company.data?.name}
       backHref={`/${role}/documents`}
       asOfLabel={formatDate(data.document_date)}
+      printDisabledReason={printBlocked}
+      printMasthead={receipt === null}
+      actions={
+        receipt ? (
+          <Button
+            variant="secondary"
+            onClick={() => setCopyOpen(true)}
+            data-testid="copy-print"
+            className="gap-1.5 text-xs"
+          >
+            <Copy className="size-3.5" /> {tf("copyPrint")}
+          </Button>
+        ) : undefined
+      }
     >
+      {/* The receipt, print-only and instead of everything else. A fiscal receipt is a
+          prescribed layout an inspector reads, not a decorated document detail — so when there
+          is one, the panels below are hidden at print time and this is what leaves the
+          printer. */}
+      {receipt && <CisReceiptLayout block={receipt} baseCurrency={baseLike} />}
+
+      <div className={receipt ? "space-y-4 print:hidden" : "space-y-4"}>
       <ReportPanel>
         <dl className="grid grid-cols-2 gap-4 sm:grid-cols-4">
           <div>
@@ -428,6 +538,23 @@ export function PartnerDocumentDetailScreen({
                     placeholder={t("reasonPlaceholder")}
                   />
                 </Field>
+                {/* Only on a fiscalized invoice RRA signed. Reversing one queues a **full
+                    refund** rather than cancelling the sale, and a refund carries a §4.16 reason
+                    code that only the person reversing can answer (decision 7). Every other
+                    reversal leaves this unset and sends nothing. */}
+                {data.kind === DocumentKind.INVOICE && data.fiscal_receipt_id !== null && (
+                  <Field label={tf("refundReason")}>
+                    <Combobox
+                      options={(fiscalContext.data?.refund_reasons ?? []).map((item) => ({
+                        value: item.code,
+                        label: `${item.code} · ${item.name}`,
+                      }))}
+                      value={refundReason}
+                      onValueChange={setRefundReason}
+                      placeholder={tf("refundReasonPlaceholder")}
+                    />
+                  </Field>
+                )}
               </div>
               <div className="mt-4 flex justify-end gap-2">
                 <Button variant="ghost" onClick={() => setReverseOpen(false)}>
@@ -435,7 +562,8 @@ export function PartnerDocumentDetailScreen({
                 </Button>
                 <Button
                   variant="danger"
-                  disabled={reason.length < 3 || reverse.isPending}
+                  disabled={reason.length < 3 || !refundReasonSatisfied || reverse.isPending}
+                  data-testid="confirm-reverse"
                   onClick={handleReverse}
                 >
                   {t("confirmReverse")}
@@ -445,6 +573,37 @@ export function PartnerDocumentDetailScreen({
           </Dialog>
         )}
       </div>
+
+      </div>
+
+      {/* The fiscal half — what the authority was told, what it signed, and the three things a
+          person can do when it has not answered. Renders nothing at all for a document that
+          was never declared, which is every document on a company with no device. */}
+      <div className="print:hidden">
+        <DocumentFiscalPanel
+          documentId={documentId}
+          receipt={receipt}
+          onSelectReceipt={setPrintReceiptId}
+        />
+      </div>
+
+      <Dialog open={copyOpen} onOpenChange={setCopyOpen}>
+        <DialogContent title={tf("copyTitle")} description={tf("copyDescription")}>
+          <div className="mt-4 flex justify-end gap-2">
+            <Button variant="ghost" onClick={() => setCopyOpen(false)}>
+              {t("cancel")}
+            </Button>
+            <Button
+              variant="primary"
+              disabled={printCopy.isPending}
+              data-testid="confirm-copy-print"
+              onClick={handleCopyPrint}
+            >
+              {tf("confirmCopy")}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={unallocateId !== null} onOpenChange={(open) => !open && setUnallocateId(null)}>
         <DialogContent title={t("unallocateTitle")} description={t("unallocateDescription")}>

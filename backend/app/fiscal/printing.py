@@ -33,6 +33,7 @@ from starlette.requests import Request
 from app.core.errors import NotFoundError
 from app.fiscal import outbox as outbox_service
 from app.fiscal import registry
+from app.fiscal.protocol import DeclaredLine
 from app.kernel.errors import LedgerStateError
 from app.models.company import Branch, Company
 from app.models.fiscalization import (
@@ -103,6 +104,11 @@ class ReceiptBlock:
     tax_total: Decimal
     gross_total: Decimal
     classes: tuple[ReceiptClassLine, ...]
+    #: What the receipt sold, as the authority received it. **The declaration's lines, not the
+    #: document's**: a USD invoice is declared in RWF from its frozen base amounts (decision 3),
+    #: so printing the document's own line amounts would put dollars under a franc total. They
+    #: also carry the item's name, which a ledger line keyed with no typed description does not.
+    lines: tuple[DeclaredLine, ...]
     #: True on every print after the first. The template adds `COPY` and
     #: `THIS IS NOT AN OFFICIAL RECEIPT`; the count is what the Z reports.
     is_copy: bool
@@ -110,7 +116,12 @@ class ReceiptBlock:
 
 
 def receipt_block(
-    db: Session, company_id: int, document_id: int, *, as_copy: bool = False
+    db: Session,
+    company_id: int,
+    document_id: int,
+    *,
+    as_copy: bool = False,
+    receipt_id: int | None = None,
 ) -> ReceiptBlock | None:
     """What this document prints, or `None` when it is not a fiscal receipt at all.
 
@@ -119,7 +130,7 @@ def receipt_block(
     does, and the authority has not signed yet".
     """
     document = _document(db, company_id, document_id)
-    receipt = _receipt(db, company_id, document)
+    receipt = _receipt(db, company_id, document, receipt_id)
     if receipt is None:
         _refuse_or_pass(db, company_id, document)
         return None
@@ -133,6 +144,7 @@ def record_copy(
     *,
     actor: User,
     request: Request | None = None,
+    receipt_id: int | None = None,
 ) -> ReceiptBlock:
     """A reprint. The counter moves, the audit records who, and RRA hears nothing.
 
@@ -141,7 +153,7 @@ def record_copy(
     editable.
     """
     document = _document(db, company_id, document_id)
-    receipt = _receipt(db, company_id, document)
+    receipt = _receipt(db, company_id, document, receipt_id)
     if receipt is None:
         _refuse_or_pass(db, company_id, document)
         raise LedgerStateError(
@@ -184,33 +196,51 @@ def _document(db: Session, company_id: int, document_id: int) -> PartnerDocument
 
 
 def _receipt(
-    db: Session, company_id: int, document: PartnerDocument
+    db: Session, company_id: int, document: PartnerDocument, receipt_id: int | None = None
 ) -> FiscalReceipt | None:
-    """The receipt this document prints — its **latest**, which is the refund when it has one.
+    """The receipt to print — a named one, or by default **the document's own**.
 
-    A signed sale that was reversed holds two receipts (the `NS` and the `NR` that reversed it),
-    and the thing to print is what the document most recently became. `fiscal_receipt_id` on the
-    document points at whichever the drainer wrote last, and is preferred so that the print and
-    the document detail can never name different receipts.
+    A signed sale that was reversed holds two receipts: the `NS` it was declared under and the
+    `NR` that reversed it (decision 7 — reversing a fiscalized invoice queues a full refund
+    rather than cancelling the sale). Both are legal documents the customer is owed, and both
+    are printable; `receipt_id` is which.
+
+    **The default is the sale, not the latest**, and that is the load-bearing half. This
+    document *is* an invoice; the refund is a receipt **about** it. A default of "latest" would
+    make a reversed invoice's own detail screen report the refund's counters as though they were
+    its own — a panel saying something true about the wrong receipt, which is the defect class
+    rule 13 exists for. So the document's `fiscal_receipt_id` wins, which is the column the
+    drainer sets for the document's own row and deliberately leaves pointing at the sale.
+
+    **Who this function decides for** — the audit, because changing it is a semantic change and
+    not a UI one. Exactly two callers, both in this module: `receipt_block()` (the document
+    detail's header block, the print gate, and the CIS layout) and `record_copy()` (the copy
+    counter). Nothing else resolves a document's receipt through it:
+
+    * `enquiries.receipts()` joins `FiscalReceipt.document_id` and returns **all** of them —
+      the receipts listing and the per-document list are unaffected by this choice;
+    * `tax/annexes.py` reads `PartnerDocument.fiscal_receipt_id` **directly**, so the VAT sales
+      annex keeps naming the sale's counters for a reversed invoice, which is what decision 12
+      asks of it;
+    * `schemas/subledger.py` exposes the same column, which is what the credit note's *Refund
+      of* picker filters on.
+
+    A `receipt_id` that is not this document's is `None` rather than somebody else's receipt.
     """
+    query = select(FiscalReceipt).where(
+        FiscalReceipt.company_id == company_id,
+        FiscalReceipt.document_id == document.id,
+    )
+    if receipt_id is not None:
+        return db.scalars(query.where(FiscalReceipt.id == receipt_id)).first()
     if document.fiscal_receipt_id is not None:
-        found = db.scalar(
-            select(FiscalReceipt).where(
-                FiscalReceipt.company_id == company_id,
-                FiscalReceipt.id == document.fiscal_receipt_id,
-            )
-        )
+        found = db.scalars(query.where(FiscalReceipt.id == document.fiscal_receipt_id)).first()
         if found is not None:
             return found
-    return db.scalars(
-        select(FiscalReceipt)
-        .where(
-            FiscalReceipt.company_id == company_id,
-            FiscalReceipt.document_id == document.id,
-        )
-        .order_by(FiscalReceipt.tot_rcpt_no.desc())
-        .limit(1)
-    ).first()
+    # No `fiscal_receipt_id` means the document's own row never produced one — a refund
+    # attached against a document that was reversed before its sale was signed, say. Then the
+    # only receipt there is, is the one to print.
+    return db.scalars(query.order_by(FiscalReceipt.tot_rcpt_no).limit(1)).first()
 
 
 def _refuse_or_pass(db: Session, company_id: int, document: PartnerDocument) -> None:
@@ -273,6 +303,7 @@ def _block(
     )
     adapter = registry.adapter_for(company.fiscal_country if company else None)
     declared = adapter.normalize_declared_totals(receipt.request, receipt.response)
+    declared_lines = adapter.normalize_declared_lines(receipt.request)
 
     classes = _class_lines(declared)
     original = (
@@ -321,6 +352,7 @@ def _block(
         tax_total=declared.tax if declared else MONEY_ZERO,
         gross_total=declared.gross if declared else MONEY_ZERO,
         classes=classes,
+        lines=declared_lines,
         is_copy=as_copy or receipt.copy_count > 0,
         copy_count=receipt.copy_count,
     )

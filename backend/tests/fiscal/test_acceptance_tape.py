@@ -631,6 +631,34 @@ def test_the_acceptance_tape(  # noqa: PLR0915
     block = printing.receipt_block(db, company_id, inv1.id)
     _expect("1", "print after the receipt", "1/1 NS", block.receipt_number)
 
+    # **What the paper prints on each line** — the declaration's, not the document's. CIS §4 e
+    # wants a description, a unit price, a quantity and a total against every line, and the
+    # figures are the wire's: the VAT-inclusive `prc` and the taxable amount the class totals
+    # are the sum of. Four lines, in the order they were keyed.
+    printed = {line.name: line for line in block.lines}
+    _expect("1", "printed lines", 4, len(block.lines))
+    _expect("1", "printed X prc", D("2360.00"), printed[tape.x.name].unit_price)
+    _expect("1", "printed X taxable", D("23600.00"), printed[tape.x.name].taxable)
+    _expect("1", "printed X tax", D("3600.00"), printed[tape.x.name].tax)
+    _expect("1", "printed X class", "B", printed[tape.x.name].tax_class)
+    _expect("1", "printed S taxable", D("11800.00"), printed[tape.s.name].taxable)
+    # E and Z are exempt and zero-rated, so their inclusive price is their price: 5 x 1 000 and
+    # 2 x 5 000, with no tax on either.
+    _expect("1", "printed E prc", D("1000.00"), printed[tape.e.name].unit_price)
+    _expect("1", "printed E taxable", D("5000.00"), printed[tape.e.name].taxable)
+    _expect("1", "printed E class", "A", printed[tape.e.name].tax_class)
+    _expect("1", "printed Z prc", D("5000.00"), printed[tape.z.name].unit_price)
+    _expect("1", "printed Z taxable", D("10000.00"), printed[tape.z.name].taxable)
+    _expect("1", "printed Z class", "C", printed[tape.z.name].tax_class)
+    # The lines add up to the receipt's own taxable total, which is the property a receipt
+    # whose lines came from somewhere else would not have.
+    _expect(
+        "1",
+        "printed lines sum to the total",
+        block.taxable_total,
+        sum(line.taxable for line in block.lines),
+    )
+
     sale_movement = _movements_of(db, tape, inv1)[0]
     _expect("1", "stock_io sarNo", 2, sale_movement.sar_no)
     _expect("1", "stock_io sarTyCd", SALE_OUT, sale_movement.payload["sarTyCd"])
@@ -768,6 +796,13 @@ def test_the_acceptance_tape(  # noqa: PLR0915
 
     _drain(db, tape, sandbox_client)
     _expect("4", "INV-3 receipt", "3/4 NS", _counter(_receipt_of(db, tape, inv3)))
+    # **The printed line is in RWF**, and this is the row that proves it: the document is USD
+    # 47.20 and the paper says 62 304, because a foreign-currency document is declared in base
+    # from its frozen base amounts (decision 3). A receipt that printed the document's own line
+    # would put dollars under a franc total.
+    block3 = printing.receipt_block(db, company_id, inv3.id)
+    _expect("4", "printed prc RWF", D("3115.20"), block3.lines[0].unit_price)
+    _expect("4", "printed taxable RWF", D("62304.00"), block3.lines[0].taxable)
     _expect("4", "master X", D(69), _master_quantity(db, tape, tape.x))
     _after_every_row(db, tape, "4")
 

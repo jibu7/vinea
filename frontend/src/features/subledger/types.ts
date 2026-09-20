@@ -3,6 +3,11 @@
  * AR and AP share every shape here: the role is a path segment on the API and a prop on the
  * screens, never a second set of types. */
 
+import { PaymentMethod as PaymentMethodValues } from "@/lib/api-enums";
+import type { PaymentMethod } from "@/lib/api-enums";
+
+export type { PaymentMethod };
+
 /** `ar` = customers, `ap` = suppliers. The same partner row is often both. Everything a
  * user reads about a role lives under `arap.role.<role>` in the message catalogue. */
 export type PartnerRole = "ar" | "ap";
@@ -249,6 +254,18 @@ export const INSTRUMENT_TYPES: readonly InstrumentType[] = [
   "other",
 ] as const;
 
+/**
+ * How a document is paid (P7 decision 7), in the order the picker offers them.
+ *
+ * Derived from the generated enum rather than re-listed: the values are the authority's seven
+ * payment types under Vinea's own names, and the adapter maps them onto `pmtTyCd 01–07`. A
+ * `"cash"` typed into a screen is the P5 step-6 defect exactly, which `api-enums.test.ts` now
+ * fails on. Labels live in the catalogue under `arap.documents.common.paymentMethodLabel.*`.
+ */
+export const PAYMENT_METHODS: readonly PaymentMethod[] = Object.values(
+  PaymentMethodValues,
+) as readonly PaymentMethod[];
+
 /** One component of one kit line, in the component item's **base** unit — what ships, not a
  * per-kit rate. A screen sends these only when it is invoicing a sales order whose kit line
  * was broken up by hand; keyed straight onto an invoice, a kit explodes from its catalogue
@@ -306,6 +323,18 @@ export interface DocumentCreatePayload {
   cash_account_id?: number | null;
   instrument_type?: InstrumentType | null;
   maturity_date?: string | null;
+  // --- P7 fiscalization (decision 7) ---------------------------------------------------------
+  /** Left unset it defaults from the payment terms — `credit` with them, `cash` without. */
+  payment_method?: PaymentMethod | null;
+  /** The customer's EBM purchase code, six characters. Required on a fiscalized sale to a
+   * customer with a TIN, and refused **at post** rather than here: whether it is needed depends
+   * on the company's devices and the partner's TIN. */
+  purchase_code?: string | null;
+  /** Which invoice a credit note refunds, when no line carries a `returns_line_id` that says
+   * so. RRA registers a refund against exactly one original. */
+  refund_of_document_id?: number | null;
+  /** One of the authority's §4.16 reason codes. Required on a fiscalized credit note. */
+  refund_reason?: string | null;
 }
 
 export interface PartnerDocument {
@@ -371,6 +400,14 @@ export interface PartnerDocumentDetail extends PartnerDocument {
   matured_entry_id: number | null;
   reversal_entry_id: number | null;
   reversed_on: string | null;
+  // --- P7 fiscalization ----------------------------------------------------------------------
+  payment_method: PaymentMethod | null;
+  purchase_code: string | null;
+  refund_of_document_id: number | null;
+  refund_reason: string | null;
+  /** The receipt RRA signed for this document, once its queue row has been sent. `null` while
+   * the row is still in flight — which is what the print refusal reads. */
+  fiscal_receipt_id: number | null;
   lines: PartnerDocumentLine[];
 }
 
@@ -629,6 +666,11 @@ export interface DocumentSummary {
   status: string;
   reference: string | null;
   description: string;
+  /** The receipt RRA signed, or `null`. On the summary as well as the detail because the credit
+   * note's *Refund of* picker is a listing: it offers the partner's **fiscalized** invoices,
+   * and the only other way to know which those are is `/fiscal/receipts`, which an AR clerk
+   * cannot read. */
+  fiscal_receipt_id: number | null;
 }
 
 /** Cursor pagination (ADR-11): `next_cursor` is the last id of this page. */

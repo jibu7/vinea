@@ -20,7 +20,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.fiscal import drainer
+from app.fiscal import drainer, enquiries, printing
 from app.fiscal import outbox as outbox_service
 from app.kernel.errors import LedgerStateError
 from app.models.fiscalization import (
@@ -32,6 +32,7 @@ from app.models.fiscalization import (
 )
 from app.models.subledger import DocumentStatus
 from app.subledger import documents as documents_service
+from app.tax import annexes
 from tests.fiscal.conftest import FiscalPosting
 from tests.fiscal.helpers import (
     APRIL,
@@ -334,3 +335,98 @@ def test_the_backoff_table_is_clamped_not_indexed_past_its_end() -> None:
     assert outbox_service.backoff_for(1) == timedelta(minutes=1)
     assert outbox_service.backoff_for(5) == timedelta(minutes=360)
     assert outbox_service.backoff_for(99) == timedelta(minutes=360)
+
+
+def test_a_reversed_sale_keeps_its_own_receipt_and_prints_the_refund_separately(
+    db: Session, fiscal_posting: FiscalPosting, sandbox_client: httpx.Client
+) -> None:
+    """What each reader of a reversed invoice's receipts sees — pinned, because `_receipt()`'s
+    default is a **semantic** choice and not a rendering one.
+
+    A reversed sale holds two receipts and four things read them, for three different reasons:
+
+    * the document detail's header and the print gate want the document's **own** — it is an
+      invoice, and the refund is a receipt *about* it;
+    * `record_copy` wants whichever is being reprinted, with its own counter;
+    * the receipts enquiry wants **all** of them, because the refund is reachable from nowhere
+      else;
+    * the VAT sales annex wants the **sale's** counters, which decision 12 asks of it.
+
+    A default of "the latest" satisfies exactly one of those and quietly breaks the other three.
+    This test is what would catch that: it asserts the four separately rather than asserting
+    that one function returns one row.
+    """
+    receive(fiscal_posting, db)
+    document = invoice(fiscal_posting, db)
+    _drain(db, fiscal_posting, sandbox_client)
+    documents_service.reverse_document(
+        db,
+        document,
+        on_date=APRIL,
+        reason="goods never delivered",
+        refund_reason=REFUND_REASON,
+        actor=fiscal_posting.owner,
+    )
+    _drain(db, fiscal_posting, sandbox_client)
+    db.flush()
+
+    company_id = fiscal_posting.company_id
+    receipts = {
+        receipt.receipt_type: receipt
+        for receipt in db.scalars(
+            select(FiscalReceipt).where(FiscalReceipt.company_id == company_id)
+        )
+    }
+    sale = receipts[FiscalReceiptType.NORMAL_SALE]
+    refund = receipts[FiscalReceiptType.NORMAL_REFUND]
+
+    # 1. The document's own block is the **sale**, after the reversal as before it.
+    block = printing.receipt_block(db, company_id, document.id)
+    assert block is not None
+    assert block.label == FiscalReceiptType.NORMAL_SALE
+    assert block.receipt_number == f"{sale.rcpt_no}/{sale.tot_rcpt_no} NS"
+    assert block.refund_of_tot_rcpt_no is None
+
+    # 2. The refund prints as its **own** receipt, naming the sale it refunds (§14).
+    refund_block = printing.receipt_block(db, company_id, document.id, receipt_id=refund.id)
+    assert refund_block is not None
+    assert refund_block.label == FiscalReceiptType.NORMAL_REFUND
+    assert refund_block.receipt_number == f"{refund.rcpt_no}/{refund.tot_rcpt_no} NR"
+    assert refund_block.refund_of_tot_rcpt_no == sale.tot_rcpt_no
+
+    # 3. Copy counters are **per receipt**, and a copy tells RRA nothing. Reprinting the sale
+    #    after the reversal is a copy of the sale; the refund's own counter does not move, or
+    #    the Z's copy count would stop being a count of pieces of paper.
+    before = len(_rows(db, company_id))
+    copy = printing.record_copy(db, company_id, document.id, actor=fiscal_posting.owner)
+    db.flush()
+    assert copy.label == FiscalReceiptType.NORMAL_SALE
+    assert copy.is_copy is True
+    assert sale.copy_count == 1
+    assert refund.copy_count == 0
+    assert len(_rows(db, company_id)) == before, "a copy is not a declaration"
+
+    refund_copy = printing.record_copy(
+        db, company_id, document.id, actor=fiscal_posting.owner, receipt_id=refund.id
+    )
+    db.flush()
+    assert refund_copy.label == FiscalReceiptType.NORMAL_REFUND
+    assert refund.copy_count == 1
+    assert sale.copy_count == 1, "copying the refund does not reprint the sale"
+    assert len(_rows(db, company_id)) == before
+
+    # 4. The enquiry returns **both**, in the order the authority issued them — the refund has
+    #    no document of its own, so this listing is the only place it is reachable from.
+    listed = enquiries.receipts(db, company_id, document_id=document.id)
+    assert [row.receipt_type for row in listed] == [
+        FiscalReceiptType.NORMAL_SALE,
+        FiscalReceiptType.NORMAL_REFUND,
+    ]
+
+    # 5. The VAT sales annex names the **sale's** counters. It reads
+    #    `PartnerDocument.fiscal_receipt_id` directly rather than through `_receipt()`, and this
+    #    is the assertion that keeps that true: an annex reporting a reversed invoice under the
+    #    refund's receipt number would not tie to anything RRA holds.
+    annex = annexes.sales_csv(db, company_id, period_from=APRIL, period_to=APRIL)
+    assert str(sale.rcpt_no) in annex
+    assert document.number in annex

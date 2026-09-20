@@ -211,6 +211,27 @@ class RefundReason(enum.StrEnum):
     OTHER_REASON = "13"
 
 
+#: §4.16's names beside its codes, so the sandbox can publish the table the way
+#: `/code/selectCodes` does and a credit note's reason picker is fed by a **sync** rather than
+#: by thirteen strings typed into a screen. Keeping them here keeps them inside
+#: `app/fiscal/rwanda/`, which is the only place that may know what RRA calls anything.
+REFUND_REASON_NAMES: dict[str, str] = {
+    RefundReason.MISSING_QUANTITY: "Missing quantity",
+    RefundReason.MISSING_ITEM: "Missing item",
+    RefundReason.DAMAGED: "Damaged",
+    RefundReason.WASTED: "Wasted",
+    RefundReason.RAW_MATERIAL_SHORTAGE: "Raw material shortage",
+    RefundReason.REFUND: "Refund",
+    RefundReason.WRONG_CUSTOMER_TIN: "Wrong customer TIN",
+    RefundReason.WRONG_CUSTOMER_NAME: "Wrong customer name",
+    RefundReason.WRONG_AMOUNT_OR_PRICE: "Wrong amount or price",
+    RefundReason.WRONG_QUANTITY: "Wrong quantity",
+    RefundReason.WRONG_ITEMS: "Wrong items",
+    RefundReason.WRONG_TAX_TYPE: "Wrong tax type",
+    RefundReason.OTHER_REASON: "Other reason",
+}
+
+
 # --- Response codes ----------------------------------------------------------------------
 #
 # The retry policy is decided from these, so they are constants rather than literals scattered

@@ -392,6 +392,9 @@ export function useDocumentPage(
     partnerId?: number;
     kind?: string;
     status?: string;
+    /** Off by default only where a caller says so: the credit note's *Refund of* picker must
+     * not ask for "every invoice of no partner" before a partner has been chosen. */
+    enabled?: boolean;
   },
 ) {
   const search = new URLSearchParams();
@@ -404,6 +407,7 @@ export function useDocumentPage(
   return useQuery({
     queryKey: [ROOT, role, "documents", params],
     queryFn: () => api.get<Page<DocumentSummary>>(`/subledger/${role}/documents?${search}`),
+    enabled: params.enabled ?? true,
   });
 }
 
@@ -435,7 +439,11 @@ export function useReverseDocument(role: PartnerRole) {
       payload,
     }: {
       documentId: number;
-      payload: { on_date: string; reason: string };
+      /** `refund_reason` is the authority's §4.16 code, required by the *service* when the
+       * document being reversed is a fiscalized invoice whose sale RRA signed — reversing it
+       * queues a full refund, and a refund carries a reason. Optional on the wire because the
+       * schema cannot see whether this document was ever registered. */
+      payload: { on_date: string; reason: string; refund_reason?: string | null };
     }) =>
       api.post<PartnerDocumentDetail>(
         `/subledger/${role}/documents/${documentId}/reverse`,
