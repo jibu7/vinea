@@ -151,6 +151,32 @@ import { navIntents, type IntentLabel } from "@/design/nav-tree";
  * remaining screens (the two Tax enquiries and the five Tax/GL reports) are step 8's and have
  * no row to be tagged yet, exactly as step 6's columns and sections had none.
  *
+ * Amended at P7 step 8 with the **other half of C.1.11** — a **Tax** block under Enquiries
+ * (Fiscal receipts, Fiscal queue history), a **Tax** block under Reports (VAT return, Daily
+ * fiscal report, Fiscal receipts) — and with **"FX revaluation"** under Reports → General
+ * Ledger. Six rows, and the phase's nav is then complete.
+ *
+ * (The prompt's own step 8 says "record these as the other half of C.1.10". That number is
+ * stale: step 6 needed an entry of its own and took C.1.10, so step 7's two blocks are C.1.11
+ * and C.1.12 and these belong to C.1.11. The Master Plan's note on the numbering says so.)
+ *
+ * **Why an enquiry and a report can carry the same label.** "Fiscal receipts" appears under
+ * both intents, and they are not the same screen. The enquiry is what somebody holding a piece
+ * of paper opens: one search box over the printed counter, the document number, the customer
+ * and the authority's invoice number. The report is what a month is closed on: per device, per
+ * range, what RRA signed beside what the sales ledger holds, and every document on one side and
+ * not the other. Appendix C already does this — "Age analysis" is an AR row and an AP row, and
+ * the intent is half the name.
+ *
+ * **Positions.** Both Tax blocks go last within their intent, after Order Entry, which is where
+ * the newest live module has landed every time. FX revaluation goes after Chart of accounts and
+ * before the phase-tagged `Bank reconciliation`, which keeps the live GL rows together and
+ * leaves the owner's tagged tail where it is — the same rule the Transactions block followed
+ * when it put the run beside Cashbook batches.
+ *
+ * Same footing as C.1.5's additions and C.1.8's two blocks: a change to the contract belongs in
+ * the document the contract lives in, which is why the Master Plan carries it too.
+ *
  * Amended before P6 step 1 with **"Documents"** under Transactions → AR and → AP, the other
  * half of that same C.1.7 entry. The appendix already recorded it: "the same hole is open in
  * AR and AP, one phase older and twice over". `POST /{role}/documents/{id}/reverse` and
@@ -242,11 +268,14 @@ const APPENDIX_C: Record<IntentLabel, Array<[string, string, string | null]>> = 
     ["Inventory", "Item enquiry", null],
     ["Order Entry", "Sales order enquiry", null],
     ["Order Entry", "Purchase order enquiry", null],
+    ["Tax", "Fiscal receipts", null],
+    ["Tax", "Fiscal queue history", null],
   ],
   "Reports": [
     ["General Ledger", "Account transactions", null],
     ["General Ledger", "Trial balance", null],
     ["General Ledger", "Chart of accounts", null],
+    ["General Ledger", "FX revaluation", null],
     ["General Ledger", "Bank reconciliation", "P8"],
     ["General Ledger", "Cashbooks", "P8"],
     ["General Ledger", "Balance sheet", "P10"],
@@ -271,6 +300,9 @@ const APPENDIX_C: Record<IntentLabel, Array<[string, string, string | null]>> = 
     ["Order Entry", "Purchase orders", null],
     ["Order Entry", "Goods received", null],
     ["Order Entry", "Landed cost", null],
+    ["Tax", "VAT return", null],
+    ["Tax", "Daily fiscal report", null],
+    ["Tax", "Fiscal receipts", null],
   ],
 };
 

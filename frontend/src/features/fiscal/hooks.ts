@@ -6,6 +6,7 @@ import { api } from "@/lib/api";
 import { FiscalOutboxStatus } from "@/lib/api-enums";
 import type {
   AttachReceiptPayload,
+  DailyReport,
   DeviceCreatePayload,
   DeviceSyncResult,
   FeedDecisionResult,
@@ -21,6 +22,7 @@ import type {
   QueueRow,
   QueueRowDetail,
   ReceiptBlock,
+  ReceiptListing,
   TinLookup,
 } from "./types";
 
@@ -476,6 +478,122 @@ export function useRejectImportDeclaration() {
       api.post<ImportDeclaration>(
         `/fiscal/import-declarations/${declarationId}/reject`,
         { note },
+        { "Idempotency-Key": idempotencyKey },
+      ),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: [ROOT] }),
+  });
+}
+
+// --- The enquiries and reports (P7 step 8) --------------------------------------------------
+
+/**
+ * The receipts RRA signed, searched the way somebody holding one searches.
+ *
+ * One box over the printed counter (`3`, `3/4`, `3/4 NS`), the document number, the partner
+ * and the authority's invoice number. Four fields would make a person guess which one their
+ * piece of paper matches; the server anchors each form rather than matching fuzzily, so a
+ * search for `1` does not return the day.
+ */
+export function useFiscalReceipts(
+  filters: {
+    deviceId?: number | null;
+    receiptType?: string;
+    partnerId?: number | null;
+    dateFrom?: string;
+    dateTo?: string;
+    search?: string;
+  } = {},
+) {
+  const query = new URLSearchParams();
+  if (filters.deviceId) query.set("device_id", String(filters.deviceId));
+  if (filters.receiptType) query.set("receipt_type", filters.receiptType);
+  if (filters.partnerId) query.set("partner_id", String(filters.partnerId));
+  if (filters.dateFrom) query.set("date_from", filters.dateFrom);
+  if (filters.dateTo) query.set("date_to", filters.dateTo);
+  if (filters.search) query.set("search", filters.search);
+  const suffix = query.toString() ? `?${query}` : "";
+  return useQuery({
+    queryKey: [ROOT, "receipts", suffix],
+    queryFn: () => api.get<FiscalReceipt[]>(`/fiscal/receipts${suffix}`),
+  });
+}
+
+/** One receipt, through the same query the listing uses — so the three ids it drills on
+ * (receipt → document → journal entry) cannot disagree with the row that was clicked. */
+export function useFiscalReceipt(receiptId: number | null) {
+  return useQuery({
+    queryKey: [ROOT, "receipt", receiptId],
+    queryFn: () => api.get<FiscalReceipt>(`/fiscal/receipts/${receiptId}`),
+    enabled: receiptId !== null,
+  });
+}
+
+/**
+ * The tie: what a device declared over a range, beside what the sales ledger holds.
+ *
+ * `enabled` on all three, because a listing with no device is a total across devices and the
+ * counters this report states are per device (decision 5).
+ */
+export function useReceiptListing(
+  deviceId: number | null,
+  dateFrom: string,
+  dateTo: string,
+) {
+  return useQuery({
+    queryKey: [ROOT, "receipt-listing", deviceId, dateFrom, dateTo],
+    queryFn: () =>
+      api.get<ReceiptListing>(
+        `/fiscal/receipts/listing?device_id=${deviceId}&date_from=${dateFrom}&date_to=${dateTo}`,
+      ),
+    enabled: deviceId !== null && Boolean(dateFrom && dateTo),
+  });
+}
+
+/** The day so far. An X is a question — it stores nothing and changes nothing, so it is never
+ * cached for long: the figure a shopkeeper is looking at is the one that has to be current. */
+export function useXReport(deviceId: number | null) {
+  return useQuery({
+    queryKey: [ROOT, "x-report", deviceId],
+    queryFn: () => api.get<DailyReport>(`/fiscal/devices/${deviceId}/x-report`),
+    enabled: deviceId !== null,
+    staleTime: 0,
+  });
+}
+
+/** The closed days, newest first. A Z is stored and immutable, so this one may be cached. */
+export function useZReports(deviceId: number | null) {
+  return useQuery({
+    queryKey: [ROOT, "z-reports", deviceId],
+    queryFn: () => api.get<DailyReport[]>(`/fiscal/devices/${deviceId}/z-reports`),
+    enabled: deviceId !== null,
+    staleTime: 30_000,
+  });
+}
+
+/**
+ * Take the Z: store the day and open the next one where this one ended.
+ *
+ * `Idempotency-Key` because a close cannot be taken back — a second one would store an empty
+ * day, move the boundary and spend an `FZR` number on it.
+ *
+ * It does **not** refuse over a queue that still holds rows, and the screen says so before the
+ * button rather than after. A Z records `queued_rows` on its face precisely so that a day
+ * closed over an unsent sale is evidence rather than a silent gap (decision 11); a refusal
+ * would make that figure dead and would leave a shop unable to close because a line was down.
+ */
+export function useCloseFiscalDay() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      deviceId,
+      idempotencyKey,
+    }: {
+      deviceId: number;
+      idempotencyKey: string;
+    }) =>
+      api.post<DailyReport>(
+        `/fiscal/devices/${deviceId}/close-day`,
+        {},
         { "Idempotency-Key": idempotencyKey },
       ),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: [ROOT] }),

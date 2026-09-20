@@ -7,7 +7,7 @@
  * screen re-deriving it from a partner lookup would be a second place for the answer to live —
  * and it is the frontend's job to know its own routes. This file is where the two meet, once.
  *
- * It exists because P6 turned one source type into five. Until this phase a move could only
+ * It exists because P6 turned one source type into five, and P7 made it seven. Until this phase a move could only
  * have come from an inventory document, so the enquiry screen wrote
  * `source_doc_type === "inventory_document"` inline and built the href by hand; every P6 move
  * therefore rendered a blank cell on a screen that had shipped and passed review, which is the
@@ -23,6 +23,13 @@ const ROUTES: Record<string, string> = {
   ap_document: "/ap/documents",
   goods_received_note: "/oe/goods-received",
   landed_cost_document: "/oe/landed-costs",
+  // P7's two, and both land on a **report** rather than on a transaction screen. That is not
+  // an accident of routing: `/tax/vat-returns` files a return and `/gl/fx-revaluations` posts
+  // a run, and somebody arriving from a journal entry is reading, not acting. The report route
+  // takes an id for exactly this — a `VATR-` or `FXR-` entry opens the document it belongs to
+  // instead of a picker that asks which one they meant.
+  vat_return: "/tax/reports/vat-return",
+  fx_revaluation: "/gl/reports/fx-revaluation",
 };
 
 /** The href for one resolved source, or `null` when this phase has no page for it. */

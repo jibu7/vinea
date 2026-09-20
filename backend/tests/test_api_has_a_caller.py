@@ -130,14 +130,12 @@ NO_UI: dict[str, str] = {
     #
     # `POST /fiscal/outbox/drain` stays exempt and always will — it is the scheduler's hook,
     # `by design` for the same reason `jobs/sweep` is.
-    # --- GAP (P7, step 8): closing the fiscal day ----------------------------------------------
     #
-    # The screen is **Transactions → Tax → Close day**, which shows the X and offers the Z. The
-    # X and the Z listing beside it are reads and need no exemption.
-    "POST /api/v1/fiscal/devices/{device_id}/close-day": (
-        "GAP (P7, step 8) — deleted by Close day, which stores the Z and opens the next day "
-        "where this one ended."
-    ),
+    # **Step 8 closed the last P7 gap.** `POST /fiscal/devices/{device_id}/close-day` carried a
+    # `GAP (P7, step 8)` line here until Reports → Tax → Daily fiscal report shipped with a
+    # **Close day** button on the X view, under `fiscal:close_day` and pressed by
+    # `e2e/p7-enquiries-reports.spec.ts`. After this step the register carries exactly one P7
+    # entry — the drain — and step 9 inherits no surprise.
     # --- GAP: the operator console, planned but unscheduled ------------------------------------
     "POST /api/v1/operator/tenants/{company_id}/activate": (
         "GAP (SaaS admin, Appendix C.2) — the operator console has no screens in any phase yet. "
