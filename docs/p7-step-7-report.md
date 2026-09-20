@@ -187,6 +187,7 @@ Figures read off the page, per rule 13:
 
 | screen | figure |
 |---|---|
+| VAT return, filing | the range is filed, a second filing is refused `already filed over …`, Reverse frees it, and the spec ends with **no posted return** on the fixture |
 | The company with **no device** | `fiscalized: false`, no purchase-code requirement against a customer who has a TIN, no refund reason on its credit note, and an empty state on the queue — asserted on Kivu Traders, not assumed from the primary company's absence of one |
 | Invoice | the purchase code is demanded inline, and the posted document totals **59,000** (25 x 2 000 + 18 %) |
 | Document detail | the receipt counter in its CIS §7.25 shape, the authority's own `SDC010000005`, and the copy count 0 → 1 |
@@ -235,17 +236,29 @@ rediscovered:
   thing under test on that line. It passes cold, after `dated-rate.spec.ts`, and in whichever
   shard it lands.
 * **The VAT spec seeds its own tagged postings** — the invoice and the credit note keyed earlier
-  in the same file — but it does not and cannot own the range. A return is a company-wide
-  aggregate over a date range on a shared fixture: another spec posting a taxed AR document this
-  month moves the sections, and one posting an untagged journal against `2200` moves the
-  difference. Isolating it would take a company of its own, which the fiscal device precludes.
-  So **it asserts no total**. It asserts the claim the screen exists to make, which holds for any
-  set of postings: every franc of movement on a VAT account is either declared by the return or
-  named by a line the report lists. The arithmetic runs across two panels of the same page —
-  `2200`'s difference against the sum of the untagged rows under it — so it is a figure read off
-  the screen rather than a constant that happens to match today. Said here rather than left to be
-  discovered, because "it leans on `ar-ap-acceptance` rows" is the honest failure mode and this
-  one does not.
+  in the same file — but it does not own the range. A return is a company-wide aggregate over a
+  date range on a shared fixture: another spec posting a taxed AR document this month moves the
+  sections, and one posting an untagged journal against `2200` moves the difference.
+
+  Owning the range **is possible** and was not chosen: a spec can sign up its own company,
+  register a device and initialize it against the sandbox from a real client — `p7-maintenance`
+  already does the device half, and `p6-cycle-tape` already does the signup half. It is the
+  expensive option, not a blocked one, and it is the right one the day this spec needs a
+  hand-worked total. It does not: what it needs is the tie, and the tie is a **delta** — every
+  franc of movement on a VAT account is either declared by the return or named by a line the
+  report lists, which holds for any set of postings. The arithmetic runs across two panels of
+  the same page (`2200`'s difference against the sum of the untagged rows under it), so it is a
+  figure read off the screen rather than a constant that happens to match today. Said here
+  rather than left to be discovered, because "it leans on `ar-ap-acceptance` rows" is the honest
+  failure mode and this one does not.
+* **It files, and it hands the range back.** `vat_period_filed` refuses any later filing that
+  overlaps a **posted** return, so a spec that filed the current month on the shared fixture and
+  walked away would refuse its own next run and step 9's tape after it. So the spec files, proves
+  the refusal by filing again, reverses, files once more to prove the reversal freed the range,
+  and reverses that too — ending with no posted return on the company, asserted. Reversing is
+  also the only way the range *can* come back (`module_reversal("tax")`), and doing it here is
+  what gives **Reverse** a caller that is pressed rather than merely present. The fixture being
+  put back, the guard being proven and the rule-14 line being earned are the same three clicks.
 * **`toISOString()` is banned in `e2e/` too**, and the first draft tripped it three times.
   `src/lib/no-utc-dates.test.ts` caught it: CI runs in UTC and could never have told a UTC
   rendering from a local one, while a run in Kigali between midnight and 02:00 would have dated

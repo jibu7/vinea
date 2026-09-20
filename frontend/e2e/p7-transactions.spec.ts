@@ -726,6 +726,54 @@ test.describe("the fiscalized transaction screens", () => {
     await expect(
       page.locator("tbody tr").filter({ hasText: "settled" }).first(),
     ).toContainText(netBeforeFiling);
+
+    // --- and the range is handed back ------------------------------------------------------
+    //
+    // **Filing is not something a spec may leave behind.** `vat_period_filed` refuses any later
+    // filing that overlaps a posted return, so a spec that filed the current month on the shared
+    // fixture and walked away would refuse its own next run, and step 9's tape through the
+    // screens after it. The range has to come back.
+    //
+    // Reversing is also the only way it can: the settlement entry reverses through the return
+    // and nowhere else (`module_reversal("tax")`). So the cycle below is the fixture being put
+    // back *and* the guard being proven *and* Reverse getting a caller that is pressed rather
+    // than merely present — the three are the same three clicks.
+    await page.getByTestId("file-return").click();
+    await page.getByTestId("confirm-file").click();
+    await expect(page.getByTestId("file-error")).toContainText(/already filed over/i);
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+
+    const openFiled = async () => {
+      await page.reload();
+      await page.waitForSelector("h1:has-text('VAT return')");
+      const row = page.locator("tr").filter({ has: page.locator('[data-testid^="filed-net-"]') });
+      await row.first().getByRole("button", { name: "Open", exact: true }).click();
+    };
+
+    await openFiled();
+    await page.getByTestId("vat-reverse-reason").fill(`Range handed back by the run ${SUFFIX}`);
+    await page.getByTestId("confirm-vat-reverse").click();
+    await expect(page.getByText(/VATR-\d+ reversed/).first()).toBeVisible();
+
+    // The proof the range is free is that it can be filed again — the clash check counts only
+    // **posted** returns, which is what the refusal above meant by "Reverse it first".
+    await page.reload();
+    await page.waitForSelector("h1:has-text('VAT return')");
+    await page.getByTestId("file-return").click();
+    await page.getByTestId("confirm-file").click();
+    await expect(page.getByText(/VATR-\d+ filed/).first()).toBeVisible();
+
+    // …and this one goes back too, so the spec leaves nothing filed on a shared fixture.
+    await openFiled();
+    await page.getByTestId("vat-reverse-reason").fill(`Range handed back by the run ${SUFFIX}`);
+    await page.getByTestId("confirm-vat-reverse").click();
+    await expect(page.getByText(/VATR-\d+ reversed/).first()).toBeVisible();
+
+    const returns = (await apiOk(page, "/tax/vat-returns")) as Array<{ status: string }>;
+    expect(
+      returns.filter((row) => row.status === "posted"),
+      "the spec files nothing it does not hand back",
+    ).toEqual([]);
   });
 
   // PATH: /gl/fx-revaluations — preview a run over an open foreign-currency invoice, post it,
