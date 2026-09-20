@@ -84,6 +84,27 @@ Published in **full** rather than sampled, deliberately: this is the one code ta
 *operator* picks from directly, and a sandbox offering three of thirteen would leave the picker
 looking complete and refusing the other ten at post.
 
+## The reversal's refund, moved here from step 8
+
+Decision 7: reversing a fiscalized invoice queues a **full refund** rather than cancelling the
+sale, so the document ends up holding two receipts — the `NS` it was declared under and the `NR`
+that reversed it. The `NR` has no document of its own. If it is not reachable from the invoice it
+is not reachable at all, and it is a legal document the customer is owed.
+
+`_receipt()` in `app/fiscal/printing.py` already **documented** returning "the latest, which is
+the refund when it has one", and returned the `NS`: it preferred `document.fiscal_receipt_id`,
+which the drainer deliberately leaves pointing at the sale so the subledger's link and the
+open-item history keep naming it. The two answer different questions and only one of them is
+"what comes out of the printer now". The code now matches its own docstring, `receipt_id` names a
+specific receipt on both the read and the copy, and the panel lists every receipt with the print
+target marked and the others one press away — so the sale stays printable rather than becoming
+unreachable. Copying the refund does not make the sale look reprinted, which keeps the Z's copy
+count a count of pieces of paper.
+
+The drainer's own comment scheduling this for step 8 is what named the requirement; it is
+satisfied where it stands, and the e2e posts an invoice, reverses it with a §4.16 reason, and
+asserts both counters on the page and that Print is pointed at the `NR`.
+
 ## Decisions worth review
 
 **The *Refund of* picker offers posted fiscalized invoices, not open ones.** The prompt says
@@ -114,18 +135,27 @@ into the phase report if it is still outstanding at step 9.
 
 ## Plan deviations
 
-* **`/tax/vat-returns` and `/gl/fx-revaluations`, singular**, and the FX screen under
-  Transactions → General Ledger. The step-3 and step-5 `NO_UI` comments guessed `/tax/vat-returns`,
-  `/gl/fx-revaluations` and a "General Ledger → Period end" group that does not exist. The
-  prompt's step-7 list is the contract and those comments predate the screens being placed. The
-  register now says so where the fourteen lines were.
+* **The routes are plural** — `/tax/vat-returns` and `/gl/fx-revaluations`. The prompt's step-7
+  list writes them singular; the rule-14 register had already named the plural ones, and plural
+  is the repo's own listing convention (`/ar/documents`, `/inventory/documents`,
+  `/oe/sales-orders`): a screen that lists rows and opens one is plural. What the earlier
+  register comment got wrong was the **placement** — there is no "General Ledger → Period end"
+  group in the owner's tree, and the FX revaluation row sits directly after Cashbook batches
+  under Transactions → GL, which is where it is. Labels and placement follow the prompt; only
+  the path spelling follows the repo. Both corrections are in the register where the fourteen
+  lines were.
 * **`qrcode.react` is a new frontend dependency.** The CIS receipt prints a QR whose content is
   §7.24.7's, assembled by the backend and stored with the receipt — nothing on the client
   composes it. Its lockfile entry was generated with the **image's own npm**: the host's npm 11
   prunes a nested `@swc/helpers` that npm 10's `npm ci` then refuses to install around, so a
   lock written by the host fails the Docker build.
-* **The step-5 `NO_UI` comment said "five lines" for a block that held four.** Corrected in
-  place. A count in a comment is the kind of thing a reader trusts.
+* **The register held fourteen `GAP (P7, step 7)` endpoints, not fifteen.** Its own prose said
+  "Six lines" + "Five lines" + four acts = 15, but the middle block listed four entries. The
+  count is checkable — `git show main:backend/tests/test_api_has_a_caller.py`, count the keys
+  between the two section markers — and it is fourteen. Corrected in the register rather than
+  carried. All fourteen are deleted by a screen a person can open and press; **none** by a hook
+  written to satisfy the matcher, and `verify` and `attach-receipt` in particular are now
+  pressed by the e2e rather than merely called.
 
 ## What the tests prove
 
@@ -138,6 +168,7 @@ Figures read off the page, per rule 13:
 
 | screen | figure |
 |---|---|
+| The company with **no device** | `fiscalized: false`, no purchase-code requirement against a customer who has a TIN, no refund reason on its credit note, and an empty state on the queue — asserted on Kivu Traders, not assumed from the primary company's absence of one |
 | Invoice | the purchase code is demanded inline, and the posted document totals **59,000** (25 x 2 000 + 18 %) |
 | Document detail | the receipt counter in its CIS §7.25 shape, the authority's own `SDC010000005`, and the copy count 0 → 1 |
 | Fiscal queue | the device's pending count, and a payload with no key in it |
@@ -145,6 +176,8 @@ Figures read off the page, per rule 13:
 | Import declarations | **240** declared |
 | VAT return | the `2200` movement matched franc-for-franc against what the return declares of it, and the settlement entry named as the untagged movement afterwards |
 | FX revaluation | **708** — 10 x USD 2.00 + 18 % = USD 23.60, carried at 1 320 and revalued at 1 350 |
+| Verify / Attach | the sandbox is driven to `accept_then_timeout`, the row goes `unknown`, **Retry is disabled**, **Verify with device** moves it to `needs_receipt`, and **Attach receipt manually** is keyed with the six fields read off the authority's own ledger — its counters, not ours |
+| A reversed sale | both receipts listed, and Print pointed at the `NR` |
 
 Three things the run taught, each now written into the spec rather than left to be
 rediscovered:
@@ -158,6 +191,21 @@ rediscovered:
 * **The sandbox is reset first.** Its ledger lives in the container's memory and `make db-reset`
   does not touch it, so a second run starts Vinea's `FIS` sequence at 1 while the authority still
   remembers invoice 1 — `994`, and a stale fixture wearing the clothes of a bug.
+* **Labels were scanned for loose lookups before the first push**, which is the step-6 lesson
+  as a rule rather than a memory. A script cross-matched every label these screens introduce
+  against every `getByLabel("…")` and `getByRole("button", { name: "…" })` in the suite, in both
+  directions. It found four collisions — `Accept`/`Accepted`, `Approve`/`Approved`,
+  `Open`/`Confirm Reopen`, and `Print`/**`Copy print`** — none of which fails today because each
+  lookup is row- or page-scoped, and all of which are now `exact`. The `Print` one is the
+  instructive one: `ReportPage` now carries a second print control, `name` matching is loose and
+  case-insensitive, and `ar-ap-reports.spec.ts` would have started failing the day a report
+  gained a receipt. That spec is tightened too.
+* **Every spec that opens a screen this step touched was run** — eleven files, 59 tests, not
+  just the ones with "fiscal" in the name. That is how the FX literal was caught disagreeing
+  with `dated-rate.spec.ts`, which seeds USD rates of its own: the invoice booked at 1 400 and
+  the hand-worked 708 became −1 180. The booking rate is now typed on the document and the rate
+  in force at the revaluation date is asserted before the figure is, so the arithmetic is this
+  test's own rather than the fixture's.
 * **`toISOString()` is banned in `e2e/` too**, and the first draft tripped it three times.
   `src/lib/no-utc-dates.test.ts` caught it: CI runs in UTC and could never have told a UTC
   rendering from a local one, while a run in Kigali between midnight and 02:00 would have dated
@@ -187,7 +235,8 @@ branch head. Everything else ran against the head.
 | `npm run lint` | clean (pre-existing `react-hooks/exhaustive-deps` warnings only) |
 | `npx vitest run` | 391 passed, 16 files |
 | `npm run build` | compiled; the five new routes built |
-| `e2e/p7-transactions.spec.ts` + `p7-maintenance` + `ar-ap-documents` | 19 passed, on a reset database with the sandbox up |
+| `e2e/p7-transactions.spec.ts` | 13 passed, on a reset database with the sandbox up |
+| every spec that opens a screen this step touched | 59 passed — `ar-ap-{acceptance,allocation,corrections,documents,reports}`, `dated-rate`, `empty-state-vs-failure`, `p6-{cycle-tape,enquiries-reports,orders,maintenance}`, `p7-maintenance` |
 | `e2e/accessibility-transactions.spec.ts` | 32 passed, including the four new Tax rows and the FX row |
 
 ## What step 8 owes

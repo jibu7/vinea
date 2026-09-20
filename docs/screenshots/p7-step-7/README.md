@@ -13,7 +13,8 @@ cd frontend
 OUT=../docs/screenshots/p7-step-7 npx tsx scripts/capture-p7-transactions.ts
 ```
 
-`ONLY` re-captures a subset, so changing one screen does not rewrite the other eighteen files:
+`ONLY` re-captures a subset — navigation included, so a subset run does not walk a screen whose
+fixture it is not setting up:
 
 ```sh
 OUT=../docs/screenshots/p7-step-7 ONLY=4-cis-receipt-print npx tsx scripts/capture-p7-transactions.ts
@@ -31,6 +32,7 @@ OUT=../docs/screenshots/p7-step-7 ONLY=4-cis-receipt-print npx tsx scripts/captu
 | 8 | Import declarations, waiting to be matched to a Vinea item | `8-import-declarations-{light,dark}.png` |
 | 9 | VAT return, the figures with the tie under them | `9-vat-return-{light,dark}.png` |
 | 10 | FX revaluation, the preview per open foreign-currency document | `10-fx-revaluation-{light,dark}.png` |
+| 11 | A reversed sale holding **both** receipts, with the one Print produces marked | `11-document-both-receipts-{light,dark}.png` |
 
 ## Shot 4 is taken under `emulateMedia({ media: "print" })`
 
@@ -47,6 +49,14 @@ Two details in that shot are worth naming, because both are rules rather than st
   currency is declared in RWF from its frozen base amounts (decision 3), so the receipt's line
   amounts come out of the stored request rather than off the ledger line. They also carry the
   item's name, which a line keyed with an item and no typed description does not.
+
+## Shot 11 is the reversal, and it is the one worth reading twice
+
+Reversing a fiscalized invoice queues a **full refund** rather than cancelling the sale
+(decision 7), so the document ends up holding two receipts: the `NS` it was declared under and
+the `NR` that reversed it. The `NR` has no document of its own, so if it is not reachable from
+the invoice it is not reachable at all. The panel lists both, Print is pointed at the refund —
+what the document most recently became — and the sale is one press away.
 
 ## The RRA logo is a bordered placeholder
 

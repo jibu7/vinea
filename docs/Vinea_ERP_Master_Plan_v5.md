@@ -511,6 +511,11 @@ The owner's original menu ordering (software_interface docx) is **adopted as the
    This is **C.2's "fiscalization status/queue screens (P7)" made good**: the addition was
    promised there without a home, and this is the home.
 
+   **The routes are plural** — `/tax/vat-returns`, not `/tax/vat-return` — which is the repo's
+   own listing convention (`/ar/documents`, `/inventory/documents`, `/oe/sales-orders`): a
+   screen that lists rows and opens one is plural. The P7 prompt's step-7 list writes them
+   singular; the rule-14 register had already named the plural ones, and that is what shipped.
+
    The first three read on `fiscal:setup_manage` **or** `fiscal:reports_view` — exactly what
    `_require_view` in the API accepts — so a clerk watching a stuck queue does not need the
    authority to reconfigure a device; the acts on them are `fiscal:queue_manage` and are gated
