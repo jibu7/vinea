@@ -405,7 +405,7 @@ test.describe("the tax enquiries and reports", () => {
 
   // PATH: /tax/reports/daily-fiscal -> GET /fiscal/devices/{id}/x-report, GET /fiscal/queue.
   // CANNOT SEE: what a Z stores — that is the next test, after this one has closed the day.
-  test("the X view warns before the button while a row is still in flight", async ({
+  test("the day closes over a row in flight, and the Z says how many", async ({
     page,
     request,
   }) => {
@@ -417,8 +417,8 @@ test.describe("the tax enquiries and reports", () => {
     await sandboxMode(request, "down");
     await postInvoice(page, "1", "stuck");
     await drain(page);
-    expect(await pendingRows(page), "the sale is stuck behind an unreachable authority")
-      .toBeGreaterThan(0);
+    const inFlight = await pendingRows(page);
+    expect(inFlight, "the sale is stuck behind an unreachable authority").toBeGreaterThan(0);
 
     await page.goto("/tax/reports/daily-fiscal");
     await page.waitForSelector("h1:has-text('Daily fiscal report')");
@@ -431,20 +431,66 @@ test.describe("the tax enquiries and reports", () => {
     await expect(page.getByTestId("close-day-warning")).toBeVisible();
     await expect(page.getByTestId("close-day-clear")).toHaveCount(0);
     await expect(page.getByTestId("close-day")).toBeEnabled();
-    await expect(page.getByTestId("day-queued-rows")).not.toHaveText("0");
 
-    // --- the authority comes back, and the warning goes with it ---------------------------
+    // **By status, not as one number.** `queued` and `sending` clear themselves; `failed`,
+    // `unknown` and `needs_receipt` each wait for a person, for three different reasons. A
+    // reader deciding whether to close needs to know which kind they have.
+    const byStatus = page.getByTestId("close-day-pending-by-status");
+    await expect(byStatus).toBeVisible();
+    await expect(byStatus).toContainText("Queued");
+    await expect(byStatus.locator("li")).not.toHaveCount(0);
+
+    // And the text says where those sales go — the Z of the day the authority signs them, not
+    // this one.
+    await expect(page.getByTestId("close-day-warning")).toContainText(
+      "the Z of the day the authority signs it",
+    );
+    await expect(page.getByTestId("day-queued-rows")).toHaveText(String(inFlight));
+
+    // --- closed **over** the row, and the Z carries the count ------------------------------
+    //
+    // Two screens, one count: what the X warned about, and what the Z recorded on its face.
+    // This is decision 11's whole reason for storing `queued_rows`, and the only way to see it
+    // is to close over something.
+    await page.getByTestId("close-day").click();
+    await expect(page.getByText(/Z-\d+ stored/).first()).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByTestId("z-number").first()).toHaveText(/^Z-\d+$/);
+    await expect(page.getByTestId("day-queued-rows")).toHaveText(String(inFlight));
+
+    // **A queued row is not a receipt, and this is where that shows.** Two sales stand in this
+    // range — the USD invoice the setup signed, and the one the authority never got — and the
+    // Z counts **one**. The other is not missing and not silently dropped: it is in
+    // `queued_rows` above, which is the whole reason decision 11 stores that figure.
+    await expect(page.getByTestId("day-ns-count")).toHaveText("1");
+    await expect(page.getByTestId("day-nr-count")).toHaveText("0");
+
+    // --- the authority comes back, and the sale lands on the *next* Z ----------------------
+    //
+    // Which is the claim the warning makes, made good. Draining here also leaves the queue
+    // clear for the rest of the file, and the second close keeps that sale out of the next
+    // test's range.
     await sandboxMode(request, "up");
+
+    // **Past the close's second before draining, deliberately.** A Z's bounds are floored to a
+    // second because `sdcDateTime` has no finer resolution, and a receipt signed in the very
+    // second a Z was taken falls inside that Z's *range* while its figures are already frozen —
+    // and the next Z opens exclusively at the same instant, so neither counts it. The backend's
+    // own boundary test sleeps 2.05s for exactly this reason
+    // (`test_daily_report.py::test_a_second_z_covers_only_what_came_after_the_first`). This is
+    // the resolution the design has, not a flake being papered over: a real device signs and
+    // closes minutes apart, and only a test is fast enough to land on the boundary.
+    await page.waitForTimeout(1500);
     await drainUntilClear(page);
-    await page.reload();
+
+    await page.goto("/tax/reports/daily-fiscal");
     await page.waitForSelector("h1:has-text('Daily fiscal report')");
     await expect(page.getByTestId("close-day-clear")).toBeVisible();
     await expect(page.getByTestId("close-day-warning")).toHaveCount(0);
-
-    // Close what is standing so far — everything this fixture and any earlier spec left — so
-    // the next test's Z covers its own three documents and nothing else.
     await page.getByTestId("close-day").click();
     await expect(page.getByText(/Z-\d+ stored/).first()).toBeVisible({ timeout: 30_000 });
+    // The sale the earlier Z could not count is on this one, and this one closed over nothing.
+    await expect(page.getByTestId("day-ns-count")).toHaveText("1");
+    await expect(page.getByTestId("day-queued-rows")).toHaveText("0");
   });
 
   // PATH: /tax/reports/daily-fiscal and /tax/reports/receipts -> GET x-report, z-reports,

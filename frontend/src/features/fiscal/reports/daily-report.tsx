@@ -13,6 +13,7 @@ import { TBody, TD, TH, THead, TR, Table } from "@/design/components/table";
 import { Tabs, TabsList, TabsTrigger } from "@/design/components/tabs";
 import { useToast } from "@/design/components/toast";
 import { isApiError, useHasPermission } from "@/features/auth/hooks";
+import { FiscalOutboxStatus } from "@/lib/api-enums";
 import { useCompanyDetails, useCurrencies } from "@/features/gl/hooks";
 import { exportToCsv } from "@/lib/csv";
 import { newDraftId } from "@/lib/drafts";
@@ -26,6 +27,13 @@ import {
   useZReports,
 } from "../hooks";
 import type { DailyFigures, DailyReport } from "../types";
+
+/** The two states a row cannot move out of by itself. Everything else is "in flight" and is
+ * what `pending_rows` counts — so this is the one place the two definitions meet. */
+const TERMINAL_ON_THE_DAY: ReadonlySet<string> = new Set([
+  FiscalOutboxStatus.SENT,
+  FiscalOutboxStatus.CANCELLED,
+]);
 
 /**
  * Reports → Tax → **Daily fiscal report** (P7 step 8): the X live, the Zs closed, and the act
@@ -50,6 +58,7 @@ import type { DailyFigures, DailyReport } from "../types";
  */
 export function DailyFiscalReport() {
   const t = useTranslations("fiscal.daily");
+  const tq = useTranslations("fiscal.queue");
   const tr = useTranslations("reports");
   const toast = useToast();
   const showApiError = useApiErrorToast();
@@ -74,6 +83,20 @@ export function DailyFiscalReport() {
   const close = useCloseFiscalDay();
 
   const pending = queue.data?.[0]?.pending_rows ?? 0;
+  /**
+   * The rows in flight **by status**, not as one number.
+   *
+   * `queued` and `sending` clear themselves; `failed`, `unknown` and `needs_receipt` each wait
+   * for a person, and they wait for three different reasons — RRA refused, RRA may be holding
+   * the sale, RRA is holding it and Vinea has no receipt. A single "5 rows pending" tells
+   * somebody deciding whether to close that there is a queue, and nothing about whether it is
+   * a drain away or a morning's work.
+   *
+   * `pending_rows` is Σ of exactly these, so the breakdown and the total cannot disagree.
+   */
+  const pendingByStatus = (queue.data?.[0]?.counts ?? []).filter(
+    (count) => !TERMINAL_ON_THE_DAY.has(count.status) && count.rows > 0,
+  );
 
   const base = (currencies.data ?? []).find((c) => c.is_base);
   /** The **declared** scale: two decimals, whatever the currency's own places are. See the
@@ -206,7 +229,20 @@ export function DailyFiscalReport() {
                       <AlertTriangle className="mt-0.5 size-4 shrink-0" />
                       <div>
                         <p className="font-semibold">{t("pendingWarningTitle")}</p>
-                        <p>{t("pendingWarning", { count: pending })}</p>
+                        <ul
+                          data-testid="close-day-pending-by-status"
+                          className="flex flex-wrap gap-x-3 pt-0.5 font-mono"
+                        >
+                          {pendingByStatus.map((count) => (
+                            <li key={count.status}>
+                              {t("pendingByStatus", {
+                                rows: count.rows,
+                                status: tq(`statusLabel.${count.status}`),
+                              })}
+                            </li>
+                          ))}
+                        </ul>
+                        <p className="pt-1">{t("pendingWarning")}</p>
                       </div>
                     </div>
                   ) : (

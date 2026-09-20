@@ -2402,7 +2402,7 @@
       "closing": "Closing…",
       "closed": "{number} stored. The next day opens where this one ended.",
       "closeFailed": "The day could not be closed",
-      "pendingWarning": "{count, plural, one {# row is} other {# rows are}} still in flight on this device. Closing now is allowed and the Z will record it on its face — but those receipts will land in the next day, not this one.",
+      "pendingWarning": "Closing now is allowed. None of these sales is on this Z — each appears on the Z of the day the authority signs it, and this Z records how many were still in flight when it was taken.",
       "pendingWarningTitle": "The queue is not empty",
       "queueClear": "The queue is clear. Everything this device has sent has been signed.",
       "nsCount": "Sales (NS)",
@@ -2440,7 +2440,8 @@
       "zHeading": "{number} — {from} to {to}",
       "sdcBlock": "SDC {sdc} · MRC {mrc}",
       "noDevice": "Register an EBM device before asking for a day's report.",
-      "theDay": "The day"
+      "theDay": "The day",
+      "pendingByStatus": "{rows} {status}"
     },
     "receiptsListing": {
       "title": "Fiscal receipts listing",

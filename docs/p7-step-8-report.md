@@ -147,41 +147,99 @@ base reversal — and that is the honest answer to "what took this out of the ba
 Overwriting it with the counter-entry would replace one true statement with a different true
 statement and lose the first.
 
-## Close day: warn, don't refuse — and why
+## Close day: the kickoff's refusal wording is withdrawn
 
 The kickoff carried this as *"refused when the device has non-terminal rows … the refusal shown
 before the button"*. Raised before building, because it contradicts an approved decision, and
 settled by the owner: **warn, don't refuse.**
 
-The conflict was real. `daily.close_day()` refuses one thing — an empty range
-(`fiscal_z_empty_range`) — and decision 11 deliberately records `queued_rows` on every Z, in its
-own words *"so a Z that closed over an unsent sale says so on its face"*. A hard refusal would
-make that figure dead: it could never be anything but zero. It would also stop a shop closing its
-day because a line was down, which turns an outage into the shop's problem instead of the queue's.
+**That wording is withdrawn. Decision 11 stands exactly as written, and is not amended.** No
+backend change was made and none was needed — `daily.close_day()` is untouched.
 
-So the rule lives where decision 11 put it, and the screen carries the part the kickoff was
-actually asking for — the warning is shown **before** the button, never after it:
+The conflict was real. `close_day()` refuses one thing, an empty range (`fiscal_z_empty_range`),
+and decision 11 deliberately records `queued_rows` on every Z, in its own words *"so a Z that
+closed over an unsent sale says so on its face"*. A refusal would make that figure dead: it could
+never be anything but zero, and the sentence decision 11 wrote it for could never be true. It
+would also stop a shop closing its day because a line was down, which turns an outage into the
+shop's problem instead of the queue's.
 
-* rows in flight → a warning naming the count, and what closing now means for those receipts
-  (`close-day-warning`); Close day stays enabled;
-* queue clear → `close-day-clear` says so;
-* and the Z that results carries `queued_rows` on its face, which the screen renders as a figure
-  of its own.
+So the screen carries what the kickoff was actually asking for — the person is told, **before**
+the button, what closing now means — and the decision keeps its meaning.
 
-The e2e proves it on a **real** stuck row driven through `/_sandbox/mode`: the authority goes
-down, a sale stays in flight, the warning appears with the button still pressable, and then the
-authority comes back and the warning is replaced. No backend change was needed and none was made.
+### What the X view says
 
-**A second close in the same second is refused**, and that is the existing guard doing its job.
-A Z's range runs from the previous close to now, floored to the second, so an immediate second
-close has an empty range. The resolution is a second because `sdcDateTime` has no finer one —
-`tests/fiscal/test_daily_report.py` sleeps 2.05 s for the same reason where it wants a real
-boundary — and the e2e clicks twice in succession and asserts the refusal.
+* **Rows in flight by status**, not as one number (`close-day-pending-by-status`): `queued` and
+  `sending` clear themselves, while `failed`, `unknown` and `needs_receipt` each wait for a person
+  and for three different reasons — RRA refused, RRA may be holding the sale, RRA is holding it
+  and Vinea has no receipt. "5 rows pending" tells a reader there is a queue and nothing about
+  whether it is a drain away or a morning's work. `pending_rows` is Σ of exactly these statuses,
+  so the breakdown and the total cannot disagree.
+* **Where those sales go**: *"Closing now is allowed. None of these sales is on this Z — each
+  appears on the Z of the day the authority signs it, and this Z records how many were still in
+  flight when it was taken."* Not "the next day": a row the authority takes three days to answer
+  lands on the Z of **that** day, and a first draft of this copy said otherwise.
+* **Close day stays enabled**, under `fiscal:close_day`.
+* When the queue is clear, `close-day-clear` says so instead.
 
-**`fiscal:close_day`** is the permission on the button (decision 15 as amended at step 5;
-`fiscal:queue_manage` was the placeholder, migration 0025 added the real one). The nav row itself
-reads on the fiscal *view* permissions, because an accountant may read an X and a Z without
-being able to close a day.
+### And the e2e closes over one
+
+Driven through `/_sandbox/mode`: the authority goes down, a sale stays in flight, and the test
+reads the count off the X view — then **presses Close day over it**. The resulting Z carries
+`queued_rows` equal to that same count, and `ns_count` **0**, because a queued row is not a
+receipt and is no part of the day's takings. Two screens, one count, which is the only way to see
+what decision 11 stores `queued_rows` for.
+
+Then the authority comes back, the queue drains, and the next Z carries that sale with
+`queued_rows` **0** — the warning's claim made good rather than asserted.
+
+### A receipt signed in the second a Z is taken is counted by neither
+
+Found by writing the test above, and worth carrying because step 9's DoD asserts Z totals.
+
+A Z's bounds are floored to a second (`_floor_second`), because `sdcDateTime` has no finer
+resolution, and a range is `from_at <` … `<= to_at`. Close a day and drain **within the same
+second**, and the receipt that comes back is stamped inside the closed Z's range — whose figures
+are already frozen — while the next Z opens *exclusively* at that same instant. Observed exactly
+once, in a run fast enough to do both in 18 seconds:
+
+| | range | `ns_count` |
+|---|---|---|
+| `Z-000001` | 21:13:06 → **21:13:11** | 1 |
+| `Z-000002` | **21:13:11** → 21:13:13 | 0 |
+
+The receipt was signed at 21:13:11 and is on neither.
+
+**Not filed as a defect, and no code was changed for it.** The tiling property decision 11 wants —
+closes cover a device's whole life with no gap and no overlap — holds over *ranges*; what cannot
+be made exact is which side a receipt issued in the boundary second falls, because the stamp has
+no finer resolution to ask. A real device signs and closes minutes apart. Only a test is fast
+enough to land on it, which is why the backend's own boundary test
+(`test_a_second_z_covers_only_what_came_after_the_first`) sleeps 2.05 s rather than pretending
+otherwise, and why this file's e2e now waits past the close's second before draining — with that
+reason written next to the wait, so nobody later deletes it as a flake patch.
+
+**For step 9**: the tape closes days and drains around them. If it asserts a Z total straight
+after a close, it has to be past that second first.
+
+### The second close
+
+Asserted as **whatever the backend actually does**, which is `fiscal_z_empty_range` on an empty
+follow-up range: a Z runs from the previous close to now, both floored to the second, so a second
+close at the same instant has a range of zero length and nothing in it. Nothing was invented, and
+no new refusal was added.
+
+It is pinned at the **service** level, where the clock is injectable
+(`tests/fiscal/test_daily_report.py::test_a_second_close_at_the_same_instant_is_refused`), and it
+was asserted nowhere before this step — the existing API test names it in a docstring as the
+reason for a `sleep` and never checks it. It is deliberately *not* asserted through the screen: a
+tab switch and a render cost more than the second the refusal depends on, and once a second has
+elapsed the close succeeds and stores an empty Z, which is also correct. A test that is right only
+when the machine is fast is a test about the machine.
+
+**`fiscal:close_day`** is the permission on the button (decision 15 as amended at step 5 —
+`fiscal:queue_manage` was the placeholder, and migration 0025 added the real one). The nav row
+reads on the fiscal *view* permissions, because an accountant may read an X and a Z without being
+able to close a day.
 
 ## The Z-versus-receipts tie, and the prices it took to see it
 

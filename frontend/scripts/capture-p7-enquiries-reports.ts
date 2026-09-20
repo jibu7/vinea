@@ -317,6 +317,15 @@ async function seed(page: Page): Promise<{ deviceId: number; documentId: number 
   // then carries figures **and** the warning (shot 4).
   await apiOk(page, `/fiscal/devices/${deviceId}/close-day`);
 
+  // **Past the close's second before anything else is signed.** A Z's bounds are floored to a
+  // second (`sdcDateTime` has no finer resolution) and its range is `from_at <` … `<= to_at`, so
+  // a receipt issued in the very second the Z was taken lands inside a range whose figures are
+  // already frozen — and the next range opens exclusively at the same instant, so neither Z
+  // counts it. This script does a day's trading in under a second, which is the only way to
+  // reach that boundary; a real device is minutes apart. Without this wait shot 4's X came out
+  // a warning over a column of zeros, because the sale below had been swallowed by the Z above.
+  await page.waitForTimeout(1500);
+
   // --- a posted revaluation, so the FX report has a run to open ---------------------------
   //
   // The mirror posts the day after the revaluation date, so a month-end run reaches into the
