@@ -627,5 +627,11 @@ anything. Its replacement asserts the counter window, and the second new
 ### The branch
 
 ```
-GIT_STATUS_PLACEHOLDER
+$ git status --short
+                                    (empty)
+$ git log @{u}..
+                                    (empty)
+$ git diff --stat 19948fe..HEAD
+45 files changed, 4252 insertions(+), 158 deletions(-)
+
 ```
