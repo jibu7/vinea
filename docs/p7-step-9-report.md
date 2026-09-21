@@ -3,7 +3,7 @@
 Step 9 is the third **STOP** gate and the phase close. It builds one substantive thing —
 membership by high-water mark, which is the defect step 8 found and could not fix inside its own
 rule — and then proves the phase: the tape through the screens on a company of its own, a
-sensitivity pass over eighteen guards on the tree that ships, the register at one P7 line, and
+sensitivity pass over nineteen guards on the tree that ships, the register at one P7 line, and
 the runbook for a certification that cannot complete on this phase alone.
 
 **Report and stop.** No PR until this is approved.
@@ -221,10 +221,16 @@ Two things the run taught, both now comments in the spec:
 
 ## C. The sensitivity pass, on the tree that ships
 
-Run at `74c1c0c`, one guard at a time: the guard is broken by a textual patch, the named test is
+Run one guard at a time: the guard is broken by a textual patch, the named test is
 run in the backend container, and the file is restored with `git checkout --` — so the restore is
 git's guarantee rather than this pass re-writing what it thinks the original was. The driver
 printed a line per guard and `git status` came back clean of every patch afterwards.
+
+**One caveat on that method, learned the hard way and worth the line.** `git checkout --` restores
+to **HEAD**, so it is only a safe restore for a guard that is already committed. Row 19's floor
+was not, the first time it was broken — and the restore deleted it, after which a second run
+dutifully "tested" a file with no floor in it and reported nothing. Nothing was lost but time, and
+the rule is simple: commit the guard, *then* break it.
 
 | # | Guard | Broken by | Caught by | What failed |
 |---|---|---|---|---|
@@ -246,6 +252,7 @@ printed a line per guard and `git status` came back clean of every patch afterwa
 | 16 | invariant 1's activation window | `moment < since` dropped from the skip | `test_an_invoice_posted_before_the_device_went_live_is_not_a_hole` | `INV-000001 posted at … on a branch whose device has been live since … and it has no queue row` |
 | 17 | `purchase_already_declared` | the refusal removed, not merely renamed — the duplicate check returns instead of raising | `test_an_unlinked_accept_of_an_invoice_already_declared_is_refused` | `DID NOT RAISE FiscalSetupError` |
 | 18 | the three immutability triggers | `ALTER TABLE … DISABLE TRIGGER`, in a transaction that is rolled back | `tests/fiscal/test_immutability.py`, `test_a_filed_return_refuses_every_change_but_its_withdrawal` | see below |
+| 19 | the queue-state census floor | `timeout` and `accept_then_timeout` removed from `MODES`, so nothing can reach `unknown` | `test_property_fiscal.py::_report_census` (deep profile) | `the deep pass never reached {'unknown': 0}` — **while the two machines themselves reported `2 passed`**, which is the vacuous green the floor exists to catch |
 
 ### Row 8 — the one worth reading twice
 
@@ -424,6 +431,9 @@ until now is that the **days tile the device**, which is invariant 12 and the re
 * **`backend/tests/test_p7_z_high_water_backfill.py`** — the rule-10 proof `make migrate-check`
   cannot reach.
 * **Three waits removed** — the e2e's, the unit test's, and the capture script's. §A.
+* **`REQUIRED_STATES` / `STATE_FLOOR`** — the queue-state census becomes a gate, with `unknown`
+  at floor 1; and `_FLOORS_FROM_EXAMPLES`, which that file declared twice, collapsed to one.
+* **`warehouses[0]` → MAIN by code** in six files, three of them capture scripts. §G.
 * **Docs** — the prompt's decision 11 and decision 15 amended and its stale C.1.10 corrected,
   with both approvals rows opened; `docs/rra/certification.md`; `docs/p7-final-report.md`; the
   README; Appendix C's three missing rows and the Master Plan's "P7 as built"; the step-9
@@ -502,7 +512,7 @@ tests/test_p7_backfill.py tests/test_p7_z_high_water_backfill.py
 **The full suite**, alone, nothing else on the stack:
 
 ```
-1379 passed, 7 warnings in 1901.30s (0:31:41)
+1379 passed, 7 warnings in 1872.90s (0:31:12)
 ```
 
 An earlier full run at `74c1c0c` came back **1 failed, 1378 passed** on
@@ -529,10 +539,19 @@ a guard reached three times by luck is a guard the next seed may not reach at al
 ```
 
 Every queue state the phase has is reached, **including `unknown`** — seven times, which is the
-one this phase most needs provoked, because it is the state a person has to resolve and the one
-`accept_then_timeout` exists for. It is also the thinnest counter in the census and worth
-watching: a seed that reaches it zero times would make the verify-and-attach path vacuous on
-that run.
+one this phase most needs provoked, because it is the state a person has to resolve.
+
+**Seven is thin, so it is a floor now rather than a number in a log.** This report said in an
+earlier draft that a seed reaching `unknown` zero times would make verify-and-attach vacuous, and
+then printed the counter and moved on. A census is a report until it is a gate.
+`REQUIRED_STATES` and `STATE_FLOOR` assert it, the way `test_property_order.py` asserts its
+refusal floors, silent below 100 examples so the per-commit profile is unaffected — §C row 19
+proves it fails when the state becomes unreachable.
+
+One thing the floor's own comment got wrong before it was measured: `accept_then_timeout` is
+**not** the only route to `unknown`. Dropping it alone and re-running the two invariant machines
+deep still reached the state 105 times, because `timeout` lands there too. What separates the two
+is whether RRA is holding the sale, which is `test_drain.py`'s distinction to make.
 
 The P6 floors are still in, and still reached:
 
@@ -553,15 +572,36 @@ npx vitest run                      Test Files 16 passed (16) · Tests 407 passe
 npm run build                       ✓ Compiled successfully
 ```
 
+**A process rule, learned here and worth keeping.** `make db-reset` brings the stack back with a
+`next dev` server that has compiled nothing, and the first test through any route pays the
+compile out of its own timeout. Starting the suite the instant the reset returns cost two
+failures that were about the server being cold and nothing else — and cold-start noise in a
+gate run is worse than slow, because it has to be told apart from a defect one failure at a
+time. **Warm the routes the suite enters first before starting it:**
+
+```sh
+make db-reset
+docker compose up -d --wait db backend frontend ebm-sandbox worker
+for p in / /login /gl/entries/1 /ar/invoices/new /fiscal/queue; do
+  curl -s -o /dev/null -m 120 "http://localhost:3000$p"
+done
+npx playwright test
+```
+
+CI does not need this — it builds the frontend image and the health check waits on it — so the
+rule is local, and it belongs to the gate step that runs the full set by hand.
+
 **The full Playwright set**, every group, on a reset database with `ebm-sandbox` up:
 
 ```
-3 failed
-229 passed (33.2m)
+252 passed (36.5m)
 ```
 
-**The three, and what each turned out to be.** Two were the stack being cold and one was a
-defect — in six files, one of which this step added.
+One pass, every group, exit 0 — after the warm-up above.
+
+**It did not start there, and the first run is the more useful record.** Cold, straight off
+`db-reset`, it came back `3 failed / 229 passed`. Two were the stack being cold and one was a
+defect — in six files, one of which this step had added.
 
 1. `accessibility-dashboard.spec.ts` — login timed out at 45 s waiting for `/`. It was the very
    first test after `make db-reset`, on a `next dev` server that had not compiled the route yet.
@@ -585,7 +625,8 @@ before   inventory-reports.spec.ts + p7-enquiries-reports.spec.ts    1 failed, 8
 after    inventory-reports.spec.ts + p7-enquiries-reports.spec.ts    17 passed
 ```
 
-And the four specs the full run failed or skipped, re-run together on a warm stack:
+The four specs that first run failed or skipped, re-run together on a warm stack before the
+full set was attempted again:
 
 ```
 e2e/accessibility-dashboard.spec.ts e2e/p7-cycle-tape.spec.ts e2e/p7-maintenance.spec.ts
@@ -593,12 +634,11 @@ e2e/p7-transactions.spec.ts e2e/p7-enquiries-reports.spec.ts
 44 passed (4.4m)
 ```
 
-**What this means for the claim.** The suite has not been run end to end green in one pass on
-this machine: the warehouse fix landed after the 252-test run, and re-running it takes another
-half hour of wall clock on a cold Next server that CI does not have to fight. What *has* been
-shown is each failure's cause, a deterministic reproduction and fix for the one that was real,
-and every affected spec green afterwards. **CI on the pushed branch is the record**, and if it
-disagrees with any of this, it is right and this section is wrong.
+**And then the whole set again, warmed, in one pass: `252 passed`.** Which is the claim this
+step owes — it is the phase close, and "CI is the record" is not what a gate step gets to say
+about a suite it can run itself in half an hour. The earlier red run is kept above because the
+defect it found is worth more than the green one that followed, and because a report that
+showed only the second would be hiding how the first was read.
 
 ### The counts, both sides
 
