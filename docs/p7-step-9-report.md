@@ -369,10 +369,11 @@ What is in it:
   `sdcsandbox.rra.gov.rw` — with the run written out as four screens, and the instruction to
   record it as `docs/rra/sandbox-run-<date>.md` with the six answers in it.
 * **The checkpoint mapping: all 75 rows**, each to the screen, test or document that shows it, or
-  to **not in P7** with what it would take. **Twelve** are not in P7: rows 1–5 (the owner's
-  documents), 11, 12, 41, 42, 43 (training and proforma), 24 (the PLU report), and 21 — a
-  verifiable software version number on the receipt, which is one line in the layout and a build
-  stamp to put in it, and the only one of the twelve that is small.
+  to **not in P7** with what it would take. **Thirteen** are not in P7: rows 1–5 (the owner's
+  documents), 11, 12, 41, 42, 43 (training and proforma), 24 (the PLU report), and two small,
+  concrete gaps on the receipt itself — **21**, a verifiable software version number, and **32**,
+  the RRA logo, which prints as a bordered `RRA` box while the real asset sits pinned in
+  `docs/rra/` referenced by nothing. Both are §1a of the runbook.
 * **Ten open questions**, each with the *evidence* that closes it rather than the opinion that
   would.
 

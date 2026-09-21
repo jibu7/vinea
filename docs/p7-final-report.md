@@ -145,8 +145,12 @@ country a package rather than a refactor.
     The companion stock entry posts first (P6 decision 2), so a movement enqueued from inside the
     stock service would sit ahead of the sale that caused it. Invariant 11 keeps the exception
     honest.
-16. **The RRA logo is a bordered placeholder.** The asset is pinned under `docs/rra/`; the layout
-    prints a placeholder rather than an approximation of §7.29.
+16. **The RRA logo is a bordered placeholder — and that is a checkpoint gap, not a deviation.**
+    Recorded here at first as though the build were waiting on an asset. It was not: the mark has
+    been pinned at `docs/rra/Rwanda-Revenue-Authority-logo.png` since the documents were, and no
+    code references it. The layout prints a box containing the text `RRA`, which is not what
+    §7.29 asks for. It belongs on the checkpoint sheet with the other unmet rows and it is there
+    now — `docs/rra/certification.md` §1a, beside row 21's version number, with what each needs.
 17. **The phase closes code-complete, certification pending** — the Definition of Done's second
     branch, taken because precondition (d) was never held.
 
