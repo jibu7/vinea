@@ -268,6 +268,96 @@ the figure is documented on every screen that shows it as a snapshot rather than
 `RwandaVSDCAdapter` per the current CIS4VSDC spec: item registration/classification, invoice & refund fiscalization, purchase acceptance, stock reporting endpoints as required; durable outbox + retry + queue dashboard; fiscal blocks on invoice/receipt templates (SDC ID, signature, QR); **VAT return report** (output vs input, exempt/zero-rated split) derived from journal tax dimensions; unrealized-FX revaluation job (it's a compliance-adjacent period-end routine, so it lives here).
 **DoD:** end-to-end fiscalization against RRA's test environment passes their checkpoint sheet; a queued invoice survives simulated RRA downtime and completes; certification application submitted.
 
+#### P7 as built *(written at step 9; the phase's own record is `docs/p7-final-report.md`)*
+
+The sixteen decisions the phase prompt locks were built as written, with two amended in flight
+(below). The shapes worth restating in the plan, because later phases will read this rather than
+the prompt:
+
+* **Fiscalization adds no ledger and no second truth.** The journal is what happened, the fiscal
+  receipt is RRA's record of it, and `fiscal_outbox` is the bridge. A document is fiscalized
+  because it was **posted**, in the same database transaction, by a row the posting wrote — never
+  by a call made from a request handler. `assert_fiscal_invariants` clause 1 is what holds it.
+* **The queue is per-device FIFO with one row in flight**, and a `failed`, `unknown` or
+  `needs_receipt` row **blocks the device** behind it. Sending out of order is worse than
+  waiting: RRA answers `921`/`922` to a stock report that arrives before its sale, and receipt
+  counters are a sequence. Postgres is the queue; Redis is still unused.
+* **A response that never arrived is `unknown` and is never blindly resent.** It is resolved by
+  *Verify with device* — which reads the authority's own counters — and then by a person keying
+  the receipt off MyRRA. A resend would be a duplicate, and `994` returns no receipt data.
+* **The VAT return is a query over `journal_lines` and nothing else.** It is *reconciled*, not
+  balanced: every franc of movement on a VAT account is either declared by the return or named,
+  line by line, as an untagged movement. A filed return never changes, and an entry backdated
+  into a filed month lands on the **next** return as a late entry (`high_water_entry_id`).
+* **A day is a run of receipt counters** (`fiscal_daily_reports.high_water_rcpt_no`, revision
+  `0026` — decision 11 as amended). A Z owns every receipt above the previous Z's mark and at or
+  below its own; the open X owns everything above the last mark. The dates a Z prints are §19.1's
+  and decide nothing.
+* **The revaluation never touches a control account.** `1200`/`2100` are subledger-only and their
+  balance is Σ open items at booking rates, so the contra goes to `1290`/`2190`; the run posts at
+  the revaluation date **and its mirror the following day**, in one transaction.
+* **No field name of the authority's exists outside `app/fiscal/`** — including on the read side,
+  where a Z totals a day through `normalize_declared_totals` rather than by reading `totAmt`.
+  `tests/fiscal/test_boundary.py` is the proof, and it is what makes a second country a package
+  rather than a refactor.
+* **The three device keys are the only secrets the phase holds.** Encrypted with Fernet at rest,
+  in no response model, stripped from every stored payload, and walked for by a redaction test
+  over every row the tape produces.
+
+**Amended decisions**, each with its reason and its approvals row:
+
+1. **Decision 11 — membership, not a range** (step 9, revision `0026_p7_z_high_water`). As frozen,
+   a Z's population was cut on `sdc_datetime` — RRA's clock — while the close was cut on `now()`.
+   Under skew a receipt in flight at the close belonged to no day at all. A Z now carries a
+   per-device high-water mark on `tot_rcpt_no`, and `assert_fiscal_invariants` clause 12 asserts
+   the days tile the device.
+2. **Decision 15 — `fiscal:close_day`** (step 4, revision `0025`). The frozen list named no
+   permission for *closing* the day; `fiscal:reports_view` is a reading and a Z is an act.
+
+**Deviations from the phase prompt**, each with its reason:
+
+1. **Transactions → Tax, Enquiries → Tax and Reports → Tax are additions to the owner's tree** —
+   Appendix C.1.11 — and the FX revaluation row under Transactions → GL is C.1.12. The prompt
+   reserved C.1.10 and C.1.11 for step 7, written before step 6 turned out to need an entry of
+   its own; step 6 took C.1.10 and everything after it moved by one.
+2. **There is no "General Ledger → Period end" group** in the owner's tree, so the FX revaluation
+   row sits directly after Cashbook batches. The routes are plural (`/tax/vat-returns`,
+   `/gl/fx-revaluations`) because that is the repo's listing convention; labels and placement
+   follow the prompt.
+3. **A partner document's stock report is enqueued by the document, not by the stock service**
+   (decision 10's ordering). The companion stock entry posts *first*, so a movement enqueued from
+   inside the stock service would carry a lower `sequence_no` than the sale that caused it.
+   Invariant 11 keeps the exception honest.
+4. **A supplier invoice is registered once, and an accepted feed row decides which registration
+   RRA keeps** (decision 9). Where the document's own row has not been sent, accepting the feed
+   cancels it in favour of the confirmation; where it has, the accept queues nothing. Invariant
+   10a asks the same question from the authority's side, where the identity is (supplier TIN,
+   supplier invoice number).
+5. **The VAT filing entry's lines carry the tax codes with `tax_amount 0`**, so the settlement is
+   itself an *untagged movement* on the next tie — named rather than absorbed — and is never
+   counted as tax.
+6. **`_receipt()` returns the document's own receipt, not the latest.** A reversed invoice holds
+   two: the `NS` it was declared under and the `NR` that reversed it. The header, the print gate
+   and the CIS layout are about the invoice; the refund prints as its own receipt.
+7. **Five accounts on the Defaults screen, not six** — `2250`, `1290`, `2190`, `4410`, `6955`,
+   plus the default purchase class code, which is six `gl_settings` keys in all.
+8. **Two literals in the prompt's acceptance tape were wrong** and were corrected on the owner's
+   direction at the step-5 gate: row 5's drains are backoff *waits* (+0, +1, +6) and row 6's
+   counter is 6, because sales and refunds share the `FIS` run.
+9. **The RRA logo is a bordered placeholder.** The asset is pinned under `docs/rra/`; the layout
+   prints a placeholder rather than an approximation of §7.29.
+10. **The phase closes code-complete, certification pending.** Nobody holds RRA
+    test-environment access, and training receipts, proforma receipts and the PLU report are out
+    of scope for P7 — so certification cannot complete on this phase alone.
+    `docs/rra/certification.md` is the runbook and lists every checkpoint row with where it lives.
+
+**Deferred out of P7**, with where each lands: POS receipts and the offline till queue are
+**P11** (the adapter, the outbox and the receipt layout are built so P11 reuses them); Kenya,
+Uganda and Tanzania are the Protocol's business and need a package each; item composition is
+**P12**; bank and cash revaluation is **P8**; e-filing the VAT return to RRA stays the
+accountant's act on e-tax; and amended returns are not a document type — a late entry flows into
+the next return.
+
 ### P8 — Banking *(≈2 wk)*
 Cashbook module proper (bank/cash accounts as flagged GL accounts, receipts/payments feed them — largely exists from P2/P4), **bank statement import** (CSV first; camt/MT940 later), reconciliation workspace (auto-match by amount/ref/date + manual match), reconciliation report, payment runs (batch supplier payments → single bank line). This covers the *Bank reconciliation* and *Cashbooks* reports the client spec listed but v4 never scheduled.
 **DoD:** import a real bank CSV, reach a zero unreconciled difference, lock the reconciliation.
@@ -421,11 +511,13 @@ The owner's original menu ordering (software_interface docx) is **adopted as the
 | Transactions → OE | **Sales order** (`/oe/sales-orders`), **Breakup** (`/oe/breakup`), **Landed cost** (`/oe/landed-costs`) | P6 — all three live |
 | Transactions → Tax *(C.1.11 — not in the owner's tree)* | **Fiscal queue** (`/fiscal/queue`), **EBM purchases** (`/fiscal/purchases`), **Import declarations** (`/fiscal/imports`), **VAT return** (`/tax/vat-returns`) | P7 — all four live |
 | Transactions → BOM / POS | Manufacture process, Breakup / Sales, Returns, Transaction | P12 / P11 |
-| Reports → GL | Account transaction (P2), Trial Balance (P2), Chart of account (P3), **Bank reconciliation (P8)**, **Cashbooks (P8)**, Balance sheet (P10), Income statement (P10) | as noted |
+| Reports → GL | Account transaction (P2), Trial Balance (P2), Chart of account (P3), **FX revaluation** (`/gl/reports/fx-revaluation`, C.1.12), **Bank reconciliation (P8)**, **Cashbooks (P8)**, Balance sheet (P10), Income statement (P10) | as noted · revaluation report P7 |
 | Reports → AR / AP | Age analyses, Allocation, Listings, Statements, Transaction listing (C.1.4) — each for both modules | P4 |
 | Reports → Inventory | Movement, Count, Transaction, Valuation (P5); Sales analyses, Slow movers (P10) | as noted |
 | Reports → OE *(C.1.8 — not in the owner's tree)* | **Sales orders**, **Purchase orders**, **Goods received**, **Landed cost** | P6 — all four live |
 | Enquiries → OE *(C.1.8 — not in the owner's tree)* | **Sales order enquiry**, **Purchase order enquiry** | P6 — both live |
+| Reports → Tax *(C.1.11 — not in the owner's tree)* | **VAT return** (`/tax/reports/vat-return`, with both annex CSVs), **Daily fiscal report** (`/tax/reports/daily-fiscal` — the X, the Z and **Close day**), **Fiscal receipts listing** (`/tax/reports/receipts` — the accountant's tie between EBM and the sales ledger) | P7 — all three live |
+| Enquiries → Tax *(C.1.11 — not in the owner's tree)* | **Fiscal receipts** (`/fiscal/enquiries/receipts`), **Fiscal queue history** (`/fiscal/enquiries/queue-history`) | P7 — both live |
 | Reports → BOM / POS | Manufacture process, MRP / Cashier sales, Inventory sales | P12 / P11 |
 
 **Coverage: 100%** — the six items v4 had orphaned (bank rec, cashbooks, breakup ×2, sales analyses, slow movers, POS transaction) all have phase homes.

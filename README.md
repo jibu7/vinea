@@ -2,7 +2,7 @@
 
 Multi-tenant cloud ERP for East African SMEs (Rwanda first). Sage-Evolution-class functionality on a modern stack: immutable ledger kernel, central posting engine, RRA EBM fiscalization, Postgres RLS tenancy.
 
-**Plan:** `docs/Vinea_ERP_Master_Plan_v5.md` (v5.1 — frozen for build). **Status:** Phase 6 complete (GL kernel · AR/AP subledger · inventory · order entry with the three-way match, landed cost and kits). Phase 7 (Rwanda fiscalization and VAT returns) next. Phase reports: `docs/p4-final-report.md`, `docs/p5-final-report.md`, `docs/p6-final-report.md`.
+**Plan:** `docs/Vinea_ERP_Master_Plan_v5.md` (v5.1 — frozen for build). **Status:** Phase 7 complete — **code-complete, certification pending** (GL kernel · AR/AP subledger · inventory · order entry with the three-way match, landed cost and kits · Rwanda fiscalization through the VSDC/OSDC contract, VAT returns and the unrealized-FX revaluation). The fiscalization build is finished and tested against the in-repo EBM sandbox; RRA certification needs test-environment access nobody holds yet, plus training and proforma receipts and the PLU report, which Phase 7 does not cover — `docs/rra/certification.md` is the runbook and says exactly what remains. Phase reports: `docs/p4-final-report.md`, `docs/p5-final-report.md`, `docs/p6-final-report.md`, `docs/p7-final-report.md`.
 
 ## Quick start
 ```bash

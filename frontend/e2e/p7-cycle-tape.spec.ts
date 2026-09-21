@@ -941,7 +941,7 @@ test.describe("the fiscal cycle, through the screens, tied to the tape", () => {
     const outputVat = (
       (await apiOk(page, "/gl/tax-codes")) as Array<Identified & { code: string }>
     ).find((code) => code.code === "VAT-OUT-18")!;
-    const item = (await apiOk(page, "/inventory/items", {
+    await apiOk(page, "/inventory/items", {
       method: "POST",
       body: {
         code: `PLAIN${SUFFIX}`,
@@ -955,11 +955,11 @@ test.describe("the fiscal cycle, through the screens, tied to the tape", () => {
         sales_account_id: byCode.get("4100"),
         default_sales_tax_code_id: outputVat.id,
       },
-    })) as Identified;
-    const customer = (await apiOk(page, "/subledger/ar/partners", {
+    });
+    await apiOk(page, "/subledger/ar/partners", {
       method: "POST",
       body: { name: `Plain customer ${SUFFIX}`, customer_code: `PC${SUFFIX}`, tin: CUSTOMER_TIN },
-    })) as Identified;
+    });
 
     await page.goto("/ar/invoices/new");
     await page.waitForSelector("h1:has-text('Invoice')");
@@ -986,9 +986,6 @@ test.describe("the fiscal cycle, through the screens, tied to the tape", () => {
       items: Array<Identified & { description: string }>;
     };
     const posted = documents.items.find((row) => row.description === `Plain invoice ${SUFFIX}`)!;
-    expect(item.id).toBeGreaterThan(0);
-    expect(customer.id).toBeGreaterThan(0);
-
     // Nothing was enqueued, and nothing could have been: there is no device.
     expect((await apiOk(page, "/fiscal/devices")) as unknown[]).toEqual([]);
 

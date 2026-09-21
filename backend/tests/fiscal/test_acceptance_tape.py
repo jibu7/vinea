@@ -1247,8 +1247,11 @@ def test_the_acceptance_tape(  # noqa: PLR0915
         _counter(_receipt_of(db, tape, inv4, FiscalReceiptType.NORMAL_REFUND)),
     )
 
-    # A second Z, one second after the first so the two ranges tile rather than overlap — a
-    # fiscal day has a second's resolution because `sdcDateTime` does.
+    # A second Z, one second after the first. **Not about membership** since revision `0026`:
+    # a Z owns a run of receipt counters, so this close would take only what came after the
+    # first one whenever it happened. The second is for the span a Z *prints* — `close_day`
+    # refuses a range of zero length (`fiscal_z_empty_range`), and both bounds are floored to
+    # the second because `sdcDateTime` has no finer resolution.
     zed2 = daily_service.close_day(
         db,
         company_id,
