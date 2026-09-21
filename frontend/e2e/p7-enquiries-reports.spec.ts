@@ -411,11 +411,15 @@ test.describe("the tax enquiries and reports", () => {
     const next = periods.find((p) => p.start_date > monthEnd() && p.status !== "open");
     if (next) await apiOk(page, `/gl/periods/${next.id}/open`, { method: "POST" });
 
-    // **Reuse a run if one already stands.** A revaluation is exclusive per (role, date), so on
-    // the shared company whichever spec gets there first owns the month end and the second is
-    // refused `fx_revaluation_exists`. The report only needs *a* posted run with lines in it.
-    const existingRuns = (await apiOk(page, "/gl/fx-revaluations")) as unknown[];
-    if (existingRuns.length === 0) {
+    // **Reuse a run only if one still *stands*.** A revaluation is exclusive per (role, date), so
+    // on the shared company whichever spec gets there first owns the month end and the second is
+    // refused `fx_revaluation_exists`. But the refusal counts **posted** runs only, and a
+    // reversed run stays in the listing — so counting every row would make this reuse a run that
+    // no longer stands, render the report over it as though it did, and leave the teardown with
+    // nothing of its own to reverse. `status` is the discriminator, as it is in
+    // `p7-transactions`'s own closing `filter(status === "posted")`.
+    const existingRuns = (await apiOk(page, "/gl/fx-revaluations")) as Array<{ status: string }>;
+    if (!existingRuns.some((row) => row.status === "posted")) {
       const run = (await apiOk(page, "/gl/fx-revaluations", {
         method: "POST",
         headers: { "Idempotency-Key": `p7-step8-fxr-${SUFFIX}` },
@@ -439,7 +443,7 @@ test.describe("the tax enquiries and reports", () => {
     // fifteen seconds, so a row RRA can answer is signed before any test could look at it —
     // and this test's whole subject is a device holding something it has not sent.
     await sandboxMode(request, "down");
-    await postInvoice(page, "1", "stuck");
+    const stuck = await postInvoice(page, "1", "stuck");
     await drain(page);
     const inFlight = await pendingRows(page);
     expect(inFlight, "the sale is stuck behind an unreachable authority").toBeGreaterThan(0);
@@ -487,8 +491,18 @@ test.describe("the tax enquiries and reports", () => {
     // in the enquiry's own test, where everything has long since drained.
     await page.goto("/fiscal/enquiries/queue-history");
     await page.waitForSelector("h1:has-text('Fiscal queue history')");
+    // **Narrowed by the filter box, and chosen by number.** It took `getByRole("option").last()`,
+    // which is the stuck document only while the list is short: on a database that has been used
+    // the picker holds every document ever queued, the last one sits outside the popover's
+    // viewport, and Playwright scrolls, finds it still out of view and retries until the test
+    // times out. Filtering is what the box is for, and naming the document says which one the
+    // assertion is about.
+    await page
+      .getByLabel(/Filter by document number/, { exact: false })
+      .first()
+      .fill(stuck.number);
     await page.getByRole("combobox", { name: "Document", exact: true }).click();
-    await page.getByRole("option").last().click();
+    await page.getByRole("option", { name: new RegExp(stuck.number) }).click();
     await expect(page.getByTestId("history-status").first()).toHaveText("Queued", {
       timeout: 30_000,
     });
@@ -759,7 +773,15 @@ test.describe("the tax enquiries and reports", () => {
       await expect(page.getByTestId("receipt-counter").first()).toHaveText(printed, {
         timeout: 30_000,
       });
-      await expect(page.getByTestId("receipts-count")).toHaveText("1");
+
+      // **Every row that came back carries the counter that was typed**, which is the claim —
+      // not that exactly one did. `rcpt_no`/`tot_rcpt_no` restart per **device** (decision 5:
+      // the counters are per device), so on a company with a second device registered the same
+      // `1/1 NS` is printed twice and both are correct answers to the search. Asserting a row
+      // count of 1 was asserting how many devices the fixture happened to have.
+      const found = await page.getByTestId("receipt-counter").allInnerTexts();
+      expect(found.length).toBeGreaterThan(0);
+      expect([...new Set(found.map((text) => text.trim()))]).toEqual([printed]);
     });
 
   // PATH: /fiscal/enquiries/queue-history -> GET /fiscal/queue/rows?document_id=, then
@@ -803,16 +825,26 @@ test.describe("the tax enquiries and reports", () => {
     // This screen renders whatever was filed; it asserts nothing about the figures beyond that
     // they are the ones the API reports.
     const standing = (await apiOk(page, "/tax/vat-returns")) as Array<
-      Identified & { number: string; net_payable: string; journal_entry_id: number | null }
+      Identified & {
+        number: string;
+        net_payable: string;
+        status: string;
+        journal_entry_id: number | null;
+      }
     >;
+    // `status === "posted"`, not merely "has a settlement entry": a **reversed** return keeps its
+    // `journal_entry_id`, so matching on that alone would reuse one that has been withdrawn —
+    // and `vat_period_filed` counts posted returns only, so the range is in fact free.
     const filed =
-      standing.find((row) => row.journal_entry_id !== null) ??
+      standing.find((row) => row.status === "posted" && row.journal_entry_id !== null) ??
       ((await apiOk(page, "/tax/vat-returns", {
         method: "POST",
         headers: { "Idempotency-Key": `p7-step8-file-${SUFFIX}` },
         body: { period_from: monthStart(), period_to: monthEnd() },
       })) as Identified & { number: string; net_payable: string });
-    if (!standing.some((row) => row.id === filed.id)) filedByThisSpec = filed.id;
+    if (!standing.some((row) => row.id === filed.id && row.status === "posted")) {
+      filedByThisSpec = filed.id;
+    }
     expect(filed.number, "shape, never a literal — the VAT run is shared").toMatch(/^VATR-\d+$/);
 
     // The **report**, by its own route — it has no `{id}` any more. The drill from a journal

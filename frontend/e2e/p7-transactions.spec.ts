@@ -773,14 +773,28 @@ test.describe("the fiscalized transaction screens", () => {
     await expect(page.getByTestId("file-error")).toContainText(/already filed over/i);
     await page.getByRole("button", { name: "Cancel", exact: true }).click();
 
-    const openFiled = async () => {
+    /**
+     * Open one filed return **by its number**.
+     *
+     * It used to take the first row carrying a `filed-net-` testid, which is the return just
+     * filed only because the listing happens to sort newest-first (`period_from desc, id desc`)
+     * — an assumption nothing in the test stated and nothing would fail on if the sort changed.
+     * It would then open an *older, reversed* return and Reverse would refuse it, with a message
+     * about a row nobody meant to touch. A reversed return stays listed (decision 12 — the row
+     * is evidence of what was submitted), so there is always more than one to choose from once
+     * any spec has filed on this company.
+     */
+    const openFiled = async (number: string) => {
       await page.reload();
       await page.waitForSelector("h1:has-text('VAT return')");
-      const row = page.locator("tr").filter({ has: page.locator('[data-testid^="filed-net-"]') });
-      await row.first().getByRole("button", { name: "Open", exact: true }).click();
+      await page
+        .locator("tr")
+        .filter({ has: page.getByTestId(`filed-net-${number}`) })
+        .getByRole("button", { name: "Open", exact: true })
+        .click();
     };
 
-    await openFiled();
+    await openFiled(filedNumber);
     await page.getByTestId("vat-reverse-reason").fill(`Range handed back by the run ${SUFFIX}`);
     await page.getByTestId("confirm-vat-reverse").click();
     await expect(page.getByText(/VATR-\d+ reversed/).first()).toBeVisible();
@@ -791,10 +805,13 @@ test.describe("the fiscalized transaction screens", () => {
     await page.waitForSelector("h1:has-text('VAT return')");
     await page.getByTestId("file-return").click();
     await page.getByTestId("confirm-file").click();
-    await expect(page.getByText(/VATR-\d+ filed/).first()).toBeVisible();
+    const refiledToast = page.getByText(/VATR-\d+ filed/).first();
+    await expect(refiledToast).toBeVisible();
+    // **A second filing takes a new number**, so the row to open is not the one above.
+    const refiledNumber = (await refiledToast.innerText()).match(/VATR-\d+/)![0];
 
     // …and this one goes back too, so the spec leaves nothing filed on a shared fixture.
-    await openFiled();
+    await openFiled(refiledNumber);
     await page.getByTestId("vat-reverse-reason").fill(`Range handed back by the run ${SUFFIX}`);
     await page.getByTestId("confirm-vat-reverse").click();
     await expect(page.getByText(/VATR-\d+ reversed/).first()).toBeVisible();

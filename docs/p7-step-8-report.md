@@ -524,6 +524,64 @@ report's whole subject, and the test had been written as though it did not exist
 were re-derived by hand — and cross-checked by an independent implementation of the two rounding
 rules, not by the code under test — before being pinned.
 
+## CI went red, and why nothing local could have caught it
+
+PR #60's first push failed three checks — `e2e (a11y)`, `e2e (rest-3)` and the `frontend` gate
+that aggregates them. Backend was green. Both root causes were reachable only under conditions
+this step was not reproducing, and the conditions are the finding.
+
+**The a11y one: a frontend change re-takes the whole touched-spec set, not its own spec.** The
+Close-day rewrite — the one that added the by-status breakdown — introduced the fake tablist. The
+"re-taken at the new head" list after it was vitest, build, `tsc`, lint and
+`p7-enquiries-reports.spec.ts`. Not the two axe sweeps, which is where a **new nav row** is
+tested: `accessibility-reports.spec.ts` enumerates `nav-tree.ts`, so six new rows became six new
+swept routes with no test code written, and nothing in the touched-spec rule points at them
+because a brand-new screen is not a screen this step *touched*. Same class as P7 step 6's label
+collision, where a new field label broke four tests in other steps' specs.
+
+**The shared-fixture one: specs that share the fixture company must run together, in CI's order,
+on one reset database.** Every local run of this file was **alone on a fresh DB** — the single
+arrangement in which an exclusive-resource collision cannot occur. `p7-enquiries-reports` sorts
+before `p7-transactions`, so in `rest-3` it went first and left a filed month and a revalued date
+behind it. Running it alone proved it worked alone, which was never the question.
+
+Both are now done as a matter of course: `p7-enquiries-reports`, `p7-transactions`,
+`p7-maintenance`, `accessibility-reports` and `accessibility-enquiries` in **one invocation** on
+one reset stack — **68 passed**. Read step 9's gate list the same way: *per group*, not per spec.
+
+**And two assertions in `p7-transactions` were accidentally true**, which this step's data
+exposed rather than broke — both written up under *Defects* above.
+
+### The second red, and three more of this spec's own assumptions
+
+The a11y check went green and `rest-3` did not. Every remaining failure was in this file, and the
+`p7-transactions` ones were a **cascade**: Playwright's serial mode skips the rest of a describe
+after a failure, so when this spec's second test failed its **teardown never ran**, the filed
+return and the posted run stayed standing, and the other spec met them. A teardown is only as
+good as the tests in front of it.
+
+* **`getByRole("option").last()` in the queue-history picker** — the stuck document only while
+  the list is short. On an accumulated list the last option sits outside the popover's viewport
+  and Playwright scrolls, finds it still out of view and retries to the timeout; when it did
+  resolve, it resolved to a document that had already been **sent** (`Sent`, not `Queued`).
+  Narrowed by the filter box and chosen by number now, in the spec and in the capture script.
+* **`receipts-count` expected `"1"`** after searching a printed counter. `rcpt_no`/`tot_rcpt_no`
+  restart **per device** (decision 5), so on a company with a second device registered the same
+  `1/1 NS` is printed twice and both are correct answers. That assertion was counting how many
+  devices the fixture happened to have. It asserts the actual claim now: every row returned
+  carries the counter that was typed.
+* **Both reuse branches matched reversed rows.** A reversed return keeps its `journal_entry_id`
+  and a reversed run stays listed, so `journal_entry_id !== null` and a bare row count would have
+  adopted a withdrawn resource, rendered the report over it as though it stood, and left the
+  teardown owning nothing. Filtered on `status === "posted"` — which is also exactly what
+  `vat_period_filed` and `fx_revaluation_exists` count, so the range really is free when no
+  posted row is found.
+
+**Run on a database that has been used, not only a reset one.** That is what found all three, and
+it is the missing half of the rule above: a reset stack proves the specs agree with each other,
+and a used one proves each is about the product rather than about a fixture's row counts. This
+file now passes both — **68** together on a reset stack, **11** alone on a used one.
+
 ## Numbers on the shared company
 
 `p7-enquiries-reports.spec.ts` runs on the **shared** Rugari Wines E2E fixture and consumes

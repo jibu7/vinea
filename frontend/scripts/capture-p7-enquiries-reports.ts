@@ -160,7 +160,9 @@ const monthEnd = () => iso(new Date(new Date().getFullYear(), new Date().getMont
  * whose two sides agreed and whose asymmetry lists were both empty would be a correct
  * screenshot of a report doing nothing.
  */
-async function seed(page: Page): Promise<{ deviceId: number; documentId: number }> {
+async function seed(
+  page: Page,
+): Promise<{ deviceId: number; documentId: number; stuckNumber: string }> {
   await apiOk(page, "/company", { tin: COMPANY_TIN }, "PATCH");
 
   // The authority forgets, so a repeated run does not meet `994` on an invoice number Vinea's
@@ -381,17 +383,17 @@ async function seed(page: Page): Promise<{ deviceId: number; documentId: number 
   // a document in the ledger and not on the receipts, which is the row the tie exists to name —
   // and what makes the X view's Close day warning real rather than staged.
   await sandboxMode("down");
-  await apiOk(page, "/subledger/ar/documents", {
+  const stuck = (await apiOk(page, "/subledger/ar/documents", {
     kind: "invoice",
     partner_id: customer.id,
     document_date: today(),
     description: "Fiscal demo invoice, still queued",
     purchase_code: PURCHASE_CODE,
     lines: [{ item_id: itemId, quantity: "5", unit_price: PRICE, tax_code_id: outputVat.id }],
-  });
+  })) as { id: number; number: string };
   await apiOk(page, "/fiscal/outbox/drain");
 
-  return { deviceId, documentId: invoice.id };
+  return { deviceId, documentId: invoice.id, stuckNumber: stuck.number };
 }
 
 async function main() {
@@ -400,7 +402,7 @@ async function main() {
   const page = await context.newPage();
 
   await login(page, OWNER);
-  const { documentId } = await seed(page);
+  const { documentId, stuckNumber } = await seed(page);
 
   for (const theme of ["light", "dark"] as const) {
     // 1 — the receipts enquiry: the counters as the paper prints them, and the three drills.
@@ -416,13 +418,18 @@ async function main() {
     await shot("2-queue-history", async () => {
       await page.goto(`${BASE}/fiscal/enquiries/queue-history`);
       await page.waitForSelector("h1:has-text('Fiscal queue history')");
-      // The **last** option is the sale the authority never got — posted after the drain, with
-      // the sandbox down. It is the document somebody opens a queue history to ask about, and
-      // it is only in this list at all because the picker reads the queue rather than the
-      // receipts: a receipt exists once RRA has signed, so a receipts-fed list offers every
-      // document except the ones still in flight.
+      // The sale the authority never got — posted after the drain, with the sandbox down. It is
+      // the document somebody opens a queue history to ask about, and it is only in this list at
+      // all because the picker reads the queue rather than the receipts: a receipt exists once
+      // RRA has signed, so a receipts-fed list offers every document except the ones still in
+      // flight.
+      //
+      // Narrowed by the filter box and chosen **by number**, not by position: on a database that
+      // has been used the picker holds every document ever queued, and the last option sits
+      // outside the popover's viewport where it can never be clicked.
+      await page.getByLabel(/Filter by document number/).first().fill(stuckNumber);
       await page.getByRole("combobox", { name: "Document", exact: true }).click();
-      await page.getByRole("option").last().click();
+      await page.getByRole("option", { name: new RegExp(stuckNumber) }).click();
       await page.getByTestId("history-sequence").first().waitFor({ state: "visible" });
       await page.getByTestId("history-inspect").first().click();
       await page.waitForTimeout(400);
