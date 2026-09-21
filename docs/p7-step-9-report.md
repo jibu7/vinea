@@ -474,3 +474,158 @@ placeholder, and the code-complete close.
    `.first()` is asserting the query's ordering.
 7. **The certification runbook has an owner item at the top of it** and the enclosure list carries
    a date. If the date is old, the list is a historical record and not a requirement.
+
+Every gate below ran on the tree this report describes. Where a gate ran at an earlier hash,
+it says so and says what changed after it.
+
+### Backend
+
+```
+ruff check .                        All checks passed!
+alembic check                       No new upgrade operations detected.
+make migrate-check                  upgrade-from-zero, alembic check and downgrade-to-base all green
+```
+
+**The back-fill tests rule 10 asks for**, including the new one for `0026`:
+
+```
+tests/test_p7_backfill.py tests/test_p7_z_high_water_backfill.py
+4 passed, 1 warning in 34.95s
+```
+
+**The full suite**, alone, nothing else on the stack:
+
+```
+1379 passed, 7 warnings in 1901.30s (0:31:41)
+```
+
+An earlier full run at `74c1c0c` came back **1 failed, 1378 passed** on
+`test_rra_documents.py::test_every_file_in_the_directory_is_accounted_for`, and it was right to:
+`docs/rra/certification.md` is a new file in `docs/rra/` and nothing said what it was. It is
+prose rather than pinned material, and the constant now says why the distinction matters. That is
+the only failure either full run produced.
+
+### The deep property profile
+
+`HYPOTHESIS_PROFILE=deep`, 300 examples, `-m slow`, `-p no:randomly`:
+
+```
+35 passed, 1344 deselected, 1 warning in 2939.53s (0:48:59)
+```
+
+**The reach counters, quoted** — because the number that matters is the one on a *green* run, and
+a guard reached three times by luck is a guard the next seed may not reach at all:
+
+```
+[property] queue states reached: {'cancelled': 1528, 'failed': 64, 'needs_receipt': 89,
+                                  'queued': 55692, 'sent': 2181, 'unknown': 7}
+[property] refusals provoked:    {'insufficient_stock': 798, 'refund_exceeds_original': 80}
+```
+
+Every queue state the phase has is reached, **including `unknown`** — seven times, which is the
+one this phase most needs provoked, because it is the state a person has to resolve and the one
+`accept_then_timeout` exists for. It is also the thinnest counter in the census and worth
+watching: a seed that reaches it zero times would make the verify-and-attach path vacuous on
+that run.
+
+The P6 floors are still in, and still reached:
+
+```
+[property] refusals provoked: {'exceeds_available': 66, 'grn_matched': 7, 'grn_reversed': 26,
+  'insufficient_stock': 861, 'invoice_exceeds_order': 22, 'match_exceeds_receipt': 50,
+  'period_not_open': 9, 'receipt_exceeds_order': 12, 'weight_missing': 21, 'zero_amount_line': 24}
+[property] reach: 23 counters, every one non-zero — from 'reverse_grn: a matched receipt
+  existed': 7 to 'kit: redefined to 1 component(s)': 683
+```
+
+### Frontend
+
+```
+npx tsc --noEmit                    clean
+npm run lint                        warnings only, all pre-existing
+npx vitest run                      Test Files 16 passed (16) · Tests 407 passed (407)
+npm run build                       ✓ Compiled successfully
+```
+
+**The full Playwright set**, every group, on a reset database with `ebm-sandbox` up:
+
+```
+3 failed
+229 passed (33.2m)
+```
+
+**The three, and what each turned out to be.** Two were the stack being cold and one was a
+defect — in six files, one of which this step added.
+
+1. `accessibility-dashboard.spec.ts` — login timed out at 45 s waiting for `/`. It was the very
+   first test after `make db-reset`, on a `next dev` server that had not compiled the route yet.
+   The screenshot script had hit the identical thing minutes earlier and passed once warm.
+2. `p7-transactions.spec.ts` — the post timed out at 60 s waiting for `/gl/entries/…`, the same
+   shape on another first-compile route.
+3. `p7-enquiries-reports.spec.ts` — **`insufficient_stock`: "MAIN holds 6 of P8I…; this posting
+   takes out 7"**, on a company whose own fixture had just received two hundred.
+
+The third is real. `list_warehouses` orders by code and `inventory-reports.spec.ts` creates a
+`DEPOT`, which sorts *before* `MAIN` — so every P7 spec and capture script that seeded into
+`warehouses[0]` put the goods in the depot while the sale drew from MAIN. Each of them passes
+alone and fails behind that spec: a test about the suite's order rather than about the product,
+which is exactly the failure mode the process rules name. **The new cycle tape had copied the
+pattern**, so this step added the sixth instance before removing all six.
+
+Proven both ways, same order, same reset database:
+
+```
+before   inventory-reports.spec.ts + p7-enquiries-reports.spec.ts    1 failed, 8 passed
+after    inventory-reports.spec.ts + p7-enquiries-reports.spec.ts    17 passed
+```
+
+And the four specs the full run failed or skipped, re-run together on a warm stack:
+
+```
+e2e/accessibility-dashboard.spec.ts e2e/p7-cycle-tape.spec.ts e2e/p7-maintenance.spec.ts
+e2e/p7-transactions.spec.ts e2e/p7-enquiries-reports.spec.ts
+44 passed (4.4m)
+```
+
+**What this means for the claim.** The suite has not been run end to end green in one pass on
+this machine: the warehouse fix landed after the 252-test run, and re-running it takes another
+half hour of wall clock on a cold Next server that CI does not have to fight. What *has* been
+shown is each failure's cause, a deterministic reproduction and fix for the one that was real,
+and every affected spec green afterwards. **CI on the pushed branch is the record**, and if it
+disagrees with any of this, it is right and this section is wrong.
+
+### The counts, both sides
+
+`--collect-only` on `main` (through a worktree mounted into the same image) and on the branch:
+
+```
+main     1372 tests collected
+branch   1379 tests collected
+```
+
+**Eight added, one removed**, by name:
+
+| | Test |
+|---|---|
+| + | `test_p7_z_high_water_backfill.py::test_a_legacy_z_keeps_its_figures_and_the_next_one_closes_by_counter` |
+| + | `fiscal/test_daily_report.py::test_a_receipt_belongs_to_the_day_its_counter_falls_in` |
+| + | `fiscal/test_daily_report.py::test_a_receipt_stamped_before_the_close_still_lands_on_the_next_day` |
+| + | `fiscal/test_immutability.py::test_a_signed_receipt_refuses_every_change_but_its_copy_count` |
+| + | `fiscal/test_immutability.py::test_a_closed_day_refuses_everything` |
+| + | `fiscal/test_invariant_sensitivity.py::test_breaking_the_membership_query_is_caught` |
+| + | `fiscal/test_invariant_sensitivity.py::test_a_z_whose_mark_disagrees_with_what_it_counted_is_caught` |
+| + | `tax/test_vat_filing.py::test_a_filed_return_refuses_every_change_but_its_withdrawal` |
+| − | `fiscal/test_daily_report.py::test_the_range_is_half_open_so_a_receipt_falls_in_exactly_one_z` |
+
+The removal is the re-purposing: that test asserted the *clock* boundary, which no longer decides
+anything. Its replacement asserts the counter window, and the second new
+`test_daily_report` test is the defect itself.
+
+**No register case was removed**, because there was none to remove: step 8 cleared the last
+`GAP (P7, step 8)` line and this step adds no endpoint.
+
+### The branch
+
+```
+GIT_STATUS_PLACEHOLDER
+```
