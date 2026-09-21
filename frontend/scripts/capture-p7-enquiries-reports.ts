@@ -246,11 +246,17 @@ async function seed(
   const supplier = suppliers.find((p) => p.supplier_code === SUPPLIER_CODE)!;
 
   const warehouses = (await get(page, "/inventory/warehouses")) as Named[];
+  const mainWarehouse = warehouses.find((w) => w.code === "MAIN") ?? warehouses[0];
   await apiOk(page, "/oe/goods-received-notes", {
     partner_id: supplier.id,
     grn_date: today(),
     description: "Fiscal demo opening stock",
-    warehouse_id: warehouses[0].id,
+    // **MAIN by code, never `warehouses[0]`.** The listing is ordered by code and
+    // `inventory-reports.spec.ts` creates a `DEPOT`, which sorts *before* `MAIN` — so index 0
+    // seeds the stock somewhere the sale will not look, and the sale is refused
+    // `insufficient_stock` on a company holding plenty. It passes alone and fails behind that
+    // spec, which makes it a test about the suite's order rather than about the product.
+    warehouse_id: mainWarehouse.id,
     lines: [{ item_id: itemId, quantity: "200", unit_cost: "1000" }],
   });
 
@@ -319,14 +325,13 @@ async function seed(
   // then carries figures **and** the warning (shot 4).
   await apiOk(page, `/fiscal/devices/${deviceId}/close-day`);
 
-  // **Past the close's second before anything else is signed.** A Z's bounds are floored to a
-  // second (`sdcDateTime` has no finer resolution) and its range is `from_at <` … `<= to_at`, so
-  // a receipt issued in the very second the Z was taken lands inside a range whose figures are
-  // already frozen — and the next range opens exclusively at the same instant, so neither Z
-  // counts it. This script does a day's trading in under a second, which is the only way to
-  // reach that boundary; a real device is minutes apart. Without this wait shot 4's X came out
-  // a warning over a column of zeros, because the sale below had been swallowed by the Z above.
-  await page.waitForTimeout(1500);
+  // **Nothing waits for the second to turn over here, and that is revision `0026`.** This used
+  // to sleep 1.5 s: a Z's range was cut on `sdcDateTime` and a receipt signed in the very second
+  // the Z was taken landed inside a range whose figures were already frozen, while the next
+  // range opened exclusively at the same instant — so shot 4's X came out a warning over a
+  // column of zeros, because the sale below had been swallowed by the Z above. A Z owns a run
+  // of receipt **counters** now, so the sale lands on the next day however fast this script
+  // trades.
 
   // --- a posted revaluation, so the FX report has a run to open ---------------------------
   //

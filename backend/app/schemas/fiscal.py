@@ -244,6 +244,11 @@ class DailyReportRead(BaseModel):
     figures: DailyFiguresRead
     number: str | None = None
     report_no: int | None = None
+    #: The counter window the day owns (0026): `from_key <` `tot_rcpt_no` `<= to_key`, with
+    #: `to_key` null on an X, which is still open. Both null on a Z stored before 0026, which
+    #: owns a stretch of clock instead — the screen says so rather than inventing a range.
+    from_key: int | None = None
+    to_key: int | None = None
 
 
 # --- The enquiries and listings (P7 step 5) -------------------------------------------------
@@ -442,6 +447,12 @@ class ReceiptListingRead(BaseModel):
     receipts: list[ListingReceiptRead]
     only_in_ledger: list[ListingDocumentRead]
     only_on_receipts: list[ListingReceiptRead]
+    #: Set when the listing was asked for one **Z** rather than a date range (0026): the Z's
+    #: number and the counter window it owns.
+    report_no: int | None = None
+    report_number: str | None = None
+    from_key: int | None = None
+    to_key: int | None = None
 
 
 class ItemRegistrationRead(BaseModel):

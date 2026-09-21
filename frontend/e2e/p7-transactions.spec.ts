@@ -332,6 +332,7 @@ test.describe("the fiscalized transaction screens", () => {
     const warehouses = (await apiOk(page, "/inventory/warehouses")) as Array<
       Identified & { code: string }
     >;
+    const mainWarehouse = warehouses.find((w) => w.code === "MAIN") ?? warehouses[0];
     const suppliers = (await apiOk(page, "/subledger/ap/partners")) as Array<
       Identified & { supplier_code: string | null }
     >;
@@ -342,7 +343,12 @@ test.describe("the fiscalized transaction screens", () => {
         partner_id: suppliers.find((s) => s.supplier_code === SUPPLIER_CODE)!.id,
         grn_date: today(),
         description: `Fiscal opening stock ${SUFFIX}`,
-        warehouse_id: warehouses[0].id,
+        // **MAIN by code, never `warehouses[0]`.** The listing is ordered by code and
+        // `inventory-reports.spec.ts` creates a `DEPOT`, which sorts *before* `MAIN` — so index 0
+        // seeds the stock somewhere the sale will not look, and the sale is refused
+        // `insufficient_stock` on a company holding plenty. It passes alone and fails behind that
+        // spec, which makes it a test about the suite's order rather than about the product.
+        warehouse_id: mainWarehouse.id,
         lines: [{ item_id: itemId, quantity: "100", unit_cost: "1000" }],
       },
     });

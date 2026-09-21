@@ -118,6 +118,35 @@ PLAN = st.lists(
 )
 
 
+#: The queue states a deep pass has to actually **reach**, and the floor each has to clear.
+#:
+#: `unknown` is the whole reason this list exists. It is the state a person has to resolve — the
+#: answer never arrived, so RRA may or may not be holding the sale — and reaching it needs a
+#: `timeout` or an `accept_then_timeout` drawn *and* a `drain` after it, which is two of
+#: fourteen operations landing in the right order. P7 step 9's deep pass reached it **seven**
+#: times against 55 692 `queued`, and seven is thin: a seed that reached it zero times would
+#: make `verify` and `attach` vacuous for that run while the census printed a wall of green
+#: numbers. Printing the counter was not enough, and step 9's own report said so before this
+#: floor existed — a census is a report until it is a gate.
+#:
+#: **Two modes reach it, not one**, and that is measured rather than reasoned: dropping only
+#: `accept_then_timeout` and re-running the two invariant machines deep still reached `unknown`
+#: 105 times, because `timeout` lands in the same state. What separates them is whether RRA is
+#: holding the sale, which is `test_drain.py`'s distinction to make, not this census's.
+#:
+#: The floor is **1** rather than P6's 3 because the route is that narrow: asking for three
+#: would be asking the generator for something it clears by luck, and the answer to a floor
+#: that fails for want of luck is a targeted property, not a bigger `max_examples`
+#: (`test_property_order.py` says the same where it sets its own).
+#: Only a run with enough examples can be held to a floor: the per-commit profile draws two
+#: and would fail every one, so both censuses below stay silent on it. Read by
+#: `_report_census` and by `_report_residue`.
+_FLOORS_FROM_EXAMPLES = 100
+
+REQUIRED_STATES = ("unknown", "needs_receipt", "failed", "cancelled", "sent")
+STATE_FLOOR = 1
+
+
 @pytest.fixture(scope="module", autouse=True)
 def _report_census():  # noqa: ANN202
     yield
@@ -125,6 +154,24 @@ def _report_census():  # noqa: ANN202
         print("\n[property] refusals provoked:", dict(sorted(_REFUSALS.items())))
     if _STATES:
         print("[property] queue states reached:", dict(sorted(_STATES.items())))
+    if settings.default.max_examples < _FLOORS_FROM_EXAMPLES:
+        return
+    short = {
+        name: _STATES.get(name, 0)
+        for name in REQUIRED_STATES
+        if _STATES.get(name, 0) < STATE_FLOOR
+    }
+    assert not short, (
+        f"the deep pass never reached {short}. A queue state the machine cannot produce is a "
+        "state this suite does not cover, however green it looks — and `unknown` in particular "
+        "is what `Verify with device` and `Attach receipt manually` exist for, so a run that "
+        "missed it proved nothing about either.\n"
+        "Before reaching for a bigger `max_examples`: check that `timeout` and "
+        "`accept_then_timeout` are still in `MODES`, and that `drain` still follows them often "
+        "enough to matter. If the generator cannot get near it, the fix is a targeted "
+        "property.\n"
+        f"reached: {dict(sorted(_STATES.items()))}"
+    )
 
 
 @contextmanager
@@ -471,8 +518,6 @@ TAXED_FLOOR = 10
 #: How many constructed discounted lines must land past a whole franc. See the floor's own
 #: comment; a deep pass produces several times this.
 TWICE_ROUNDED_FLOOR = 20
-#: Only a run with enough examples can be held to a floor. The per-commit profile draws two.
-_FLOORS_FROM_EXAMPLES = 100
 
 
 @pytest.fixture(scope="module", autouse=True)

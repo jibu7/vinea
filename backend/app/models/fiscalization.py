@@ -611,6 +611,19 @@ class FiscalDailyReport(AuditedMixin, CompanyScopedMixin, Base):
     number: Mapped[str] = mapped_column(String(30), nullable=False)
     from_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     to_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    #: **What this Z owns** (0026): the device's `tot_rcpt_no` at the close. A Z covers every
+    #: receipt whose counter is above the previous Z's mark and at or below this one's, and the
+    #: open X owns everything above the last mark — so membership is a counter the authority
+    #: itself keys the receipt by, not an interval of anybody's clock.
+    #:
+    #: `from_at`/`to_at` stay for display and for the paper: §19.1 prints a day's span, and an
+    #: inspector reads dates. They no longer decide what is in the day, because the range was
+    #: cut on RRA's stamp while the close was cut on Vinea's, and a receipt in flight across
+    #: that skew belonged to neither day (`docs/p7-step-8-report.md`, item 8).
+    #:
+    #: NULL means a Z closed before this revision: its membership is its legacy `sdc_datetime`
+    #: range, and the first Z closed after the upgrade takes its mark from the device's counter.
+    high_water_rcpt_no: Mapped[int | None] = mapped_column(Integer)
     figures: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     #: What was still in the queue when the day closed.
     queued_rows: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

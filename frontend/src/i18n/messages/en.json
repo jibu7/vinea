@@ -2441,7 +2441,10 @@
       "sdcBlock": "SDC {sdc} · MRC {mrc}",
       "noDevice": "Register an EBM device before asking for a day's report.",
       "theDay": "The day",
-      "pendingByStatus": "{rows} {status}"
+      "pendingByStatus": "{rows} {status}",
+      "window": "Covers receipts {from}–{to}",
+      "windowOpen": "Covers every receipt above {from}",
+      "windowLegacy": "Closed before receipt counters — covers its dated range"
     },
     "receiptsListing": {
       "title": "Fiscal receipts listing",
@@ -2499,7 +2502,11 @@
       "invoiceCount": "Invoices",
       "invoiceTotal": "Invoices total",
       "creditNoteCount": "Credit notes",
-      "creditNoteTotal": "Credit notes total"
+      "creditNoteTotal": "Credit notes total",
+      "zFilter": "Fiscal day (Z)",
+      "zFilterAll": "Any day in the range",
+      "zWindow": "Covers receipts {from}–{to}",
+      "zNote": "A Z owns its receipts by counter, not by clock. Chosen here, the receipts side is exactly what that Z counted, and the dates follow the Z's own span."
     }
   },
   "orderEntry": {

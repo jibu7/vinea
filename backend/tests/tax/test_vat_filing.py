@@ -11,7 +11,8 @@ from datetime import date
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
+from sqlalchemy.exc import DatabaseError
 from sqlalchemy.orm import Session
 
 from app.kernel import posting
@@ -540,3 +541,51 @@ def test_a_reversed_ordinary_journal_still_lists_as_two_rows(
     ]
     assert tie.difference == Decimal("0.000000")
     assert tie.reconciled
+
+
+def test_a_filed_return_refuses_every_change_but_its_withdrawal(
+    db: Session, month: FiscalPosting  # noqa: F811
+) -> None:
+    """The database's half of "a filed return never changes" (revision `0022`, `VN011`).
+
+    Everything else in this file proves the *query* leaves a filed return alone — a late entry
+    lands on the next one, filing and reversing hands the range back. This proves that nothing
+    else can touch it either, which is the claim architecture rule 3 makes about every posted
+    row and which no test was making about this table: the figures, the range and the
+    high-water mark are what "filed" means.
+
+    What may move is `status` and `reversal_entry_id`, because a filed return can be withdrawn —
+    and a trigger that refused that would be wrong in a way an "it raises" test could not see.
+    """
+    filed = vat.file_return(
+        db,
+        month.company_id,
+        period_from=MARCH_FROM,
+        period_to=MARCH_TO,
+        actor=month.owner,
+    )
+    db.flush()
+    return_id = filed.id
+
+    def refused(statement: str) -> str:
+        # Inside a SAVEPOINT, so the refusal takes the statement with it and the filed return
+        # is still standing for the second half of the test.
+        with pytest.raises(DatabaseError) as raised, db.begin_nested():
+            db.execute(text(statement))
+        message = str(raised.value)
+        assert "VN011" in message or "immutable" in message or "filed" in message, message
+        return message
+
+    refused(
+        f"UPDATE vat_returns SET high_water_entry_id = high_water_entry_id + 1 "
+        f"WHERE id = {return_id}"
+    )
+    refused(f"UPDATE vat_returns SET number = 'VATR-999999' WHERE id = {return_id}")
+    refused(f"UPDATE vat_returns SET period_to = period_to + 1 WHERE id = {return_id}")
+    refused(f"DELETE FROM vat_returns WHERE id = {return_id}")
+
+    # …and the withdrawal the trigger exists to allow.
+    db.execute(text(f"UPDATE vat_returns SET status = 'reversed' WHERE id = {return_id}"))
+    db.flush()
+    db.expire_all()
+    assert db.get(VatReturn, return_id).status is VatReturnStatus.REVERSED

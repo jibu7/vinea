@@ -60,6 +60,21 @@ Step 3 adds four, for the purchase and stock reports:
    VSDC §3.1 requires the invoice information first and RRA answers `921`/`922` when it does
    not get it. The reason this is an invariant rather than a comment is that the companion
    stock entry posts *first*, so the natural order is the wrong one.
+
+Step 9 adds the last one, with revision 0026:
+
+12. **The days tile the device.** Per device, every receipt belongs to exactly one closed Z or
+   to the open X: no receipt is counted by two closes, and no receipt's counter falls in a gap
+   between them. Each Z's stored `ns_count + nr_count` equals the number of receipts its
+   membership window holds, so Σ over the Zs plus the open day is the device's whole receipt
+   count.
+
+   This is the clause step 8 could not write. A Z's range was cut on `sdc_datetime` — RRA's
+   clock — while the close was cut on `now()`; a receipt in flight across that skew came back
+   stamped before the close, landed inside a Z already frozen, and the next Z opened after it.
+   A receipt in **no** day, on a report a revenue authority reads, and nothing anywhere said
+   otherwise. `fiscal_daily_reports.high_water_rcpt_no` makes membership a counter instead, and
+   this is what holds it.
 """
 
 import json
@@ -69,10 +84,12 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.fiscal import daily as daily_service
 from app.fiscal import feed as feed_service
 from app.fiscal import outbox as outbox_service
 from app.fiscal.keys import decrypt_key
 from app.models.fiscalization import (
+    FiscalDailyReport,
     FiscalDevice,
     FiscalDeviceStatus,
     FiscalFeedDecision,
@@ -126,6 +143,7 @@ def assert_fiscal_invariants(db: Session, company_id: int) -> None:
     _assert_purchase_numbers_gapless(rows)
     _assert_stock_numbers_gapless(rows)
     _assert_movements_follow_their_document(rows)
+    _assert_days_tile_the_device(db, company_id, devices, receipts)
 
 
 def _assert_one_document_one_row(
@@ -531,3 +549,84 @@ def _assert_one_registration_per_supplier_invoice(
             f"RRA twice: as {clash.number}'s own registration and as the confirmation of feed "
             f"row {feed_row.id}. One purchase, registered twice, and the input VAT with it"
         )
+
+
+def _assert_days_tile_the_device(
+    db: Session,
+    company_id: int,
+    devices: list[FiscalDevice],
+    receipts: list[FiscalReceipt],
+) -> None:
+    """Invariant 12 (0026). Every receipt is in exactly one day.
+
+    Read through `daily.membership_of` and `daily.receipts_of` rather than re-implemented here,
+    deliberately: a second spelling of "what is in this day" would be a second answer, and the
+    failure this clause exists for is precisely two parts of the system disagreeing about which
+    day a receipt is in. Breaking the membership query breaks this — which is how it is proven
+    sensitive (`test_invariant_sensitivity.py`).
+
+    **The one receipt that is in no day and should be.** A device suspended and brought back
+    starts a new continuous period (0024), and the open day opens at that activation. Receipts
+    the device signed before it, that no Z ever closed, belong to the period that ended when
+    somebody suspended the device — they are below the open day's floor on purpose, and the
+    check says so rather than pretending the X covers them.
+    """
+    by_device: dict[int, list[FiscalReceipt]] = defaultdict(list)
+    for receipt in receipts:
+        by_device[receipt.device_id].append(receipt)
+
+    for device in devices:
+        held = by_device.get(device.id, [])
+        if not held:
+            continue
+        owner: dict[int, str] = {}
+        reports = list(
+            db.scalars(
+                select(FiscalDailyReport)
+                .where(
+                    FiscalDailyReport.company_id == company_id,
+                    FiscalDailyReport.device_id == device.id,
+                )
+                .order_by(FiscalDailyReport.report_no)
+            )
+        )
+        for report in reports:
+            window = daily_service.receipts_of(
+                db, company_id, device.id, daily_service.membership_of(db, company_id, report)
+            )
+            for receipt in window:
+                assert receipt.id not in owner, (
+                    f"receipt {receipt.id} (counter {receipt.tot_rcpt_no}) is counted by both "
+                    f"{owner[receipt.id]} and {report.number} — one sale, declared twice on "
+                    "two days a revenue authority reads"
+                )
+                owner[receipt.id] = report.number
+            counted = int(report.figures.get("ns_count", 0)) + int(
+                report.figures.get("nr_count", 0)
+            )
+            assert counted == len(window), (
+                f"{report.number} stored {counted} receipts and its membership window holds "
+                f"{len(window)} — the close and the report of the close disagree about what "
+                "was in the day"
+            )
+
+        open_day = daily_service.receipts_of(
+            db, company_id, device.id, daily_service.open_membership(db, company_id, device)
+        )
+        for receipt in open_day:
+            assert receipt.id not in owner, (
+                f"receipt {receipt.id} (counter {receipt.tot_rcpt_no}) is in the open day and "
+                f"was already closed by {owner[receipt.id]}"
+            )
+            owner[receipt.id] = "the open X"
+
+        floor = daily_service.open_membership(db, company_id, device).from_key or 0
+        for receipt in held:
+            if receipt.id in owner:
+                continue
+            assert receipt.tot_rcpt_no <= floor, (
+                f"receipt {receipt.id} (counter {receipt.tot_rcpt_no}) on device {device.id} "
+                f"is in no Z and not in the open day, which opens above {floor} — a receipt "
+                "that fell between two closes, which is the failure 0026 exists to make "
+                "impossible"
+            )

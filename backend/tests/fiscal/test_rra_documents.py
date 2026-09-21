@@ -47,7 +47,14 @@ SUPPORTING = {
 RECEIPT_SUFFIXES = {".pdf", ".png", ".jpg", ".jpeg", ".webp"}
 
 #: Everything the register has to account for, and the prose files that are the register.
-PROSE = {"README.md", "contract-notes.md"}
+#:
+#: `certification.md` (P7 step 9) joins them rather than `SUPPORTING`, and the distinction is
+#: the one this whole file is about: `SUPPORTING` is **material RRA produced** — the checkpoint
+#: sheet, the logo — which is pinned by hash because a replaced copy changes what the build was
+#: written against. The three prose files are **Vinea's own writing about** that material: the
+#: register, the reading map over the specifications, and the runbook for obtaining
+#: certification. Hashing one of those would pin a file that is meant to be edited.
+PROSE = {"README.md", "contract-notes.md", "certification.md"}
 
 SHA256 = re.compile(r"`?\b([0-9a-f]{64})\b`?")
 

@@ -490,6 +490,13 @@ export interface DailyReport {
   figures: DailyFigures;
   number: string | null;
   report_no: number | null;
+  /**
+   * The counter window the day owns (0026): `from_key <` `tot_rcpt_no` `<= to_key`, with
+   * `to_key` null on an X, which is still open. Both null on a Z closed before 0026, which owns
+   * a stretch of clock instead — the screen says so rather than inventing a range.
+   */
+  from_key: number | null;
+  to_key: number | null;
 }
 
 /** One signed receipt on the tie, with what it declared beside what its document posted. */
@@ -554,4 +561,9 @@ export interface ReceiptListing {
   receipts: ListingReceipt[];
   only_in_ledger: ListingDocument[];
   only_on_receipts: ListingReceipt[];
+  /** Set when the listing was asked for one **Z** rather than a date range (0026). */
+  report_no: number | null;
+  report_number: string | null;
+  from_key: number | null;
+  to_key: number | null;
 }

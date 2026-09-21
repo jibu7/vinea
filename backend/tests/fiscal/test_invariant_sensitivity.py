@@ -1,6 +1,6 @@
 """`assert_fiscal_invariants` is only worth running if it fails when it should.
 
-Ten invariants and a breakage each, most of them a single edit to a row the ordinary path
+Twelve invariants and a breakage each, most of them a single edit to a row the ordinary path
 produced. The pattern P5 established in `tests/inventory/test_checker_sensitivity.py`, and it
 exists because an invariant suite that cannot fail is the most expensive kind of green: every
 property test in the phase asserts these after every step, so a checker that had quietly
@@ -11,13 +11,15 @@ Each breakage is also a thing that could actually happen — a second row for on
 reached a stored payload. None of them is contrived.
 """
 
+from datetime import UTC, datetime, timedelta
+
 import httpx
 import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.fiscal import daily, drainer
 from app.fiscal import devices as device_service
-from app.fiscal import drainer
 from app.fiscal import outbox as outbox_service
 from app.fiscal import sales as fiscal_sales
 from app.models.fiscalization import (
@@ -274,3 +276,69 @@ def test_one_supplier_invoice_declared_twice_is_caught_as_a_state(
 
     with pytest.raises(AssertionError, match="reaches RRA twice"):
         assert_fiscal_invariants(db, fiscal_posting.company_id)
+
+
+def _close(db: Session, posting: FiscalPosting, seconds: int):  # noqa: ANN202
+    """A Z at an injected instant. The span a Z prints still has a second's resolution, so two
+    closes in one test have to name their moments — what they *contain* is counters (0026)."""
+    report = daily.close_day(
+        db,
+        posting.company_id,
+        posting.device.id,
+        actor=posting.owner,
+        now=datetime.now(UTC) + timedelta(seconds=seconds),
+    )
+    db.flush()
+    return report
+
+
+def test_breaking_the_membership_query_is_caught(
+    db: Session, drained: FiscalPosting, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Invariant 12, proven sensitive the way A.3 asks: break the membership query.
+
+    The classic off-by-one — `>=` where the rule says `>` on the lower bound — makes two
+    consecutive Zs both claim the receipt on the seam. That is the double count the clause
+    exists to make impossible, and it is a one-character edit in the one function that decides
+    what is in a day.
+    """
+    _close(db, drained, 1)
+    _close(db, drained, 2)
+    assert_fiscal_invariants(db, drained.company_id)
+
+    honest = daily.receipts_of
+
+    def off_by_one(session, company_id, device_id, members):  # noqa: ANN001, ANN202
+        if members.by_counter:
+            members = daily.Membership.by_key(members.from_key - 1, members.to_key)
+        return honest(session, company_id, device_id, members)
+
+    monkeypatch.setattr(daily, "receipts_of", off_by_one)
+
+    with pytest.raises(AssertionError, match="counted by both|membership window holds"):
+        assert_fiscal_invariants(db, drained.company_id)
+
+
+def test_a_z_whose_mark_disagrees_with_what_it_counted_is_caught(
+    db: Session, drained: FiscalPosting
+) -> None:
+    """The other half of invariant 12: a stored mark that does not describe the stored figures.
+
+    A close that took its high-water mark from the wrong place — the previous Z's, say, or a
+    counter read before the last receipt landed — would store a day whose figures and whose
+    membership are about different sets of receipts. Nothing else in the phase would notice:
+    the figures are frozen and look plausible, and the next day would silently re-count or
+    silently drop whatever the mark disagreed about.
+
+    `fiscal_daily_reports` is immutable by trigger, so the breakage is made on the ORM's copy —
+    which is what the checker reads.
+    """
+    report = _close(db, drained, 1)
+    assert report.high_water_rcpt_no == 2
+    assert_fiscal_invariants(db, drained.company_id)
+
+    report.high_water_rcpt_no = 1
+
+    with pytest.raises(AssertionError, match="membership window holds"):
+        assert_fiscal_invariants(db, drained.company_id)
+    db.expunge_all()

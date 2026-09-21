@@ -538,12 +538,14 @@ export function useReceiptListing(
   deviceId: number | null,
   dateFrom: string,
   dateTo: string,
+  reportNo: number | null = null,
 ) {
   return useQuery({
-    queryKey: [ROOT, "receipt-listing", deviceId, dateFrom, dateTo],
+    queryKey: [ROOT, "receipt-listing", deviceId, dateFrom, dateTo, reportNo],
     queryFn: () =>
       api.get<ReceiptListing>(
-        `/fiscal/receipts/listing?device_id=${deviceId}&date_from=${dateFrom}&date_to=${dateTo}`,
+        `/fiscal/receipts/listing?device_id=${deviceId}&date_from=${dateFrom}&date_to=${dateTo}` +
+          (reportNo === null ? "" : `&report_no=${reportNo}`),
       ),
     enabled: deviceId !== null && Boolean(dateFrom && dateTo),
   });
