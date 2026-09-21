@@ -246,11 +246,17 @@ async function seed(
   const supplier = suppliers.find((p) => p.supplier_code === SUPPLIER_CODE)!;
 
   const warehouses = (await get(page, "/inventory/warehouses")) as Named[];
+  const mainWarehouse = warehouses.find((w) => w.code === "MAIN") ?? warehouses[0];
   await apiOk(page, "/oe/goods-received-notes", {
     partner_id: supplier.id,
     grn_date: today(),
     description: "Fiscal demo opening stock",
-    warehouse_id: warehouses[0].id,
+    // **MAIN by code, never `warehouses[0]`.** The listing is ordered by code and
+    // `inventory-reports.spec.ts` creates a `DEPOT`, which sorts *before* `MAIN` — so index 0
+    // seeds the stock somewhere the sale will not look, and the sale is refused
+    // `insufficient_stock` on a company holding plenty. It passes alone and fails behind that
+    // spec, which makes it a test about the suite's order rather than about the product.
+    warehouse_id: mainWarehouse.id,
     lines: [{ item_id: itemId, quantity: "200", unit_cost: "1000" }],
   });
 

@@ -411,7 +411,10 @@ test.describe("the fiscal cycle, through the screens, tied to the tape", () => {
     // Opening stock. A fiscalized company's negative-stock policy is locked at `block`
     // (CIS §7.30 — no receipt for goods the stock does not hold), so a sale with nothing behind
     // it would be refused before it ever reached the queue.
-    const warehouses = (await apiOk(page, "/inventory/warehouses")) as Array<Identified>;
+    const warehouses = (await apiOk(page, "/inventory/warehouses")) as Array<
+      Identified & { code: string }
+    >;
+    const mainWarehouse = warehouses.find((w) => w.code === "MAIN") ?? warehouses[0];
     await apiOk(page, "/oe/goods-received-notes", {
       method: "POST",
       headers: { "Idempotency-Key": `p7-tape-grn-${SUFFIX}` },
@@ -419,7 +422,12 @@ test.describe("the fiscal cycle, through the screens, tied to the tape", () => {
         partner_id: supplierId,
         grn_date: today(),
         description: `Tape opening stock ${SUFFIX}`,
-        warehouse_id: warehouses[0].id,
+        // **MAIN by code, never `warehouses[0]`.** The listing is ordered by code and
+        // `inventory-reports.spec.ts` creates a `DEPOT`, which sorts *before* `MAIN` — so index 0
+        // seeds the stock somewhere the sale will not look, and the sale is refused
+        // `insufficient_stock` on a company holding plenty. It passes alone and fails behind that
+        // spec, which makes it a test about the suite's order rather than about the product.
+        warehouse_id: mainWarehouse.id,
         lines: [{ item_id: itemId, quantity: "100", unit_cost: COST }],
       },
     });
