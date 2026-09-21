@@ -325,7 +325,17 @@ $ npx next lint
 No screen exists yet, so there is no e2e to re-take and no screenshot to commit — rule 13
 applies from step 6, and step 1 builds nothing a person can open.
 
-<!-- GIT -->
+The branch, pushed at `53d47d6`:
+
+```
+$ git status --short
+$ git log @{u}..
+```
+
+Both empty. `git diff --stat main...HEAD`: **40 files, 7 045 insertions, 24 deletions** —
+of which 6 025 lines are the eleven new files (the migration, the six modules and the four
+test files), 356 are this report, and the 24 deletions are the lines this step replaced in
+`test_schema_invariants.py`, `revaluation.py` and `models/__init__.py`.
 
 ## Deferred out of step 1, deliberately
 
