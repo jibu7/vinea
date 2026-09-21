@@ -244,7 +244,7 @@ printed a line per guard and `git status` came back clean of every patch afterwa
 | 14 | the tie's two axes | `dated_outside` is never returned | `test_a_receipt_signed_outside_its_documents_range_says_dated_outside` | `assert […'other_branch'] == […'dated_outside']` |
 | 15 | `registration_hash` over values, not representations | `default=canonical` → `default=str` | `tests/test_fingerprints.py` | `assert '{"amount":"0"}' == '{"amount":"0.0"}'` |
 | 16 | invariant 1's activation window | `moment < since` dropped from the skip | `test_an_invoice_posted_before_the_device_went_live_is_not_a_hole` | `INV-000001 posted at … on a branch whose device has been live since … and it has no queue row` |
-| 17 | `purchase_already_declared` | the refusal's code is renamed | `test_an_unlinked_accept_of_an_invoice_already_declared_is_refused` | `assert 'purchase_already_declared_DISABLED' == 'purchase_already_declared'` |
+| 17 | `purchase_already_declared` | the refusal removed, not merely renamed — the duplicate check returns instead of raising | `test_an_unlinked_accept_of_an_invoice_already_declared_is_refused` | `DID NOT RAISE FiscalSetupError` |
 | 18 | the three immutability triggers | `ALTER TABLE … DISABLE TRIGGER`, in a transaction that is rolled back | `tests/fiscal/test_immutability.py`, `test_a_filed_return_refuses_every_change_but_its_withdrawal` | see below |
 
 ### Row 8 — the one worth reading twice
