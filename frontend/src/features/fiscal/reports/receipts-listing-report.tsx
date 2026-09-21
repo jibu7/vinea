@@ -13,7 +13,7 @@ import { TBody, TD, TH, THead, TR, Table } from "@/design/components/table";
 import { useCompanyDetails, useCurrencies } from "@/features/gl/hooks";
 import { exportToCsv } from "@/lib/csv";
 import { dotted, formatDate, formatMoney, monthToDateIso } from "@/lib/format";
-import { useFiscalDevices, useReceiptListing } from "../hooks";
+import { useFiscalDevices, useReceiptListing, useZReports } from "../hooks";
 
 /**
  * Reports → Tax → **Fiscal receipts listing** (P7 step 8) — the accountant's tie.
@@ -33,6 +33,12 @@ import { useFiscalDevices, useReceiptListing } from "../hooks";
  * **Declared figures print at two decimals**, the ledger's at the currency's own — because
  * that difference *is* the residue, and rounding the wire's figure to the franc on screen would
  * erase the thing this report exists to show.
+ *
+ * **"This Z" is a third filter, not a shortcut for two dates** (0026). A Z owns its receipts by
+ * counter — `high_water_rcpt_no` — so no date range can express what it counted: a receipt
+ * signed either side of midnight, or across the skew between RRA's clock and Vinea's, is in a Z
+ * whose dates do not contain it. Picking the Z asks the server for that Z's own members, and
+ * the heading states the counter window so the reader can see what they are looking at.
  */
 export function FiscalReceiptsListingReport() {
   const t = useTranslations("fiscal.receiptsListing");
@@ -42,12 +48,19 @@ export function FiscalReceiptsListingReport() {
   const [deviceId, setDeviceId] = useState("");
   const [dateFrom, setDateFrom] = useState(initial.from);
   const [dateTo, setDateTo] = useState(initial.to);
+  const [reportNo, setReportNo] = useState("");
 
   const company = useCompanyDetails();
   const currencies = useCurrencies();
   const devices = useFiscalDevices();
   const chosen = deviceId ? Number(deviceId) : (devices.data?.[0]?.id ?? null);
-  const listing = useReceiptListing(chosen, dateFrom, dateTo);
+  const zReports = useZReports(chosen);
+  const listing = useReceiptListing(
+    chosen,
+    dateFrom,
+    dateTo,
+    reportNo === "" ? null : Number(reportNo),
+  );
   const data = listing.data;
 
   const base = (currencies.data ?? []).find((c) => c.is_base);
@@ -99,11 +112,18 @@ export function FiscalReceiptsListingReport() {
       asOfLabel={dotted(
         data?.device_label,
         data?.sdc_id,
-        tr("dateRange", { from: formatDate(dateFrom), to: formatDate(dateTo) }),
+        data?.report_number,
+        data && data.from_key !== null && data.to_key !== null
+          ? t("zWindow", { from: data.from_key + 1, to: data.to_key })
+          : null,
+        tr("dateRange", {
+          from: formatDate(data?.date_from ?? dateFrom),
+          to: formatDate(data?.date_to ?? dateTo),
+        }),
       )}
       onExportCsv={data && data.receipts.length > 0 ? handleExport : undefined}
       filters={
-        <div className="grid grid-cols-1 gap-3 rounded-[var(--radius-card)] border border-[var(--vinea-border)] bg-[var(--vinea-surface-raised)] p-4 sm:grid-cols-3">
+        <div className="grid grid-cols-1 gap-3 rounded-[var(--radius-card)] border border-[var(--vinea-border)] bg-[var(--vinea-surface-raised)] p-4 sm:grid-cols-4">
           <Field label={t("device")}>
             <Select
               options={(devices.data ?? []).map((row) => ({
@@ -121,6 +141,28 @@ export function FiscalReceiptsListingReport() {
           <Field label={tr("to")}>
             <IsoDatePicker value={dateTo} onValueChange={setDateTo} />
           </Field>
+          <Field label={t("zFilter")}>
+            <Select
+              options={[
+                { value: "", label: t("zFilterAll") },
+                ...(zReports.data ?? []).map((row) => ({
+                  value: String(row.report_no ?? ""),
+                  label: row.number ?? String(row.report_no ?? ""),
+                })),
+              ]}
+              value={reportNo}
+              onValueChange={setReportNo}
+              ariaLabel={t("zFilter")}
+            />
+          </Field>
+          {reportNo === "" ? null : (
+            <p
+              className="text-xs text-[var(--vinea-ink-muted)] sm:col-span-4"
+              data-testid="listing-z-note"
+            >
+              {t("zNote")}
+            </p>
+          )}
         </div>
       }
     >

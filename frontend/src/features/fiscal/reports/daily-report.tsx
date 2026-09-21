@@ -253,6 +253,9 @@ export function DailyFiscalReport() {
                       {dotted(
                         `${t("openedAt")} ${formatDate(x.data.from_at)}`,
                         `${t("takenAt")} ${formatDate(x.data.to_at)}`,
+                        x.data.from_key === null
+                          ? null
+                          : t("windowOpen", { from: x.data.from_key }),
                       )}
                     </p>
                   )}
@@ -346,6 +349,22 @@ export function DailyFiscalReport() {
                             from: formatDate(report.from_at),
                             to: formatDate(report.to_at),
                           })}
+                          {/* **What the Z owns, beside what it spans** (0026). The dates are
+                              what §19.1 prints; the counters are what the day actually
+                              contains, and an inspector holding a receipt reads the counter
+                              off the paper. A Z closed before 0026 says so instead of
+                              inventing a window. */}
+                          <span
+                            data-testid="z-window"
+                            className="block pt-0.5 font-mono text-[11px] text-[var(--vinea-ink-subtle)]"
+                          >
+                            {report.from_key !== null && report.to_key !== null
+                              ? t("window", {
+                                  from: report.from_key + 1,
+                                  to: report.to_key,
+                                })
+                              : t("windowLegacy")}
+                          </span>
                         </TD>
                         <TD
                           className="text-right font-mono text-xs tabular-nums"

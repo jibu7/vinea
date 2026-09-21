@@ -32,11 +32,12 @@ from sqlalchemy import Select, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.errors import NotFoundError
+from app.fiscal import daily, registry
 from app.fiscal import outbox as outbox_service
-from app.fiscal import registry
 from app.models.audit import AuditLog
 from app.models.company import Branch, Company
 from app.models.fiscalization import (
+    FiscalDailyReport,
     FiscalDevice,
     FiscalItem,
     FiscalOutboxKind,
@@ -787,6 +788,14 @@ class ReceiptListing:
     receipts: tuple[ListingReceipt, ...]
     only_in_ledger: tuple[ListingDocument, ...]
     only_on_receipts: tuple[ListingReceipt, ...]
+    #: Set when the listing was asked for **one Z** rather than a date range: its number, and
+    #: the counter window it owns. The screen states them because "these are the receipts that
+    #: Z counted" is the whole claim the accountant is checking, and a heading that said only
+    #: the dates would be the range that stopped deciding membership at 0026.
+    report_no: int | None = None
+    report_number: str | None = None
+    from_key: int | None = None
+    to_key: int | None = None
 
     @property
     def declared_net(self) -> Decimal:
@@ -810,13 +819,23 @@ def receipt_listing(
     *,
     date_from: date,
     date_to: date,
+    report_no: int | None = None,
 ) -> ReceiptListing:
-    """The listing and its tie, for one device over one closed date range.
+    """The listing and its tie, for one device over one closed date range — or over one Z.
 
     One device rather than all of them, because the counters this report states are per device
     (decision 5) and a total across two devices is a number with no receipt behind it. The
     ledger side is narrowed to the device's **branch** for the same reason: a device is a
     branch's, so the sales it is answerable for are that branch's sales.
+
+    **`report_no` is the "this Z" filter** (0026). A Z owns its receipts by counter now, and a
+    date range cannot express that: a receipt signed either side of midnight, or across the
+    skew between RRA's clock and Vinea's, is in a Z whose dates do not contain it. Asked for a
+    Z, the receipts side is exactly that Z's members — `daily.receipts_of`, the same function
+    the close itself used, so the two cannot disagree — and the dates become the Z's own span,
+    which is what the ledger side and the asymmetry lists are cut on. Without it the accountant's
+    tie compares a Z's total to a *different* set of receipts and calls the difference a
+    finding.
     """
     device = db.scalar(
         select(FiscalDevice).where(
@@ -829,20 +848,37 @@ def receipt_listing(
         select(Branch).where(Branch.company_id == company_id, Branch.id == device.branch_id)
     )
 
-    from_at = datetime.combine(date_from, time.min, tzinfo=UTC)
-    to_at = datetime.combine(date_to, time.max, tzinfo=UTC)
-    signed = list(
-        db.scalars(
-            select(FiscalReceipt)
-            .where(
-                FiscalReceipt.company_id == company_id,
-                FiscalReceipt.device_id == device_id,
-                FiscalReceipt.sdc_datetime >= from_at,
-                FiscalReceipt.sdc_datetime <= to_at,
+    if report_no is not None:
+        report = db.scalar(
+            select(FiscalDailyReport).where(
+                FiscalDailyReport.company_id == company_id,
+                FiscalDailyReport.device_id == device_id,
+                FiscalDailyReport.report_no == report_no,
             )
-            .order_by(FiscalReceipt.tot_rcpt_no, FiscalReceipt.id)
         )
-    )
+        if report is None:
+            raise NotFoundError("Fiscal daily report not found")
+        members = daily.membership_of(db, company_id, report)
+        signed = daily.receipts_of(db, company_id, device_id, members)
+        date_from = report.from_at.date()
+        date_to = report.to_at.date()
+        zed = (report.report_no, report.number, members.from_key, members.to_key)
+    else:
+        zed = (None, None, None, None)
+        from_at = datetime.combine(date_from, time.min, tzinfo=UTC)
+        to_at = datetime.combine(date_to, time.max, tzinfo=UTC)
+        signed = list(
+            db.scalars(
+                select(FiscalReceipt)
+                .where(
+                    FiscalReceipt.company_id == company_id,
+                    FiscalReceipt.device_id == device_id,
+                    FiscalReceipt.sdc_datetime >= from_at,
+                    FiscalReceipt.sdc_datetime <= to_at,
+                )
+                .order_by(FiscalReceipt.tot_rcpt_no, FiscalReceipt.id)
+            )
+        )
 
     documents = _documents(db, company_id, {receipt.document_id for receipt in signed})
     ledger = _sales_ledger(
@@ -938,6 +974,10 @@ def receipt_listing(
             for document in missing
         ),
         only_on_receipts=tuple(row for row in rows if row.outside_range is not None),
+        report_no=zed[0],
+        report_number=zed[1],
+        from_key=zed[2],
+        to_key=zed[3],
     )
 
 

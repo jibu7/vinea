@@ -119,28 +119,26 @@ def test_a_second_z_covers_only_what_came_after_the_first(
 ) -> None:
     """The closes tile the device's life: no receipt is counted twice, and none is missed.
 
-    The clock is injected rather than read, because a receipt's stamp has a second's resolution
-    and a test that closed twice in the same millisecond would be asking which of two days an
-    instant belongs to when both bounds are the same instant. Real days are hours apart; this
-    one is two seconds, which is enough to be a boundary.
+    **Re-purposed to counters at 0026, and the proof is what came out.** This test used to
+    sleep 2.05 seconds between the first close and the refund, because membership was a range
+    of `sdc_datetime` and two receipts issued in the same second could not be put on opposite
+    sides of a boundary by any rule. The sleep is gone and the assertions are unchanged: a Z
+    owns a run of receipt counters now, so a refund signed in the very second the first Z was
+    taken is still the second Z's, because its `tot_rcpt_no` is above the first Z's mark.
+
+    If this test ever needs a sleep again, the fix has come undone.
+
+    The closes themselves still name their instants — `close_day` refuses a range of zero
+    length (`fiscal_z_empty_range`), which is about the span a Z *prints*, not about what it
+    contains.
     """
-    # The timeline, in whole seconds, because that is the resolution `sdcDateTime` has:
-    #
-    #   S     the device is activated and the sale is rung up  (both in `a_day`)
-    #   S+1   the first Z is taken — after the sale, so it contains it
-    #   S+2   the refund is rung up — after the first Z, so it belongs to the second
-    #   S+2   the second Z is taken
-    #
-    # Two receipts issued in the *same* second cannot be put on opposite sides of a boundary by
-    # any rule, so the test waits rather than pretending otherwise. The sandbox stamps from the
-    # wall clock, as a device does, which is why the wait is real.
     first = daily.close_day(
         db, a_day.company_id, a_day.device.id, actor=a_day.owner, now=_later(1)
     )
     db.flush()
 
-    time.sleep(2.05)
-
+    # One receipt so far, and the first close took it — mark 1, and the next day opens above it.
+    assert first.high_water_rcpt_no == 1
     assert (
         len(
             db.scalars(
@@ -168,12 +166,21 @@ def test_a_second_z_covers_only_what_came_after_the_first(
     _drain_everything(db, a_day, sandbox_client)
 
     second = daily.close_day(
-        db, a_day.company_id, a_day.device.id, actor=a_day.owner, now=datetime.now(UTC)
+        db, a_day.company_id, a_day.device.id, actor=a_day.owner, now=_later(2)
     )
     db.flush()
 
     assert second.report_no == 2
     assert second.from_at == first.to_at
+    # The window, stated: (1, 2] — everything the device signed after the first close.
+    assert second.high_water_rcpt_no == 2
+    members = daily.receipts_of(
+        db,
+        a_day.company_id,
+        a_day.device.id,
+        daily.membership_of(db, a_day.company_id, second),
+    )
+    assert [receipt.tot_rcpt_no for receipt in members] == [2]
     # Only the refund is in the second close.
     assert second.figures["ns_count"] == 0
     assert second.figures["nr_count"] == 1
@@ -213,34 +220,93 @@ def test_a_device_that_never_activated_has_no_day(
     assert raised.value.code == "fiscal_device_not_active"
 
 
-def test_the_range_is_half_open_so_a_receipt_falls_in_exactly_one_z(
+def test_a_receipt_belongs_to_the_day_its_counter_falls_in(
     db: Session, a_day: FiscalPosting
 ) -> None:
-    """The boundary that decides whether a receipt is double-counted or lost."""
+    """The boundary that decides whether a receipt is double-counted or lost (0026).
+
+    It is a counter now, not an instant. A window closed at the receipt's own counter contains
+    it; the next window, which opens above that counter, does not — and neither bound is read
+    off a clock, so no skew between RRA's stamp and Vinea's `now()` can put a receipt in
+    both or in neither.
+    """
     receipt = db.scalars(
         select(FiscalReceipt).where(FiscalReceipt.company_id == a_day.company_id)
     ).one()
-    moment = receipt.sdc_datetime
+    counter = receipt.tot_rcpt_no
 
-    # A range ending exactly at the receipt's instant contains it...
     inside = daily.compute(
         db,
         a_day.company_id,
         a_day.device.id,
-        from_at=moment - timedelta(seconds=1),
-        to_at=moment,
+        members=daily.Membership.by_key(counter - 1, counter),
     )
     assert inside.ns_count == 1
 
-    # ...and the next range, which starts there, does not.
     after = daily.compute(
         db,
         a_day.company_id,
         a_day.device.id,
-        from_at=moment,
-        to_at=datetime.now(UTC) + timedelta(seconds=1),
+        members=daily.Membership.by_key(counter, None),
     )
     assert after.ns_count == 0
+
+
+def test_a_receipt_stamped_before_the_close_still_lands_on_the_next_day(
+    db: Session, a_day: FiscalPosting, sandbox_client: httpx.Client
+) -> None:
+    """**The step-8 defect, as a test.** The reason 0026 exists.
+
+    A Z's range used to be cut on `sdc_datetime` — RRA's clock, on RRA's server — while the
+    close was cut on `now()`, Vinea's. Let those two disagree and a receipt signed after the
+    close comes back stamped *before* it: under the old rule it fell inside a Z whose figures
+    were already frozen, and the next Z opened after that instant, so it was counted by
+    neither. In no day at all, on a report a revenue authority reads.
+
+    The skew is made explicit here rather than waited for: the first close is taken at a Vinea
+    clock running a minute ahead, and the sale that follows is signed with RRA's, which is
+    behind it. The receipt is stamped before the day it belongs to began — and it is on that
+    day anyway, because a day is a run of counters.
+
+    Nothing is mutated to arrange it. `fiscal_receipts` is immutable by trigger, which is why
+    the skew has to come from the clocks, which is also where it comes from in production.
+    """
+    first = daily.close_day(
+        db, a_day.company_id, a_day.device.id, actor=a_day.owner, now=_later(60)
+    )
+    db.flush()
+    assert first.high_water_rcpt_no == 1
+
+    helpers.invoice(a_day, db)
+    db.flush()
+    _drain_everything(db, a_day, sandbox_client)
+
+    late = db.scalars(
+        select(FiscalReceipt)
+        .where(FiscalReceipt.company_id == a_day.company_id)
+        .order_by(FiscalReceipt.tot_rcpt_no.desc())
+        .limit(1)
+    ).first()
+    assert late is not None and late.tot_rcpt_no == 2
+
+    second = daily.close_day(
+        db, a_day.company_id, a_day.device.id, actor=a_day.owner, now=_later(120)
+    )
+    db.flush()
+
+    assert late.sdc_datetime < second.from_at, (
+        "the premise: RRA stamped this receipt before the day it belongs to opened"
+    )
+    assert second.figures["ns_count"] == 1, (
+        "a receipt in flight across the close belongs to the next day, not to no day"
+    )
+    members = daily.receipts_of(
+        db,
+        a_day.company_id,
+        a_day.device.id,
+        daily.membership_of(db, a_day.company_id, second),
+    )
+    assert [receipt.id for receipt in members] == [late.id]
 
 
 def test_a_z_totals_equal_the_sum_of_its_own_receipts(
@@ -256,13 +322,12 @@ def test_a_z_totals_equal_the_sum_of_its_own_receipts(
     )
     db.flush()
 
-    covered = [
-        receipt
-        for receipt in db.scalars(
-            select(FiscalReceipt).where(FiscalReceipt.company_id == a_day.company_id)
-        )
-        if report.from_at <= receipt.sdc_datetime <= report.to_at
-    ]
+    covered = daily.receipts_of(
+        db,
+        a_day.company_id,
+        a_day.device.id,
+        daily.membership_of(db, a_day.company_id, report),
+    )
     assert covered, "the fixture issued a receipt; the close must cover it"
 
     sales = [r for r in covered if r.receipt_type is FiscalReceiptType.NORMAL_SALE]
@@ -438,6 +503,10 @@ def test_closing_the_day_over_the_api_stores_a_z_and_lists_it(
     assert body["kind"] == "Z"
     assert body["number"].startswith("Z-")
     assert body["figures"]["ns_count"] == 1
+    # The window the Z owns, on the wire: "covers receipts 1–1" (0026). The screen prints it
+    # because that is the sentence an inspector can check against the paper in their hand.
+    assert body["from_key"] == 0
+    assert body["to_key"] == 1
 
     listing = client.get(f"/api/v1/fiscal/devices/{signed_in_owner.device.id}/z-reports")
     assert listing.status_code == 200, listing.text

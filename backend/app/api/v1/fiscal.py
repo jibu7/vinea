@@ -39,6 +39,7 @@ from app.fiscal import printing as printing_service
 from app.kernel.errors import LedgerStateError
 from app.models.fiscalization import (
     FiscalCode,
+    FiscalDailyReport,
     FiscalFeedDecision,
     FiscalImportStatus,
     FiscalItemClass,
@@ -561,6 +562,31 @@ def _daily_read(view: daily_service.DailyReportView) -> DailyReportRead:
         figures=DailyFiguresRead.model_validate(view.figures.as_dict()),
         number=view.number,
         report_no=view.report_no,
+        from_key=view.from_key,
+        to_key=view.to_key,
+    )
+
+
+def _stored_z_read(
+    db: Session, company_id: int, report: FiscalDailyReport
+) -> DailyReportRead:
+    """A stored Z, with the counter window it owns resolved for the screen.
+
+    The window is derived rather than stored whole: the table holds this Z's mark, and the one
+    it starts above is the previous Z's — asking `membership_of` keeps the answer in the one
+    module that decides what is in a day.
+    """
+    members = daily_service.membership_of(db, company_id, report)
+    return DailyReportRead(
+        device_id=report.device_id,
+        kind="Z",
+        from_at=report.from_at,
+        to_at=report.to_at,
+        figures=DailyFiguresRead.model_validate(report.figures),
+        number=report.number,
+        report_no=report.report_no,
+        from_key=members.from_key,
+        to_key=members.to_key,
     )
 
 
@@ -582,15 +608,7 @@ def list_z_reports(
     limit: int = Query(default=50, ge=1, le=200),
 ) -> list[DailyReportRead]:
     return [
-        DailyReportRead(
-            device_id=report.device_id,
-            kind="Z",
-            from_at=report.from_at,
-            to_at=report.to_at,
-            figures=DailyFiguresRead.model_validate(report.figures),
-            number=report.number,
-            report_no=report.report_no,
-        )
+        _stored_z_read(db, auth.company_id, report)
         for report in daily_service.reports_of(db, auth.company_id, device_id, limit=limit)
     ]
 
@@ -617,15 +635,7 @@ def close_day(
         request=request,
     )
     db.commit()
-    return DailyReportRead(
-        device_id=report.device_id,
-        kind="Z",
-        from_at=report.from_at,
-        to_at=report.to_at,
-        figures=DailyFiguresRead.model_validate(report.figures),
-        number=report.number,
-        report_no=report.report_no,
-    )
+    return _stored_z_read(db, auth.company_id, report)
 
 
 # --- The enquiries and listings (P7 step 5) -------------------------------------------------
@@ -858,6 +868,7 @@ def receipt_listing(
     device_id: int = Query(...),
     date_from: date = Query(...),
     date_to: date = Query(...),
+    report_no: int | None = Query(default=None),
     auth: AuthContext = Depends(get_tenant_context),
     db: Session = Depends(get_db),
 ) -> ReceiptListingRead:
@@ -869,7 +880,12 @@ def receipt_listing(
     """
     _require_view(auth)
     view = enquiry_service.receipt_listing(
-        db, auth.company_id, device_id, date_from=date_from, date_to=date_to
+        db,
+        auth.company_id,
+        device_id,
+        date_from=date_from,
+        date_to=date_to,
+        report_no=report_no,
     )
     return ReceiptListingRead(
         device_id=view.device_id,
@@ -894,6 +910,10 @@ def receipt_listing(
         receipts=[ListingReceiptRead(**vars(row)) for row in view.receipts],
         only_in_ledger=[ListingDocumentRead(**vars(row)) for row in view.only_in_ledger],
         only_on_receipts=[ListingReceiptRead(**vars(row)) for row in view.only_on_receipts],
+        report_no=view.report_no,
+        report_number=view.report_number,
+        from_key=view.from_key,
+        to_key=view.to_key,
     )
 
 

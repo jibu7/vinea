@@ -534,15 +534,13 @@ test.describe("the tax enquiries and reports", () => {
     // test's range.
     await sandboxMode(request, "up");
 
-    // **Past the close's second before draining, deliberately.** A Z's bounds are floored to a
-    // second because `sdcDateTime` has no finer resolution, and a receipt signed in the very
-    // second a Z was taken falls inside that Z's *range* while its figures are already frozen —
-    // and the next Z opens exclusively at the same instant, so neither counts it. The backend's
-    // own boundary test sleeps 2.05s for exactly this reason
-    // (`test_daily_report.py::test_a_second_z_covers_only_what_came_after_the_first`). This is
-    // the resolution the design has, not a flake being papered over: a real device signs and
-    // closes minutes apart, and only a test is fast enough to land on the boundary.
-    await page.waitForTimeout(1500);
+    // **Drained straight away, and that is the point.** This spec used to wait out the close's
+    // second here: a Z's range was cut on `sdcDateTime` and a receipt signed in the very second
+    // a Z was taken fell inside that Z's range while its figures were already frozen, and the
+    // next Z opened exclusively at the same instant — a receipt in neither day. Since 0026 a Z
+    // owns a run of receipt **counters**, so the sale below lands on the next Z whenever RRA
+    // signs it. The wait is gone and the assertions beneath it are unchanged, which is the
+    // proof the fix is real rather than a timing coincidence.
     await drainUntilClear(page);
 
     await page.goto("/tax/reports/daily-fiscal");
@@ -635,6 +633,7 @@ test.describe("the tax enquiries and reports", () => {
     // The number is asserted by **shape**, never as a literal: this spec runs on the shared
     // Rugari Wines E2E company and the `FZR` run is consumed by whatever ran before it.
     await expect(page.getByTestId("z-number").first()).toHaveText(/^Z-\d+$/);
+    const zNumber = (await page.getByTestId("z-number").first().innerText()).trim();
 
     // **Two screens, one number.** The Z's sales total is the server absorbing every receipt in
     // its range; the figure above is the test adding up what the listing rendered per receipt.
@@ -657,6 +656,29 @@ test.describe("the tax enquiries and reports", () => {
     await expect(page.getByTestId("day-posted")).toHaveText("15,919");
     await expect(page.getByTestId("day-residue")).toHaveText("0.38");
 
+    // --- the tie, pointed at **this Z** rather than at a date range ------------------------
+    //
+    // The two sides of this test used to be cut differently: the Z owned a stretch of clock and
+    // the listing owned a date range, and they agreed because nothing here straddles a
+    // boundary. Since 0026 a Z owns a run of receipt counters, which no date range can express
+    // — a receipt signed either side of midnight, or across the skew between RRA's clock and
+    // Vinea's, is in a Z whose dates do not contain it. So the listing is asked for *that Z's
+    // members*, and the two figures below are the same set of receipts totalled by two
+    // independent paths: the close absorbing them one at a time, and the listing summing what
+    // it rendered.
+    await page.goto("/tax/reports/receipts");
+    await page.waitForSelector("h1:has-text('Fiscal receipts listing')");
+    await page.getByRole("combobox", { name: "Fiscal day (Z)", exact: true }).click();
+    await page.getByRole("option", { name: zNumber, exact: true }).click();
+    await expect(page.getByTestId("listing-z-note")).toBeVisible();
+
+    await expect(page.getByTestId("tie-ns-gross")).toHaveText(DECLARED.salesTotal, {
+      timeout: 30_000,
+    });
+    await expect(page.getByTestId("tie-ns-count")).toHaveText("2");
+    await expect(page.getByTestId("tie-nr-count")).toHaveText("1");
+    await expect(page.getByTestId("tie-declared-net")).toHaveText(DECLARED.net);
+
     // --- and the day is closed, so the X starts again from nothing -------------------------
     //
     // **Back to the X tab**, which is where Close day lives — a Z is a thing that happened, the
@@ -671,6 +693,8 @@ test.describe("the tax enquiries and reports", () => {
     // test that is right only when the machine is fast is a test about the machine. The clock
     // is injectable at the service level, so the refusal is pinned there instead —
     // `tests/fiscal/test_daily_report.py::test_a_second_close_at_the_same_instant_is_refused`.
+    await page.goto("/tax/reports/daily-fiscal");
+    await page.waitForSelector("h1:has-text('Daily fiscal report')");
     await page.getByRole("button", { name: /X —/ }).click();
     await expect(page.getByTestId("day-ns-count")).toHaveText("0");
   });

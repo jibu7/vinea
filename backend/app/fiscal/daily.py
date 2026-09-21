@@ -5,6 +5,13 @@ last Z to now, and is never stored — asking what the day looks like so far mus
 the day is. Z is a stored close: it takes a number from the device's `FZR` run, freezes its
 figures, and becomes the `from_at` of the next one.
 
+**A day is a run of receipt counters, not a stretch of clock** (0026, amending decision 11).
+A Z owns every receipt whose `tot_rcpt_no` is above the previous Z's high-water mark and at or
+below its own, and the X owns everything above the last mark. The range it prints stays on the
+paper; it stopped deciding membership when step 8 noticed that the range was cut on RRA's clock
+and the close on Vinea's, so a receipt in flight across the skew belonged to no day at all.
+`Membership` says the rest.
+
 **A Z states what the authority signed.** Both the population of a day and its figures come
 from `fiscal_receipts` — the receipts say which documents are in the day and when, and the
 payloads they were issued against say what was declared. Not the ledger: on a discounted line
@@ -185,6 +192,52 @@ class DailyReportView:
     figures: DailyFigures
     number: str | None = None
     report_no: int | None = None
+    #: The counter window this day owns, for the screen and the paper to state. `None` on a
+    #: legacy Z, which owns a stretch of clock instead.
+    from_key: int | None = None
+    to_key: int | None = None
+
+
+@dataclass(frozen=True)
+class Membership:
+    """**Which receipts are in a day** (0026, amending decision 11).
+
+    Two forms, and only one of them is used for anything closed after 0026:
+
+    * **By counter** — `from_key < tot_rcpt_no <= to_key`, with `to_key = None` for the open X,
+      which owns everything above the last Z's mark. This is the rule. `tot_rcpt_no` is
+      strictly increasing per device across receipt types (`assert_fiscal_invariants` clause 4
+      proves it rather than assuming it), it is clock-free, and it is what RRA keys the receipt
+      by.
+    * **By timestamp** — the legacy form, for a Z stored before 0026. Its mark is NULL and the
+      table is immutable (`VN011`), so its membership stays what it was when it was written.
+
+    Why the change: a Z's range was cut on `sdc_datetime`, which is *RRA's* clock, while the
+    close was cut on `now()`, which is Vinea's. A receipt in flight across that skew returns
+    stamped before the close, falls inside a frozen Z, and the next Z opens after it — a
+    receipt in no day at all, silently, on any slow day. The kernel already knew the answer:
+    decision 12 does the same thing to late VAT entries with `high_water_entry_id`.
+    """
+
+    from_key: int | None = None
+    to_key: int | None = None
+    from_at: datetime | None = None
+    to_at: datetime | None = None
+    include_from: bool = False
+
+    @property
+    def by_counter(self) -> bool:
+        return self.from_key is not None
+
+    @classmethod
+    def by_key(cls, from_key: int, to_key: int | None) -> "Membership":
+        return cls(from_key=from_key, to_key=to_key)
+
+    @classmethod
+    def by_clock(
+        cls, from_at: datetime, to_at: datetime, *, include_from: bool = False
+    ) -> "Membership":
+        return cls(from_at=from_at, to_at=to_at, include_from=include_from)
 
 
 def x_report(
@@ -192,21 +245,17 @@ def x_report(
 ) -> DailyReportView:
     """The day so far. Computed, shown, and forgotten."""
     device = _device(db, company_id, device_id)
-    from_at, include_from = _opened_at(db, company_id, device)
+    from_at, _ = _opened_at(db, company_id, device)
     to_at = _floor_second(now or datetime.now(UTC))
+    members = open_membership(db, company_id, device)
     return DailyReportView(
         device_id=device.id,
         kind="X",
         from_at=from_at,
         to_at=to_at,
-        figures=compute(
-            db,
-            company_id,
-            device.id,
-            from_at=from_at,
-            to_at=to_at,
-            include_from=include_from,
-        ),
+        figures=compute(db, company_id, device.id, members=members),
+        from_key=members.from_key,
+        to_key=members.to_key,
     )
 
 
@@ -223,13 +272,16 @@ def close_day(
 ) -> FiscalDailyReport:
     """Take the Z. Never commits.
 
-    The range runs from the last Z (or the device's activation, for the first one) to now, so
-    the closes of a device tile its whole life with no gap and no overlap — which is what makes
+    The closes of a device tile its whole life with no gap and no overlap — which is what makes
     "the sum of the Zs" a statement about the device rather than about the days somebody
-    happened to close.
+    happened to close. Since 0026 that tiling is over **counters**: this Z owns every receipt
+    above the last Z's high-water mark and at or below the device's counter now, and the next
+    one starts where this leaves off. `from_at`/`to_at` are still stored and still printed —
+    §19.1 puts a span on the paper and an inspector reads dates — but they no longer decide
+    what is in the day.
     """
     device = _device(db, company_id, device_id)
-    from_at, include_from = _opened_at(db, company_id, device)
+    from_at, _ = _opened_at(db, company_id, device)
     to_at = _floor_second(now or datetime.now(UTC))
     if to_at <= from_at:
         raise LedgerStateError(
@@ -238,15 +290,17 @@ def close_day(
             field_errors={"device_id": ["already closed"]},
         )
 
-    figures = compute(
-        db,
-        company_id,
-        device.id,
-        from_at=from_at,
-        to_at=to_at,
-        include_from=include_from,
-    )
+    # **The number first, then the mark** — and that order is the lock (0026). `claim_number`
+    # takes `SELECT … FOR UPDATE` on the branch's `FZR` row, a device is unique per branch, so
+    # two closes of the same device serialize there. Reading the device's counter *after* the
+    # claim means the second close cannot see the same high-water mark the first one took and
+    # store a Z that owns receipts the first one already owns.
     claimed = claim_number(db, company_id, DocType.FISCAL_Z_REPORT, device.branch_id)
+    from_key = _open_from_key(db, company_id, device)
+    to_key = max(from_key, _device_counter(db, company_id, device.id))
+    figures = compute(
+        db, company_id, device.id, members=Membership.by_key(from_key, to_key)
+    )
     report = FiscalDailyReport(
         company_id=company_id,
         device_id=device.id,
@@ -254,6 +308,7 @@ def close_day(
         number=claimed.number,
         from_at=from_at,
         to_at=to_at,
+        high_water_rcpt_no=to_key,
         figures=figures.as_dict(),
         queued_rows=figures.queued_rows,
         closed_by=actor.id,
@@ -278,6 +333,7 @@ def close_day(
             "ns_count": figures.ns_count,
             "nr_count": figures.nr_count,
             "queued_rows": figures.queued_rows,
+            "high_water_rcpt_no": to_key,
         },
         request=request,
     )
@@ -289,40 +345,15 @@ def compute(
     company_id: int,
     device_id: int,
     *,
-    from_at: datetime,
-    to_at: datetime,
-    include_from: bool = False,
+    members: Membership,
     adapter: FiscalizationAdapter | None = None,
 ) -> DailyFigures:
-    """The §19.1 arithmetic over the receipts a device issued in a range.
+    """The §19.1 arithmetic over the receipts that belong to a day.
 
-    Closed at the end and normally open at the start (`from_at <` … `<= to_at`), so a receipt
-    is counted by exactly one Z however finely the day is sliced: a close's `to_at` becomes the
-    next day's `from_at`, and the receipt that landed on the boundary belongs to the earlier of
-    the two.
-
-    `include_from` is for the one range with no earlier day to belong to — a device's **first**,
-    which opens at its activation. That bound is floored to the second (see `_floor_second`), so
-    a receipt issued in the activation second sits exactly *on* it, and an exclusive start would
-    drop the first sale a device ever made.
+    Which receipts those are is `Membership`'s question, not this function's — by counter for
+    anything closed since 0026, by clock for a Z stored before it.
     """
-    opens = (
-        FiscalReceipt.sdc_datetime >= from_at
-        if include_from
-        else FiscalReceipt.sdc_datetime > from_at
-    )
-    receipts = list(
-        db.scalars(
-            select(FiscalReceipt)
-            .where(
-                FiscalReceipt.company_id == company_id,
-                FiscalReceipt.device_id == device_id,
-                opens,
-                FiscalReceipt.sdc_datetime <= to_at,
-            )
-            .order_by(FiscalReceipt.id)
-        )
-    )
+    receipts = receipts_of(db, company_id, device_id, members)
     reader = adapter or _adapter_for(db, company_id)
     documents = _documents_of(db, company_id, [receipt.document_id for receipt in receipts])
 
@@ -399,6 +430,158 @@ def _absorb(
         method = str(document.payment_method)
         bucket = figures.refunds_by_payment_method if is_refund else figures.by_payment_method
         bucket[method] = bucket.get(method, MONEY_ZERO) + declared.gross
+
+
+def receipts_of(
+    db: Session, company_id: int, device_id: int, members: Membership
+) -> list[FiscalReceipt]:
+    """The receipts a day owns, in counter order.
+
+    The single implementation of membership. The X and the close read it, the receipts
+    listing's "this Z" filter reads it, and `assert_fiscal_invariants` clause 12 reads it to
+    prove the days tile the device — three readers that must not be able to disagree about
+    what is in a day, because the only symptom of their disagreeing is a figure on a report
+    that nobody can reproduce.
+    """
+    query = select(FiscalReceipt).where(
+        FiscalReceipt.company_id == company_id,
+        FiscalReceipt.device_id == device_id,
+    )
+    if members.by_counter:
+        query = query.where(FiscalReceipt.tot_rcpt_no > members.from_key)
+        if members.to_key is not None:
+            query = query.where(FiscalReceipt.tot_rcpt_no <= members.to_key)
+    else:
+        # A Z stored before 0026: its membership is the clock range it was written with,
+        # half-open at the start except for a device's very first day (see `_floor_second`).
+        assert members.from_at is not None and members.to_at is not None
+        query = query.where(
+            FiscalReceipt.sdc_datetime >= members.from_at
+            if members.include_from
+            else FiscalReceipt.sdc_datetime > members.from_at,
+            FiscalReceipt.sdc_datetime <= members.to_at,
+        )
+    return list(db.scalars(query.order_by(FiscalReceipt.tot_rcpt_no, FiscalReceipt.id)))
+
+
+def membership_of(db: Session, company_id: int, report: FiscalDailyReport) -> Membership:
+    """What a **stored** Z owns.
+
+    By counter when it carries a mark, and by its own clock range when it does not — a Z closed
+    before 0026 is immutable (`VN011`) and there is no honest way to give it a mark after the
+    fact, so it keeps the membership it was written with. That is not a wart: it is the same
+    rule decision 12 applies to a filed VAT return, which also never changes once filed.
+    """
+    if report.high_water_rcpt_no is None:
+        return Membership.by_clock(
+            report.from_at, report.to_at, include_from=report.report_no == 1
+        )
+    return Membership.by_key(
+        _mark_before(db, company_id, report.device_id, report), report.high_water_rcpt_no
+    )
+
+
+def open_membership(db: Session, company_id: int, device: FiscalDevice) -> Membership:
+    """What the **open** day owns: everything the device has signed above the last Z's mark.
+
+    Unbounded above, which is the point — the X is a question asked of a day that has not
+    finished, and a receipt signed between the question and the answer belongs to it either
+    way.
+    """
+    return Membership.by_key(_open_from_key(db, company_id, device), None)
+
+
+def _last_report(
+    db: Session, company_id: int, device_id: int, *, before: int | None = None
+) -> FiscalDailyReport | None:
+    query = select(FiscalDailyReport).where(
+        FiscalDailyReport.company_id == company_id,
+        FiscalDailyReport.device_id == device_id,
+    )
+    if before is not None:
+        query = query.where(FiscalDailyReport.report_no < before)
+    return db.scalar(query.order_by(FiscalDailyReport.report_no.desc()).limit(1))
+
+
+def _mark_before(
+    db: Session, company_id: int, device_id: int, report: FiscalDailyReport
+) -> int:
+    earlier = _last_report(db, company_id, device_id, before=report.report_no)
+    if earlier is None:
+        return 0
+    return _effective_mark(db, company_id, device_id, earlier)
+
+
+def _effective_mark(
+    db: Session, company_id: int, device_id: int, report: FiscalDailyReport
+) -> int:
+    """Where a Z's day ends, as a counter — even when the Z predates counters.
+
+    A legacy Z carries no mark, so the boundary it left behind has to be translated: everything
+    the device signed at or before its `to_at` was closed by it or by a Z before it, because
+    the closes tile the device's life. That translation reads the clock exactly once, at the
+    seam between the old rule and the new one, and never again — the skew that motivates this
+    revision is between a *receipt in flight* and a close, and a Z stored months ago has
+    nothing in flight.
+    """
+    if report.high_water_rcpt_no is not None:
+        return report.high_water_rcpt_no
+    return _counter_at(db, company_id, device_id, moment=report.to_at, inclusive=True)
+
+
+def _open_from_key(db: Session, company_id: int, device: FiscalDevice) -> int:
+    """The mark the open day starts above: the last Z's, or the device's activation.
+
+    Activation rather than zero, for the reason `_opened_at` gives: a device suspended and
+    brought back starts a new continuous period, and the receipts of an earlier one are not
+    this day's takings. That bound is a clock reading, and it is the right one — activation is
+    an operator's deliberate act with nothing in flight behind it, not a race with a device.
+    """
+    last = _last_report(db, company_id, device.id)
+    if last is not None:
+        return _effective_mark(db, company_id, device.id, last)
+    if device.activated_at is None:
+        return 0
+    return _counter_at(
+        db,
+        company_id,
+        device.id,
+        moment=_floor_second(device.activated_at),
+        inclusive=False,
+    )
+
+
+def _counter_at(
+    db: Session, company_id: int, device_id: int, *, moment: datetime, inclusive: bool
+) -> int:
+    bound = (
+        FiscalReceipt.sdc_datetime <= moment
+        if inclusive
+        else FiscalReceipt.sdc_datetime < moment
+    )
+    return int(
+        db.scalar(
+            select(func.max(FiscalReceipt.tot_rcpt_no)).where(
+                FiscalReceipt.company_id == company_id,
+                FiscalReceipt.device_id == device_id,
+                bound,
+            )
+        )
+        or 0
+    )
+
+
+def _device_counter(db: Session, company_id: int, device_id: int) -> int:
+    """The device's highest signed receipt counter right now — the close's upper bound."""
+    return int(
+        db.scalar(
+            select(func.max(FiscalReceipt.tot_rcpt_no)).where(
+                FiscalReceipt.company_id == company_id,
+                FiscalReceipt.device_id == device_id,
+            )
+        )
+        or 0
+    )
 
 
 def _adapter_for(db: Session, company_id: int) -> FiscalizationAdapter:
@@ -478,11 +661,15 @@ def _device(db: Session, company_id: int, device_id: int) -> FiscalDevice:
 
 
 def _opened_at(db: Session, company_id: int, device: FiscalDevice) -> tuple[datetime, bool]:
-    """Where this day starts: the last Z's `to_at`, or the device's activation.
+    """Where this day starts **on the paper**: the last Z's `to_at`, or the device's activation.
 
     Activation rather than creation, because a device that was registered in March and
     activated in June issued nothing in between, and a first Z whose range began at
     registration would claim to cover months that could hold no receipt.
+
+    Display only since 0026 — what the day *contains* is `_open_from_key`'s question. The two
+    are kept apart deliberately: the span is what §19.1 prints, and merging them again is how
+    the clock would get back into deciding membership.
     """
     last = db.scalar(
         select(FiscalDailyReport.to_at)
