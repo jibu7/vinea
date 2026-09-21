@@ -4,7 +4,9 @@
 sheet requires **training receipts (TS/TR, rows 11, 41, 42)**, a **proforma receipt (PS, rows
 12, 43)** and a **PLU report (row 24)**. All three are explicitly out of scope for Phase 7 (the
 phase prompt's "Out of scope — do not build"), and none of them is a defect or an oversight:
-they are work that has not been scheduled. Vinea can be *submitted* for certification only once
+they are work that has not been scheduled. Two smaller rows are also unmet — the receipt's
+software version number (21) and the RRA logo (32) — and those two *are* unfinished rather than
+unscheduled; §1a says what each needs. Vinea can be *submitted* for certification only once
 they exist. Everything else on the sheet is built, and §4 below says where each row lives.
 
 This file is the runbook for what happens after that: what to send, what to register, how to
@@ -49,6 +51,23 @@ is ready".
 owner item, not as a build gap.
 
 ---
+
+## 1a. The two gaps on the receipt itself
+
+Neither is a design decision and neither is large. They are listed here, beside the enclosures,
+because they are the difference between "the build is ready" and "the receipt passes the sheet",
+and because a gap recorded only as a plan deviation is a gap a reader has to go and find.
+
+| Row | What the sheet asks | What the receipt does | What it needs |
+|---|---|---|---|
+| 21 | "CIS software must have a version number which can be verified and printed on each receipt" | prints no version | one line in `receipt-layout.tsx` and a build stamp for it to read |
+| 32 | "The CIS shall print official RRA logos on each receipt regardless the type" | prints a bordered box containing the text `RRA` | render `docs/rra/Rwanda-Revenue-Authority-logo.png`, which is pinned and is referenced by no code |
+
+**Row 32 was carried as a plan deviation, and that was the wrong place for it.** The phase report
+said the logo was "a bordered placeholder until the owner supplies the asset" — but the asset has
+been in `docs/rra/` since the documents were pinned, so nothing was waiting on anybody. What is
+true is simpler: the layout was built with a placeholder and the real mark was never wired to it.
+That is unfinished work against a checkpoint, not a decision, and the sheet is where it belongs.
 
 ## 2. The MRC, and where Vinea keeps each part
 
@@ -156,7 +175,7 @@ Rows 1–5 are the enclosures of §1. Rows 6–75 are the build.
 | 29 | One original per receipt | `copy_count` starts at 0 and every further print is a copy — `app/fiscal/printing.py` |
 | 30 | Re-print as COPY | as row 10 |
 | 31 | QR code as specified | `receipt-layout.tsx` builds §7.24.7's payload. **Open:** no live receipt's QR has been decoded (§5.5) |
-| 32 | Official RRA logo on every receipt | `docs/rra/Rwanda-Revenue-Authority-logo.png` is pinned; the layout prints a bordered placeholder — **a plan deviation, named in the final report** |
+| 32 | Official RRA logo on every receipt | **not in P7** — the layout prints a bordered box containing the text `RRA` (`receipt-layout.tsx`), and the pinned `docs/rra/Rwanda-Revenue-Authority-logo.png` is referenced by no code. §7.29 asks for the authority's own mark, and a placeholder is not one. See §1a |
 | 33 | Header: name and address, at least three lines | `receipt-layout.tsx` — taxpayer name, TIN, branch address |
 | 34 | TIN in the first block, SDC information before the last | the layout's order, asserted as text on the printed sheet by the tape |
 | 35 | Client TIN, name and mobile; mobile where there is no TIN | `custTin` / `custNm` / `custMblNo` from the partner (decision 6); `Client ID:` on the paper |
@@ -201,10 +220,10 @@ Rows 1–5 are the enclosures of §1. Rows 6–75 are the build.
 | 74 | Stock synchronised in real time across importation, purchase and sale | the outbox is written **in the posting transaction** — `assert_fiscal_invariants` clause 1 |
 | 75 | Display and handle errors received from VSDC | the queue screen's row detail: `resultCd`, the message, the action log; `failed` blocks the device and says so |
 
-**Count:** 75 rows. **Not in P7:** 1–5 (owner documents), 11, 12, 21, 24, 41, 42, 43 — **twelve
-rows**: five are documents somebody has to write, six are the training / proforma / PLU work the
-phase prompt excluded, and one (21) is a single missing field on the receipt — a verifiable
-software version number, which is one line in the layout and a build stamp to put in it.
+**Count:** 75 rows. **Not in P7:** 1–5 (owner documents), 11, 12, 21, 24, **32**, 41, 42, 43 —
+**thirteen rows**: five are documents somebody has to write, six are the training / proforma /
+PLU work the phase prompt excluded, and two are small, concrete gaps on the receipt itself —
+**row 21**, a verifiable software version number, and **row 32**, the RRA logo. Both are §1a.
 
 ---
 
