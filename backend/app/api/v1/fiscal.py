@@ -64,6 +64,8 @@ from app.schemas.fiscal import (
     ImportDeclarationRead,
     ImportReject,
     ItemRegistrationRead,
+    ListingDocumentRead,
+    ListingReceiptRead,
     QueueActionRead,
     QueueAttachReceipt,
     QueueDeviceRead,
@@ -74,6 +76,7 @@ from app.schemas.fiscal import (
     ReceiptBlockRead,
     ReceiptClassLineRead,
     ReceiptLineRead,
+    ReceiptListingRead,
     ReceiptRead,
     RefundReasonRead,
     TinLookupRead,
@@ -848,6 +851,50 @@ def list_receipts(
             limit=limit,
         )
     ]
+
+
+@router.get("/receipts/listing")
+def receipt_listing(
+    device_id: int = Query(...),
+    date_from: date = Query(...),
+    date_to: date = Query(...),
+    auth: AuthContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+) -> ReceiptListingRead:
+    """The **tie**: what this device declared over a range, beside what the sales ledger holds.
+
+    Declared above `/receipts/{receipt_id}` deliberately — FastAPI matches in declaration
+    order, and `listing` would otherwise be handed to the path below as a receipt id and fail
+    validation.
+    """
+    _require_view(auth)
+    view = enquiry_service.receipt_listing(
+        db, auth.company_id, device_id, date_from=date_from, date_to=date_to
+    )
+    return ReceiptListingRead(
+        device_id=view.device_id,
+        device_label=view.device_label,
+        sdc_id=view.sdc_id,
+        mrc_no=view.mrc_no,
+        date_from=view.date_from,
+        date_to=view.date_to,
+        ns_count=view.ns_count,
+        ns_gross=view.ns_gross,
+        ns_tax=view.ns_tax,
+        nr_count=view.nr_count,
+        nr_gross=view.nr_gross,
+        nr_tax=view.nr_tax,
+        declared_net=view.declared_net,
+        ledger_invoice_count=view.ledger_invoice_count,
+        ledger_invoice_total=view.ledger_invoice_total,
+        ledger_credit_note_count=view.ledger_credit_note_count,
+        ledger_credit_note_total=view.ledger_credit_note_total,
+        ledger_net=view.ledger_net,
+        difference=view.difference,
+        receipts=[ListingReceiptRead(**vars(row)) for row in view.receipts],
+        only_in_ledger=[ListingDocumentRead(**vars(row)) for row in view.only_in_ledger],
+        only_on_receipts=[ListingReceiptRead(**vars(row)) for row in view.only_on_receipts],
+    )
 
 
 @router.get("/receipts/{receipt_id}")

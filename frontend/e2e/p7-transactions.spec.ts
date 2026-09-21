@@ -698,6 +698,11 @@ test.describe("the fiscalized transaction screens", () => {
     expect(movement).toMatch(/\d{1,3},\d{3}/);
 
     const netBeforeFiling = await page.getByTestId("vat-net").innerText();
+    // The **output** total as well as the net. The settlement posts Dr output VAT, Cr input VAT
+    // and the net to `2250`, so the line it leaves on `2200` is the *output* figure — which
+    // equals the net only while input VAT is zero, as it was on this fixture until P7 step 8's
+    // spec put a purchase on the same company and month.
+    const outputBeforeFiling = await page.getByTestId("vat-output").innerText();
 
     // **The return as it stands, kept for the round trip below.** Read through the preview the
     // screen itself renders, because what has to come back is the whole read — the figures *and*
@@ -707,16 +712,28 @@ test.describe("the fiscalized transaction screens", () => {
 
     await page.getByTestId("file-return").click();
     await page.getByTestId("confirm-file").click();
-    await expect(page.getByText(/VATR-\d+ filed/).first()).toBeVisible();
+    const filedToast = page.getByText(/VATR-\d+ filed/).first();
+    await expect(filedToast).toBeVisible();
+    // **The number this test filed**, so the row below is named rather than guessed at.
+    const filedNumber = (await filedToast.innerText()).match(/VATR-\d+/)![0];
 
     await page.reload();
     await page.waitForSelector("h1:has-text('VAT return')");
 
     // The filed return carries the net the preview showed — frozen, not recomputed.
-    const filedNet = page.locator('[data-testid^="filed-net-"]').first();
+    //
+    // **Scoped to this return's own number.** It was `[data-testid^="filed-net-"]` with a
+    // `.first()`, which held only while the listing had exactly one row — and `.first()` does
+    // not narrow a `has:` filter anyway, so the row lookup matched every filed return at once
+    // and failed strict mode the moment a second one existed. A reversed return stays listed
+    // (decision 12 — the row is evidence of what was submitted), so any spec that files on this
+    // company leaves one behind, and P7 step 8's does.
+    const filedNet = page.getByTestId(`filed-net-${filedNumber}`);
     await expect(filedNet).toBeVisible();
     await expect(filedNet).toHaveText(netBeforeFiling);
-    await expect(page.locator("tr").filter({ has: filedNet })).toContainText("Filed");
+    await expect(
+      page.locator("tr").filter({ has: page.getByTestId(`filed-net-${filedNumber}`) }),
+    ).toContainText("Filed");
 
     // …and the settlement entry it posted is now an **untagged movement** on this range's own
     // tie, named and listed rather than absorbed. That is decision 12 working: the settlement's
@@ -727,11 +744,18 @@ test.describe("the fiscalized transaction screens", () => {
     // *balanced* — a VAT payment to the authority and a journal keyed without a code are real
     // movements that no tax line explains — it is reconciled when every franc of the difference
     // is accounted for by a line the report can name. The line naming this one is the return
-    // that was just filed, for exactly the net it was filed at.
+    // that was just filed, for exactly the **output VAT** it declared.
+    //
+    // **Scoped to `2200`'s own untagged list, and to the output figure.** It read "the first row
+    // on the page containing `settled` carries the net", which was two coincidences at once: the
+    // net equals the output total only when input VAT is zero, and there is only one settled row
+    // when the settlement moves only one VAT account. Both held on this fixture until a purchase
+    // appeared on the same company and month, and then the first settled row was `VAT-IN-18
+    // settled −3,600` — a true row, and not the one this assertion meant.
     await expect(page.getByTestId("tie-2200")).toHaveText("Reconciled");
-    await expect(
-      page.locator("tbody tr").filter({ hasText: "settled" }).first(),
-    ).toContainText(netBeforeFiling);
+    const untagged2200 = page.getByTestId("untagged-2200");
+    await expect(untagged2200).toContainText("settled");
+    await expect(untagged2200).toContainText(outputBeforeFiling);
 
     // --- and the range is handed back ------------------------------------------------------
     //
@@ -749,14 +773,28 @@ test.describe("the fiscalized transaction screens", () => {
     await expect(page.getByTestId("file-error")).toContainText(/already filed over/i);
     await page.getByRole("button", { name: "Cancel", exact: true }).click();
 
-    const openFiled = async () => {
+    /**
+     * Open one filed return **by its number**.
+     *
+     * It used to take the first row carrying a `filed-net-` testid, which is the return just
+     * filed only because the listing happens to sort newest-first (`period_from desc, id desc`)
+     * — an assumption nothing in the test stated and nothing would fail on if the sort changed.
+     * It would then open an *older, reversed* return and Reverse would refuse it, with a message
+     * about a row nobody meant to touch. A reversed return stays listed (decision 12 — the row
+     * is evidence of what was submitted), so there is always more than one to choose from once
+     * any spec has filed on this company.
+     */
+    const openFiled = async (number: string) => {
       await page.reload();
       await page.waitForSelector("h1:has-text('VAT return')");
-      const row = page.locator("tr").filter({ has: page.locator('[data-testid^="filed-net-"]') });
-      await row.first().getByRole("button", { name: "Open", exact: true }).click();
+      await page
+        .locator("tr")
+        .filter({ has: page.getByTestId(`filed-net-${number}`) })
+        .getByRole("button", { name: "Open", exact: true })
+        .click();
     };
 
-    await openFiled();
+    await openFiled(filedNumber);
     await page.getByTestId("vat-reverse-reason").fill(`Range handed back by the run ${SUFFIX}`);
     await page.getByTestId("confirm-vat-reverse").click();
     await expect(page.getByText(/VATR-\d+ reversed/).first()).toBeVisible();
@@ -767,10 +805,13 @@ test.describe("the fiscalized transaction screens", () => {
     await page.waitForSelector("h1:has-text('VAT return')");
     await page.getByTestId("file-return").click();
     await page.getByTestId("confirm-file").click();
-    await expect(page.getByText(/VATR-\d+ filed/).first()).toBeVisible();
+    const refiledToast = page.getByText(/VATR-\d+ filed/).first();
+    await expect(refiledToast).toBeVisible();
+    // **A second filing takes a new number**, so the row to open is not the one above.
+    const refiledNumber = (await refiledToast.innerText()).match(/VATR-\d+/)![0];
 
     // …and this one goes back too, so the spec leaves nothing filed on a shared fixture.
-    await openFiled();
+    await openFiled(refiledNumber);
     await page.getByTestId("vat-reverse-reason").fill(`Range handed back by the run ${SUFFIX}`);
     await page.getByTestId("confirm-vat-reverse").click();
     await expect(page.getByText(/VATR-\d+ reversed/).first()).toBeVisible();

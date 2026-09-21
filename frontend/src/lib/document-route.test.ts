@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { documentHref, ROUTED_TARGETS } from "./document-route";
 
 /**
- * The five routing keys the API can send, against the five routes that exist.
+ * The seven routing keys the API can send, against the seven routes that exist.
  *
  * This is a spelling test, and spelling is exactly what went wrong: the keys are produced in
  * `backend/app/order_entry/sources.py` and consumed here, with a string literal at each end
@@ -10,13 +10,15 @@ import { documentHref, ROUTED_TARGETS } from "./document-route";
  * know renders plain text — which is correct for a source with no page, and silent for a typo.
  */
 describe("document routing keys", () => {
-  it("routes every source type P6 can post", () => {
+  it("routes every source type P6 and P7 can post", () => {
     expect([...ROUTED_TARGETS].sort()).toEqual([
       "ap_document",
       "ar_document",
+      "fx_revaluation",
       "goods_received_note",
       "inventory_document",
       "landed_cost_document",
+      "vat_return",
     ]);
   });
 
@@ -26,6 +28,11 @@ describe("document routing keys", () => {
     ["ap_document", "/ap/documents/7"],
     ["goods_received_note", "/oe/goods-received/7"],
     ["landed_cost_document", "/oe/landed-costs/7"],
+    // P7's two go to the **document** screens, not to the reports over them: the entry page's
+    // link is "reverse via the module's document", and Reverse lives there. A report has no
+    // Reverse button.
+    ["vat_return", "/tax/vat-returns/7"],
+    ["fx_revaluation", "/gl/fx-revaluations/7"],
   ])("sends %s to %s", (target, href) => {
     expect(documentHref(target, 7)).toBe(href);
   });

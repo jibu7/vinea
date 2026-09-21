@@ -236,6 +236,28 @@ export default function EntryViewPage() {
               adjustment and the companion entry of a stock-bearing invoice are all `inv`, and
               `/inventory/documents/<a landed cost id>` opens somebody else's document with no
               sign that it is the wrong one. */}
+          {/* **The document, whether or not the module owns the entry** (P7 step 8).
+              `module_document_target` resolved for four kinds of entry before this phase and
+              they were all module-owned, so the link lived inside the branch below and nobody
+              noticed the coupling. P7 posts `FXR-` entries under module **`gl`** — a
+              revaluation run, its next-day mirror, the counter-entry that undid it and that
+              counter's own mirror — and every one of them resolves to a run that the server
+              now names. Left as it was, the server had the link and the screen dropped it:
+              four `FXR-` numbers on the trial balance belonging, as far as a reader could
+              tell, to nothing. That is the P4 failure mode rule 13 is written against.
+
+              Rendered only when the module does **not** own the entry, so the module-owned
+              path below is untouched and no entry grows a second link to the same place. */}
+          {!isModuleOwned && moduleDocumentHref && (
+            <Link
+              href={moduleDocumentHref}
+              data-testid="entry-source-document"
+              className="inline-flex shrink-0 items-center gap-1 text-sm font-medium text-[var(--vinea-brand)] underline"
+            >
+              {t("openSourceDocument", { number: entry.module_document_number ?? "" })}
+              <ArrowRight className="size-3.5" />
+            </Link>
+          )}
           {isModuleOwned ? (
             <div className="flex items-center gap-3 text-right">
               <p

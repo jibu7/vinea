@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 import {
   PRIMARY_EMAIL,
   login,
@@ -62,6 +62,27 @@ const UNKNOWN_TIN = "100999999";
 /** Where the backend reaches the sandbox from **inside** the compose network. Not localhost:
  * the URL is dialled by the backend container, not by Playwright, so it is the service name. */
 const EBM_URL = process.env.PLAYWRIGHT_EBM_URL ?? "http://ebm-sandbox:8100";
+/** The same sandbox, reached from **this** process rather than from the backend container. */
+const SANDBOX_ADMIN = process.env.PLAYWRIGHT_EBM_ADMIN_URL ?? "http://localhost:8100";
+
+/**
+ * Forget everything the authority is holding.
+ *
+ * The sandbox keeps its ledger — invoice numbers, receipt counters, the taxpayers it has heard
+ * of — in the **container's memory**, and `make db-reset` does not touch it. So this file's
+ * initialize can meet a device the authority already knows while Vinea's own tables have just
+ * been re-seeded, and fail on a screen that is working correctly. It did, once, run straight
+ * after a screenshot capture.
+ *
+ * In CI it is the first thing to touch a fresh container and would never see this; locally it
+ * sees whatever ran last. A spec that passes only on a fresh container is a test about the
+ * container, so it resets what it depends on — the same call `p7-transactions` and
+ * `p7-enquiries-reports` already make, for the same reason.
+ */
+async function sandboxReset(request: APIRequestContext): Promise<void> {
+  const res = await request.post(`${SANDBOX_ADMIN}/_sandbox/reset`);
+  expect(res.ok(), `sandbox reset -> ${res.status()}`).toBe(true);
+}
 
 /** What the sandbox hands back on initialization. Fixed values, not random ones, so a tape can
  * assert them — and so this test can tell "the device answered" from "the screen rendered the
@@ -118,7 +139,9 @@ test.describe("EBM devices", () => {
   // CANNOT SEE: that a sale queues against the device. Step 7's screen.
   test("a device is registered, initialized against the sandbox, synced and suspended", async ({
     page,
+    request,
   }) => {
+    await sandboxReset(request);
     await login(page, PRIMARY_EMAIL);
     await ensureCompanyTin(page);
 

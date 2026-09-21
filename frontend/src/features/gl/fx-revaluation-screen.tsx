@@ -57,7 +57,16 @@ function monthEndOf(today: string): string {
  * The three refusals live on the Post button, not here: the period must be open, the date must
  * be a period end, and a run for that (role, date) must not already stand — reverse it first.
  */
-export function FxRevaluationScreen() {
+/**
+ * `openId` pre-opens one row's detail, and it exists for the **drill**.
+ *
+ * `sources.py` resolves a ``FXR-`` journal entry to its run, and the entry page's
+ * "reverse via the module's document" link has to land where Reverse actually is — which is
+ * here, not on the report. The report answers "what did we revalue over this range"; this screen
+ * owns the document and its actions (P5 step 9's kernel rule: a module-owned entry reverses
+ * through its module's document, never from the general ledger).
+ */
+export function FxRevaluationScreen({ openId }: { openId?: number } = {}) {
   const t = useTranslations("gl.fxRevaluation");
   const toast = useToast();
   const showApiError = useApiErrorToast();
@@ -67,7 +76,7 @@ export function FxRevaluationScreen() {
   const [role, setRole] = useState<FxRevaluationRole>(FxRevaluationRole.BOTH);
   const [postOpen, setPostOpen] = useState(false);
   const [postError, setPostError] = useState<string | null>(null);
-  const [openRunId, setOpenRunId] = useState<number | null>(null);
+  const [openRunId, setOpenRunId] = useState<number | null>(openId ?? null);
   const [reverseReason, setReverseReason] = useState("");
   const [reverseError, setReverseError] = useState<string | null>(null);
 

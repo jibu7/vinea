@@ -319,6 +319,23 @@ export const navIntents: NavIntent[] = [
         permission: OE_VIEW_PERMISSIONS,
         href: "/oe/enquiries/purchase-orders",
       },
+      // P7 step 8, Appendix C.1.11's other half. Both read on either fiscal permission, which
+      // is exactly what `_require_view` in the API accepts: an accountant establishing a fact
+      // about one sale holds `fiscal:reports_view` and has no business reconfiguring a device,
+      // and gating these on `fiscal:setup_manage` alone would have handed them that authority
+      // to read a receipt.
+      {
+        label: "Fiscal receipts",
+        module: "Tax",
+        permission: ["fiscal:setup_manage", "fiscal:reports_view"],
+        href: "/fiscal/enquiries/receipts",
+      },
+      {
+        label: "Fiscal queue history",
+        module: "Tax",
+        permission: ["fiscal:setup_manage", "fiscal:reports_view"],
+        href: "/fiscal/enquiries/queue-history",
+      },
     ],
   },
   {
@@ -327,6 +344,11 @@ export const navIntents: NavIntent[] = [
       { label: "Account transactions", module: "General Ledger", permission: "gl:reports_view", href: "/gl/reports/account-transactions" },
       { label: "Trial balance", module: "General Ledger", permission: "gl:reports_view", href: "/gl/reports/trial-balance" },
       { label: "Chart of accounts", module: "General Ledger", permission: "gl:reports_view", href: "/gl/reports/chart-of-accounts" },
+      // P7 step 8. The *run* posts and lives under Transactions (C.1.12); this is the report
+      // over a posted one, per line, and it reads on the ordinary GL reporting right rather
+      // than on `gl:fx_revalue` — reading what a revaluation did is not the authority to post
+      // another one.
+      { label: "FX revaluation", module: "General Ledger", permission: "gl:reports_view", href: "/gl/reports/fx-revaluation" },
       { label: "Bank reconciliation", module: "General Ledger", phase: "P8" },
       { label: "Cashbooks", module: "General Ledger", phase: "P8" },
       { label: "Balance sheet", module: "General Ledger", phase: "P10" },
@@ -390,6 +412,31 @@ export const navIntents: NavIntent[] = [
         module: "Order Entry",
         permission: OE_VIEW_PERMISSIONS,
         href: "/oe/reports/landed-cost",
+      },
+      // P7 step 8, the rest of Appendix C.1.11. Three reports, and they answer three different
+      // people: the VAT return is the accountant's filing, the daily report is the shopkeeper's
+      // day, and the receipts listing is the tie between the two systems.
+      //
+      // The VAT return reads on either tax permission for the same reason the Transactions row
+      // does — the endpoint behind it accepts `tax:vat_return_view`, and a controller who may
+      // look at a filed return and not file one must be able to reach it.
+      {
+        label: "VAT return",
+        module: "Tax",
+        permission: ["tax:vat_return_view", "tax:vat_return_file"],
+        href: "/tax/reports/vat-return",
+      },
+      {
+        label: "Daily fiscal report",
+        module: "Tax",
+        permission: ["fiscal:setup_manage", "fiscal:reports_view"],
+        href: "/tax/reports/daily-fiscal",
+      },
+      {
+        label: "Fiscal receipts",
+        module: "Tax",
+        permission: ["fiscal:setup_manage", "fiscal:reports_view"],
+        href: "/tax/reports/receipts",
       },
     ],
   },

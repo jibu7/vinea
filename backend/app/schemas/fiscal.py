@@ -26,6 +26,7 @@ from app.models.fiscalization import (
     FiscalReceiptType,
     PaymentMethod,
 )
+from app.models.subledger import DocumentKind
 
 
 class DeviceCreate(BaseModel):
@@ -375,6 +376,72 @@ class ReceiptRead(BaseModel):
     base_total_amount: Decimal
     currency_id: int
     journal_entry_id: int | None
+
+
+class ListingReceiptRead(BaseModel):
+    """One signed receipt on the tie, with what it declared and what its document posted."""
+
+    receipt_id: int
+    document_id: int
+    document_number: str
+    document_date: date
+    partner_name: str
+    receipt_type: FiscalReceiptType
+    receipt_number: str
+    invc_no: int
+    sdc_datetime: datetime
+    declared_gross: Decimal
+    declared_tax: Decimal
+    posted_base_total: Decimal | None
+    #: `dated_outside`, `other_branch`, `document_gone` — or null when this receipt's document
+    #: is on the ledger side of the same range.
+    outside_range: str | None
+
+
+class ListingDocumentRead(BaseModel):
+    """One sales-ledger document with no receipt in the range, and what it is waiting on."""
+
+    document_id: int
+    number: str
+    document_date: date
+    partner_name: str
+    kind: DocumentKind
+    base_total_amount: Decimal
+    #: A queue status, or `unqueued`.
+    reason: str
+
+
+class ReceiptListingRead(BaseModel):
+    """The accountant's tie: what RRA signed beside what the sales ledger holds.
+
+    The three derived figures are computed on the server and sent rather than left to the
+    screen. `difference` in particular is the number a reader acts on, and a subtraction
+    performed in TypeScript over two decimal strings is a rounding rule living somewhere nobody
+    is testing it.
+    """
+
+    device_id: int
+    device_label: str
+    sdc_id: str | None
+    mrc_no: str | None
+    date_from: date
+    date_to: date
+    ns_count: int
+    ns_gross: Decimal
+    ns_tax: Decimal
+    nr_count: int
+    nr_gross: Decimal
+    nr_tax: Decimal
+    declared_net: Decimal
+    ledger_invoice_count: int
+    ledger_invoice_total: Decimal
+    ledger_credit_note_count: int
+    ledger_credit_note_total: Decimal
+    ledger_net: Decimal
+    difference: Decimal
+    receipts: list[ListingReceiptRead]
+    only_in_ledger: list[ListingDocumentRead]
+    only_on_receipts: list[ListingReceiptRead]
 
 
 class ItemRegistrationRead(BaseModel):

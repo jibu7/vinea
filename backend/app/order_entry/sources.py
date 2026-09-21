@@ -17,7 +17,16 @@ place, instead of growing a branch per source type in every screen that lists mo
 
 **Resolution is bulk.** An item enquiry lists hundreds of moves; asking per row would be a
 query per row. `resolve()` groups the references by type and issues one query for each type
-actually present — at most four, whatever the page size.
+actually present — at most six, whatever the page size.
+
+**P7 adds two, and they are not stock at all.** A filed VAT return and an FX revaluation run
+both post through the kernel from outside any subledger, and both write their own key into
+`journal_entries.source_doc_type`. Neither is in `MODULE_DOCUMENT_TABLES` — `tax` has no
+document table and `gl` is every manual journal ever posted — so without a key here a `VATR-`
+or `FXR-` entry opened from the GL showed the same blank cell every P6 move showed before this
+file existed. They are registered here rather than in a second resolver because the entry page
+already asks this one question, and two places that answer "what did this entry come from" is
+how they come to disagree.
 """
 
 from collections.abc import Iterable
@@ -26,6 +35,7 @@ from dataclasses import dataclass
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.models.fiscalization import FxRevaluation, VatReturn
 from app.models.inventory import GoodsReceivedNote, InventoryDocument
 from app.models.order_entry import LandedCostDocument
 from app.models.partner import PartnerRole
@@ -38,6 +48,13 @@ INVENTORY_DOCUMENT = "inventory_document"
 PARTNER_DOCUMENT = "partner_document"
 GOODS_RECEIVED_NOTE = "goods_received_note"
 LANDED_COST_DOCUMENT = "landed_cost_document"
+#: P7. The strings are `app.tax.vat.VAT_RETURN_SOURCE` and
+#: `app.subledger.revaluation.FX_REVALUATION_SOURCE`; asserted equal to them by
+#: `tests/fiscal/test_entry_drill.py` rather than imported, because this module is the
+#: inventory side of the tree and importing tax into it to spell a constant would be a
+#: dependency bought for nothing.
+VAT_RETURN = "vat_return"
+FX_REVALUATION = "fx_revaluation"
 
 
 @dataclass(frozen=True)
@@ -93,6 +110,8 @@ def resolve(db: Session, company_id: int, refs: Iterable[Ref]) -> dict[Ref, Sour
     _simple(INVENTORY_DOCUMENT, InventoryDocument, INVENTORY_DOCUMENT)
     _simple(GOODS_RECEIVED_NOTE, GoodsReceivedNote, GOODS_RECEIVED_NOTE)
     _simple(LANDED_COST_DOCUMENT, LandedCostDocument, LANDED_COST_DOCUMENT)
+    _simple(VAT_RETURN, VatReturn, VAT_RETURN)
+    _simple(FX_REVALUATION, FxRevaluation, FX_REVALUATION)
 
     partner_ids = wanted.get(PARTNER_DOCUMENT)
     if partner_ids:

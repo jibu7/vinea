@@ -436,3 +436,122 @@ export interface ImportDeclaration {
   item_id: number | null;
   decided_at: string | null;
 }
+
+// --- The daily report, and the tie (P7 step 8) ----------------------------------------------
+
+/** One tax class on a day, split by receipt type — §19.1 prints sales and refunds apart. */
+export interface DailyClassTotals {
+  taxable_ns: string;
+  tax_ns: string;
+  taxable_nr: string;
+  tax_nr: string;
+  rate: string;
+}
+
+/**
+ * The §19.1 content of a day, computed from the receipts a device issued in a range.
+ *
+ * Every figure here is the **declaration's**, not the ledger's: a Z states what the authority
+ * signed, and on a discounted or fractionally priced line the wire's taxable amount is not the
+ * posted gross. `posted_net` and `declared_less_posted` carry the ledger's side and the residue
+ * between them, so a reader reconciling a month of Zs against that month's VAT return meets a
+ * number with a name on it rather than an unexplained franc.
+ */
+export interface DailyFigures {
+  ns_count: number;
+  ns_gross: string;
+  nr_count: number;
+  nr_gross: string;
+  net_gross: string;
+  total_tax: string;
+  items_ns: string;
+  items_nr: string;
+  copies_count: number;
+  copies_gross: string;
+  discounts: string;
+  posted_net: string;
+  declared_less_posted: string;
+  /** What the device was still holding when the report was taken. A queued row is not a
+   * receipt, so it is no part of the totals — and a Z that closed over one says so on its
+   * face, which is why Close day warns rather than refuses. */
+  queued_rows: number;
+  classes: Record<string, DailyClassTotals>;
+  by_payment_method: Record<string, string>;
+  refunds_by_payment_method: Record<string, string>;
+}
+
+/** An X or a Z in the same shape. They differ by whether anybody stored it: an X is a
+ * question, a Z is an act, and only the Z has a number. */
+export interface DailyReport {
+  device_id: number;
+  kind: string;
+  from_at: string;
+  to_at: string;
+  figures: DailyFigures;
+  number: string | null;
+  report_no: number | null;
+}
+
+/** One signed receipt on the tie, with what it declared beside what its document posted. */
+export interface ListingReceipt {
+  receipt_id: number;
+  document_id: number;
+  document_number: string;
+  document_date: string;
+  partner_name: string;
+  receipt_type: FiscalReceiptType;
+  receipt_number: string;
+  invc_no: number;
+  sdc_datetime: string;
+  declared_gross: string;
+  declared_tax: string;
+  posted_base_total: string | null;
+  /** `dated_outside`, `other_branch`, `document_gone` — or null when this receipt's document
+   * is on the ledger side of the same range. */
+  outside_range: string | null;
+}
+
+/** One sales-ledger document with no receipt in the range, and what it is waiting on. */
+export interface ListingDocument {
+  document_id: number;
+  number: string;
+  document_date: string;
+  partner_name: string;
+  kind: string;
+  base_total_amount: string;
+  /** A queue status (`queued`, `failed`, `unknown`, `needs_receipt`, `cancelled`) or
+   * `unqueued`. The word an operator acts on. */
+  reason: string;
+}
+
+/**
+ * The accountant's tie: what RRA signed beside what the sales ledger holds.
+ *
+ * The three derived figures come from the server rather than being subtracted here. A rounding
+ * rule living in a screen is a rounding rule nobody is testing, and this report's whole value
+ * is that its difference can be trusted.
+ */
+export interface ReceiptListing {
+  device_id: number;
+  device_label: string;
+  sdc_id: string | null;
+  mrc_no: string | null;
+  date_from: string;
+  date_to: string;
+  ns_count: number;
+  ns_gross: string;
+  ns_tax: string;
+  nr_count: number;
+  nr_gross: string;
+  nr_tax: string;
+  declared_net: string;
+  ledger_invoice_count: number;
+  ledger_invoice_total: string;
+  ledger_credit_note_count: number;
+  ledger_credit_note_total: string;
+  ledger_net: string;
+  difference: string;
+  receipts: ListingReceipt[];
+  only_in_ledger: ListingDocument[];
+  only_on_receipts: ListingReceipt[];
+}
