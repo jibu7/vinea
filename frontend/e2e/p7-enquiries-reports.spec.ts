@@ -229,6 +229,22 @@ test.describe("the tax enquiries and reports", () => {
   let customerId = 0;
   let invoiceAId = 0;
   let reversibleId = 0;
+  /**
+   * **What this spec files or posts on the shared company, so it can put it back.**
+   *
+   * A filed VAT period and an FX revaluation at a date are *exclusive*: `vat_period_filed`
+   * refuses a second return over an overlapping range, and `fx_revaluation_exists` refuses a
+   * second run for the same (role, date). This file sorts before `p7-transactions.spec.ts`, so
+   * in a shard that holds both it goes first and would leave that spec with a month it cannot
+   * file and a date it cannot revalue — which is exactly what it did, and CI is where it showed.
+   *
+   * Step 7's own report wrote the rule and this file did not carry it: *"Nothing this spec files
+   * is left posted … so the range and the date are free for whatever runs next."* Both ids are
+   * `0` when the resource was already there and this file reused it, in which case it is not
+   * ours to reverse.
+   */
+  let filedByThisSpec = 0;
+  let revaluedByThisSpec = 0;
 
   async function postInvoice(
     page: Page,
@@ -394,11 +410,19 @@ test.describe("the tax enquiries and reports", () => {
     >;
     const next = periods.find((p) => p.start_date > monthEnd() && p.status !== "open");
     if (next) await apiOk(page, `/gl/periods/${next.id}/open`, { method: "POST" });
-    await apiOk(page, "/gl/fx-revaluations", {
-      method: "POST",
-      headers: { "Idempotency-Key": `p7-step8-fxr-${SUFFIX}` },
-      body: { revaluation_date: monthEnd(), role: "both" },
-    });
+
+    // **Reuse a run if one already stands.** A revaluation is exclusive per (role, date), so on
+    // the shared company whichever spec gets there first owns the month end and the second is
+    // refused `fx_revaluation_exists`. The report only needs *a* posted run with lines in it.
+    const existingRuns = (await apiOk(page, "/gl/fx-revaluations")) as unknown[];
+    if (existingRuns.length === 0) {
+      const run = (await apiOk(page, "/gl/fx-revaluations", {
+        method: "POST",
+        headers: { "Idempotency-Key": `p7-step8-fxr-${SUFFIX}` },
+        body: { revaluation_date: monthEnd(), role: "both" },
+      })) as Identified;
+      revaluedByThisSpec = run.id;
+    }
 
     await drainUntilClear(page);
   });
@@ -447,6 +471,11 @@ test.describe("the tax enquiries and reports", () => {
     );
     await expect(page.getByTestId("day-queued-rows")).toHaveText(String(inFlight));
 
+    // What the day holds **before** the close, read off the page rather than assumed. A literal
+    // here would be a claim about everything signed on this device since its last close — which
+    // on the shared fixture company includes whatever spec ran before this one, and did.
+    const nsBeforeClose = (await page.getByTestId("day-ns-count").textContent())!.trim();
+
     // --- and the queue history can reach it, which is the whole reason the picker changed ---
     //
     // **This is the witness for a defect the tests could not have caught.** The picker was first
@@ -478,12 +507,11 @@ test.describe("the tax enquiries and reports", () => {
     await expect(page.getByTestId("z-number").first()).toHaveText(/^Z-\d+$/);
     await expect(page.getByTestId("day-queued-rows")).toHaveText(String(inFlight));
 
-    // **A queued row is not a receipt, and this is where that shows.** Two sales stand in this
-    // range — the USD invoice the setup signed, and the one the authority never got — and the
-    // Z counts **one**. The other is not missing and not silently dropped: it is in
-    // `queued_rows` above, which is the whole reason decision 11 stores that figure.
-    await expect(page.getByTestId("day-ns-count")).toHaveText("1");
-    await expect(page.getByTestId("day-nr-count")).toHaveText("0");
+    // **A queued row is not a receipt, and this is where that shows.** The Z counts exactly what
+    // the X counted a moment before it — the stuck sale added nothing to the takings — while
+    // `queued_rows` above records that it was there. Not missing, not silently dropped, which is
+    // the whole reason decision 11 stores that figure.
+    await expect(page.getByTestId("day-ns-count")).toHaveText(nsBeforeClose);
 
     // --- the authority comes back, and the sale lands on the *next* Z ----------------------
     //
@@ -629,7 +657,7 @@ test.describe("the tax enquiries and reports", () => {
     // test that is right only when the machine is fast is a test about the machine. The clock
     // is injectable at the service level, so the refusal is pinned there instead —
     // `tests/fiscal/test_daily_report.py::test_a_second_close_at_the_same_instant_is_refused`.
-    await page.getByRole("tab", { name: /X —/ }).click();
+    await page.getByRole("button", { name: /X —/ }).click();
     await expect(page.getByTestId("day-ns-count")).toHaveText("0");
   });
 
@@ -682,7 +710,7 @@ test.describe("the tax enquiries and reports", () => {
     await page.goto("/tax/reports/daily-fiscal");
     await page.waitForSelector("h1:has-text('Daily fiscal report')");
 
-    await page.getByRole("tab", { name: /Z —/ }).click();
+    await page.getByRole("button", { name: /Z —/ }).click();
     await expect(page.getByTestId("z-number").first()).toHaveText(/^Z-\d+$/);
     await page.getByTestId("open-z").first().click();
 
@@ -770,11 +798,21 @@ test.describe("the tax enquiries and reports", () => {
 
     // File the month, so there is a filed return to report on. Through the API: the act is
     // step 7's screen and is pressed there; what this file is about is reading one back.
-    const filed = (await apiOk(page, "/tax/vat-returns", {
-      method: "POST",
-      headers: { "Idempotency-Key": `p7-step8-file-${SUFFIX}` },
-      body: { period_from: monthStart(), period_to: monthEnd() },
-    })) as Identified & { number: string; net_payable: string };
+    // **Reuse a filed return if the month already has one.** A range may not be filed twice
+    // (`vat_period_filed`), and on the shared company the first spec into the month owns it.
+    // This screen renders whatever was filed; it asserts nothing about the figures beyond that
+    // they are the ones the API reports.
+    const standing = (await apiOk(page, "/tax/vat-returns")) as Array<
+      Identified & { number: string; net_payable: string; journal_entry_id: number | null }
+    >;
+    const filed =
+      standing.find((row) => row.journal_entry_id !== null) ??
+      ((await apiOk(page, "/tax/vat-returns", {
+        method: "POST",
+        headers: { "Idempotency-Key": `p7-step8-file-${SUFFIX}` },
+        body: { period_from: monthStart(), period_to: monthEnd() },
+      })) as Identified & { number: string; net_payable: string });
+    if (!standing.some((row) => row.id === filed.id)) filedByThisSpec = filed.id;
     expect(filed.number, "shape, never a literal — the VAT run is shared").toMatch(/^VATR-\d+$/);
 
     // The **report**, by its own route — it has no `{id}` any more. The drill from a journal
@@ -936,6 +974,23 @@ test.describe("the tax enquiries and reports", () => {
       method: "POST",
       body: { reason: `P7 step 8 e2e finished ${SUFFIX}` },
     });
+
+    // **And the exclusive resources go back.** A filed month and a revalued date are singletons,
+    // so leaving them standing hands the next spec a range it cannot file and a date it cannot
+    // revalue. Only what this file created is reversed — an id of `0` means it reused what was
+    // already there, which is not its to take away.
+    if (filedByThisSpec) {
+      await apiOk(page, `/tax/vat-returns/${filedByThisSpec}/reverse`, {
+        method: "POST",
+        body: { reason: `P7 step 8 e2e finished ${SUFFIX}` },
+      });
+    }
+    if (revaluedByThisSpec) {
+      await apiOk(page, `/gl/fx-revaluations/${revaluedByThisSpec}/reverse`, {
+        method: "POST",
+        body: { reason: `P7 step 8 e2e finished ${SUFFIX}` },
+      });
+    }
 
     const context = (await apiOk(page, "/fiscal/document-context")) as { fiscalized: boolean };
     expect(context.fiscalized, "the fixture is put back for whatever runs next").toBe(false);

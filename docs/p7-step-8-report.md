@@ -471,6 +471,50 @@ never got, **while it is still stuck**, and asserts the row is listed as `Queued
 no receipt is the only thing that can tell the two picker sources apart, and by the time the
 enquiry's own test runs everything has long since drained.
 
+**7. A fake tablist, caught by the axe sweep the moment the nav rows landed.** The daily report's
+X/Z switch used Radix `Tabs` as a segmented control with **no `TabsContent`** — the two panels it
+switches between are rendered by `ReportPage` further down, and a `TabsContent` has to live inside
+the `Tabs` root to be one. Radix still wrote `aria-controls` at a panel id that existed nowhere:
+`aria-valid-attr-value`, **critical**, in both themes. Two buttons carrying `aria-pressed` say what
+is actually true — a choice of what the page shows.
+
+Worth noting *how* it was caught: `accessibility-reports.spec.ts` enumerates `nav-tree.ts`, so the
+six new rows became six new swept routes without a line of test code. Locally it never ran, because
+the specs re-run were the ones that open screens this step *touched* — and a brand-new screen is
+not one of those. The sweep is the reason the rule "every untagged row has a route" is worth
+keeping.
+
+**8. This spec left the shared company unusable for the next one.** It filed the month's VAT return
+and posted the month-end FX revaluation and left both standing. Both are **exclusive**:
+`vat_period_filed` refuses a second return over an overlapping range, `fx_revaluation_exists`
+refuses a second run for the same (role, date). `p7-enquiries-reports.spec.ts` sorts before
+`p7-transactions.spec.ts`, so in the shard that holds both it goes first and handed the other a
+month it could not file and a date it could not revalue.
+
+Step 7's own report wrote the rule — *"Nothing this spec files is left posted … so the range and
+the date are free for whatever runs next"* — and this file did not carry it. It now reuses either
+resource if one already stands, and reverses in teardown only what it created.
+
+**The method is what hid it.** Every local run was this spec **alone on a fresh database**, which
+is the one arrangement in which the collision cannot happen. It now runs against
+`p7-transactions` and `p7-maintenance` in one invocation, in CI's order, which is the only
+arrangement that proves anything about a shared fixture.
+
+**9. And two assertions in `p7-transactions` that were accidentally true.** Both broke on this
+step's data, and neither was wrong about the product:
+
+* the filed row was located by testid **prefix** with a `.first()` — which does not narrow a
+  `has:` filter — so it matched every filed return at once and failed strict mode as soon as a
+  second one existed. A reversed return stays listed (decision 12: the row is evidence of what was
+  submitted), so any spec that files leaves one behind. It names the return it filed now.
+* *"the first row containing `settled` carries the net"* rested on two coincidences: the net equals
+  the output total only while **input VAT is zero**, and there is one settled row only while the
+  settlement moves one VAT account. This step's purchase put input VAT on the same month, and the
+  first settled row became `VAT-IN-18 settled −3,600` — a true row, and not the one the assertion
+  meant. The settlement posts Dr output / Cr input / net to `2250`, so the line it leaves on `2200`
+  is the **output** figure and never the net. Scoped to `untagged-2200` and to the output total,
+  which holds either way; the comment claimed the net, and says the output now.
+
 ### And one thing the tests corrected in the writing
 
 The first draft of `test_receipt_listing.py` asserted the ledger side at **two** decimals

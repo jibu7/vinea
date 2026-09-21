@@ -4,13 +4,13 @@ import { useState } from "react";
 import { useTranslations } from "next-intl";
 import { AlertTriangle } from "lucide-react";
 import { Button } from "@/design/components/button";
+import { cn } from "@/lib/cn";
 import { Field } from "@/design/components/input";
 import { QueryState } from "@/design/components/query-state";
 import { ReportPage, ReportPanel } from "@/design/components/report-page";
 import { Select } from "@/design/components/select";
 import { StatusChip } from "@/design/components/status-chip";
 import { TBody, TD, TH, THead, TR, Table } from "@/design/components/table";
-import { Tabs, TabsList, TabsTrigger } from "@/design/components/tabs";
 import { useToast } from "@/design/components/toast";
 import { isApiError, useHasPermission } from "@/features/auth/hooks";
 import { FiscalOutboxStatus } from "@/lib/api-enums";
@@ -197,13 +197,39 @@ export function DailyFiscalReport() {
               ariaLabel={t("device")}
             />
           </Field>
-          <div className="flex items-end sm:col-span-2">
-            <Tabs value={tab} onValueChange={setTab}>
-              <TabsList>
-                <TabsTrigger value="x">{t("xTab")}</TabsTrigger>
-                <TabsTrigger value="z">{t("zTab")}</TabsTrigger>
-              </TabsList>
-            </Tabs>
+          {/* **Buttons, not a Radix `Tabs`.** This looks like a tablist and is not one: the two
+              panels it switches between are rendered by `ReportPage` further down the page, and
+              a `TabsContent` has to live inside the `Tabs` root to be one. Used as a bare
+              trigger pair, Radix still wrote `aria-controls` at a panel id that existed
+              nowhere — `aria-valid-attr-value`, critical, which the axe sweep caught the moment
+              this screen joined the nav tree. Two buttons carrying `aria-pressed` say what is
+              actually true: a choice of what the page shows. */}
+          <div
+            role="group"
+            aria-label={t("theDay")}
+            className="flex items-end gap-1 sm:col-span-2"
+          >
+            {(
+              [
+                ["x", t("xTab")],
+                ["z", t("zTab")],
+              ] as const
+            ).map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                aria-pressed={tab === value}
+                onClick={() => setTab(value)}
+                className={cn(
+                  "rounded-[var(--radius-control)] px-3 py-1.5 text-xs font-medium transition",
+                  tab === value
+                    ? "bg-[var(--vinea-surface-sunken)] text-[var(--vinea-ink)]"
+                    : "text-[var(--vinea-ink-muted)] hover:text-[var(--vinea-ink)]",
+                )}
+              >
+                {label}
+              </button>
+            ))}
           </div>
         </div>
       }

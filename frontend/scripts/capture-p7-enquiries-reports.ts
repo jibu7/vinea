@@ -457,7 +457,7 @@ async function main() {
     await shot("5-daily-z-figures", async () => {
       await page.goto(`${BASE}/tax/reports/daily-fiscal`);
       await page.waitForSelector("h1:has-text('Daily fiscal report')");
-      await page.getByRole("tab", { name: /Z —/ }).click();
+      await page.getByRole("button", { name: /Z —/ }).click();
       await page.getByTestId("z-number").first().waitFor({ state: "visible" });
       await page.getByTestId("open-z").first().click();
       await page.getByTestId("day-residue").waitFor({ state: "visible" });
