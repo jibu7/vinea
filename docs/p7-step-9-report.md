@@ -474,6 +474,12 @@ placeholder, and the code-complete close.
    `.first()` is asserting the query's ordering.
 7. **The certification runbook has an owner item at the top of it** and the enclosure list carries
    a date. If the date is old, the list is a historical record and not a requirement.
+8. **Issue #20's `now()`-tie sweep is clear on the P7 side**, checked here rather than asserted:
+   `fiscal/worker.py` sorts nothing — it lists devices and hands each to the drainer — and every
+   ordering the queue has is `ORDER BY sequence_no` in `app/fiscal/outbox.py` (the claim, the
+   head and the listing), with devices ordered by id. No timestamp decides what is sent next, so
+   the queue has no tie to break. The `stock_moves` half of that sweep is still open and is not
+   this phase's.
 
 Every gate below ran on the tree this report describes. Where a gate ran at an earlier hash,
 it says so and says what changed after it.

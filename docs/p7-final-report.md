@@ -192,5 +192,8 @@ by the first live sync.
 4. **Training receipts, proforma receipts and the PLU report** need a phase. Certification cannot
    complete without them.
 5. **After P7 closes:** issue #54 (the audit index) as its own PR, and the `now()`-tie sweep from
-   #20 — `fiscal/worker.py` orders by `sequence_no` rather than by timestamp, confirmed at step
-   9; the `stock_moves` half of that sweep stays post-P7.
+   #20. **The P7 half is confirmed clear:** `fiscal/worker.py` sorts nothing of its own — it
+   lists devices and hands each to the drainer — and every ordering the queue has is
+   `ORDER BY sequence_no` in `app/fiscal/outbox.py` (three of them: the claim, the head and the
+   listing), with devices ordered by id. No timestamp decides what is sent next, so there is no
+   `now()` tie to break. The `stock_moves` half of that sweep stays post-P7.
