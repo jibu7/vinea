@@ -111,6 +111,20 @@ class DocType(enum.StrEnum):
     #: An unrealized FX revaluation run (decision 13). ADR-05 reserved `FXR` for it at P2 and
     #: this is the phase that makes it real.
     FX_REVALUATION = "FXR"
+    # P8 — banking. None of these three numbers a posting: a statement, a reconciliation and a
+    # payment run are **records of banking acts**, and every journal entry the phase causes
+    # takes its number from the P2/P4 run that already owns it (a `CB-` cashbook entry, a
+    # `PMT-` settlement, an `ALC-`/`ALJ-` allocation). So all three claimants are the phase's
+    # own tables, and each run is gapless over rows that exist whether or not anything posted.
+    #: An imported (or keyed) bank statement.
+    BANK_STATEMENT = "BST"
+    #: A bank reconciliation, numbered when it is **opened** — it is nameable from that moment,
+    #: it may be reopened, and an auditor following the `BRC-` run must not find a hole where
+    #: one was opened and never locked. The same argument as P5's count session.
+    BANK_RECONCILIATION = "BRC"
+    #: A supplier payment run. Claimed at posting — there are no draft rows — and held by every
+    #: row including the reversed ones, as orders do.
+    PAYMENT_RUN = "PYR"
 
 
 DEFAULT_PREFIXES: dict[str, str] = {
@@ -148,6 +162,9 @@ DEFAULT_PREFIXES: dict[str, str] = {
     DocType.FISCAL_Z_REPORT: "Z-",
     DocType.VAT_RETURN: "VATR-",
     DocType.FX_REVALUATION: "FXR-",
+    DocType.BANK_STATEMENT: "BST-",
+    DocType.BANK_RECONCILIATION: "BRC-",
+    DocType.PAYMENT_RUN: "PYR-",
 }
 
 
@@ -288,6 +305,15 @@ _NIL_VAT_RETURN = SequenceClaimant(table="vat_returns", where="journal_entry_id 
 _VALUELESS_REVALUATION = SequenceClaimant(
     table="fx_revaluations", where="journal_entry_id IS NULL"
 )
+#: P8. Each of these tables holds its own number outright — no `where`, and no `_ENTRY`
+#: alternative — because none of the three rows *is* a posting. A statement records what the
+#: bank said; a reconciliation records a proof; a payment run records a banking act whose
+#: postings are ordinary `PMT-` documents with numbers of their own. A voided statement, a
+#: reopened reconciliation and a reversed run all keep their numbers, the way a cancelled
+#: order keeps its `SO-` (P6 decision 3): each is a thing that happened.
+_BANK_STATEMENT = SequenceClaimant(table="bank_statements")
+_BANK_RECONCILIATION = SequenceClaimant(table="bank_reconciliations")
+_PAYMENT_RUN = SequenceClaimant(table="payment_runs")
 
 #: A claimant is checked against the live schema, so a run can only be registered once the
 #: table that holds its numbers exists — see the P6 note in `DocType`.
@@ -334,6 +360,9 @@ SEQUENCE_CLAIMANTS: dict[str, tuple[SequenceClaimant, ...]] = {
     # nil return, which posts none, holds it itself.
     DocType.VAT_RETURN: (_ENTRY, _NIL_VAT_RETURN),
     DocType.FX_REVALUATION: (_ENTRY, _VALUELESS_REVALUATION),
+    DocType.BANK_STATEMENT: (_BANK_STATEMENT,),
+    DocType.BANK_RECONCILIATION: (_BANK_RECONCILIATION,),
+    DocType.PAYMENT_RUN: (_PAYMENT_RUN,),
 }
 
 

@@ -92,16 +92,61 @@ def test_money_and_rate_precision_follow_adr_06() -> None:
     assert (rate.precision, rate.scale) == (20, 10)
 
 
+#: Columns whose name contains "balance" and which are **not** the thing ADR-04 forbids, with
+#: the reason. What the rule forbids is a stored balance of a Vinea account or partner — a
+#: figure postings would have to maintain, and which would then be capable of disagreeing with
+#: the ledger. Every entry below is a figure Vinea does not derive at all, or a snapshot of a
+#: proof that a test recomputes.
+#:
+#: A register rather than a loosened substring, and asserted by **equality** rather than by
+#: subset: a new `balance` column fails this test, and so does deleting one of these without
+#: deleting its line. Both cost a line of review, which is the point.
+ALLOWED_BALANCE_COLUMNS: dict[str, str] = {
+    # --- P8: the bank's own figures. Vinea derives none of these ----------------------------
+    "bank_statements.opening_balance": (
+        "the balance the **bank** printed at the top of the statement. Not a balance of a "
+        "Vinea account: it is evidence, keyed or read off the file's balance column, and the "
+        "reconciliation compares the ledger against it rather than maintaining it."
+    ),
+    "bank_statements.closing_balance": "as above — the figure the bank printed at the bottom.",
+    "bank_statement_lines.balance_after": (
+        "the bank's own running balance on that line, stored as it came. Immutable by "
+        "trigger (VN013) and never recomputed, because it is a transcription of the file."
+    ),
+    "bank_reconciliations.statement_balance": (
+        "the bank balance the reconciliation was struck against — keyed, or defaulted from "
+        "the latest statement line. The thing being proved *to*, not a derived figure."
+    ),
+    "bank_reconciliations.ledger_balance": (
+        "the snapshot of a proof, stored at lock. `assert_bank_invariants` clause 4 "
+        "recomputes it from the lines that existed at that moment and asserts it reproduces "
+        "exactly — which is the verifiable-cache exemption ADR-04 names, the same standing "
+        "`period_balances` has."
+    ),
+    "bank_accounts.last_reconciled_balance": (
+        "a cache of a **stored row** — the latest locked reconciliation's statement balance — "
+        "and not a balance of the account, which stays sum(journal_lines). Clause 7 "
+        "recomputes it from that row every time the suite runs."
+    ),
+}
+
+
 def test_no_mutable_balance_columns_exist() -> None:
     """ADR-04: balances are derived. Guard the rule from the first schema onwards."""
     inspector = inspect(engine)
-    offenders = [
+    found = {
         f"{table}.{column['name']}"
         for table in inspector.get_table_names()
         for column in inspector.get_columns(table)
         if "balance" in column["name"].lower()
-    ]
-    assert offenders == []
+    }
+
+    assert found == set(ALLOWED_BALANCE_COLUMNS), (
+        "a column whose name contains 'balance' is either a stored balance (which ADR-04 "
+        "forbids) or belongs in ALLOWED_BALANCE_COLUMNS with a reason: "
+        f"unregistered={sorted(found - set(ALLOWED_BALANCE_COLUMNS))} "
+        f"missing={sorted(set(ALLOWED_BALANCE_COLUMNS) - found)}"
+    )
 
 
 def test_amount_columns_never_use_floating_point() -> None:

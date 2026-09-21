@@ -75,6 +75,13 @@ class GLSettingsRead(ApiModel):
     unrealized_fx_gain_account_id: int | None
     unrealized_fx_loss_account_id: int | None
     fiscal_default_purchase_class_code: str | None
+    # --- P8 (step 6) ---------------------------------------------------------------------
+    # The bank revaluation contra, and the two accounts the post-from-a-statement-line drawer
+    # opens on. Exposed here for the same reason P7's five were: seeded by `seed_rwanda`, and
+    # otherwise unsettable by a tenant that did not come from the Rwanda pack.
+    bank_revaluation_account_id: int | None
+    bank_charges_account_id: int | None
+    bank_interest_account_id: int | None
 
 
 class GLSettingsUpdate(BaseModel):
@@ -89,6 +96,9 @@ class GLSettingsUpdate(BaseModel):
     ap_revaluation_account_id: int | None = None
     unrealized_fx_gain_account_id: int | None = None
     unrealized_fx_loss_account_id: int | None = None
+    bank_revaluation_account_id: int | None = None
+    bank_charges_account_id: int | None = None
+    bank_interest_account_id: int | None = None
     fiscal_default_purchase_class_code: str | None = Field(default=None, max_length=20)
     clear_fiscal_default_purchase_class_code: bool = False
 

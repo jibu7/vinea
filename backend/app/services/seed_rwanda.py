@@ -12,6 +12,7 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.banking import accounts as bank_accounts
 from app.core.permissions import SYSTEM_ROLES
 from app.kernel.periods import create_fiscal_year
 from app.kernel.sequences import DEFAULT_PREFIXES, ensure_sequence
@@ -112,6 +113,19 @@ ACCOUNT_AP_REVALUATION = "2190"
 ACCOUNT_UNREALIZED_FX_GAIN = "4410"
 ACCOUNT_UNREALIZED_FX_LOSS = "6955"
 
+# --- P8 banking ---------------------------------------------------------------------------------
+#: The contra side of a bank/cash revaluation (P8 decision 8) — a **plain** account, and never
+#: the bank account itself. A base-only line on a bank account (zero `amount`, non-zero
+#: `base_amount`) is a ledger line the statement can never show, so the reconciliation would
+#: carry it as outstanding forever; the balance sheet reads `1121 + 1130` the way it reads
+#: `1200 + 1290`.
+ACCOUNT_BANK_REVALUATION = "1130"
+#: The defaults the post-from-a-statement-line drawer opens with: a debit the ledger lacks is
+#: usually a bank charge, a credit is usually interest. Defaults, not a posting map — a
+#: `bank_rules` row is what makes a specific recurring line prefill, and a person still posts.
+ACCOUNT_BANK_CHARGES = "6700"
+ACCOUNT_OTHER_INCOME = "4300"
+
 RWANDA_TAX_CODES = [
     {
         "code": "VAT-OUT-18",
@@ -192,6 +206,9 @@ RW_SME_V1_ACCOUNTS: tuple[
     # control one, so the balance sheet reads 1200 + 1290 and the control account keeps the
     # balance P4 promised it would.
     (ACCOUNT_AR_REVALUATION, "AR Revaluation", _A, "1100", True, None),
+    # P8 decision 8 — the asset side of a bank revaluation, beside `1120`/`1121` for the same
+    # reason `1290` sits beside `1200`.
+    (ACCOUNT_BANK_REVALUATION, "Bank Revaluation", _A, "1100", True, None),
     ("1500", "Prepayments & Deposits", _A, "1100", True, None),
     ("1600", "Non-current Assets", _A, "1000", False, None),
     ("1610", "Property, Plant & Equipment", _A, "1600", True, None),
@@ -373,10 +390,27 @@ def seed_chart_of_accounts(db: Session, company: Company) -> dict[str, GLAccount
             ap_revaluation_account_id=accounts[ACCOUNT_AP_REVALUATION].id,
             unrealized_fx_gain_account_id=accounts[ACCOUNT_UNREALIZED_FX_GAIN].id,
             unrealized_fx_loss_account_id=accounts[ACCOUNT_UNREALIZED_FX_LOSS].id,
+            bank_revaluation_account_id=accounts[ACCOUNT_BANK_REVALUATION].id,
+            bank_charges_account_id=accounts[ACCOUNT_BANK_CHARGES].id,
+            bank_interest_account_id=accounts[ACCOUNT_OTHER_INCOME].id,
         )
     )
     db.flush()
     return accounts
+
+
+def seed_bank_accounts(db: Session, accounts: dict[str, GLAccount]) -> None:
+    """Every seeded `bank` / `cash` control account gets its master row, in the same
+    transaction as the chart (P8 decision 2).
+
+    The seed calls `ensure_row` rather than building the rows itself, so there is exactly one
+    place that decides what a master over a flagged account looks like — the same function
+    `POST /gl/accounts` calls. `assert_bank_invariants` clause 6 is what catches a path that
+    skips it, and it would catch this one.
+    """
+    for account in accounts.values():
+        bank_accounts.ensure_row(db, account)
+    db.flush()
 
 
 def seed_subledger_transaction_types(
@@ -591,6 +625,7 @@ def seed_company(db: Session, company: Company, *, year: int | None = None) -> l
     seed_currencies(db, company)
     branch = seed_branch(db, company)
     accounts = seed_chart_of_accounts(db, company)
+    seed_bank_accounts(db, accounts)
     seed_tax_codes(db, company, valid_from=date(fiscal_year, 1, 1), accounts=accounts)
     seed_subledger_transaction_types(db, company, accounts)
     seed_inventory_transaction_types(db, company, accounts)

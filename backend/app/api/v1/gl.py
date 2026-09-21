@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session, aliased, selectinload
 
 from app.api import idempotency
 from app.api.deps import AuthContext, get_tenant_context
+from app.banking import accounts as bank_accounts
 from app.core import permissions
 from app.core.errors import NotFoundError, PermissionDeniedError
 from app.db import get_db
@@ -408,6 +409,11 @@ def create_account(
         actor=auth.user,
         request=request,
     )
+    # P8 decision 2: a `bank` / `cash` control account gets its master row in the **same
+    # transaction** as the account. The hook lives here rather than in
+    # `app/kernel/accounts.py` because the kernel may not import the banking package; a path
+    # that forgets it is caught by `assert_bank_invariants` clause 6, not by review.
+    bank_accounts.ensure_row(db, account)
     db.commit()
     return GLAccountRead.model_validate(account)
 
@@ -527,6 +533,22 @@ _SETTING_ACCOUNT_RULES: tuple[tuple[str, str, tuple[AccountClass, ...] | None], 
     (
         "unrealized_fx_loss_account_id",
         "unrealized FX loss",
+        (AccountClass.INCOME, AccountClass.EXPENSE),
+    ),
+    # P8. `1130` is an **asset** and is deliberately not the bank account itself (decision 8):
+    # a base-only line on a bank account is a ledger line the statement can never show, and
+    # the reconciliation would carry it forever. The other two are the drawer's defaults, and
+    # a fee is an expense while interest is income — but either may legitimately be the other
+    # (a bank refunding charges, a penalty), so both classes are allowed on both.
+    ("bank_revaluation_account_id", "bank revaluation", (AccountClass.ASSET,)),
+    (
+        "bank_charges_account_id",
+        "bank charges",
+        (AccountClass.INCOME, AccountClass.EXPENSE),
+    ),
+    (
+        "bank_interest_account_id",
+        "bank interest",
         (AccountClass.INCOME, AccountClass.EXPENSE),
     ),
 )

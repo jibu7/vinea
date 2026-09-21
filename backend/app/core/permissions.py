@@ -116,6 +116,27 @@ TAX_VAT_RETURN_FILE = "tax:vat_return_file"
 # on the balance sheet at a date, which is a month-end authority and not a keying one.
 GL_FX_REVALUE = "gl:fx_revalue"
 
+# Banking (P8) — the bank-account master, the statement, the reconciliation and the run.
+#
+# Six rather than one, because they are six authorities. Registering a bank account and
+# writing the column mapping its exports are read with is an administrator's act, done once
+# per account. **Importing** a statement is the clerk's daily one and carries the void with
+# it, because whoever imported the wrong file is who has to take it back out. **Matching** is
+# the reconciler's judgement — and deliberately not the authority to *post*: posting from a
+# statement line requires this permission *and* the permission of the thing being posted
+# (`gl:journal_post` for a cashbook entry, `ar:`/`ap:transactions_post` for a settlement), so
+# a reconciler who may tick cannot quietly write the ledger. **Locking** is separated from
+# matching the way `inv:count_process` is separated from `inv:count_enter`: the person who
+# ticks the lines is not necessarily the person who signs the reconciliation off, and reopen
+# lives here too because it is the same signature withdrawn. A **payment run** moves money to
+# suppliers and is its own authority entirely. Reading is none of the above.
+BANK_SETUP_MANAGE = "bank:setup_manage"
+BANK_STATEMENT_IMPORT = "bank:statement_import"
+BANK_RECONCILE = "bank:reconcile"
+BANK_RECONCILE_LOCK = "bank:reconcile_lock"
+BANK_PAYMENT_RUN_POST = "bank:payment_run_post"
+BANK_REPORTS_VIEW = "bank:reports_view"
+
 # Reporting & analytics
 REPORTING_FINANCIAL_STATEMENTS_VIEW = "reporting:financial_statements_view"
 REPORTING_FINANCIAL_STATEMENTS_GENERATE = "reporting:financial_statements_generate"
@@ -199,6 +220,12 @@ ALL_PERMISSIONS: tuple[str, ...] = (
     TAX_VAT_RETURN_VIEW,
     TAX_VAT_RETURN_FILE,
     GL_FX_REVALUE,
+    BANK_SETUP_MANAGE,
+    BANK_STATEMENT_IMPORT,
+    BANK_RECONCILE,
+    BANK_RECONCILE_LOCK,
+    BANK_PAYMENT_RUN_POST,
+    BANK_REPORTS_VIEW,
     REPORTING_FINANCIAL_STATEMENTS_VIEW,
     REPORTING_FINANCIAL_STATEMENTS_GENERATE,
     REPORTING_TEMPLATES_MANAGE,
@@ -257,6 +284,15 @@ SYSTEM_ROLES: tuple[dict[str, object], ...] = (
             TAX_VAT_RETURN_VIEW,
             TAX_VAT_RETURN_FILE,
             GL_FX_REVALUE,
+            # P8: importing the statement, working the match, signing the reconciliation off
+            # and pressing the payment run are all an accountant's work. Registering the bank
+            # accounts and writing their column mappings is not — that stays with the
+            # administrator, the same split as the EBM device above.
+            BANK_STATEMENT_IMPORT,
+            BANK_RECONCILE,
+            BANK_RECONCILE_LOCK,
+            BANK_PAYMENT_RUN_POST,
+            BANK_REPORTS_VIEW,
             REPORTING_FINANCIAL_STATEMENTS_VIEW,
             REPORTING_TRIAL_BALANCE_VIEW,
         ],
@@ -284,6 +320,8 @@ SYSTEM_ROLES: tuple[dict[str, object], ...] = (
             AR_REPORTS_VIEW,
             AP_REPORTS_VIEW,
             PROJECTS_READ,
+            # Reading the cashbook and what has been reconciled, and nothing that changes it.
+            BANK_REPORTS_VIEW,
         ],
     },
 )

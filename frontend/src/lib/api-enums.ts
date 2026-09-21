@@ -337,5 +337,73 @@ export const FxRevaluationRole = {
   AR: "ar",
   AP: "ap",
   BOTH: "both",
+  BANK: "bank",
+  ALL: "all",
 } as const;
 export type FxRevaluationRole = (typeof FxRevaluationRole)[keyof typeof FxRevaluationRole];
+
+export const BankAccountKind = {
+  BANK: "bank",
+  CASH: "cash",
+} as const;
+export type BankAccountKind = (typeof BankAccountKind)[keyof typeof BankAccountKind];
+
+export const StatementSource = {
+  CSV: "csv",
+  MANUAL: "manual",
+} as const;
+export type StatementSource = (typeof StatementSource)[keyof typeof StatementSource];
+
+export const StatementStatus = {
+  OPEN: "open",
+  VOID: "void",
+} as const;
+export type StatementStatus = (typeof StatementStatus)[keyof typeof StatementStatus];
+
+export const StatementFormatPreset = {
+  GENERIC: "generic",
+  CUSTOM: "custom",
+} as const;
+export type StatementFormatPreset = (typeof StatementFormatPreset)[keyof typeof StatementFormatPreset];
+
+export const StatementAmountMode = {
+  DEBIT_CREDIT: "debit_credit",
+  SIGNED: "signed",
+} as const;
+export type StatementAmountMode = (typeof StatementAmountMode)[keyof typeof StatementAmountMode];
+
+export const StatementSignConvention = {
+  CREDIT_POSITIVE: "credit_positive",
+  DEBIT_POSITIVE: "debit_positive",
+} as const;
+export type StatementSignConvention = (typeof StatementSignConvention)[keyof typeof StatementSignConvention];
+
+export const BankMatchKind = {
+  AUTO: "auto",
+  MANUAL: "manual",
+  TICK: "tick",
+  POSTED: "posted",
+} as const;
+export type BankMatchKind = (typeof BankMatchKind)[keyof typeof BankMatchKind];
+
+export const BankMatchRule = {
+  REFERENCE: "reference",
+  PAYMENT_RUN: "payment_run",
+  AMOUNT_DATE: "amount_date",
+  POSTED_FROM_STATEMENT: "posted_from_statement",
+  MANUAL: "manual",
+  TICK: "tick",
+} as const;
+export type BankMatchRule = (typeof BankMatchRule)[keyof typeof BankMatchRule];
+
+export const ReconciliationStatus = {
+  OPEN: "open",
+  LOCKED: "locked",
+} as const;
+export type ReconciliationStatus = (typeof ReconciliationStatus)[keyof typeof ReconciliationStatus];
+
+export const PaymentRunStatus = {
+  POSTED: "posted",
+  REVERSED: "reversed",
+} as const;
+export type PaymentRunStatus = (typeof PaymentRunStatus)[keyof typeof PaymentRunStatus];

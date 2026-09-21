@@ -208,12 +208,32 @@ class FxRevaluationStatus(enum.StrEnum):
 
 
 class FxRevaluationRole(enum.StrEnum):
-    """Which open items a revaluation run covers. `both` is one run over AR and AP together —
-    the common case at a month end, and one entry rather than two."""
+    """What a revaluation run covers. `both` is one run over AR and AP together — the common
+    case at a month end, and one entry rather than two.
+
+    P8 decision 8 adds the bank side as a **scope of this run** rather than a second run,
+    because one revaluation is what the accountant presses at month end. `bank` covers every
+    active foreign-currency `bank_accounts` row; `all` is the month-end press.
+
+    `both` stays for rows stored before P8 — an enum value that names a set some tenant's
+    history already uses is never removed.
+
+    The two new values are held by the column from **P8 step 1**, because the Postgres type has
+    to be rebuilt in one migration (never `ALTER TYPE … ADD VALUE`, P6 step 1) and the column
+    has to be able to carry what step 4 will store. Until step 4 builds the scope,
+    `app/subledger/revaluation.py` refuses them by name — `fx_revaluation_role_unsupported` —
+    rather than letting a value the API accepts fall through its role map as a `KeyError`.
+
+    Decision 8 turns `fx_revaluation_exists` from a role equality into a **scope test**: two
+    runs at one date are refused when the sets they cover intersect, so `bank` after `all` is
+    refused and `bank` after `ar` is not. That map lands with the code that reads it, at step 4.
+    """
 
     AR = "ar"
     AP = "ap"
     BOTH = "both"
+    BANK = "bank"
+    ALL = "all"
 
 
 fiscal_profile_type = pg_enum(FiscalProfile, "fiscal_profile")
@@ -886,20 +906,39 @@ class FxRevaluationLine(AuditedMixin, CompanyScopedMixin, Base):
             ondelete="RESTRICT",
         ),
         ForeignKeyConstraint(
+            ["company_id", "bank_account_id"],
+            ["bank_accounts.company_id", "bank_accounts.id"],
+            name="fk_fx_revaluation_lines_bank_account",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
             ["company_id", "currency_id"],
             ["currencies.company_id", "currencies.id"],
             name="fk_fx_revaluation_lines_currency",
             ondelete="RESTRICT",
+        ),
+        # A line is about exactly one thing: an open partner document, or a bank account's
+        # balance. Not both, and never neither — which is what makes `document_id` safe to
+        # widen to nullable without the table growing a second meaning for NULL.
+        CheckConstraint(
+            "(document_id IS NULL) <> (bank_account_id IS NULL)",
+            name="line_is_a_document_or_a_bank_account",
         ),
         Index("ix_fx_revaluation_lines_run", "company_id", "revaluation_id"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     revaluation_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    document_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    document_id: Mapped[int | None] = mapped_column(BigInteger)
+    #: P8 decision 8. A bank line revalues the account's **book balance** at the date, so
+    #: `open_amount` is Σ `amount` in the account's currency and `carrying_base` is Σ
+    #: `base_amount`. `booking_rate` is `carrying_base / open_amount` where the balance is
+    #: non-zero and NULL where it is not: informational on a bank line, because unlike a
+    #: document there is no single rate the balance was booked at.
+    bank_account_id: Mapped[int | None] = mapped_column(BigInteger)
     currency_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     open_amount: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
-    booking_rate: Mapped[Decimal] = mapped_column(RATE, nullable=False)
+    booking_rate: Mapped[Decimal | None] = mapped_column(RATE)
     carrying_base: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
     rate_at_date: Mapped[Decimal] = mapped_column(RATE, nullable=False)
     revalued_base: Mapped[Decimal] = mapped_column(MONEY, nullable=False)

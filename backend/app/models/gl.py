@@ -165,6 +165,10 @@ SETTINGS_ACCOUNT_FIELDS = (
     "ap_revaluation_account_id",
     "unrealized_fx_gain_account_id",
     "unrealized_fx_loss_account_id",
+    # P8 banking defaults.
+    "bank_revaluation_account_id",
+    "bank_charges_account_id",
+    "bank_interest_account_id",
 )
 
 
@@ -259,6 +263,18 @@ class GLSettings(AuditedMixin, CompanyScopedMixin, Base):
     #: by a payment, and an accountant reads the two apart.
     unrealized_fx_gain_account_id: Mapped[int | None] = mapped_column(BigInteger)
     unrealized_fx_loss_account_id: Mapped[int | None] = mapped_column(BigInteger)
+    # --- P8 banking defaults ---------------------------------------------------------------
+    #: The contra side of a bank/cash revaluation (P8 decision 8) — **never the bank account
+    #: itself.** A base-only line on a bank account (zero `amount`, non-zero `base_amount`) is
+    #: a ledger line the statement can never show, so the reconciliation would carry it as
+    #: outstanding forever. The balance sheet reads `1121 + 1130` exactly as it reads
+    #: `1200 + 1290`.
+    bank_revaluation_account_id: Mapped[int | None] = mapped_column(BigInteger)
+    #: The default counterpart the drawer opens with when a statement **debit** is posted as a
+    #: bank fee, and the credit side for interest. Defaults, not rules: a `bank_rules` row is
+    #: what makes a specific recurring line prefill, and a person still presses Post.
+    bank_charges_account_id: Mapped[int | None] = mapped_column(BigInteger)
+    bank_interest_account_id: Mapped[int | None] = mapped_column(BigInteger)
     #: The item class a purchase line with no item is registered under — rent, freight, a
     #: consultant's fee. The authority requires a class on every line; Vinea does not require
     #: an item on an AP line, so one default bridges the two (decision 9).

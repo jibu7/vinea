@@ -101,6 +101,20 @@ from app.services.provisioning import ProvisionedTenant, provision_tenant  # noq
 
 TABLES_IN_TRUNCATION_ORDER = (
     "jobs",
+    # P8 first: the match member tables point at statement lines and journal lines, the
+    # reconciliation and the run point at a bank account, and the run's lines point at partner
+    # documents and allocations. `CASCADE` would sort it out, but naming them keeps this list
+    # an inventory of what a tenant owns rather than a list of whatever needed saying.
+    "bank_match_journal_lines",
+    "bank_match_statement_lines",
+    "bank_matches",
+    "bank_reconciliations",
+    "bank_statement_lines",
+    "bank_statements",
+    "bank_rules",
+    "payment_run_lines",
+    "payment_runs",
+    "bank_accounts",
     # P7 first: every one of these points at something later in the list, and the fiscal
     # receipt / partner document pair points *both* ways. `CASCADE` would sort it out, but
     # naming them keeps the list an inventory of what a tenant owns rather than a list of

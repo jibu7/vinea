@@ -105,6 +105,15 @@ class Partner(AuditedMixin, CompanyScopedMixin, Base):
     notes: Mapped[str | None] = mapped_column(Text)
     # Default document currency; None means the company base currency.
     currency_id: Mapped[int | None] = mapped_column(BigInteger)
+    # --- P8: where a payment run sends the money ------------------------------------------
+    # On the partner rather than on `partner_ap_settings`, because a customer refunded by
+    # transfer needs the same three fields and duplicating them per role is how the two come
+    # to disagree. All nullable: a supplier without them is *listed* in the run with a
+    # `bank_details_missing` warning and still paid — the accountant keys that beneficiary by
+    # hand, and the instruction file carries the row with the fields empty so they know which.
+    bank_name: Mapped[str | None] = mapped_column(String(200))
+    bank_account_number: Mapped[str | None] = mapped_column(String(50))
+    bank_account_holder: Mapped[str | None] = mapped_column(String(200))
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
     def code_for(self, role: PartnerRole) -> str | None:
