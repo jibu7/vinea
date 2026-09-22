@@ -251,7 +251,7 @@ reach:    {'auto-match: run': 248, 'currency rule: attempted': 79, 'lock: attemp
            'usd line on the base-currency account': 83}
 ```
 
-Three readings off this, before the fixes:
+Four readings off this, before the fixes:
 
 * **`statement_already_imported` reached 9.** Step 2's note said the file-hash refusal was
   unreachable because the machine keys its statements line by line. That was true of
@@ -280,8 +280,8 @@ lines of the same amount within the window, one statement line naming neither �
 its shape (the amount, the date, the 0-to-3-day gap). It asserts the line is left alone and both
 candidates reported.
 
-It is the most important of the four targeted properties and the only one that is a **decline**
-rather than a refusal: a matcher that guessed between two candidates would put a fact in the
+It is the most important property in that file and the only one that is a **decline** rather
+than a refusal: a matcher that guessed between two candidates would put a fact in the
 reconciliation nobody checked, and unlike a refusal there is no error message whose absence
 anybody would notice. So it carries an explicit **anti-vacuity control**: the same construction
 with one of the two lines removed must *match*. Without that, the property would pass just as
@@ -292,11 +292,256 @@ It is deliberately **not** added to `REQUIRED_REACH`. The census fixture is modu
 file increments would be read before it was written. The property failing is the gate; the
 counter is reporting.
 
-### Pass 2 — the one this gate is reported on
+### Pass 2 — the fixes worked, and one of them broke something else
 
 ```
-PASS_2_CENSUS
+refusals: {'bank_account_currency_mismatch': 404, 'document_not_open': 1,
+           'match_unbalanced': 14, 'not_found': 41, 'payment_exceeds_open': 44,
+           'payment_run_before_invoice': 40, 'reconciliation_date_order': 8,
+           'reconciliation_difference': 27, 'reconciliation_open_exists': 73,
+           'statement_already_imported': 24, 'statement_lines_unmatched': 10}
+reach:    {'auto-match: found a tie and declined': 3, 'auto-match: matched something': 27,
+           'auto-match: run': 368, 'currency rule: attempted': 404, 'lock: attempted': 70,
+           'lock: attempted at a wrong balance': 32, 'lock: succeeded': 33,
+           'match: attempted manually': 47, 'match: made manually': 33,
+           'payment run: attempted': 134, 'payment run: posted': 8,
+           'posted from a statement line': 8, 'reconciliation: opened': 322,
+           'reopen: succeeded': 7, 'settlement: posted': 391,
+           'statement: imported from a file': 161, 'statement: keyed': 152,
+           'statement: perturbed by dropping a line': 27,
+           'statement: perturbed by shifting a value date': 38,
+           'statement: perturbed with a line the ledger lacks': 50,
+           'supplier invoice: posted': 405, 'tick: made': 155, 'unmatch: succeeded': 36,
+           'usd line on the base-currency account': 381}
+
+the deep pass did not provoke {'document_not_open': 1} at least 3 times each.
 ```
+
+Every invariant held over 300 examples at both scales. The two generator fixes did what they
+were meant to — `lock: attempted at a wrong balance` went 2 → **32** and
+`reconciliation_difference` 2 → **27** — and `auto-match: found a tie and declined` is back at 3
+from the targeted property.
+
+**And `payment_run_before_invoice` — the refusal this step added — starved the generator.** 134
+run attempts, 40 of them refused for the date, and **eight** runs posted. Two things follow from
+eight:
+
+* `document_not_open` needs a *posted* run to have closed an invoice, so it reached 1. The
+  one-in-three already-paid draw added after pass 1 had almost nothing to draw from.
+* **`reverse_run` never ran once in 300 examples.** `run reversal: attempted` is absent from the
+  reach table entirely — `state["runs"]` only fills on a posted run. The most important new path
+  in the step, and the machine had not touched it.
+
+That is a generator defect and not a guard: the screen defaults the payment date to today and
+the invoices are already raised, so a run dated *before* one of them is the unusual case. The
+generator now dates the run at or after the latest invoice it pays, three draws in four; the
+fourth stays deliberately backdated so the refusal keeps appearing in the census rather than
+going quiet the moment it stopped being an accident.
+
+`run reversal: succeeded` is added to `REQUIRED_REACH` at the same time. It is two preconditions
+deep — a run must post, then be drawn for reversal — and it is the path that unallocates N
+allocations and reverses N settlements, so a zero there means the invariant suite never saw the
+state between those legs. Reading the number was what found this; gating it is what stops the
+next step losing it silently.
+
+### Pass 3 — the new floor catches the thing it was added for
+
+```
+refusals: {'bank_account_currency_mismatch': 381, 'document_not_open': 5,
+           'match_unbalanced': 8, 'not_found': 24, 'payment_exceeds_open': 9,
+           'payment_run_before_invoice': 8, 'reconciliation_difference': 21,
+           'reconciliation_open_exists': 66, 'statement_already_imported': 7}
+reach:    {'auto-match: found a tie and declined': 3, 'auto-match: matched something': 29,
+           'auto-match: run': 442, 'currency rule: attempted': 381, 'lock: attempted': 46,
+           'lock: attempted at a wrong balance': 21, 'lock: succeeded': 25,
+           'match: attempted manually': 44, 'match: made manually': 36,
+           'payment run: attempted': 70, 'payment run: posted': 24,
+           'posted from a statement line': 10, 'reconciliation: opened': 267,
+           'reopen: succeeded': 10, 'settlement: posted': 366,
+           'statement: imported from a file': 111, 'statement: keyed': 61,
+           'statement: perturbed by dropping a line': 8,
+           'statement: perturbed by shifting a value date': 65,
+           'statement: perturbed with a line the ledger lacks': 35,
+           'supplier invoice: posted': 316, 'tick: made': 98, 'unmatch: succeeded': 12,
+           'usd line on the base-currency account': 403}
+
+the deep pass did not reach {'run reversal: succeeded': 0} at least 3 times each.
+```
+
+**Every refusal floor cleared** — `document_not_open` 1 → 5, so the date fix worked, and
+`payment_run_before_invoice` settled at 8, so the deliberate backdated draw keeps it counted
+without starving the runs.
+
+**And the floor added at pass 2 failed on its first outing, which is the best thing that happened
+to this step's census.** `run reversal: succeeded` is 0 — and `run reversal: attempted` is absent
+from the reach table *altogether*, so the operation was never even entered. `state["runs"]` is
+empty unless a run posted earlier in the same plan, and 24 runs posted across 300 examples.
+
+A run reversal is therefore a conjunction **two operations deep**, and P7's rule sends that to a
+targeted property rather than to a bigger `max_examples`. Had the counter not been gated at pass
+2, this step would have shipped with its most important new path — N unallocations and N
+document reversals — never once exercised by the machine, and the census would have looked green.
+
+Three changes followed, and **the first diagnosis of the three was wrong** — pass 4 is what
+corrected it, which is the part of this worth reading:
+
+* **`not_found` was 24 of 70 run attempts** — ids the session rollback had taken away, still
+  named in `state["invoices"]`. Pruned before the draw. A screen only ever offers documents that
+  exist, so this makes the generator more like the product and not less.
+* **`test_reversing_a_payment_run_holds_every_invariant`** in the targeted file: it builds the
+  run and asserts all three invariant suites **between** the reversal's legs, which is what the
+  machine would have contributed rather than what the service tests already do, and draws over
+  both invoice amounts, the date, and whether the bank line was matched first — the case where
+  the reversal also has to release the match.
+* **The tie property was building two full company seeds per draw.** Its anti-vacuity control
+  does not vary with the amount or the date, so drawing it 300 times bought nothing and made the
+  property the slowest thing in the deep run. It is one example now, and deliberately *not*
+  marked `slow`, so the per-commit suite runs it: a control only the nightly sees is a control
+  that can rot for a day.
+
+`run reversal: succeeded` was taken *out* of `REQUIRED_REACH` at this point, on the reading that a
+reversal is a conjunction the generator cannot reach. **Pass 4 showed that reading was wrong.**
+With the stale ids pruned, posted runs went 24 → 41 and the machine reached the reversal **7**
+times — so the cause of the zero was the generator failing to post the thing, not the conjunction
+being out of range, and that is precisely the mistake step 2's report warns against making in the
+other direction about `reconciliation_difference`. The floor is restored, and the targeted
+property is kept: seven against three is a thinner margin than the rest of the list, and the
+property is what makes a dip below it a question about the generator rather than a hole in the
+coverage.
+
+### Pass 4 — the floor was wrongly removed, and this is what said so
+
+```
+refusals: {'bank_account_currency_mismatch': 463, 'document_not_open': 6,
+           'match_unbalanced': 14, 'payment_exceeds_open': 18,
+           'payment_run_before_invoice': 3, 'reconciliation_date_order': 1,
+           'reconciliation_difference': 28, 'reconciliation_open_exists': 47,
+           'statement_already_imported': 13, 'statement_lines_unmatched': 22}
+reach:    {'auto-match: found a tie and declined': 1, 'auto-match: matched something': 49,
+           'auto-match: run': 442, 'currency rule: attempted': 463, 'lock: attempted': 80,
+           'lock: attempted at a wrong balance': 43, 'lock: succeeded': 30,
+           'match: attempted manually': 22, 'match: made manually': 8,
+           'payment run: attempted': 68, 'payment run: posted': 41,
+           'posted from a statement line': 29, 'reconciliation: opened': 310,
+           'run reversal: attempted': 7, 'run reversal: succeeded': 7,
+           'settlement: posted': 350, 'statement: imported from a file': 171,
+           'statement: keyed': 191, 'statement: perturbed by dropping a line': 51,
+           'statement: perturbed by shifting a value date': 49,
+           'statement: perturbed with a line the ledger lacks': 83,
+           'supplier invoice: posted': 374, 'tick: made': 171, 'unmatch: succeeded': 49,
+           'usd line on the base-currency account': 437}
+
+10 passed, 1 warning in 632.63s (0:10:32)
+```
+
+Green, and two numbers in it are the interesting ones.
+
+**`not_found` is absent from the refusal census entirely** — it was 24. Every one of those was a
+wasted draw, and giving them back is why `payment_exceeds_open` roughly doubled (9 → 18) and
+`statement_lines_unmatched` went 10 → 22.
+
+**`run reversal: attempted` and `succeeded` both read 7.** The machine gets there now, so the
+floor removed after pass 3 goes back — see above. Note these 7 are the *machine's*: the census
+prints at the machine module's teardown, which is before the targeted file runs, so the targeted
+property's own count is not in this table.
+
+`auto-match: found a tie and declined` reads 1 here for the same ordering reason and is not a
+gated floor; the tie's cover is its property, which either passes or fails.
+
+### Pass 5 — a *step-2* floor reads zero, and that is the real finding
+
+```
+refusals: {'bank_account_currency_mismatch': 427, 'match_unbalanced': 12,
+           'payment_exceeds_open': 13, 'payment_run_before_invoice': 17,
+           'reconciliation_date_order': 3, 'reconciliation_difference': 27,
+           'reconciliation_open_exists': 102, 'statement_already_imported': 11,
+           'statement_lines_unmatched': 1}
+reach:    {..., 'payment run: posted': 13, 'posted from a statement line': 0,
+           'run reversal: attempted': 4, 'run reversal: succeeded': 4, ...}
+
+the deep pass did not reach {'posted from a statement line': 0} at least 3 times each.
+```
+
+`run reversal: succeeded` held at 4, so restoring the floor was right. But
+`document_not_open` is **absent** — it read 5 and 6 on the two previous passes — and
+`posted from a statement line`, which is a **step-2** floor with step-2 code behind it, read
+**0** against 3, 8, 10 and 29 on the four passes before it.
+
+Put the five passes side by side and the cause stops being any one guard:
+
+| counter | pass 1 | pass 2 | pass 3 | pass 4 | pass 5 |
+|---|---|---|---|---|---|
+| `posted from a statement line` | 3 | 8 | 10 | 29 | **0** |
+| `document_not_open` | 0 | 1 | 5 | 6 | **0** |
+| `run reversal: succeeded` | — | 0 | 0 | 7 | 4 |
+| `payment run: posted` | 302 | 8 | 24 | 41 | 13 |
+
+Same guards, same code; what changed is how often a plan reaches them. **And the cause is this
+step.** `OPERATIONS` went from 14 to 18 — a supplier invoice, a payment run, its reversal, and
+the file-import path splitting off — while the plan kept step 2's 6-22 draws. Every operation is
+drawn proportionally less often, and the marginal counters started flipping between passes. A
+floor that flips is worse than no floor: it trains the reader to re-run the nightly rather than to
+read it, which is the failure step 2's report spent a page on.
+
+Three changes, root cause first: the plan draws **10-30** steps rather than 6-22; **both**
+machines close the fee loop after the plan rather than only the 0-dp one (and a fee at a
+two-decimal base rounds where the 0-dp one cannot, so it earns its place rather than only doubling
+a count); and the already-paid-invoice draw goes from one in three to one in two, which is
+`document_not_open`'s only route.
+
+### Pass 6 — the one this gate is reported on
+
+```
+refusals: {'bank_account_currency_mismatch': 658, 'document_not_open': 13,
+           'match_unbalanced': 21, 'not_found': 56, 'payment_exceeds_open': 57,
+           'payment_run_already_reversed': 7, 'payment_run_before_invoice': 24,
+           'reconciliation_difference': 51, 'reconciliation_open_exists': 150,
+           'statement_already_imported': 37, 'statement_lines_unmatched': 9}
+reach:    {'auto-match: found a tie and declined': 1, 'auto-match: matched something': 63,
+           'auto-match: run': 664, 'currency rule: attempted': 658, 'lock: attempted': 132,
+           'lock: attempted at a wrong balance': 55, 'lock: succeeded': 72,
+           'match: attempted manually': 72, 'match: made manually': 51,
+           'payment run: attempted': 173, 'payment run: posted': 64,
+           'posted from a statement line': 25, 'reconciliation: opened': 553,
+           'reopen: succeeded': 29, 'run reversal: attempted': 75,
+           'run reversal: succeeded': 27, 'settlement: posted': 576,
+           'statement: imported from a file': 280, 'statement: keyed': 303,
+           'statement: perturbed by dropping a line': 20,
+           'statement: perturbed by shifting a value date': 155,
+           'statement: perturbed with a line the ledger lacks': 102,
+           'supplier invoice: posted': 613, 'tick: made': 281, 'unmatch: succeeded': 70,
+           'usd line on the base-currency account': 594}
+
+10 passed, 1 warning in 979.39s (0:16:19)
+```
+
+Green, and — the point of the five passes before it — green **with a margin** rather than green
+by luck:
+
+| floor (3 at the deep profile) | pass 5 | pass 6 |
+|---|---|---|
+| `document_not_open` | 0 | **13** |
+| `payment_exceeds_open` | 13 | **57** |
+| `statement_already_imported` | 11 | **37** |
+| `reconciliation_difference` | 27 | **51** |
+| `bank_account_currency_mismatch` | 427 | **658** |
+| `posted from a statement line` (reach) | 0 | **25** |
+| `run reversal: succeeded` (reach) | 4 | **27** |
+| `lock: attempted at a wrong balance` (reach) | 27 | **55** |
+
+The thinnest margin in the table is now about eight times its floor. Sixteen minutes rather than
+ten, which is what a longer plan costs the nightly and is the right trade for a census that means
+something.
+
+Two entries in it worth naming:
+
+* **`payment_run_already_reversed` at 7** — the machine draws `reverse_run` on a run it has
+  already reversed, so `reverse_run`'s own front-door refusal is exercised rather than assumed.
+* **`not_found` at 56 of 173 run attempts.** `state["invoices"]` is pruned of ids the session
+  rollback took away; `state["paid"]` is not, so a stale paid id is a skipped step instead of a
+  `document_not_open`. Harmless — it is a counted skip, and the floors clear with margin either
+  way — and pruning it the same way is a small generator improvement left named for step 4 rather
+  than churned in at a gate.
 
 ## Decisions worth review
 
@@ -356,13 +601,13 @@ $ make migrate-check
 migrate-check: upgrade-from-zero, alembic check and downgrade-to-base all green
 
 $ make be-test                 # docker compose exec -T backend uv run pytest -n 4 -q
-1601 passed, 8 warnings in 1436.81s (0:23:56)
+1603 passed, 8 warnings in 1444.71s (0:24:04)
 ```
 
 `migrate-check` is worth reading twice for the same reason it was at step 2: `alembic check`
 comes back clean **without a new revision**, which is this step's claim that it added no schema.
 
-`main` at `33c8470` runs 1 563. The 38 this step adds:
+`main` at `33c8470` runs 1 563. The 40 this step adds:
 
 | | |
 |---|---|
@@ -370,8 +615,8 @@ comes back clean **without a new revision**, which is this step's claim that it 
 | `tests/banking/test_api.py` | 4 new (22 total) |
 | `tests/banking/test_invariant_sensitivity.py` | 4 new for clause 8, 1 deleted → +3 (21 total) |
 | `tests/test_api_has_a_caller.py` — parametrized, one case per endpoint | 3 |
-| `tests/banking/test_property_targeted_refusals.py` | 1 new (5 total) |
-| | **38** |
+| `tests/banking/test_property_targeted_refusals.py` | 3 new — the tie, its control, the run reversal (7 total) |
+| | **40** |
 
 Nothing deselected, nothing skipped.
 
@@ -413,7 +658,9 @@ $ git status --short
 $ git log @{u}..
 ```
 
-BRANCH_STAT
+Both empty at the gate. `git diff --stat main...HEAD`: **20 files, 3 931 insertions, 75
+deletions** — three new source files (the payment-run service, the remittance job, its test
+suite), this report, and the rest edited in place.
 
 ## What step 4 inherits
 
