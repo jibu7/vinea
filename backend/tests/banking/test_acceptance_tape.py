@@ -929,10 +929,20 @@ def test_the_acceptance_tape(db: Session, tape: Tape) -> None:  # noqa: PLR0915
     _after_every_row(db, tape, "4")
 
     # --- Row 5: RCT-3 USD into BK-USD, RCT-4 USD into BK-RWF at the bank's rate -----------------
+    # **Reference `INV-3`, which is the token the bank's own line carries.** The prompt gives
+    # `RCT-3` no reference of its own, but row 11 expects the USD statement's
+    # `INWARD TRF C1 INV-3` to match it by `reference` — the strongest of the three rules — so the
+    # receipt has to hold something that line contains. `INV-3` is the invoice number the customer
+    # quoted, which is exactly what `_reference_tokens` says a receipt's `reference` is for.
+    #
+    # The first draft used `INV-3 C1` by analogy with `RCT-1` and got an `amount_date` match
+    # instead: normalised, `INV3C1` is not inside `INWARDTRFC1INV3`, because the bank prints the
+    # two tokens the other way round. Same match, weaker evidence — and the rule is what row 11
+    # asserts.
     rct3 = _settlement(
         db, tape, role=PartnerRole.AR, partner="C1", amount=Decimal("500.00"), on=SEP_15,
         account_code="1121", instrument=InstrumentType.BANK, currency="USD",
-        reference="INV-3 C1",
+        reference="INV-3",
     )
     _allocate(
         db, tape, role=PartnerRole.AR, partner="C1",
@@ -1247,3 +1257,84 @@ def test_the_acceptance_tape(db: Session, tape: Tape) -> None:  # noqa: PLR0915
         tape.bank("BK-RWF").last_reconciled_balance,
     )
     _after_every_row(db, tape, "9")
+
+    # --- Row 10: unmatching inside a locked reconciliation --------------------------------------
+    rct1_line = _bank_line(
+        db, tape, db.get(JournalEntry, tape.documents["RCT-1"].journal_entry_id), "1120"
+    )
+    rct1_match = matching.match_by_journal_line(db, tape.company_id, rct1_line.id)
+    assert rct1_match is not None
+    locked_refusal = _refuses(
+        db,
+        "10",
+        "unmatch inside a locked BRC",
+        "reconciliation_locked",
+        lambda: matching.unmatch(db, tape.company_id, rct1_match.id, actor=tape.owner),
+    )
+    _expect("10", "refusal names BRC-2", True, "BRC-000002" in str(locked_refusal))
+    _after_every_row(db, tape, "10")
+
+    # --- Row 11: the USD statement, the fee in USD, BRC-3 ---------------------------------------
+    usd_content = sample("generic-bk-usd-sep.csv")
+    usd_result = statements_service.import_statement(
+        db,
+        tape.company_id,
+        bank_account_id=tape.bank("BK-USD").id,
+        content=usd_content,
+        file_name="generic-bk-usd-sep.csv",
+        actor=tape.owner,
+    )
+    db.flush()
+    bst2 = usd_result.statement
+    _expect("11", "BST-2 number", "BST-000002", bst2.number)
+
+    matching.auto_match(db, tape.company_id, tape.bank("BK-USD").id, actor=tape.owner)
+    db.flush()
+    usd_lines = statements_service.lines_of(db, tape.company_id, bst2.id)
+    usd_states = matching.statement_line_states(db, tape.company_id, bst2.id)
+    first_usd = next(line for line in usd_lines if line.line_no == 1)
+    # `INWARD TRF C1 INV-3` contains RCT-3's reference — the bank quoting what the payer typed.
+    _expect(
+        "11",
+        "USD line 1 rule",
+        "reference",
+        usd_states[first_usd.id].match_rule.value,
+    )
+
+    fee_line = next(line for line in usd_lines if line.line_no == 2)
+    posted_usd_fee = matching.post_cashbook_from_line(
+        db,
+        tape.company_id,
+        fee_line.id,
+        gl_account_id=tape.acct("6700"),
+        actor=tape.owner,
+    )
+    db.flush()
+    tape.documents["CB-4"] = posted_usd_fee
+    _expect(
+        "11", "CB-4 match rule", "posted_from_statement", posted_usd_fee.match.rule.value
+    )
+    # USD 5.00 at 1 320 — the rate that stood on 15 September.
+    cb4_line = _bank_line(db, tape, db.get(JournalEntry, posted_usd_fee.entry_id), "1121")
+    _expect("11", "CB-4 base_amount", Decimal(-6600), cb4_line.base_amount)
+    _expect("11", "CB-4 amount", Decimal("-5.00"), cb4_line.amount)
+
+    brc3 = reconciliation_service.open_reconciliation(
+        db,
+        tape.company_id,
+        bank_account_id=tape.bank("BK-USD").id,
+        reconciliation_date=SEP_30,
+        actor=tape.owner,
+    )
+    db.flush()
+    figures = reconciliation_service.live_figures(db, tape.company_id, brc3)
+    # 500.00 − 5.00, in the account's own currency.
+    _expect("11", "BRC-3 statement", Decimal("495.00"), figures.statement_balance)
+    _expect("11", "BRC-3 ledger", Decimal("495.00"), figures.ledger_balance)
+    _expect("11", "BRC-3 outstanding", Decimal(0), figures.outstanding_total)
+    _expect("11", "BRC-3 difference", Decimal(0), figures.difference)
+    reconciliation_service.lock(db, tape.company_id, brc3.id, actor=tape.owner)
+    db.flush()
+    tape.documents["BRC-3"] = brc3
+    _expect("11", "BRC-3 number", "BRC-000003", brc3.number)
+    _after_every_row(db, tape, "11")
