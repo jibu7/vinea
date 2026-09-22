@@ -138,6 +138,7 @@ NO_UI: dict[str, str] = {
     # entry — the drain — and step 9 inherits no surprise.
     # --- GAP: P8 banking, steps 6 and 7 ---------------------------------------------------------
     #
+    # Seventeen lines by the end of step 2 — eight here and nine below.
     # Eight lines, each naming the step that deletes it. P8 builds its services in steps 1-5 and
     # its screens in steps 6-8, so between those two points the endpoints exist and nothing
     # calls them — the shape P6 and P7 each carried and each cleared.
@@ -181,6 +182,44 @@ NO_UI: dict[str, str] = {
     ),
     "POST /api/v1/banking/statements/{statement_id}/void": (
         "GAP (P8, step 7) — Void on the statement detail. The only correction a statement has."
+    ),
+    # --- GAP: P8 step 2's workspace, which is step 7's screen -----------------------------------
+    #
+    # Nine more, all one screen: **Transactions → General Ledger → Bank reconciliation**
+    # (`/bank/reconciliations/{id}`, the workspace). Auto-match, select-on-both-sides → Match,
+    # Unmatch, Tick on a ledger line, the two Post-from-line drawers, and the New / Lock /
+    # Reopen of the reconciliation itself. They exist now because step 2 builds the services
+    # and step 7 builds the screen; the same shape P6 and P7 each carried and each cleared.
+    "POST /api/v1/banking/accounts/{bank_account_id}/auto-match": (
+        "GAP (P8, step 7) — *Auto-match* on the reconciliation workspace."
+    ),
+    "POST /api/v1/banking/matches": (
+        "GAP (P8, step 7) — select on both sides, then *Match*. The balance is shown beside "
+        "the button and `match_unbalanced` renders inline."
+    ),
+    "POST /api/v1/banking/matches/tick": (
+        "GAP (P8, step 7) — *Tick* on a ledger line: paper mode, where there is no statement."
+    ),
+    "DELETE /api/v1/banking/matches/{match_id}": (
+        "GAP (P8, step 7) — *Unmatch*, which the workspace refuses on a locked reconciliation "
+        "before the button rather than after it."
+    ),
+    "POST /api/v1/banking/statement-lines/{statement_line_id}/post-cashbook": (
+        "GAP (P8, step 7) — *Post from line* opening the cashbook-entry drawer, prefilled by "
+        "the account's rules."
+    ),
+    "POST /api/v1/banking/statement-lines/{statement_line_id}/post-settlement": (
+        "GAP (P8, step 7) — the same drawer's receipt / payment half."
+    ),
+    "POST /api/v1/banking/reconciliations": (
+        "GAP (P8, step 7) — *New* on the reconciliation listing: account, date, and the "
+        "statement balance defaulted from the latest imported line."
+    ),
+    "POST /api/v1/banking/reconciliations/{reconciliation_id}/lock": (
+        "GAP (P8, step 7) — *Lock*, with both refusals shown before the button."
+    ),
+    "POST /api/v1/banking/reconciliations/{reconciliation_id}/reopen": (
+        "GAP (P8, step 7) — *Reopen* on the latest locked one, with the reason dialog."
     ),
     # --- GAP: the operator console, planned but unscheduled ------------------------------------
     "POST /api/v1/operator/tenants/{company_id}/activate": (
