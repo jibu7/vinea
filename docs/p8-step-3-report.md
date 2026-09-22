@@ -209,14 +209,24 @@ clause fails identically. It is reachable today through the AR/AP screens: post 
 last month and allocate it to this month's invoice.
 
 What step 3 did: **refuse it on the path step 3 built.** `payment_run_before_invoice` — a run
-cannot pay an invoice before it is raised, which is true on its own terms and not only as an
-invariant defence. What step 3 did **not** do: add the same guard to `allocate()`. That would
-change AR and AP behaviour this step was not asked to touch, and the decision is the owner's.
+cannot pay an invoice before it is raised. What step 3 did **not** do: add the same guard to
+`allocate()`. That would change AR and AP behaviour this step was not asked to touch.
 
-**Recommendation for the owner.** `allocations.prepare` should refuse an `allocation_date`
-earlier than the latest document date in the pairs. It is a three-line guard in one place, and
-the state it prevents is one the P4 suite does not currently catch. It is out of step 3's scope
-and is recorded here rather than carried silently.
+### Ruled at the gate, and the diagnosis was sharpened
+
+The owner ruled on this, and corrected the framing. **A payment dated before the invoice is
+ordinary business** — it is a deposit, and it must stay legal. What is illegal is *allocating* it
+on a date the invoice was not yet posted, which is what makes the control account and the open
+items disagree in between. So:
+
+* **The P4 fix is `allocate()` refusing an `allocation_date` earlier than either document's
+  `document_date`** — `allocation_before_document`, on both the `allocate()` and the
+  auto-allocate paths, with the reduced P4-only reproduction above as its sensitivity test. It
+  ships as **its own PR off `main`**, touching no P8 file, before step 4.
+* **`payment_run_before_invoice` stays.** It is a different rule at a different level — a run
+  pays invoices that exist at its payment date — and the two are kept because neither implies the
+  other: the P4 guard would not stop a run being *dated* before an invoice it does not pay, and
+  the run guard says nothing about a hand-keyed allocation.
 
 ### 2. `reconciliation_difference` and `lock: attempted at a wrong balance` fell below their floors
 
@@ -547,25 +557,31 @@ Two entries in it worth naming:
 
 1. **The clearing account was rejected.** Argued in full above. It is the one structural choice
    in decision 7 and the report records it because the final report has to.
-2. **`payment_run_before_invoice` is a refusal this phase added.** Not in the prompt. It is here
-   because the state it prevents breaks `assert_subledger_invariants`, which the Definition of
-   Done requires green after every tape row. The deeper fix belongs to `allocate()` and is the
-   owner's call — see *What the machine found*.
-3. **`Idempotency-Key` on `reverse`: not implemented, and this is a deviation.** Decision 11
-   lists it. `payment_runs` carries one `idempotency_key` pair and it belongs to the post; a
+2. **`payment_run_before_invoice` stays, and the P4 defect is fixed separately — ruled.** This
+   refusal is not in the prompt; it is here because the state it prevents breaks
+   `assert_subledger_invariants`. The owner ruled at this gate that it keeps its place as a rule
+   of its own — *a run pays invoices that exist at its payment date* — and that the underlying
+   P4 defect is a different rule in a different place. See *What the machine found*.
+3. **`Idempotency-Key` on `reverse`: not implemented — accepted as a plan deviation.** Decision
+   11 lists it. `payment_runs` carries one `idempotency_key` pair and it belongs to the post; a
    second would be a migration, and step 1 owned the schema. A retried reverse cannot double-post
    — it is refused `payment_run_already_reversed` — so what a key would buy is a 200 with the
-   original result instead of a 409. Step 2 shipped `reconciliation.reopen` the same way against
-   the same decision, unrecorded; both are recorded here. **The owner's call** whether step 5
-   adds a `*_reversal_idempotency_key` pair to both tables or the refusal is accepted.
+   original result instead of a 409.
+
+   Step 2 shipped `reconciliation.reopen` the same way against the same decision, unrecorded.
+   **Ruled at this gate: no column for either.** Both are refused on a second press by state —
+   `payment_run_already_reversed`, and `reconciliation_not_latest` / already-open for reopen — so
+   a double-click is harmless. Carried to `docs/p8-final-report.md`'s deviations list.
 4. **The remittance advices are read back through the banking router**, not through
    `/subledger/jobs`. Decision 11 puts them under `bank:payment_run_post`, and the generic jobs
    endpoints are gated on `ar:`/`ap:reports_view` — so a person who may post a run could not
    download its advices. The scoped read also checks the job belongs to the run being looked at.
    Two GETs, no duplication of the job machinery.
-5. **The discount is taken only on a line that settles the invoice's whole remaining amount.**
-   Decision 7 says to take the discount P4 computes and does not say what a *partial* line
-   should do, so the choice had to be made. A settlement discount buys prompt settlement of the
+5. **The discount is taken only on a line that settles the invoice's whole remaining amount —
+   ruled, and this is the reading of decision 7.** Decision 7 says to take the discount P4
+   computes and does not say what a *partial* line should do, so the choice had to be made.
+   Accepted at this gate as the phase's reading, the owner noting it is also Evolution's
+   behaviour. A settlement discount buys prompt settlement of the
    account, not a percentage off an instalment — and the other candidate, capping P4's figure at
    the line's amount, is wrong twice over: 1 000 paid against a 100 000 invoice at 2/10 would
    claim a 1 000 discount and post a settlement of **zero cash**, which `post_document` refuses
@@ -664,12 +680,19 @@ suite), this report, and the rest edited in place.
 
 ## What step 4 inherits
 
-Nothing withheld. The two open questions are for the owner rather than for step 4:
+Nothing withheld, and nothing open. All three questions this report raised were ruled at the
+gate:
 
-* **`allocate()` and a backdated allocation** — finding 1 above. Step 4 touches revaluation and
-  will not go near it, but it is live in AR and AP today.
-* **`Idempotency-Key` on the two reversal/withdrawal paths** — decision 3 above, `reverse_run`
-  and `reconciliation.reopen` together.
+* **The P4 backdated-allocation defect** ships as its own PR off `main` before step 4 —
+  `allocation_before_document` on both allocate paths. It touches no P8 file, so step 4 starts
+  from a `main` that already carries it.
+* **No idempotency column** for `reverse_run` or `reconciliation.reopen`; state refusals suffice.
+  Recorded as a deviation, carried to the final report.
+* **The discount on full settlement only** is the phase's reading of decision 7.
+
+One small generator improvement is named rather than done: `state["paid"]` is not pruned of ids
+the session rollback took away, so 56 of pass 6's 173 run attempts were counted skips rather than
+real draws. Every floor clears with margin either way.
 
 Step 4's own inheritance is ordinary: clause 8 is asserted after every machine step, so a
 revaluation that touched a bank account's own lines would now break it as well as clause 4.
