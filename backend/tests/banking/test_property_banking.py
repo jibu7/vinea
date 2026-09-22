@@ -661,6 +661,32 @@ def _settlement(db: Session, banking: Banking, *, amount: Decimal, on: date) -> 
     _count(_REACH, "settlement: posted")
 
 
+def _prune(db: Session, state: dict) -> None:
+    """Drop every id the session rollback took away, across **all four** lists.
+
+    An illegal step rolls the session back to the last commit, which un-posts rows these lists
+    still name. Step 3 pruned `invoices` only and took `not_found` from 24 to zero; step 4's
+    revaluations and the `paid` list brought it back to **118** of ~680 attempts, which is the
+    same defect wearing two more hats. One helper over every list, so the next list added is
+    pruned by construction rather than by remembering.
+
+    A screen only ever offers rows that exist, so this makes the generator more like the product
+    and not less.
+    """
+    from app.models.banking import PaymentRun
+    from app.models.fiscalization import FxRevaluation
+
+    for key, model in (
+        ("invoices", PartnerDocument),
+        ("paid", PartnerDocument),
+        ("runs", PaymentRun),
+        ("revaluations", FxRevaluation),
+    ):
+        state[key] = [
+            row_id for row_id in state[key] if db.get(model, row_id) is not None
+        ]
+
+
 def _supplier_invoice(
     db: Session, banking: Banking, state: dict, *, amount: Decimal, on: date
 ) -> None:
@@ -688,15 +714,7 @@ def _payment_run(
     phase learning to distrust. One draw in three also asks for more than the invoice has open,
     which is `payment_exceeds_open` arriving from the ordinary case rather than a special one.
     """
-    # **Ids the rollback took away are dropped first.** An illegal step rolls the session back
-    # to the last commit, which un-posts invoices this list still names; pass 3 lost 24 of 70 run
-    # attempts to `not_found` that way. A screen only ever offers documents that exist, so
-    # filtering here makes the generator more like the product and not less.
-    state["invoices"] = [
-        document_id
-        for document_id in state["invoices"]
-        if db.get(PartnerDocument, document_id) is not None
-    ]
+    _prune(db, state)
     invoices = state["invoices"]
     if not invoices:
         return
@@ -766,6 +784,7 @@ def _open_of(db: Session, document_id: int) -> Decimal:
 def _reverse_run(db: Session, banking: Banking, state: dict, *, pick: int) -> None:
     """Reverse a run drawn blind — including one already reversed, and one whose bank line is
     inside a locked reconciliation. Both are refusals the census counts."""
+    _prune(db, state)
     runs = state["runs"]
     if not runs:
         return
@@ -811,6 +830,7 @@ def _revalue(db: Session, banking: Banking, state: dict, *, pick: int) -> None:
 def _reverse_revaluation(db: Session, banking: Banking, state: dict, *, pick: int) -> None:
     """Reverse one drawn blind — including one already reversed, which `fx_revaluation_reversed`
     refuses."""
+    _prune(db, state)
     runs = state["revaluations"]
     if not runs:
         return
