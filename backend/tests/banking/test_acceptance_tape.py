@@ -57,7 +57,7 @@ from app.kernel import periods as kernel_periods
 from app.kernel import posting
 from app.kernel.errors import PostingError
 from app.kernel.events import CashbookEntry, CashbookKind, CashbookLineSpec
-from app.models.banking import BankAccount
+from app.models.banking import BankAccount, BankMatchKind, BankMatchRule
 from app.models.currency import Currency, ExchangeRate
 from app.models.fiscal import AccountingPeriod, FiscalYear, PeriodStatus
 from app.models.gl import AccountClass, ControlType, GLAccount
@@ -1081,3 +1081,66 @@ def test_the_acceptance_tape(db: Session, tape: Tape) -> None:  # noqa: PLR0915
         ),
     )
     _after_every_row(db, tape, "7")
+
+    # --- Row 8: BRC-2 as at 30 Sep, the lock refused, a manual match refused --------------------
+    brc2 = reconciliation_service.open_reconciliation(
+        db,
+        tape.company_id,
+        bank_account_id=tape.bank("BK-RWF").id,
+        reconciliation_date=SEP_30,
+        actor=tape.owner,
+    )
+    db.flush()
+    tape.documents["BRC-2"] = brc2
+    # The statement balance **defaults from the balance column** — nothing was keyed.
+    _expect("8", "BRC-2 statement balance", Decimal(1090500), brc2.statement_balance)
+
+    figures = reconciliation_service.live_figures(db, tape.company_id, brc2)
+    _expect("8", "BRC-2 ledger", Decimal(983000), figures.ledger_balance)
+    # Only PMT-4 is outstanding: the fee and the deposit are on the statement but **not in the
+    # ledger at all**, so there is nothing outstanding for them — they are unmatched statement
+    # lines, which is a different thing and counted separately.
+    _expect("8", "BRC-2 outstanding", Decimal(-70000), figures.outstanding_total)
+    _expect("8", "BRC-2 unmatched statement lines", 2, figures.unmatched_statement_count)
+    # 1 090 500 − (983 000 + (−70 000)) = 177 500? No: 1 090 500 − 983 000 − 70 000 = 37 500.
+    # The deposit (40 000) less the fee (2 500) — exactly what the ledger lacks.
+    _expect("8", "BRC-2 difference", Decimal(37500), figures.difference)
+
+    _refuses(
+        db,
+        "8",
+        "lock with lines unmatched",
+        "statement_lines_unmatched",
+        lambda: reconciliation_service.lock(db, tape.company_id, brc2.id, actor=tape.owner),
+    )
+
+    # The manual match row 8 refuses: statement line 6 (the 40 000 deposit) against PMT-4
+    # (−70 000). 40 000 − (−70 000) = 110 000 out.
+    lines = statements_service.lines_of(db, tape.company_id, tape.documents["BST-1"].id)
+    line6 = next(line for line in lines if line.line_no == 6)
+    pmt4_line = _bank_line(
+        db, tape, db.get(JournalEntry, tape.documents["PMT-4"].journal_entry_id), "1120"
+    )
+    unbalanced = _refuses(
+        db,
+        "8",
+        "manual match across the two",
+        "match_unbalanced",
+        lambda: matching.create_match(
+            db,
+            tape.company_id,
+            bank_account_id=tape.bank("BK-RWF").id,
+            statement_line_ids=[line6.id],
+            journal_line_ids=[pmt4_line.id],
+            kind=BankMatchKind.MANUAL,
+            rule=BankMatchRule.MANUAL,
+            actor=tape.owner,
+        ),
+    )
+    _expect(
+        "8",
+        "match_unbalanced names 110 000",
+        True,
+        "110000" in str(unbalanced.field_errors).replace(" ", ""),
+    )
+    _after_every_row(db, tape, "8")
