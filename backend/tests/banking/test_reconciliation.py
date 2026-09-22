@@ -697,3 +697,35 @@ def test_an_account_with_no_lines_locks_with_a_high_water_mark_of_zero(
     figures = reconciliation_service.live_figures(db, banking.company_id, following)
     assert {item.dated_inside for item in figures.outstanding} == {reconciliation.number}
     assert_bank_invariants(db, banking.company_id)
+
+
+def test_reopening_is_refused_while_a_later_reconciliation_is_open(
+    db: Session, banking: Banking
+) -> None:
+    """Found by the property machine (P8 step 2), not by review.
+
+    One open reconciliation per account is the rule, and `open_reconciliation` enforces it —
+    but reopening is the back way into the same state: lock `BRC-1`, open `BRC-2` on top of it,
+    then reopen `BRC-1` and the account has two open. The partial unique index catches that,
+    which is the right last line of defence and the wrong first one: it reaches the caller as
+    an integrity error rather than as something a screen can render.
+
+    Nobody sets out to do this, which is why no hand-written test had.
+    """
+    first = _open(db, banking, on=SEP_30, balance=Decimal(0))
+    db.commit()
+    reconciliation_service.lock(db, banking.company_id, first.id, actor=banking.owner)
+    db.commit()
+    second = _open(db, banking, on=OCT_31, balance=Decimal(0))
+    db.commit()
+
+    with pytest.raises(LedgerStateError) as excinfo:
+        reconciliation_service.reopen(
+            db, banking.company_id, first.id, reason="a mistake", actor=banking.owner
+        )
+
+    assert excinfo.value.code == "reconciliation_open_exists"
+    assert second.number in excinfo.value.message
+    db.rollback()
+    assert first.status == ReconciliationStatus.LOCKED
+    assert_bank_invariants(db, banking.company_id)

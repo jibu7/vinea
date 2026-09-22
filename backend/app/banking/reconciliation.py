@@ -628,6 +628,23 @@ def reopen(
             code="reconciliation_not_latest",
             field_errors={"reconciliation_id": ["only the latest may be reopened"]},
         )
+    # **One open reconciliation per account — by this door too.** `open_reconciliation` refuses
+    # a second one, but reopening is the back way into the same state: lock `BRC-2`, open
+    # `BRC-3` on top of it, then reopen `BRC-2` and the account has two. The partial unique
+    # index catches it, which is the right last line of defence and the wrong first one — it
+    # surfaces as an integrity error rather than as something a screen can render.
+    #
+    # Found by the property machine, which reached the sequence by wandering into it. No
+    # hand-written test had, because "reopen the locked one while a later one is open" is not a
+    # thing anybody sets out to do.
+    standing = open_for(db, company_id, reconciliation.bank_account_id)
+    if standing is not None and standing.id != reconciliation.id:
+        raise LedgerStateError(
+            f"{standing.number} is open on this account; lock or delete it before reopening "
+            f"{reconciliation.number}",
+            code="reconciliation_open_exists",
+            field_errors={"reconciliation_id": [f"{standing.number} is still open"]},
+        )
     if not reason or not reason.strip():
         raise LedgerStateError(
             "Reopening a reconciliation needs a reason",

@@ -83,21 +83,50 @@ def _count(counter: dict[str, int], key: str) -> None:
 
 #: The refusals a deep pass must actually provoke, and the floor each must clear.
 #:
-#: **Five of decision 12's seven.** `payment_exceeds_open` and `statement_already_imported` are
-#: the other two: the first needs payment runs, which arrive at step 3, and the second needs the
-#: *file* path — this machine keys its statements line by line, because generating a CSV to
-#: express a date and an amount would make every example a parser test. `statement_already_imported`
-#: is covered by construction in `tests/banking/test_statements.py` and joins this census when
-#: the runs do.
+#: Of decision 12's seven, this machine is responsible for three. `payment_exceeds_open` needs
+#: payment runs (step 3). `statement_already_imported` needs the *file* path, and this machine
+#: keys its statements line by line — generating a CSV to express a date and an amount would
+#: make every example a parser test; it is covered by construction in
+#: `tests/banking/test_statements.py`. The other two are below.
 #:
 #: Three rather than one, because one is indistinguishable from a coincidence: a boundary hit
 #: once in 300 examples is one the next seed may well miss. Three is not a statistical claim —
 #: it is the smallest number that cannot be a single lucky plan.
+#: **Three of decision 12's five moved out, over two deep passes**, and the reasoning is the
+#: point rather than the list. `match_unbalanced`, `reconciliation_locked` and
+#: `statement_lines_unmatched` are *conjunctions* three operations deep:
+#:
+#: * `match_unbalanced` needs a live statement line and an unmatched ledger line of a
+#:   *different* amount both present and both drawn — and this phase's statements are generated
+#:   from the ledger, so a blind pair usually balances (46 of 48 did);
+#: * `reconciliation_locked` needs a lock to have succeeded, a match to have been assigned to
+#:   it, and that match to be the one drawn for unmatching;
+#: * `statement_lines_unmatched` needs a statement line still unmatched when a lock is
+#:   attempted — and auto-match runs often enough that by lock time there is usually nothing
+#:   left. Its *interesting* case is narrower still: a difference of **zero** with an
+#:   unexplained line, which is the two-errors-cancelling the refusal ordering exists to stop.
+#:
+#: The two deep passes reached them 2/0/7 and 1/0/1 against a floor of 3, with every reach
+#: counter healthy — the census saying "the generator cannot get there", not "the guard is
+#: broken".
+#:
+#: P7's rule is that the answer to a floor a generator cannot reach is a **targeted property
+#: that constructs the precondition**, not a bigger `max_examples`. All three now have one in
+#: `tests/banking/test_property_targeted_refusals.py`, and all three are still counted in
+#: `_REFUSALS` below — what this machine no longer does is *fail* when a seed misses a chain it
+#: was never the right tool for.
+#:
+#: **`reconciliation_difference` stayed, and it is the counter-example worth keeping in view.**
+#: It read zero on the first deep pass too, and moving it out would have been wrong: the cause
+#: was that `_lock` only ever keyed the closing figure, so the machine never *tried* to lock at
+#: a difference. That is a generator defect, and the fix was one draw in three keying a wrong
+#: balance — after which it reached 37. A floor at zero is a question, not an answer; the reach
+#: counters are what tell the two cases apart.
+#:
+#: The two that remain are the ones a single drawn operation can provoke, which is what a
+#: machine like this is good at.
 REQUIRED_REFUSALS = (
     "reconciliation_difference",
-    "statement_lines_unmatched",
-    "match_unbalanced",
-    "reconciliation_locked",
     "bank_account_currency_mismatch",
 )
 CENSUS_FLOOR = 3
@@ -108,6 +137,7 @@ CENSUS_FLOOR = 3
 #: is a coverage gap rather than a regression.
 REQUIRED_REACH = (
     "lock: attempted",
+    "lock: attempted at a wrong balance",
     "lock: succeeded",
     "statement: keyed",
     "statement: perturbed with a line the ledger lacks",
@@ -431,7 +461,13 @@ def _run(db: Session, banking: Banking, plan) -> None:  # noqa: ANN001, C901
                 )
                 _count(_REACH, "reconciliation: opened")
             elif operation == "lock":
-                _lock(db, banking)
+                _lock(
+                    db,
+                    banking,
+                    # One draw in three is deliberately out, so both halves of the lock — the
+                    # one that closes and the one that is refused — are reached.
+                    wrong_by=amount if pick % 3 == 0 else ZERO,
+                )
             elif operation == "reopen":
                 _reopen(db, banking)
             db.flush()
@@ -557,23 +593,32 @@ def _unmatch(db: Session, banking: Banking, *, pick: int) -> None:
     _count(_REACH, "unmatch: succeeded")
 
 
-def _lock(db: Session, banking: Banking) -> None:
+def _lock(db: Session, banking: Banking, *, wrong_by: Decimal) -> None:
+    """Lock the standing reconciliation, keying the balance it would need to close — or, one
+    draw in three, a balance that is deliberately out by a drawn amount.
+
+    **The split is the generator fix the first deep pass asked for.** Keying only the closing
+    figure made `lock: succeeded` reach 98 and `reconciliation_difference` reach *zero*: the
+    machine could never lock at a difference because it never tried to. Both are needed — a
+    lock that succeeds is the precondition for `reconciliation_locked` below, and a lock that
+    fails is the only way to provoke the refusal — so the draw decides which, rather than the
+    code choosing one and the census going quiet about the other.
+    """
     standing = reconciliation_service.open_for(
         db, banking.company_id, banking.bank("BK-RWF").id
     )
     if standing is None:
         return
     _count(_REACH, "lock: attempted")
-    # Key the balance the reconciliation would need to close. Most of the time it *will* close
-    # — which is the point: `lock: succeeded` has to clear its floor for `reconciliation_locked`
-    # below to be reachable at all — and where a statement line is still unmatched it is refused
-    # on that first, whatever the figure says.
     live = reconciliation_service.live_figures(db, banking.company_id, standing)
+    closing = live.ledger_balance - live.outstanding_total
+    if wrong_by != ZERO:
+        _count(_REACH, "lock: attempted at a wrong balance")
     reconciliation_service.lock(
         db,
         banking.company_id,
         standing.id,
-        statement_balance=live.ledger_balance - live.outstanding_total,
+        statement_balance=closing + wrong_by,
         actor=banking.owner,
     )
     _count(_REACH, "lock: succeeded")
