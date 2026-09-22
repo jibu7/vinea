@@ -121,6 +121,19 @@ def _tick_the_opening(db: Session, banking: Banking) -> None:
     db.flush()
 
 
+def _post_lines(db: Session, banking: Banking, lines: list) -> PaymentRun:
+    posted = payment_run_service.post_run(
+        db,
+        banking.company_id,
+        bank_account_id=banking.bank("BK-RWF").id,
+        payment_date=SEP_10,
+        lines=lines,
+        actor=banking.owner,
+    )
+    db.flush()
+    return posted
+
+
 def _balance(db: Session, banking: Banking, code: str = "1120") -> Decimal:
     """Derived from the lines, never from a column — ADR-04, and the only reading this file
     trusts about what the bank account holds."""
@@ -874,3 +887,65 @@ def test_a_run_cannot_be_dated_before_an_invoice_it_pays(
             lines=[payment_run_service.RunLineInput(document_id=run.sin1.id)],
         )
     assert error.value.code == "payment_run_before_invoice"
+
+
+def test_a_partial_payment_takes_no_discount_and_still_reports_one(
+    db: Session, banking: Banking, run: Run
+) -> None:
+    """The discount buys prompt settlement of the account, not a percentage off an instalment.
+
+    The alternative — P4's figure capped at the line's amount — would post a settlement of
+    **zero cash** for a line paying less than the discount on offer (1 000 against a 100 000
+    invoice at 2/10), which `post_document` refuses after the `PYR-` number was claimed. So a
+    partial line pays exactly what was keyed, and `discount_available` keeps reporting what
+    settling in full would be worth.
+    """
+    preview = payment_run_service.plan(
+        db,
+        banking.company_id,
+        bank_account_id=banking.bank("BK-RWF").id,
+        payment_date=SEP_10,
+        lines=[
+            payment_run_service.RunLineInput(document_id=run.sin2.id, amount=Decimal(1000))
+        ],
+    )
+    line = preview.suppliers[0].lines[0]
+    assert line.discount_available == S2_DISCOUNT, "what paying in full would be worth"
+    assert line.discount_amount == Decimal(0)
+    assert line.cash_amount == Decimal(1000)
+    assert preview.total == Decimal(1000)
+
+    posted = _post_lines(
+        db,
+        banking,
+        [payment_run_service.RunLineInput(document_id=run.sin2.id, amount=Decimal(1000))],
+    )
+    assert posted.total == Decimal(1000)
+    assert recompute_open_amount(db, run.sin2) == S2_INVOICE - Decimal(1000)
+
+
+def test_settling_the_last_of_a_part_paid_invoice_takes_the_discount(
+    db: Session, banking: Banking, run: Run
+) -> None:
+    """"In full" is the invoice's **remaining** amount, not its total. An invoice part paid
+    outside the run still qualifies when the run clears the rest inside the window."""
+    _post_lines(
+        db,
+        banking,
+        [payment_run_service.RunLineInput(document_id=run.sin2.id, amount=Decimal(40000))],
+    )
+    db.flush()
+    assert recompute_open_amount(db, run.sin2) == Decimal(60000)
+
+    preview = payment_run_service.plan(
+        db,
+        banking.company_id,
+        bank_account_id=banking.bank("BK-RWF").id,
+        payment_date=SEP_10,
+        lines=[payment_run_service.RunLineInput(document_id=run.sin2.id)],
+    )
+    line = preview.suppliers[0].lines[0]
+    assert line.open_amount == Decimal(60000)
+    assert line.amount == Decimal(60000)
+    assert line.discount_amount == S2_DISCOUNT, "2 % of the invoice total, P4's own figure"
+    assert line.cash_amount == Decimal(58000)

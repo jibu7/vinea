@@ -432,10 +432,20 @@ def plan(
         available = allocation_service.max_discount(
             db, document, on=payment_date, currency=currency
         )
-        # Never more than the line pays: a discount larger than the settlement would make the
-        # cash negative, and P4 would refuse the pair anyway. Capping here keeps the preview
-        # arithmetic the same as the posting's.
-        discount = min(available, amount) if line.take_discount else ZERO
+        # **Taken only on a line that settles the invoice's whole remaining amount**, which is
+        # what a settlement discount is for: the terms buy prompt settlement of the account, not
+        # a percentage off an instalment.
+        #
+        # Decision 7 says to take the discount P4 computes and does not say what a *partial*
+        # line should do, so the choice had to be made. Capping P4's figure at the line's amount
+        # was the other candidate and it is wrong twice over: 1 000 paid against a 100 000
+        # invoice with 2/10 terms would claim a 1 000 discount and post a settlement of **zero**
+        # cash — refused by `_require_settlement_amount` deep inside `post_document`, after the
+        # `PYR-` number was claimed, which is the one thing `plan()` exists to prevent.
+        #
+        # `discount_available` is still reported on every line either way, so the screen can
+        # say "pay it in full and save 2 000" rather than going quiet.
+        discount = available if line.take_discount and amount == open_amount else ZERO
         remaining[document.id] -= amount
         partners.setdefault(document.partner_id, _partner(db, company_id, document))
         grouped.setdefault(document.partner_id, []).append(
