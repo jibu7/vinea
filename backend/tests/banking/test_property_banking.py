@@ -162,21 +162,25 @@ REQUIRED_REACH = (
     # `payment_exceeds_open` means nothing until these two are healthy.
     "payment run: attempted",
     "payment run: posted",
+    # **This one read 0 on its first deep pass and 7 on the next, and the difference was a
+    # generator defect rather than a conjunction.** `run reversal: attempted` was absent from the
+    # table altogether — the operation was never entered, because `state["invoices"]` still named
+    # ids the session rollback had taken away, so most runs were refused `not_found` and only 24
+    # posted. Pruning those ids took posted runs to 41 and reversals to 7.
+    #
+    # That is the case step 2's report warns against reading the other way: a floor at zero is a
+    # question, and the answer here was "the generator cannot post the thing", not "a reversal is
+    # unreachable in one plan". So the floor stays.
+    #
+    # Seven against a floor of three is a thinner margin than the rest of this list, and
+    # `test_reversing_a_payment_run_holds_every_invariant` in
+    # `tests/banking/test_property_targeted_refusals.py` is why a dip below it would be a
+    # question about the generator rather than a hole in the coverage: that property constructs
+    # the run and asserts all three invariant suites **between** the reversal's legs, which is
+    # more than the machine checks even when it does get there.
+    "run reversal: succeeded",
     "statement: imported from a file",
 )
-
-#: **`run reversal: succeeded` was a floor here for exactly one deep pass, and reading it is why
-#: it is not one now.** It came back 0 — with `run reversal: attempted` absent from the table
-#: altogether, so the operation was never even entered: `state["runs"]` is empty unless a run
-#: posted *earlier in the same plan*, and 24 runs posted across 300 examples. A reversal is
-#: therefore a conjunction two operations deep, which is the shape P7's rule sends to a targeted
-#: property rather than to a bigger `max_examples`.
-#:
-#: `test_reversing_a_payment_run_holds_every_invariant` in
-#: `tests/banking/test_property_targeted_refusals.py` is that property, and it asserts the thing
-#: the machine would have: all three invariant suites **between** the reversal's legs, not only
-#: after it. The operation stays in `OPERATIONS` — when a plan does get there it is worth having
-#: — and the counter stays in the reach table as reporting.
 REACH_FLOOR = 3
 
 #: Only a run with enough examples can be held to the floors. The per-commit profile draws two
