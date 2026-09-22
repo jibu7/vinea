@@ -254,6 +254,33 @@ def prepare(
                     f"{document.number} belongs to a different partner or role",
                     code="allocation_partner_mismatch",
                 )
+            # **An allocation is dated no earlier than the documents it joins.**
+            #
+            # A payment dated before the invoice it settles is ordinary business — it is a
+            # deposit, and it stays legal. What cannot be legal is *allocating* it on a date the
+            # invoice was not yet posted: the allocation puts the settlement on the control
+            # account from `allocation_date`, while the invoice arrives on its own later date,
+            # so between the two the control account and the open items disagree by the
+            # allocated amount. That is clause 1 of `assert_subledger_invariants`, and it fails.
+            #
+            # Found by P8's banking property machine, which drew a payment run dated before an
+            # invoice it paid; the state reduces to plain P4 with no banking code involved
+            # (`test_an_allocation_dated_before_its_invoice_is_refused`). `auto_allocate_pairs`
+            # never produces such a pair — it filters `document_date <= allocation_date` — and
+            # `test_the_auto_path_never_builds_a_pair_this_refuses` holds the two paths to the
+            # same rule rather than trusting that filter to stay.
+            if allocation_date < document.document_date:
+                raise LedgerStateError(
+                    f"{document.number} is dated "
+                    f"{document.document_date.isoformat()}; an allocation cannot be dated "
+                    "before a document it joins",
+                    code="allocation_before_document",
+                    field_errors={
+                        "allocation_date": [
+                            f"not before {document.document_date.isoformat()}"
+                        ]
+                    },
+                )
             # Recomputed, never the stored `open_amount` column: a cache that has drifted
             # must not be able to authorise an over-allocation (decision 3).
             remaining.setdefault(document.id, recompute_open_amount(db, document))
