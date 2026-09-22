@@ -49,15 +49,26 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.banking import matching
+from app.banking import payment_runs as payment_run_service
 from app.banking import reconciliation as reconciliation_service
 from app.banking import statements as statements_service
 from app.banking.formats import ParsedLine
 from app.kernel.errors import LedgerStateError
 from app.models.banking import BankMatchKind, BankMatchRule, BankStatementLine
-from tests.banking.conftest import Banking, bank_line_of, build_banking, cashbook
+from app.subledger.openitems import recompute_open_amount
+from tests.banking.conftest import (
+    Banking,
+    ap_invoice,
+    ap_supplier,
+    bank_line_of,
+    build_banking,
+    cashbook,
+)
 from tests.banking.invariants import assert_bank_invariants
 from tests.banking.test_property_banking import _REACH, _REFUSALS, _count
 from tests.kernel.conftest import YEAR
+from tests.kernel.invariants import assert_ledger_invariants
+from tests.subledger.invariants import assert_subledger_invariants
 
 BASE_DAY = date(YEAR, 9, 1)
 ZERO = Decimal(0)
@@ -407,8 +418,8 @@ def test_auto_match_declines_a_tie_and_leaves_both_candidates(
     with a statement line that names neither — is built, because step 3's deep pass reached it
     zero times once payment runs joined the plan.
 
-    **The anti-vacuity control is the second half**: the same construction with one of the two
-    lines removed must match. Without it this property would pass just as happily against a
+    Its anti-vacuity control is the test below — the same construction with one of the two lines
+    removed, which must *match*. Without it this property would pass just as happily against a
     matcher that matched nothing at all, which is the failure mode the whole census exists to
     catch.
     """
@@ -440,8 +451,26 @@ def test_auto_match_declines_a_tie_and_leaves_both_candidates(
     assert_bank_invariants(db, banking.company_id)
     db.rollback()
 
-    # The control. One candidate instead of two, everything else identical.
+
+def test_the_tie_construction_matches_when_there_is_only_one_candidate(
+    db: Session,
+) -> None:
+    """The anti-vacuity control for the property above, and **one example rather than 300**.
+
+    Its job is to show that the construction can match at all — without it, the tie property
+    would pass just as happily against a matcher that matched nothing, which is the failure mode
+    the whole census exists to catch. That claim does not vary with the amount or the date, so
+    drawing it was buying nothing and costing a second tenant build on every one of 300 draws:
+    `build_banking` seeds a whole company, and the property was the slowest thing in the deep run
+    by a distance.
+
+    Not marked `slow` either, so the per-commit suite runs it: a control that only the nightly
+    sees is a control that can rot for a day.
+    """
     banking = _tenant(db, "tie-control")
+    on = BASE_DAY + timedelta(days=3)
+    value = Decimal(500)
+
     cashbook(db, banking, account_code="1120", amount=value, on=on)
     db.flush()
     line = _key_one_line(db, banking, on=on, description="A DEPOSIT", amount=value)
@@ -452,10 +481,101 @@ def test_auto_match_declines_a_tie_and_leaves_both_candidates(
 
     assert result.ambiguous == {}, "one candidate is not a tie"
     assert len(result.matched) == 1, (
-        "the construction cannot match at all — this property would pass over a matcher that "
-        "matched nothing"
+        "the construction cannot match at all — the tie property above would pass over a "
+        "matcher that matched nothing"
     )
     assert result.matched[0].rule == BankMatchRule.AMOUNT_DATE
     assert matching.members_of(db, banking.company_id, result.matched[0].id)[0] == [line.id]
+    assert_bank_invariants(db, banking.company_id)
+    db.rollback()
+
+
+# --- the run reversal: a conjunction two operations deep -----------------------------------------
+
+
+@pytest.mark.slow
+@given(
+    first=st.integers(min_value=1, max_value=900),
+    second=st.integers(min_value=1, max_value=900),
+    day=st.integers(min_value=0, max_value=20),
+    matched=st.booleans(),
+)
+@settings(deadline=None)
+def test_reversing_a_payment_run_holds_every_invariant(
+    db: Session, first: int, second: int, day: int, matched: bool
+) -> None:
+    """**Every invariant suite, through a run's reversal**, with the run constructed.
+
+    `run reversal: succeeded` was a reach floor on the machine for exactly one deep pass, and
+    reading it is why it is not one now: it came back **0**, with `run reversal: attempted`
+    absent from the table altogether. The operation was never entered — `state["runs"]` is empty
+    unless a run posted earlier in the same plan, and 24 runs posted across 300 examples. A
+    reversal is a conjunction two operations deep, which is the shape P7's rule sends here.
+
+    What the machine would have contributed is the invariant suites asserted *between* the
+    reversal's legs rather than only after it, so that is what this does: three suppliers' worth
+    of unallocations and reversals, checked at every point where the run is half undone.
+
+    Drawn over the shape — both invoice amounts, the date, and whether the run's bank line has
+    been matched to a statement line first, because a matched run is the case where the reversal
+    also has to release the match.
+    """
+    banking = _tenant(db, "run-reversal")
+    on = BASE_DAY + timedelta(days=day)
+    opening = Decimal(first + second + 1000)
+
+    cashbook(db, banking, account_code="1120", amount=opening, on=BASE_DAY)
+    s1 = ap_supplier(db, banking, name="Reversal One", code="R1")
+    s2 = ap_supplier(db, banking, name="Reversal Two", code="R2")
+    invoices = [
+        ap_invoice(db, banking, s1, amount=Decimal(first), on=BASE_DAY),
+        ap_invoice(db, banking, s2, amount=Decimal(second), on=BASE_DAY),
+    ]
+    db.commit()
+
+    run = payment_run_service.post_run(
+        db,
+        banking.company_id,
+        bank_account_id=banking.bank("BK-RWF").id,
+        payment_date=on,
+        lines=[
+            payment_run_service.RunLineInput(document_id=invoice.id) for invoice in invoices
+        ],
+        actor=banking.owner,
+    )
+    db.flush()
+    total = run.total
+    assert_ledger_invariants(db, banking.company_id)
+    assert_subledger_invariants(db, banking.company_id)
+    assert_bank_invariants(db, banking.company_id)
+
+    if matched:
+        _key_one_line(
+            db, banking, on=on, description=f"BULK PAYMENT {run.number}", amount=-total
+        )
+        result = matching.auto_match(
+            db, banking.company_id, banking.bank("BK-RWF").id, actor=banking.owner
+        )
+        assert len(result.matched) == 1, "the run's one bank line, its two ledger lines"
+        assert result.matched[0].rule == BankMatchRule.PAYMENT_RUN
+        db.flush()
+        assert_bank_invariants(db, banking.company_id)
+
+    payment_run_service.reverse_run(
+        db, banking.company_id, run.id, reason="property", actor=banking.owner
+    )
+    db.flush()
+    _count(_REACH, "run reversal: succeeded")
+
+    # Every open item back, every settlement reversed, the bank where it started, and — the
+    # clause the machine would have been checking — a reversed run with no member left standing.
+    for invoice, amount in zip(invoices, (first, second), strict=True):
+        assert recompute_open_amount(db, invoice) == Decimal(amount)
+    if matched:
+        assert matching.matches_of(db, banking.company_id, banking.bank("BK-RWF").id) == [], (
+            "a reversed run releases its match; the bank's line is unexplained again"
+        )
+    assert_ledger_invariants(db, banking.company_id)
+    assert_subledger_invariants(db, banking.company_id)
     assert_bank_invariants(db, banking.company_id)
     db.rollback()

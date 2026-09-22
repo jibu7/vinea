@@ -162,12 +162,21 @@ REQUIRED_REACH = (
     # `payment_exceeds_open` means nothing until these two are healthy.
     "payment run: attempted",
     "payment run: posted",
-    # A reversal needs a posted run, so this is two preconditions deep and the one most worth
-    # gating: it is the path that unallocates N allocations and reverses N settlements, and a
-    # zero here would mean the invariant suite never saw the state between those legs.
-    "run reversal: succeeded",
     "statement: imported from a file",
 )
+
+#: **`run reversal: succeeded` was a floor here for exactly one deep pass, and reading it is why
+#: it is not one now.** It came back 0 — with `run reversal: attempted` absent from the table
+#: altogether, so the operation was never even entered: `state["runs"]` is empty unless a run
+#: posted *earlier in the same plan*, and 24 runs posted across 300 examples. A reversal is
+#: therefore a conjunction two operations deep, which is the shape P7's rule sends to a targeted
+#: property rather than to a bigger `max_examples`.
+#:
+#: `test_reversing_a_payment_run_holds_every_invariant` in
+#: `tests/banking/test_property_targeted_refusals.py` is that property, and it asserts the thing
+#: the machine would have: all three invariant suites **between** the reversal's legs, not only
+#: after it. The operation stays in `OPERATIONS` — when a plan does get there it is worth having
+#: — and the counter stays in the reach table as reporting.
 REACH_FLOOR = 3
 
 #: Only a run with enough examples can be held to the floors. The per-commit profile draws two
@@ -648,6 +657,15 @@ def _payment_run(
     phase learning to distrust. One draw in three also asks for more than the invoice has open,
     which is `payment_exceeds_open` arriving from the ordinary case rather than a special one.
     """
+    # **Ids the rollback took away are dropped first.** An illegal step rolls the session back
+    # to the last commit, which un-posts invoices this list still names; pass 3 lost 24 of 70 run
+    # attempts to `not_found` that way. A screen only ever offers documents that exist, so
+    # filtering here makes the generator more like the product and not less.
+    state["invoices"] = [
+        document_id
+        for document_id in state["invoices"]
+        if db.get(PartnerDocument, document_id) is not None
+    ]
     invoices = state["invoices"]
     if not invoices:
         return
