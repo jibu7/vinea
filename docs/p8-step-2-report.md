@@ -436,7 +436,56 @@ meantime, for the reason the register exists.
 
 The P1–P7 entries are whatever `main` carries; none was changed.
 
-<!-- GATES -->
+## Gates
+
+```
+$ docker compose exec -T backend uv run ruff check .
+All checks passed!
+
+$ make migrate-check
+migrate-check: upgrade-from-zero, alembic check and downgrade-to-base all green
+
+$ make be-test                 # docker compose exec -T backend uv run pytest -n 4 -q
+1563 passed, 7 warnings in 1419.12s (0:23:39)
+```
+
+`migrate-check` is the one worth reading twice: `alembic check` comes back clean **without a
+new revision**, which is this step's claim that it added no schema.
+
+`main` at `ed8abe6` runs 1 467. The 96 this step adds:
+
+| | |
+|---|---|
+| `tests/banking/test_matching.py` | 27 |
+| `tests/banking/test_reconciliation.py` | 23 |
+| `tests/banking/test_invariant_sensitivity.py` | 18 |
+| `tests/banking/test_api.py` | 6 new (18 total) |
+| `tests/banking/test_boundary.py` | 6 |
+| `tests/banking/test_property_targeted_refusals.py` | 4 |
+| `tests/banking/test_property_banking.py` | 3 |
+| `tests/test_api_has_a_caller.py` — parametrized, one case per endpoint | 9 |
+| | **96** |
+
+Nothing deselected, nothing skipped; the seven warnings are the ones `main` already carries.
+
+The **deep** profile is not part of `be-test` — the per-commit profile draws two examples, so
+the census stays silent there and the nightly is where it is enforced. The deep run is quoted in
+full above.
+
+### Frontend
+
+**Untouched.** `git diff main...HEAD -- frontend` is empty: this step builds services and
+endpoints, and the screens arrive at step 7. No e2e to re-take and no screenshot to commit —
+rule 13 applies from step 6, and step 2 builds nothing a person can open.
+
+### The branch
+
+```
+$ git status --short
+$ git log @{u}..
+```
+
+<!-- BRANCH -->
 
 ## What step 3 inherits
 
