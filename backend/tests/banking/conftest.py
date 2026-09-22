@@ -8,6 +8,8 @@ exists to catch, and a fixture that inserted the row itself would test nothing a
 """
 
 from dataclasses import dataclass
+from datetime import date
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -15,9 +17,16 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.banking import accounts as accounts_service
+from app.banking import statements as statements_service
+from app.banking.formats import ParsedLine
 from app.kernel import accounts as kernel_accounts
+from app.kernel import posting
+from app.kernel.events import CashbookEntry, CashbookKind, CashbookLineSpec
 from app.models.banking import BankAccount
 from app.models.gl import AccountClass, ControlType, GLAccount
+from app.models.journal import JournalEntry, JournalLine
+from app.models.partner import Partner, PartnerRole, TaxMode
+from app.subledger import masters as partner_masters
 from tests.kernel.conftest import Ledger, build_ledger
 
 # Re-exported the way `tests/fiscal/conftest.py` re-exports it: several tests here are about
@@ -36,6 +45,10 @@ def sample(name: str) -> bytes:
 class Banking:
     ledger: Ledger
     accounts: dict[str, BankAccount]
+    #: One of each, so the post-from-a-statement-line drawer has a partner to post a receipt
+    #: or a payment against. The subledger suite's own pair, built the same way.
+    customer: Partner
+    supplier: Partner
 
     @property
     def company_id(self) -> int:
@@ -67,6 +80,33 @@ def build_banking(db: Session, **kwargs) -> Banking:
     accounts_service.ensure_row(db, usd_gl)
     db.flush()
 
+    customer = partner_masters.create_partner(
+        db,
+        ledger.company_id,
+        partner_masters.PartnerInput(name="Amahoro Retail Ltd", customer_code="CUST001"),
+        actor=ledger.owner,
+    )
+    supplier = partner_masters.create_partner(
+        db,
+        ledger.company_id,
+        partner_masters.PartnerInput(name="Rwanda Paper Supplies", supplier_code="SUPP001"),
+        actor=ledger.owner,
+    )
+    for partner, role in ((customer, PartnerRole.AR), (supplier, PartnerRole.AP)):
+        partner_masters.upsert_role_settings(
+            db,
+            ledger.company_id,
+            partner,
+            role,
+            partner_masters.RoleSettingsInput(
+                default_gl_account_id=ledger.acct(
+                    "4100" if role == PartnerRole.AR else "6990"
+                ),
+                tax_mode=TaxMode.EXCLUSIVE,
+            ),
+            actor=ledger.owner,
+        )
+
     rows = {row.code: row for row in db.scalars(select(BankAccount))}
     accounts_service.update(
         db,
@@ -91,9 +131,119 @@ def build_banking(db: Session, **kwargs) -> Banking:
     return Banking(
         ledger=ledger,
         accounts={row.code: row for row in db.scalars(select(BankAccount))},
+        customer=customer,
+        supplier=supplier,
     )
 
 
 @pytest.fixture
 def banking(db: Session) -> Banking:
     return build_banking(db)
+
+
+# --- Posting helpers the matching and reconciliation suites share --------------------------------
+#
+# Every one of these goes through the kernel or through P4, because a fixture that wrote a
+# journal line itself would be testing the matcher against rows the engine would never produce
+# — and `tests/banking/test_boundary.py` exists to say that nothing does.
+
+
+def cashbook(
+    db: Session,
+    banking: Banking,
+    *,
+    account_code: str,
+    amount: Decimal,
+    on: date,
+    contra: str = "3400",
+    currency: str = "RWF",
+    reference: str | None = None,
+    description: str = "opening",
+) -> JournalEntry:
+    """A cashbook receipt (positive) or payment (negative) on a bank account."""
+    entry = posting.post(
+        db,
+        CashbookEntry(
+            entry_date=on,
+            description=description,
+            reference=reference,
+            cash_account_id=banking.ledger.acct(account_code),
+            kind=CashbookKind.RECEIPT if amount > 0 else CashbookKind.PAYMENT,
+            currency_id=banking.ledger.cur(currency),
+            lines=(
+                CashbookLineSpec(
+                    gl_account_id=banking.ledger.acct(contra), amount=abs(amount)
+                ),
+            ),
+        ),
+        company_id=banking.company_id,
+        actor=banking.owner,
+    )
+    assert entry is not None
+    return entry
+
+
+def bank_line_of(db: Session, banking: Banking, entry: JournalEntry, account_code: str):  # noqa: ANN201
+    """The line of this entry that sits on the bank account — what a match points at."""
+    return db.scalars(
+        select(JournalLine).where(
+            JournalLine.entry_id == entry.id,
+            JournalLine.gl_account_id == banking.ledger.acct(account_code),
+        )
+    ).one()
+
+
+def import_sample(db: Session, banking: Banking, name: str, *, account: str = "BK-RWF"):  # noqa: ANN201
+    return statements_service.import_statement(
+        db,
+        banking.company_id,
+        bank_account_id=banking.bank(account).id,
+        content=sample(name),
+        file_name=name,
+        actor=banking.owner,
+    )
+
+
+def key_statement(
+    db: Session,
+    banking: Banking,
+    *,
+    account: str = "BK-RWF",
+    lines: list[tuple[date, str, Decimal]],
+    opening: Decimal = Decimal(0),
+    closing: Decimal | None = None,
+):  # noqa: ANN201
+    """A statement keyed line by line — `(value date, description, credit-positive amount)`.
+
+    The suites use this rather than a CSV wherever the *file* is not what is under test: a
+    reconciliation cares about dates, amounts and text, and building a CSV to express three of
+    those is a parser test wearing a reconciliation test's clothes.
+    """
+    parsed = [
+        ParsedLine(
+            row=index,
+            value_date=value_date,
+            booking_date=None,
+            description=description,
+            reference=None,
+            amount=amount,
+            balance_after=None,
+            external_id=None,
+            occurrence=sum(
+                1
+                for earlier in lines[: index - 1]
+                if (earlier[0], earlier[1], earlier[2]) == (value_date, description, amount)
+            ),
+        )
+        for index, (value_date, description, amount) in enumerate(lines, start=1)
+    ]
+    total = sum((amount for _, _, amount in lines), Decimal(0))
+    return statements_service.import_manual(
+        db,
+        banking.company_id,
+        bank_account_id=banking.bank(account).id,
+        lines=parsed,
+        opening_balance=opening,
+        closing_balance=opening + total if closing is None else closing,
+        actor=banking.owner,
+    )
