@@ -30,7 +30,7 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 from starlette.requests import Request
 
@@ -205,12 +205,38 @@ def _lines_in_effective_matches(
 def _lines_in_this_reconciliation(
     db: Session, company_id: int, reconciliation_id: int
 ) -> set[int]:
-    """The assignment made at lock **is** the membership (clause 4). Not a date comparison:
-    a match created afterwards may well be effective at the locked date, and counting it would
-    restate a figure somebody signed."""
+    """The assignment made at lock **is** the membership (clause 4) — this reconciliation's
+    matches **and those of every locked one before it on the same account**.
+
+    Not a date comparison: a match created afterwards may well be effective at the locked date,
+    and counting it would restate a figure somebody signed. That is the property this function
+    exists to keep, and the "before it" half does not weaken it — a later reconciliation is dated
+    later, so its matches are never in this set.
+
+    **The "before it" half was missing until the acceptance tape reached it**, and the tape is
+    the first thing in the build that could: it needs two successive locked reconciliations on one
+    account with a match belonging to the *first*. Step 2's own tests each had one lock, so the
+    narrow reading passed everything. What it does wrong is arithmetic rather than bookkeeping —
+    `CB-1`'s 1 000 000 cleared the bank in August and `BRC-1` proved it, so in September it is
+    not outstanding; counting only this reconciliation's own matches made `BRC-2` reproduce
+    930 000 against a stored −70 000, and clause 4 failed on a figure the lock had computed
+    correctly.
+    """
+    reconciliation = db.get(BankReconciliation, reconciliation_id)
+    assert reconciliation is not None
+    earlier = select(BankReconciliation.id).where(
+        BankReconciliation.company_id == company_id,
+        BankReconciliation.bank_account_id == reconciliation.bank_account_id,
+        BankReconciliation.status == ReconciliationStatus.LOCKED,
+        BankReconciliation.reconciliation_date <= reconciliation.reconciliation_date,
+        BankReconciliation.id != reconciliation_id,
+    )
     assigned = select(BankMatch.id).where(
         BankMatch.company_id == company_id,
-        BankMatch.reconciliation_id == reconciliation_id,
+        or_(
+            BankMatch.reconciliation_id == reconciliation_id,
+            BankMatch.reconciliation_id.in_(earlier),
+        ),
     )
     return set(
         db.scalars(

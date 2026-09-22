@@ -41,7 +41,7 @@ from datetime import date
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
@@ -342,14 +342,20 @@ def tape(db: Session) -> Tape:
     db.flush()
     tape_state.banks = {row.code: row for row in db.scalars(select(BankAccount))}
 
-    # The rule row 9's drawer is prefilled from.
+    # The rule row 9's drawer is prefilled from: pattern and account only, which is all the
+    # prompt's setup gives it.
+    #
+    # **Deliberately no `description`.** `prefill_for` returns `rule.description or
+    # line.description`, so a rule that names its own narrative shadows the bank's text — and
+    # row 9 expects the drawer to open on `MONTHLY ACCOUNT FEE`, which is what the bank printed.
+    # A description here would have made the tape disagree with its own prompt, and the first
+    # draft of this fixture invented one and did exactly that.
     bank_accounts.create_rule(
         db,
         company_id,
         bank_account_id=tape_state.bank("BK-RWF").id,
         pattern="ACCOUNT FEE",
         gl_account_id=tape_state.acct("6700"),
-        description="Monthly bank charges",
         actor=owner,
     )
 
@@ -1144,3 +1150,100 @@ def test_the_acceptance_tape(db: Session, tape: Tape) -> None:  # noqa: PLR0915
         "110000" in str(unbalanced.field_errors).replace(" ", ""),
     )
     _after_every_row(db, tape, "8")
+
+    # --- Row 9: post the fee and the deposit from their lines, then lock BRC-2 -------------------
+    line4 = next(line for line in lines if line.line_no == 4)
+
+    # The drawer opens **prefilled by the rule**: 6700, the line's own amount and date, and the
+    # description the bank printed. A suggestion, not a posting — a person still presses Post.
+    prefill = matching.prefill_for(db, tape.company_id, line4)
+    _expect("9", "prefill account", tape.acct("6700"), prefill.gl_account_id)
+    _expect("9", "prefill kind", "payment", prefill.kind)
+    _expect("9", "prefill description", "MONTHLY ACCOUNT FEE", prefill.description)
+    _expect("9", "prefill amount", Decimal(-2500), line4.amount)
+    _expect("9", "prefill date", SEP_12, line4.value_date)
+
+    posted_fee = matching.post_cashbook_from_line(
+        db,
+        tape.company_id,
+        line4.id,
+        gl_account_id=prefill.gl_account_id,
+        actor=tape.owner,
+    )
+    db.flush()
+    tape.documents["CB-3"] = posted_fee
+    _expect("9", "CB-3 match rule", "posted_from_statement", posted_fee.match.rule.value)
+
+    line6 = next(line for line in lines if line.line_no == 6)
+    posted_receipt = matching.post_settlement_from_line(
+        db,
+        tape.company_id,
+        line6.id,
+        partner_id=tape.partners["C2"].id,
+        actor=tape.owner,
+    )
+    db.flush()
+    tape.documents["RCT-5"] = posted_receipt
+    _expect("9", "RCT-5 match rule", "posted_from_statement", posted_receipt.match.rule.value)
+
+    # 983 000 − 2 500 + 40 000
+    _expect("9", "1120 balance", Decimal(1020500), _balance(db, tape, "1120"))
+    figures = reconciliation_service.live_figures(db, tape.company_id, brc2)
+    _expect("9", "BRC-2 statement", Decimal(1090500), figures.statement_balance)
+    _expect("9", "BRC-2 ledger", Decimal(1020500), figures.ledger_balance)
+    _expect("9", "BRC-2 outstanding", Decimal(-70000), figures.outstanding_total)
+    _expect("9", "BRC-2 unmatched", 0, figures.unmatched_statement_count)
+    _expect("9", "BRC-2 difference", Decimal(0), figures.difference)
+
+    # Keyed 500 short: the difference is −500 and the lock is refused at it.
+    wrong = _refuses(
+        db,
+        "9",
+        "lock at a wrong balance",
+        "reconciliation_difference",
+        lambda: reconciliation_service.lock(
+            db,
+            tape.company_id,
+            brc2.id,
+            statement_balance=Decimal(1090000),
+            actor=tape.owner,
+        ),
+    )
+    _expect("9", "difference is -500", True, "-500" in str(wrong.field_errors).replace(" ", ""))
+
+    reconciliation_service.lock(db, tape.company_id, brc2.id, actor=tape.owner)
+    db.flush()
+    _expect("9", "BRC-2 number", "BRC-000002", brc2.number)
+    assigned = [
+        match
+        for match in matching.matches_of(db, tape.company_id, tape.bank("BK-RWF").id)
+        if match.reconciliation_id == brc2.id
+    ]
+    _expect("9", "matches assigned", 6, len(assigned))
+    # The prompt writes this `[PMT-4 −70 000]`; `PMT-4` is the tape's name for the fourth
+    # payment and `PMT-000004` is what the sequence actually issued, so the literal below pins
+    # the numbering as well as the snapshot.
+    _expect(
+        "9",
+        "snapshot",
+        [("PMT-000004", Decimal(-70000))],
+        [
+            (entry["entry_number"], Decimal(entry["amount"]))
+            for entry in (brc2.outstanding_snapshot or [])
+        ],
+    )
+    _expect("9", "PMT-4 is the fourth payment", "PMT-000004", tape.documents["PMT-4"].number)
+    greatest = db.scalar(
+        select(func.max(JournalLine.id)).where(
+            JournalLine.company_id == tape.company_id,
+            JournalLine.gl_account_id == tape.acct("1120"),
+        )
+    )
+    _expect("9", "high_water_line_id", greatest, brc2.high_water_line_id)
+    _expect(
+        "9",
+        "last_reconciled_balance",
+        Decimal(1090500),
+        tape.bank("BK-RWF").last_reconciled_balance,
+    )
+    _after_every_row(db, tape, "9")
