@@ -287,8 +287,20 @@ def _plans(draw):  # noqa: ANN001, ANN202
                 # census cannot tell that from a guard that stopped firing.
                 st.booleans(),  # key the lock balance deliberately wrong
             ),
-            min_size=6,
-            max_size=22,
+            # **Longer than step 2's 6-22, because step 3 made the list longer.** Three
+            # operations joined `OPERATIONS` (a supplier invoice, a payment run, its reversal)
+            # and a fourth split off (the file import), taking it from 14 to 18 — so a plan of
+            # the same length draws each one proportionally less often, and the census showed it
+            # across five deep passes: `posted from a statement line` read 3, 8, 10, 29 and then
+            # **0**, and `document_not_open` 0, 1, 5, 6, **0**. Those are the same guards with
+            # the same code behind them; what changed was how often a plan reached them.
+            #
+            # A floor that flips between passes is worse than no floor — it trains the reader to
+            # re-run the nightly rather than to read it, which is the failure step 2's report
+            # spent a page on. Adding operations without lengthening the plan is what caused it,
+            # so the plan gets longer.
+            min_size=10,
+            max_size=30,
         )
     )
 
@@ -683,7 +695,7 @@ def _payment_run(
     # and the first deep pass read this refusal at zero with 302 runs posted. Constructing it
     # in the generator is the same fix `_lock`'s wrong balance had at step 2, for the same
     # reason: the machine should try the thing, not wait to stumble into it.
-    if state["paid"] and pick % 3 == 0:
+    if state["paid"] and pick % 2 == 0:
         chosen.insert(0, state["paid"][pick % len(state["paid"])])
     over = Decimal(magnitude * 1000) if pick % 3 == 0 else None
     # **Dated at or after the latest invoice it pays**, three draws in four.
@@ -902,6 +914,21 @@ def _post_from_a_statement_line(db: Session, banking: Banking) -> None:
     _count(_REACH, "posted from a statement line")
 
 
+def _close_the_fee_loop(db: Session, banking: Banking) -> None:
+    """After the plan, post the fee the `add_a_line` perturbation invented.
+
+    Without this the fee is only ever an unmatched statement line and
+    `posted from a statement line` never reaches its floor — the mechanism decision 4 exists for
+    would be generated and never exercised.
+    """
+    try:
+        _post_from_a_statement_line(db, banking)
+        db.flush()
+    except AppError as error:
+        db.rollback()
+        _skip(error)
+
+
 # --- The machines ------------------------------------------------------------------------------
 
 
@@ -919,15 +946,7 @@ def test_the_invariants_hold_over_any_sequence_at_a_zero_decimal_base(
         email=f"property.bank.{next(_EXAMPLE)}@example.test",
     )
     _run(db, banking, plan)
-    # After the plan, close the loop the `add_a_line` perturbation opens — otherwise the fee it
-    # invents is only ever an unmatched line, and `posted from a statement line` never reaches
-    # its floor.
-    try:
-        _post_from_a_statement_line(db, banking)
-        db.flush()
-    except AppError as error:
-        db.rollback()
-        _skip(error)
+    _close_the_fee_loop(db, banking)
     assert_ledger_invariants(db, banking.company_id)
     assert_subledger_invariants(db, banking.company_id)
     assert_bank_invariants(db, banking.company_id)
@@ -954,6 +973,12 @@ def test_the_invariants_hold_over_any_sequence_at_a_two_decimal_base(
     base.decimal_places = 2
     db.flush()
     _run(db, banking, plan)
+    # **Both machines close the loop, not just the 0-dp one.** It was only here at step 2 and
+    # `posted from a statement line` cleared its floor on one machine's examples alone; at step
+    # 3's plan length it read 0 on pass 5. Two machines is twice the chances, and a fee posted at
+    # a two-decimal base is worth asserting on its own account — the cashbook entry it writes
+    # rounds where the 0-dp one cannot.
+    _close_the_fee_loop(db, banking)
     assert_ledger_invariants(db, banking.company_id)
     assert_subledger_invariants(db, banking.company_id)
     assert_bank_invariants(db, banking.company_id)
