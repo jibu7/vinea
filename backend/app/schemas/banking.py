@@ -488,3 +488,102 @@ class PaymentRunReverse(BaseModel):
     #: Defaults to the run's payment date. Never earlier than it — P4 refuses
     #: `reversal_before_original`.
     on_date: date | None = None
+
+
+# --- Cashbooks, the reconciliation report and the enquiry (decisions 6 and 10) -------------------
+
+
+class CashbookRowRead(BaseModel):
+    journal_line_id: int
+    entry_id: int
+    entry_date: date
+    entry_number: str
+    #: `journal_entries.doc_type` — decision 6's *document type* column.
+    doc_type: str
+    module: str
+    reference: str | None = None
+    description: str | None = None
+    partner_name: str | None = None
+    receipt: Decimal
+    payment: Decimal
+    running_balance: Decimal
+    base_amount: Decimal
+    #: `BRC-000002`, `matched`, or null for outstanding.
+    reconciled: str | None = None
+
+
+class CashbookDetailRead(BaseModel):
+    bank_account_id: int
+    code: str
+    name: str
+    currency_id: int
+    currency_code: str
+    date_from: date
+    date_to: date
+    opening_balance: Decimal
+    opening_base: Decimal
+    receipts_total: Decimal
+    payments_total: Decimal
+    #: In the account's own currency. `closing_base` is the figure that ties to the trial
+    #: balance; see `app/banking/reports.py` for why there are two.
+    closing_balance: Decimal
+    closing_base: Decimal
+    rows: list[CashbookRowRead]
+
+
+class CashbookSummaryRowRead(BaseModel):
+    bank_account_id: int
+    code: str
+    name: str
+    kind: str
+    currency_code: str
+    opening_balance: Decimal
+    receipts: Decimal
+    payments: Decimal
+    closing_balance: Decimal
+    closing_base: Decimal
+    last_reconciled_at: date | None = None
+    last_reconciled_balance: Decimal | None = None
+    unmatched_statement_lines: int
+    outstanding_lines: int
+
+
+class ReconciliationReportRead(BaseModel):
+    """`stored` is what a locked reconciliation *said*; `live` is what its date computes now.
+    They differ by exactly `posted_after_lock`."""
+
+    reconciliation_id: int
+    number: str
+    bank_account_id: int
+    bank_account_code: str
+    currency_code: str
+    reconciliation_date: date
+    status: ReconciliationStatus
+    live: FiguresRead
+    stored: FiguresRead | None = None
+    posted_after_lock: list[OutstandingLineRead] = []
+
+
+class BankAccountEnquiryRead(BaseModel):
+    bank_account_id: int
+    code: str
+    name: str
+    kind: str
+    currency_code: str
+    #: In the account's own currency, and in base. Decision 10 names both: a USD balance means
+    #: nothing to a balance sheet and its base value means nothing to the bank.
+    book_balance: Decimal
+    book_balance_base: Decimal
+    last_reconciliation_id: int | None = None
+    last_reconciliation_number: str | None = None
+    last_reconciled_at: date | None = None
+    last_reconciled_balance: Decimal | None = None
+    open_reconciliation_id: int | None = None
+    open_reconciliation_number: str | None = None
+    unmatched_statement_count: int
+    unmatched_statement_total: Decimal
+    outstanding_count: int
+    outstanding_total: Decimal
+    latest_statement_id: int | None = None
+    latest_statement_number: str | None = None
+    latest_statement_to: date | None = None
