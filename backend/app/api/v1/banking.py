@@ -62,6 +62,7 @@ from app.schemas.banking import (
     CashbookRowRead,
     CashbookSummaryRowRead,
     FiguresRead,
+    LedgerLineRead,
     ManualStatementWrite,
     MatchCandidateRead,
     MatchRead,
@@ -88,7 +89,9 @@ from app.schemas.banking import (
     SelectableDocumentRead,
     StatementDetail,
     StatementImportResult,
+    StatementLineDetailRead,
     StatementLineRead,
+    StatementLineStateRead,
     StatementPreviewRead,
     StatementRead,
     StatementVoid,
@@ -316,13 +319,53 @@ def read_statement(
     auth: AuthContext = permissions.require(permissions.BANK_REPORTS_VIEW),
     db: Session = Depends(get_db),
 ) -> StatementDetail:
+    """The statement with its lines **and their match state** (step 5).
+
+    The state was missing until step 5 and the detail was the poorer for it: a screen listing the
+    bank's six lines with no column saying which had been explained is a screen that cannot be
+    worked from. `journal_line_count` is on it because a payment run's single debit matches three
+    ledger lines, and "matched" alone would hide that.
+    """
     statement = statements_service.get(db, auth.company_id, statement_id)
     detail = StatementDetail.model_validate(statement)
+    states = matching.statement_line_states(db, auth.company_id, statement_id)
     detail.lines = [
-        StatementLineRead.model_validate(line)
+        StatementLineDetailRead(
+            **StatementLineRead.model_validate(line).model_dump(),
+            state=StatementLineStateRead(
+                **{
+                    key: value
+                    for key, value in vars(states[line.id]).items()
+                    if key != "statement_line_id"
+                }
+            )
+            if line.id in states
+            else StatementLineStateRead(),
+        )
         for line in statements_service.lines_of(db, auth.company_id, statement_id)
     ]
     return detail
+
+
+@router.get("/accounts/{bank_account_id}/ledger-lines")
+def list_ledger_lines(
+    bank_account_id: int,
+    as_of: date | None = Query(default=None),
+    auth: AuthContext = permissions.require(permissions.BANK_REPORTS_VIEW),
+    db: Session = Depends(get_db),
+) -> list[LedgerLineRead]:
+    """The reconciliation workspace's **right pane**: every ledger line on the account with its
+    match state, outstanding first.
+
+    The left pane's `unmatched-statement-lines` had no counterpart until step 5, so the workspace
+    could show what the bank said and not what the ledger holds — which is half a reconciliation.
+    """
+    return [
+        LedgerLineRead(**vars(row), is_outstanding=row.is_outstanding)
+        for row in matching.list_ledger_lines(
+            db, auth.company_id, bank_account_id, as_of=as_of
+        )
+    ]
 
 
 @router.post("/statements/preview")

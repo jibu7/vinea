@@ -26,7 +26,7 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import Select, or_, select
+from sqlalchemy import Select, func, or_, select
 from sqlalchemy.orm import Session
 from starlette.requests import Request
 
@@ -48,7 +48,7 @@ from app.models.banking import (
     PaymentRunLine,
     PaymentRunStatus,
 )
-from app.models.journal import JournalEntry, JournalLine
+from app.models.journal import JournalEntry, JournalLine, JournalStatus
 from app.models.subledger import PartnerDocument
 from app.models.user import User
 from app.services.audit import record_audit
@@ -1176,3 +1176,186 @@ def post_settlement_from_line(
         document_id=document.id,
         document_number=document.number,
     )
+
+
+# --- The listings the workspace's two panes read (step 5) ---------------------------------------
+#
+# `unmatched_statement_lines` and `unmatched_journal_lines` above are *filters* the matcher uses.
+# What a screen needs is every line with its state, because "matched to what" is the column the
+# reconciler reads down. Both panes therefore have a listing of their own here rather than the
+# screen calling a filter twice and inferring the difference.
+
+
+@dataclass(frozen=True)
+class LedgerLineRow:
+    """One ledger line on a bank account, with what the reconciliation makes of it.
+
+    `reconciled_amount` rather than `amount` or `base_amount`, because the pane sits beside the
+    statement and the two must be comparable — one definition, `accounts.reconciled_amount`.
+    """
+
+    journal_line_id: int
+    entry_id: int
+    entry_number: str
+    entry_date: date
+    doc_type: str
+    description: str | None
+    reference: str | None
+    amount: Decimal
+    #: None where the line is outstanding.
+    match_id: int | None
+    match_kind: BankMatchKind | None
+    match_rule: BankMatchRule | None
+    #: The `BRC-` this line's match was locked into, if it was.
+    reconciliation_number: str | None
+    #: Set where the line was posted *after* a locked reconciliation whose date it falls inside
+    #: — decision 5's late line. The pane flags it "dated inside BRC-n", which calls for a
+    #: different action from an ordinary outstanding item.
+    dated_inside: str | None
+
+    @property
+    def is_outstanding(self) -> bool:
+        return self.match_id is None
+
+
+def list_ledger_lines(
+    db: Session,
+    company_id: int,
+    bank_account_id: int,
+    *,
+    as_of: date | None = None,
+    outstanding_first: bool = True,
+) -> list[LedgerLineRow]:
+    """The workspace's right pane: every ledger line on the account, with its match state.
+
+    **Outstanding first** by default, which is decision 7's ordering for the screen and not
+    merely a nicety: the pane exists to be worked down, and a reconciler scrolling past forty
+    matched lines to reach the two that are not is the reason a reconciliation gets abandoned
+    half done. Matched lines follow in date order so the pane still reads as a statement.
+    """
+    row = accounts_service.get(db, company_id, bank_account_id)
+    base = base_currency(db, company_id).id
+    amount_column = accounts_service.reconciled_amount_column(row, base)
+    # Imported here rather than at module scope: `reconciliation.py` imports this module, so a
+    # top-level import would be a cycle. One call site, one lazy import.
+    from app.banking.reconciliation import _late_line_labels
+
+    late = _late_line_labels(db, company_id, row)
+
+    statement = (
+        select(JournalLine, JournalEntry, amount_column)
+        .join(JournalEntry, JournalEntry.id == JournalLine.entry_id)
+        .where(
+            JournalLine.company_id == company_id,
+            JournalLine.gl_account_id == row.gl_account_id,
+            JournalEntry.status == JournalStatus.POSTED,
+        )
+        .order_by(JournalEntry.entry_date, JournalLine.id)
+    )
+    if as_of is not None:
+        statement = statement.where(JournalEntry.entry_date <= as_of)
+
+    rows: list[LedgerLineRow] = []
+    for line, entry, amount in db.execute(statement).all():
+        match = match_by_journal_line(db, company_id, line.id)
+        number = (
+            _reconciliation_number(db, company_id, match.reconciliation_id)
+            if match is not None and match.reconciliation_id is not None
+            else None
+        )
+        rows.append(
+            LedgerLineRow(
+                journal_line_id=line.id,
+                entry_id=entry.id,
+                entry_number=entry.number,
+                entry_date=entry.entry_date,
+                doc_type=entry.doc_type,
+                description=line.description or entry.description,
+                reference=entry.reference,
+                amount=amount,
+                match_id=match.id if match is not None else None,
+                match_kind=match.kind if match is not None else None,
+                match_rule=match.rule if match is not None else None,
+                reconciliation_number=number,
+                dated_inside=late.get(line.id),
+            )
+        )
+    if outstanding_first:
+        # Stable: `sorted` keeps the date order above within each group.
+        rows.sort(key=lambda item: not item.is_outstanding)
+    return rows
+
+
+@dataclass(frozen=True)
+class StatementLineState:
+    """What a statement line's match is, for the statement detail and the left pane."""
+
+    statement_line_id: int
+    match_id: int | None
+    match_kind: BankMatchKind | None
+    match_rule: BankMatchRule | None
+    reconciliation_number: str | None
+    #: How many ledger lines the match holds. Three on the bank's single line for a payment run,
+    #: which is the one-to-many decision 7 produces and the number a reader needs to see.
+    journal_line_count: int
+
+
+def statement_line_states(
+    db: Session, company_id: int, statement_id: int
+) -> dict[int, StatementLineState]:
+    """Match state for every line of one statement, keyed by line id.
+
+    One query pass for the whole statement rather than a lookup per line, because the detail
+    screen renders every line and the per-line version was a hundred round trips for a
+    hundred-line export.
+    """
+    rows = db.execute(
+        select(
+            BankStatementLine.id,
+            BankMatch.id,
+            BankMatch.kind,
+            BankMatch.rule,
+            BankMatch.reconciliation_id,
+        )
+        .outerjoin(
+            BankMatchStatementLine,
+            (BankMatchStatementLine.statement_line_id == BankStatementLine.id)
+            & (BankMatchStatementLine.company_id == BankStatementLine.company_id),
+        )
+        .outerjoin(
+            BankMatch,
+            (BankMatch.id == BankMatchStatementLine.match_id)
+            & (BankMatch.company_id == BankMatchStatementLine.company_id),
+        )
+        .where(
+            BankStatementLine.company_id == company_id,
+            BankStatementLine.statement_id == statement_id,
+        )
+    ).all()
+    states: dict[int, StatementLineState] = {}
+    for line_id, match_id, kind, rule, reconciliation_id in rows:
+        states[line_id] = StatementLineState(
+            statement_line_id=line_id,
+            match_id=match_id,
+            match_kind=kind,
+            match_rule=rule,
+            reconciliation_number=(
+                _reconciliation_number(db, company_id, reconciliation_id)
+                if reconciliation_id is not None
+                else None
+            ),
+            journal_line_count=(
+                db.scalar(
+                    select(func.count())
+                    .select_from(BankMatchJournalLine)
+                    .where(
+                        BankMatchJournalLine.company_id == company_id,
+                        BankMatchJournalLine.match_id == match_id,
+                    )
+                )
+                or 0
+            )
+            if match_id is not None
+            else 0,
+        )
+    return states

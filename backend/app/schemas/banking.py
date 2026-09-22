@@ -177,9 +177,52 @@ class StatementLineRead(BaseModel):
     external_id: str | None = None
 
 
+class StatementLineStateRead(BaseModel):
+    """A statement line's match, for the detail screen and the workspace's left pane."""
+
+    match_id: int | None = None
+    match_kind: BankMatchKind | None = None
+    match_rule: BankMatchRule | None = None
+    #: The `BRC-` the match was locked into, if it was.
+    reconciliation_number: str | None = None
+    #: How many ledger lines the match holds — **three** on the bank's single line for a payment
+    #: run, which is the one-to-many decision 7 produces and a figure the reader needs.
+    journal_line_count: int = 0
+
+
+class StatementLineDetailRead(StatementLineRead):
+    """The line with its match state. `StatementLineRead` stays as it was for the paths that only
+    need the bank's own figures (the preview, which has no matches yet)."""
+
+    state: StatementLineStateRead
+
+
 class StatementDetail(StatementRead):
     format_snapshot: dict[str, Any] | None = None
-    lines: list[StatementLineRead] = []
+    lines: list[StatementLineDetailRead] = []
+
+
+class LedgerLineRead(BaseModel):
+    """One ledger line on a bank account with what the reconciliation makes of it — the
+    workspace's right pane. Outstanding lines come first."""
+
+    journal_line_id: int
+    entry_id: int
+    entry_number: str
+    entry_date: date
+    doc_type: str
+    description: str | None = None
+    reference: str | None = None
+    #: The reconciled amount: the account's own currency, one definition
+    #: (`accounts.reconciled_amount`), so this pane and the statement pane are comparable.
+    amount: Decimal
+    match_id: int | None = None
+    match_kind: BankMatchKind | None = None
+    match_rule: BankMatchRule | None = None
+    reconciliation_number: str | None = None
+    #: "dated inside BRC-n" — posted after that reconciliation locked, dated before its date.
+    dated_inside: str | None = None
+    is_outstanding: bool
 
 
 class StatementImportResult(BaseModel):
