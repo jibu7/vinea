@@ -17,6 +17,7 @@ from app.models.banking import (
     BankAccountKind,
     BankMatchKind,
     BankMatchRule,
+    PaymentRunStatus,
     ReconciliationStatus,
     StatementSource,
     StatementStatus,
@@ -375,3 +376,115 @@ class ReconciliationLock(BaseModel):
 
 class ReconciliationReopen(BaseModel):
     reason: str = Field(min_length=1, max_length=500)
+
+
+# --- Payment runs (decision 7) -----------------------------------------------------------------
+
+
+class SelectableDocumentRead(BaseModel):
+    """An open supplier invoice the run could pay. `discount_available` is P4's own
+    computation at the payment date, not a figure this phase invents."""
+
+    document_id: int
+    number: str
+    partner_id: int
+    partner_name: str
+    supplier_code: str | None = None
+    document_date: date
+    due_date: date | None = None
+    currency_id: int
+    total_amount: Decimal
+    open_amount: Decimal
+    discount_available: Decimal
+
+
+class PaymentRunLineWrite(BaseModel):
+    document_id: int
+    #: What comes off the invoice's open amount. `None` means "all of it".
+    amount: Decimal | None = None
+    take_discount: bool = True
+
+
+class PaymentRunWrite(BaseModel):
+    bank_account_id: int
+    payment_date: date
+    lines: list[PaymentRunLineWrite] = Field(min_length=1)
+
+
+class PaymentRunPreviewLineRead(BaseModel):
+    document_id: int
+    document_number: str
+    due_date: date | None = None
+    open_amount: Decimal
+    amount: Decimal
+    discount_available: Decimal
+    discount_amount: Decimal
+    #: What leaves the bank for this line: `amount` less the discount taken.
+    cash_amount: Decimal
+
+
+class PaymentRunPreviewSupplierRead(BaseModel):
+    partner_id: int
+    partner_name: str
+    supplier_code: str | None = None
+    bank_name: str | None = None
+    bank_account_number: str | None = None
+    bank_account_holder: str | None = None
+    lines: list[PaymentRunPreviewLineRead]
+    #: `bank_details_missing` and `open_credits: …`. Shown beside the supplier, never blocking
+    #: the run.
+    warnings: list[str] = []
+    total: Decimal
+    discount_total: Decimal
+
+
+class PaymentRunPreviewRead(BaseModel):
+    bank_account_id: int
+    bank_account_code: str
+    payment_date: date
+    currency_id: int
+    currency_code: str
+    suppliers: list[PaymentRunPreviewSupplierRead]
+    total: Decimal
+    discount_total: Decimal
+
+
+class PaymentRunLineRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    partner_id: int
+    document_id: int
+    amount: Decimal
+    discount_amount: Decimal
+    settlement_document_id: int | None = None
+    allocation_id: int | None = None
+
+
+class PaymentRunRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    bank_account_id: int
+    number: str
+    payment_date: date
+    currency_id: int
+    total: Decimal
+    reference: str
+    status: PaymentRunStatus
+    posted_at: datetime
+    reversed_at: datetime | None = None
+    reversal_reason: str | None = None
+
+
+class PaymentRunDetail(PaymentRunRead):
+    lines: list[PaymentRunLineRead] = []
+    #: The `remittance_pdf` jobs this run queued, one per supplier, with their artifacts.
+    remittance_job_ids: list[int] = []
+
+
+class PaymentRunReverse(BaseModel):
+    reason: str = Field(min_length=1, max_length=500)
+    #: Defaults to the run's payment date. Never earlier than it — P4 refuses
+    #: `reversal_before_original`.
+    on_date: date | None = None

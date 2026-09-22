@@ -18,6 +18,7 @@ from typing import Annotated
 
 from fastapi import (
     APIRouter,
+    BackgroundTasks,
     Depends,
     File,
     Form,
@@ -33,10 +34,13 @@ from app.api.deps import AuthContext
 from app.api.idempotency import IdempotencyKey
 from app.banking import accounts as accounts_service
 from app.banking import matching
+from app.banking import payment_runs as payment_run_service
 from app.banking import reconciliation as reconciliation_service
+from app.banking import remittance as remittance_service  # noqa: F401 - registers the job
 from app.banking import statements as statements_service
 from app.banking.formats import ParsedLine, normalise
 from app.core import permissions
+from app.core.errors import ConflictError, NotFoundError
 from app.db import get_db
 from app.models.banking import (
     BankMatchKind,
@@ -44,6 +48,7 @@ from app.models.banking import (
     BankStatementLine,
     ReconciliationStatus,
 )
+from app.models.job import JobStatus
 from app.schemas.banking import (
     AutoMatchResultRead,
     BankAccountRead,
@@ -57,6 +62,14 @@ from app.schemas.banking import (
     MatchRead,
     MatchWrite,
     OutstandingLineRead,
+    PaymentRunDetail,
+    PaymentRunLineRead,
+    PaymentRunPreviewLineRead,
+    PaymentRunPreviewRead,
+    PaymentRunPreviewSupplierRead,
+    PaymentRunRead,
+    PaymentRunReverse,
+    PaymentRunWrite,
     PostCashbookFromLine,
     PostedFromStatementRead,
     PostSettlementFromLine,
@@ -66,6 +79,7 @@ from app.schemas.banking import (
     ReconciliationOpen,
     ReconciliationRead,
     ReconciliationReopen,
+    SelectableDocumentRead,
     StatementDetail,
     StatementImportResult,
     StatementLineRead,
@@ -75,6 +89,9 @@ from app.schemas.banking import (
     TickWrite,
     UnregisteredAccountRead,
 )
+from app.schemas.subledger import JobRead
+from app.services import jobs as jobs_service
+from app.services.jobs import run_job
 
 router = APIRouter(prefix="/banking", tags=["banking"])
 
@@ -804,3 +821,261 @@ def reopen_reconciliation(
     )
     db.commit()
     return read_reconciliation(reconciliation_id, auth=auth, db=db)
+
+
+# --- Payment runs (decision 7) -----------------------------------------------------------------
+#
+# Preview → post in one call, P7's shape: there are no draft runs, so `POST /payment-runs/preview`
+# writes nothing and `POST /payment-runs` re-runs every one of its refusals before it claims a
+# number. The remittance advices are read back through this router rather than through
+# `/subledger/jobs`, because decision 11 puts the advices under `bank:payment_run_post` — and
+# because a scoped read can check the job actually belongs to the run being looked at.
+
+
+def _preview_read(preview) -> PaymentRunPreviewRead:  # noqa: ANN001
+    return PaymentRunPreviewRead(
+        bank_account_id=preview.bank_account_id,
+        bank_account_code=preview.bank_account_code,
+        payment_date=preview.payment_date,
+        currency_id=preview.currency_id,
+        currency_code=preview.currency_code,
+        total=preview.total,
+        discount_total=preview.discount_total,
+        suppliers=[
+            PaymentRunPreviewSupplierRead(
+                partner_id=supplier.partner_id,
+                partner_name=supplier.partner_name,
+                supplier_code=supplier.supplier_code,
+                bank_name=supplier.bank_name,
+                bank_account_number=supplier.bank_account_number,
+                bank_account_holder=supplier.bank_account_holder,
+                warnings=list(supplier.warnings),
+                total=supplier.total,
+                discount_total=supplier.discount_total,
+                lines=[
+                    PaymentRunPreviewLineRead(
+                        document_id=line.document_id,
+                        document_number=line.document_number,
+                        due_date=line.due_date,
+                        open_amount=line.open_amount,
+                        amount=line.amount,
+                        discount_available=line.discount_available,
+                        discount_amount=line.discount_amount,
+                        cash_amount=line.cash_amount,
+                    )
+                    for line in supplier.lines
+                ],
+            )
+            for supplier in preview.suppliers
+        ],
+    )
+
+
+@router.get("/payment-runs/selectable")
+def list_selectable_documents(
+    bank_account_id: int = Query(...),
+    due_by: date | None = Query(default=None),
+    partner_id: int | None = Query(default=None),
+    on: date | None = Query(default=None),
+    auth: AuthContext = permissions.require(permissions.BANK_PAYMENT_RUN_POST),
+    db: Session = Depends(get_db),
+) -> list[SelectableDocumentRead]:
+    """The selection grid: open supplier invoices this account could pay, by supplier."""
+    return [
+        SelectableDocumentRead(**vars(document))
+        for document in payment_run_service.selectable_documents(
+            db,
+            auth.company_id,
+            bank_account_id=bank_account_id,
+            due_by=due_by,
+            partner_id=partner_id,
+            on=on,
+        )
+    ]
+
+
+@router.get("/payment-runs")
+def list_payment_runs(
+    bank_account_id: int | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    auth: AuthContext = permissions.require(permissions.BANK_REPORTS_VIEW),
+    db: Session = Depends(get_db),
+) -> list[PaymentRunRead]:
+    return [
+        PaymentRunRead.model_validate(run)
+        for run in payment_run_service.list_runs(
+            db, auth.company_id, bank_account_id=bank_account_id, limit=limit
+        )
+    ]
+
+
+@router.get("/payment-runs/{run_id}")
+def read_payment_run(
+    run_id: int,
+    auth: AuthContext = permissions.require(permissions.BANK_REPORTS_VIEW),
+    db: Session = Depends(get_db),
+) -> PaymentRunDetail:
+    run = payment_run_service.get(db, auth.company_id, run_id)
+    return PaymentRunDetail(
+        **PaymentRunRead.model_validate(run).model_dump(),
+        lines=[
+            PaymentRunLineRead.model_validate(line)
+            for line in payment_run_service.lines_of(db, auth.company_id, run_id)
+        ],
+        remittance_job_ids=[
+            job.id for job in _remittance_jobs(db, auth.company_id, run_id)
+        ],
+    )
+
+
+@router.post("/payment-runs/preview")
+def preview_payment_run(
+    payload: PaymentRunWrite,
+    auth: AuthContext = permissions.require(permissions.BANK_PAYMENT_RUN_POST),
+    db: Session = Depends(get_db),
+) -> PaymentRunPreviewRead:
+    """What the run would pay, and every refusal it would raise. Writes nothing."""
+    return _preview_read(
+        payment_run_service.plan(
+            db,
+            auth.company_id,
+            bank_account_id=payload.bank_account_id,
+            payment_date=payload.payment_date,
+            lines=[
+                payment_run_service.RunLineInput(
+                    document_id=line.document_id,
+                    amount=line.amount,
+                    take_discount=line.take_discount,
+                )
+                for line in payload.lines
+            ],
+        )
+    )
+
+
+@router.post("/payment-runs", status_code=status.HTTP_201_CREATED)
+def post_payment_run(
+    payload: PaymentRunWrite,
+    request: Request,
+    background: BackgroundTasks,
+    auth: AuthContext = permissions.require(permissions.BANK_PAYMENT_RUN_POST),
+    db: Session = Depends(get_db),
+    idempotency_key: str = IdempotencyKey,
+) -> PaymentRunDetail:
+    """One settlement and one allocation per supplier, in one transaction.
+
+    The remittance jobs are queued inside that transaction and **run after the commit**: a job
+    that started against the run's rows before they were durable would render an advice for a
+    payment that may yet be rolled back.
+    """
+    run = payment_run_service.post_run(
+        db,
+        auth.company_id,
+        bank_account_id=payload.bank_account_id,
+        payment_date=payload.payment_date,
+        lines=[
+            payment_run_service.RunLineInput(
+                document_id=line.document_id,
+                amount=line.amount,
+                take_discount=line.take_discount,
+            )
+            for line in payload.lines
+        ],
+        actor=auth.user,
+        permissions=auth.permissions,
+        idempotency_key=idempotency_key,
+        request=request,
+    )
+    jobs = _remittance_jobs(db, auth.company_id, run.id)
+    db.commit()
+    for job in jobs:
+        background.add_task(run_job, job.id, auth.company_id, auth.user.id)
+    return read_payment_run(run.id, auth=auth, db=db)
+
+
+@router.post("/payment-runs/{run_id}/reverse")
+def reverse_payment_run(
+    run_id: int,
+    payload: PaymentRunReverse,
+    request: Request,
+    auth: AuthContext = permissions.require(permissions.BANK_PAYMENT_RUN_POST),
+    db: Session = Depends(get_db),
+) -> PaymentRunDetail:
+    """Unallocate everything, then reverse everything — the fallible leg first — and release
+    the match holding the run's bank line. Refused while that match is inside a locked
+    reconciliation."""
+    payment_run_service.reverse_run(
+        db,
+        auth.company_id,
+        run_id,
+        reason=payload.reason,
+        on_date=payload.on_date,
+        actor=auth.user,
+        request=request,
+    )
+    db.commit()
+    return read_payment_run(run_id, auth=auth, db=db)
+
+
+@router.get("/payment-runs/{run_id}/instruction.csv")
+def download_instruction_file(
+    run_id: int,
+    auth: AuthContext = permissions.require(permissions.BANK_PAYMENT_RUN_POST),
+    db: Session = Depends(get_db),
+) -> Response:
+    """One row per beneficiary, the missing-details rows included with their account fields
+    empty — see `payment_runs.instruction_rows`."""
+    run = payment_run_service.get(db, auth.company_id, run_id)
+    return Response(
+        content=payment_run_service.instruction_csv(db, auth.company_id, run),
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="{run.number}-instruction.csv"'
+        },
+    )
+
+
+@router.get("/payment-runs/{run_id}/remittances")
+def list_remittances(
+    run_id: int,
+    auth: AuthContext = permissions.require(permissions.BANK_PAYMENT_RUN_POST),
+    db: Session = Depends(get_db),
+) -> list[JobRead]:
+    payment_run_service.get(db, auth.company_id, run_id)
+    return [
+        JobRead.model_validate(job)
+        for job in _remittance_jobs(db, auth.company_id, run_id)
+    ]
+
+
+@router.get("/payment-runs/{run_id}/remittances/{job_id}")
+def download_remittance(
+    run_id: int,
+    job_id: int,
+    auth: AuthContext = permissions.require(permissions.BANK_PAYMENT_RUN_POST),
+    db: Session = Depends(get_db),
+) -> Response:
+    payment_run_service.get(db, auth.company_id, run_id)
+    job = jobs_service.get_job(db, auth.company_id, job_id)
+    if (job.params or {}).get("run_id") != run_id:
+        raise NotFoundError("That advice does not belong to this run")
+    if job.status != JobStatus.SUCCEEDED:
+        raise ConflictError("The advice has not been rendered yet", code="job_not_ready")
+    artifact = jobs_service.load_artifact(db, auth.company_id, job_id)
+    if artifact is None:
+        raise ConflictError("The advice has not been rendered yet", code="job_not_ready")
+    return Response(
+        content=artifact,
+        media_type=job.artifact_content_type or "application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{job.artifact_name}"'},
+    )
+
+
+def _remittance_jobs(db: Session, company_id: int, run_id: int):  # noqa: ANN202
+    return [
+        job
+        for job in jobs_service.list_jobs(
+            db, company_id, kind=payment_run_service.REMITTANCE_JOB, limit=200
+        )
+        if (job.params or {}).get("run_id") == run_id
+    ]

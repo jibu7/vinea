@@ -138,7 +138,8 @@ NO_UI: dict[str, str] = {
     # entry — the drain — and step 9 inherits no surprise.
     # --- GAP: P8 banking, steps 6 and 7 ---------------------------------------------------------
     #
-    # Seventeen lines by the end of step 2 — eight here and nine below.
+    # Twenty lines by the end of step 3 — eight here, nine below, and three for the payment
+    # runs step 3 added.
     # Eight lines, each naming the step that deletes it. P8 builds its services in steps 1-5 and
     # its screens in steps 6-8, so between those two points the endpoints exist and nothing
     # calls them — the shape P6 and P7 each carried and each cleared.
@@ -220,6 +221,25 @@ NO_UI: dict[str, str] = {
     ),
     "POST /api/v1/banking/reconciliations/{reconciliation_id}/reopen": (
         "GAP (P8, step 7) — *Reopen* on the latest locked one, with the reason dialog."
+    ),
+    # --- GAP: P8 step 3's payment runs, which are step 7's third screen --------------------------
+    #
+    # Transactions → Accounts Payable → **Payment runs** (`/ap/payment-runs`): the selection
+    # grid with its preview, Post, and Reverse on the run's detail. There are no draft runs, so
+    # the preview and the post are two calls of one press — which is why the preview is on this
+    # list even though it writes nothing: a preview nobody can reach is a run posted blind.
+    #
+    # The instruction file and the remittance advices are **GETs** and so are not the
+    # register's business, but they are the same screen's buttons and arrive with it.
+    "POST /api/v1/banking/payment-runs/preview": (
+        "GAP (P8, step 7) — *Preview* on `/ap/payment-runs/new`: the per-supplier totals, "
+        "`discount_available` per line and the warnings, before Post."
+    ),
+    "POST /api/v1/banking/payment-runs": (
+        "GAP (P8, step 7) — *Post* on the same screen."
+    ),
+    "POST /api/v1/banking/payment-runs/{run_id}/reverse": (
+        "GAP (P8, step 7) — *Reverse* on `/ap/payment-runs/{id}`, with the reason dialog."
     ),
     # --- GAP: the operator console, planned but unscheduled ------------------------------------
     "POST /api/v1/operator/tenants/{company_id}/activate": (
