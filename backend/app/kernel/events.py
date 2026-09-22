@@ -321,6 +321,16 @@ class _StubEvent(PostingEvent):
 # `FxRevalued` stood here as a stub from P2 until P7 step 4, which built it: it is a real
 # `SubledgerJournal` above, posted by `app/subledger/revaluation.py`. ADR-05 called it the last
 # kernel-side stub the fiscalization phase retires, and this is that.
+#
+# **P8 Banking adds no event, and that is the decision rather than an omission** (decision 11).
+# Every posting the phase causes already has an owner: a fee or a deposit posted from a
+# statement line is a `CashbookEntry`, a payment run's settlements are `PartnerDocumentPosted`
+# and their allocations `AllocationPosted`, and bank revaluation is `FxRevalued` with a wider
+# scope. A `BankStatementImported` or a `PaymentRunPosted` would be an event with no ledger
+# consequence of its own — a second name for a posting that already has one — and the module
+# string it carried would be the second posting authority ADR-05 exists to prevent.
+# `app/models/banking.BANKING_MODULE` is kept as a name for the thing that does not happen, and
+# `tests/banking/test_boundary.py` asserts no entry is ever posted under it.
 
 
 @dataclass(frozen=True, kw_only=True)
