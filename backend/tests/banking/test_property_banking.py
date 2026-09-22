@@ -6,8 +6,9 @@ bank invariant suites after every single step.
 
 The operations are the phase's: cashbook entries and settlements (some in USD against the RWF
 account, which decision 2's one-sided rule allows), statements **generated from the ledger and
-then perturbed**, auto-match, manual n:m matches, ticks, unmatches, opens, locks and reopens.
-Payment runs and revaluation join at steps 3 and 4.
+then perturbed** — keyed line by line, and sometimes written out as a CSV and imported through
+the file path — auto-match, manual n:m matches, ticks, unmatches, opens, locks, reopens, and
+supplier payment runs with their reversals. Revaluation joins at step 4.
 
 **The perturbations are the point.** A statement that simply mirrored the ledger would
 reconcile on the first try and prove nothing: what this phase has to survive is a bank whose
@@ -42,6 +43,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.banking import matching
+from app.banking import payment_runs as payment_run_service
 from app.banking import reconciliation as reconciliation_service
 from app.banking import statements as statements_service
 from app.banking.formats import ParsedLine
@@ -57,7 +59,8 @@ from app.models.banking import (
     ReconciliationStatus,
 )
 from app.models.journal import JournalEntry, JournalLine
-from tests.banking.conftest import Banking, build_banking
+from app.models.subledger import PartnerDocument
+from tests.banking.conftest import Banking, ap_invoice, build_banking
 from tests.banking.invariants import assert_bank_invariants
 from tests.kernel.invariants import assert_ledger_invariants
 from tests.subledger.invariants import assert_subledger_invariants
@@ -83,11 +86,19 @@ def _count(counter: dict[str, int], key: str) -> None:
 
 #: The refusals a deep pass must actually provoke, and the floor each must clear.
 #:
-#: Of decision 12's seven, this machine is responsible for three. `payment_exceeds_open` needs
-#: payment runs (step 3). `statement_already_imported` needs the *file* path, and this machine
-#: keys its statements line by line — generating a CSV to express a date and an amount would
-#: make every example a parser test; it is covered by construction in
-#: `tests/banking/test_statements.py`. The other two are below.
+#: **Step 3 moved two in and brought a third with it.** `payment_exceeds_open` needed payment
+#: runs and now has them, and `document_not_open` is its neighbour: a run that names an invoice
+#: a previous run already closed. Both are a single drawn operation away, which is what this
+#: machine is good at, so both are floors here rather than targeted properties.
+#:
+#: `statement_already_imported` joined them by a different route. Step 2's note said this
+#: machine keys its statements line by line, so the file-hash refusal was unreachable and lived
+#: in `tests/banking/test_statements.py` by construction. That was true of `import_manual` and
+#: is no longer true of the machine: `import_statement_file` writes the generated statement out
+#: as a `generic` CSV and imports *those bytes*, which makes the second import of the same file
+#: an ordinary draw. The parser-test objection still stands for the dates and the amounts — the
+#: CSV is generated from the ledger rather than drawn — but the refusal under test here is the
+#: hash, and a hash needs a file.
 #:
 #: Three rather than one, because one is indistinguishable from a coincidence: a boundary hit
 #: once in 300 examples is one the next seed may well miss. Three is not a statistical claim —
@@ -128,6 +139,9 @@ def _count(counter: dict[str, int], key: str) -> None:
 REQUIRED_REFUSALS = (
     "reconciliation_difference",
     "bank_account_currency_mismatch",
+    "payment_exceeds_open",
+    "document_not_open",
+    "statement_already_imported",
 )
 CENSUS_FLOOR = 3
 
@@ -143,6 +157,29 @@ REQUIRED_REACH = (
     "statement: perturbed with a line the ledger lacks",
     "match: attempted manually",
     "posted from a statement line",
+    # Step 3's own preconditions. A payment run needs an open supplier invoice to exist before
+    # it can be refused for anything, and a reversal needs a posted run — so a zero against
+    # `payment_exceeds_open` means nothing until these two are healthy.
+    "payment run: attempted",
+    "payment run: posted",
+    # **This one read 0 on its first deep pass and 7 on the next, and the difference was a
+    # generator defect rather than a conjunction.** `run reversal: attempted` was absent from the
+    # table altogether — the operation was never entered, because `state["invoices"]` still named
+    # ids the session rollback had taken away, so most runs were refused `not_found` and only 24
+    # posted. Pruning those ids took posted runs to 41 and reversals to 7.
+    #
+    # That is the case step 2's report warns against reading the other way: a floor at zero is a
+    # question, and the answer here was "the generator cannot post the thing", not "a reversal is
+    # unreachable in one plan". So the floor stays.
+    #
+    # Seven against a floor of three is a thinner margin than the rest of this list, and
+    # `test_reversing_a_payment_run_holds_every_invariant` in
+    # `tests/banking/test_property_targeted_refusals.py` is why a dip below it would be a
+    # question about the generator rather than a hole in the coverage: that property constructs
+    # the run and asserts all three invariant suites **between** the reversal's legs, which is
+    # more than the machine checks even when it does get there.
+    "run reversal: succeeded",
+    "statement: imported from a file",
 )
 REACH_FLOOR = 3
 
@@ -208,7 +245,13 @@ OPERATIONS = (
     "cashbook_wrong_currency",
     "cashbook_cash",
     "settlement",
+    "supplier_invoice",
+    "payment_run",
+    "reverse_run",
     "import_statement",
+    #: The same generated statement, written out as a `generic` CSV and imported through the
+    #: file path — which is the only way `statement_already_imported` is reachable at all.
+    "import_statement_file",
     "auto_match",
     "manual_match",
     "tick",
@@ -236,9 +279,28 @@ def _plans(draw):  # noqa: ANN001, ANN202
                 st.integers(min_value=0, max_value=40),  # day offset from 1 September
                 st.sampled_from(PERTURBATIONS),
                 st.integers(min_value=0, max_value=6),  # which row a per-row choice lands on
+                # **Its own draw, not a slice of `pick`.** It used to be `pick % 3 == 0`, and
+                # step 3's deep pass read `lock: attempted at a wrong balance` at 2 against a
+                # floor of 3 over 116 lock attempts — a third of which it should have been.
+                # Deriving one decision from another draw's arithmetic makes its frequency a
+                # property of Hypothesis's shrinking rather than of the generator, and the
+                # census cannot tell that from a guard that stopped firing.
+                st.booleans(),  # key the lock balance deliberately wrong
             ),
-            min_size=6,
-            max_size=22,
+            # **Longer than step 2's 6-22, because step 3 made the list longer.** Three
+            # operations joined `OPERATIONS` (a supplier invoice, a payment run, its reversal)
+            # and a fourth split off (the file import), taking it from 14 to 18 — so a plan of
+            # the same length draws each one proportionally less often, and the census showed it
+            # across five deep passes: `posted from a statement line` read 3, 8, 10, 29 and then
+            # **0**, and `document_not_open` 0, 1, 5, 6, **0**. Those are the same guards with
+            # the same code behind them; what changed was how often a plan reached them.
+            #
+            # A floor that flips between passes is worse than no floor — it trains the reader to
+            # re-run the nightly rather than to read it, which is the failure step 2's report
+            # spent a page on. Adding operations without lengthening the plan is what caused it,
+            # so the plan gets longer.
+            min_size=10,
+            max_size=30,
         )
     )
 
@@ -293,9 +355,9 @@ def _post_cashbook(
     )
 
 
-def _generate_statement(
+def _statement_rows(
     db: Session, banking: Banking, *, perturbation: str, on: date, pick: int
-) -> None:
+) -> list[tuple[date, str, Decimal]]:
     """Build a statement **from the ledger** and then perturb it.
 
     Generated rather than drawn, because a statement of random figures would never match
@@ -312,7 +374,7 @@ def _generate_statement(
         )
     )
     if not unmatched:
-        return
+        return []
     entries = {
         line.id: db.get(JournalEntry, line.entry_id).entry_date for line in unmatched
     }
@@ -340,6 +402,11 @@ def _generate_statement(
         rows[index] = (value_date + timedelta(days=5), description, amount)
         _count(_REACH, "statement: perturbed by shifting a value date")
 
+    return [row_ for row_ in rows if row_[2] != ZERO]
+
+
+def _key_statement(db: Session, banking: Banking, rows: list[tuple[date, str, Decimal]]) -> None:
+    """The keyed path: line by line, as a clerk with a paper statement does it."""
     if not rows:
         return
     parsed = [
@@ -359,14 +426,11 @@ def _generate_statement(
             ),
         )
         for index, (value_date, description, amount) in enumerate(rows, start=1)
-        if amount != ZERO
     ]
-    if not parsed:
-        return
     statements_service.import_manual(
         db,
         banking.company_id,
-        bank_account_id=row.id,
+        bank_account_id=banking.bank("BK-RWF").id,
         lines=parsed,
         opening_balance=ZERO,
         closing_balance=sum((line.amount for line in parsed), ZERO),
@@ -375,8 +439,62 @@ def _generate_statement(
     _count(_REACH, "statement: keyed")
 
 
-def _run(db: Session, banking: Banking, plan) -> None:  # noqa: ANN001, C901
-    for operation, magnitude, offset, perturbation, pick in plan:
+def _import_statement_file(
+    db: Session,
+    banking: Banking,
+    rows: list[tuple[date, str, Decimal]],
+    *,
+    state: dict,
+    pick: int,
+) -> None:
+    """The **file** path: the same generated statement written out as a `generic` CSV.
+
+    This is what makes `statement_already_imported` reachable at all — the refusal is over the
+    file's SHA-256, and there is no file on the keyed path. One draw in three re-offers the
+    previous run's bytes rather than building new ones, which is a user finding last month's
+    export in their downloads folder and is the whole of what the refusal is for.
+    """
+    previous = state.get("last_csv")
+    if previous is not None and pick % 3 == 0:
+        content, file_name = previous
+    elif rows:
+        content = _generic_csv(rows)
+        file_name = f"generated-{len(rows)}-{rows[-1][0]:%Y%m%d}.csv"
+    else:
+        return
+    statements_service.import_statement(
+        db,
+        banking.company_id,
+        bank_account_id=banking.bank("BK-RWF").id,
+        content=content,
+        file_name=file_name,
+        actor=banking.owner,
+    )
+    state["last_csv"] = (content, file_name)
+    _count(_REACH, "statement: imported from a file")
+
+
+def _generic_csv(rows: list[tuple[date, str, Decimal]]) -> bytes:
+    """The committed samples' layout — `Date,Description,Reference,Debit,Credit,Balance`, the
+    one `formats.GENERIC_PRESET` reads with no mapping on the account."""
+    balance = ZERO
+    body = ["Date,Description,Reference,Debit,Credit,Balance"]
+    for value_date, description, amount in rows:
+        balance += amount
+        debit = "" if amount > ZERO else str(-amount)
+        credit = str(amount) if amount > ZERO else ""
+        body.append(
+            f"{value_date:%Y-%m-%d},{description},,{debit},{credit},{balance}"
+        )
+    return ("\r\n".join(body) + "\r\n").encode()
+
+
+def _run(db: Session, banking: Banking, plan) -> None:  # noqa: ANN001, C901, PLR0912, PLR0915
+    #: What the plan has built so far and may refer back to. Payment runs need it: an invoice a
+    #: previous run closed is the only way `document_not_open` happens, and a *closed* invoice
+    #: is exactly the thing a "list the open ones" helper would hide.
+    state: dict = {"invoices": [], "runs": [], "paid": []}
+    for operation, magnitude, offset, perturbation, pick, key_it_wrong in plan:
         on = BASE_DAY + timedelta(days=offset)
         amount = Decimal(magnitude * 1000)
         row = banking.bank("BK-RWF")
@@ -431,9 +549,29 @@ def _run(db: Session, banking: Banking, plan) -> None:  # noqa: ANN001, C901
                 )
             elif operation == "settlement":
                 _settlement(db, banking, amount=amount, on=on)
+            elif operation == "supplier_invoice":
+                _supplier_invoice(db, banking, state, amount=amount, on=on)
+            elif operation == "payment_run":
+                _payment_run(db, banking, state, on=on, pick=pick, magnitude=magnitude)
+            elif operation == "reverse_run":
+                _reverse_run(db, banking, state, pick=pick)
             elif operation == "import_statement":
-                _generate_statement(
-                    db, banking, perturbation=perturbation, on=on, pick=pick
+                _key_statement(
+                    db,
+                    banking,
+                    _statement_rows(
+                        db, banking, perturbation=perturbation, on=on, pick=pick
+                    ),
+                )
+            elif operation == "import_statement_file":
+                _import_statement_file(
+                    db,
+                    banking,
+                    _statement_rows(
+                        db, banking, perturbation=perturbation, on=on, pick=pick
+                    ),
+                    state=state,
+                    pick=pick,
                 )
             elif operation == "auto_match":
                 result = matching.auto_match(
@@ -464,9 +602,9 @@ def _run(db: Session, banking: Banking, plan) -> None:  # noqa: ANN001, C901
                 _lock(
                     db,
                     banking,
-                    # One draw in three is deliberately out, so both halves of the lock — the
-                    # one that closes and the one that is refused — are reached.
-                    wrong_by=amount if pick % 3 == 0 else ZERO,
+                    # Half the draws are deliberately out, so both halves of the lock — the one
+                    # that closes and the one that is refused — are reached.
+                    wrong_by=amount if key_it_wrong else ZERO,
                 )
             elif operation == "reopen":
                 _reopen(db, banking)
@@ -506,6 +644,125 @@ def _settlement(db: Session, banking: Banking, *, amount: Decimal, on: date) -> 
         actor=banking.owner,
     )
     _count(_REACH, "settlement: posted")
+
+
+def _supplier_invoice(
+    db: Session, banking: Banking, state: dict, *, amount: Decimal, on: date
+) -> None:
+    """Something for a payment run to pay. Posted through P4, like everything else here."""
+    invoice = ap_invoice(db, banking, banking.supplier, amount=amount, on=on)
+    state["invoices"].append(invoice.id)
+    _count(_REACH, "supplier invoice: posted")
+
+
+def _payment_run(
+    db: Session,
+    banking: Banking,
+    state: dict,
+    *,
+    on: date,
+    pick: int,
+    magnitude: int,
+) -> None:
+    """Pay one or two invoices the plan has posted — **drawn from every invoice, not from the
+    open ones**.
+
+    That is deliberate, and it is the same choice `_manual_match` makes about balancing. A
+    generator that filtered to what was payable could never provoke `document_not_open`, and
+    the census would read zero with every reach counter healthy — the shape P6 step 5 spent a
+    phase learning to distrust. One draw in three also asks for more than the invoice has open,
+    which is `payment_exceeds_open` arriving from the ordinary case rather than a special one.
+    """
+    # **Ids the rollback took away are dropped first.** An illegal step rolls the session back
+    # to the last commit, which un-posts invoices this list still names; pass 3 lost 24 of 70 run
+    # attempts to `not_found` that way. A screen only ever offers documents that exist, so
+    # filtering here makes the generator more like the product and not less.
+    state["invoices"] = [
+        document_id
+        for document_id in state["invoices"]
+        if db.get(PartnerDocument, document_id) is not None
+    ]
+    invoices = state["invoices"]
+    if not invoices:
+        return
+    chosen = [invoices[pick % len(invoices)]]
+    if len(invoices) > 1 and magnitude % 2:
+        chosen.append(invoices[(pick + 1) % len(invoices)])
+    # **One draw in three names an invoice a previous run already closed**, which is the whole
+    # of `document_not_open`: a selection made while the invoice was open, posted after
+    # somebody else paid it. Drawing it blind from `invoices` does not get there — a plan long
+    # enough to hold two runs *and* to have them collide on the same invoice is a conjunction,
+    # and the first deep pass read this refusal at zero with 302 runs posted. Constructing it
+    # in the generator is the same fix `_lock`'s wrong balance had at step 2, for the same
+    # reason: the machine should try the thing, not wait to stumble into it.
+    if state["paid"] and pick % 2 == 0:
+        chosen.insert(0, state["paid"][pick % len(state["paid"])])
+    over = Decimal(magnitude * 1000) if pick % 3 == 0 else None
+    # **Dated at or after the latest invoice it pays**, three draws in four.
+    #
+    # This is the generator following the product rather than fighting it: the screen defaults
+    # the payment date to today and the invoices are already raised, so a run dated before one
+    # of them is the unusual case, not the usual one. The first version drew the date blind from
+    # the plan's offset, and `payment_run_before_invoice` then refused 40 of 134 attempts —
+    # **eight** runs posted out of 134, which starved `document_not_open` (it needs a posted run
+    # to have closed an invoice) and meant `reverse_run` never ran once in 300 examples. A
+    # generator that cannot post the thing cannot exercise anything downstream of it.
+    #
+    # The remaining draw in four is deliberately backdated, so the refusal stays in the census
+    # rather than going quiet the moment it stopped being an accident.
+    chosen = list(dict.fromkeys(chosen))
+    latest = max(
+        (
+            document.document_date
+            for document in (db.get(PartnerDocument, document_id) for document_id in chosen)
+            if document is not None
+        ),
+        default=on,
+    )
+    payment_date = on if pick % 4 == 0 else max(on, latest)
+    _count(_REACH, "payment run: attempted")
+    run = payment_run_service.post_run(
+        db,
+        banking.company_id,
+        bank_account_id=banking.bank("BK-RWF").id,
+        payment_date=payment_date,
+        lines=[
+            payment_run_service.RunLineInput(
+                document_id=document_id,
+                amount=None if over is None else _open_of(db, document_id) + over,
+            )
+            for document_id in chosen
+        ],
+        actor=banking.owner,
+    )
+    state["runs"].append(run.id)
+    state["paid"].extend(
+        line.document_id
+        for line in payment_run_service.lines_of(db, banking.company_id, run.id)
+    )
+    _count(_REACH, "payment run: posted")
+
+
+def _open_of(db: Session, document_id: int) -> Decimal:
+    document = db.get(PartnerDocument, document_id)
+    return ZERO if document is None else document.open_amount
+
+
+def _reverse_run(db: Session, banking: Banking, state: dict, *, pick: int) -> None:
+    """Reverse a run drawn blind — including one already reversed, and one whose bank line is
+    inside a locked reconciliation. Both are refusals the census counts."""
+    runs = state["runs"]
+    if not runs:
+        return
+    _count(_REACH, "run reversal: attempted")
+    payment_run_service.reverse_run(
+        db,
+        banking.company_id,
+        runs[pick % len(runs)],
+        reason="property",
+        actor=banking.owner,
+    )
+    _count(_REACH, "run reversal: succeeded")
 
 
 def _manual_match(db: Session, banking: Banking, *, pick: int) -> None:
@@ -657,6 +914,21 @@ def _post_from_a_statement_line(db: Session, banking: Banking) -> None:
     _count(_REACH, "posted from a statement line")
 
 
+def _close_the_fee_loop(db: Session, banking: Banking) -> None:
+    """After the plan, post the fee the `add_a_line` perturbation invented.
+
+    Without this the fee is only ever an unmatched statement line and
+    `posted from a statement line` never reaches its floor — the mechanism decision 4 exists for
+    would be generated and never exercised.
+    """
+    try:
+        _post_from_a_statement_line(db, banking)
+        db.flush()
+    except AppError as error:
+        db.rollback()
+        _skip(error)
+
+
 # --- The machines ------------------------------------------------------------------------------
 
 
@@ -674,15 +946,7 @@ def test_the_invariants_hold_over_any_sequence_at_a_zero_decimal_base(
         email=f"property.bank.{next(_EXAMPLE)}@example.test",
     )
     _run(db, banking, plan)
-    # After the plan, close the loop the `add_a_line` perturbation opens — otherwise the fee it
-    # invents is only ever an unmatched line, and `posted from a statement line` never reaches
-    # its floor.
-    try:
-        _post_from_a_statement_line(db, banking)
-        db.flush()
-    except AppError as error:
-        db.rollback()
-        _skip(error)
+    _close_the_fee_loop(db, banking)
     assert_ledger_invariants(db, banking.company_id)
     assert_subledger_invariants(db, banking.company_id)
     assert_bank_invariants(db, banking.company_id)
@@ -709,6 +973,12 @@ def test_the_invariants_hold_over_any_sequence_at_a_two_decimal_base(
     base.decimal_places = 2
     db.flush()
     _run(db, banking, plan)
+    # **Both machines close the loop, not just the 0-dp one.** It was only here at step 2 and
+    # `posted from a statement line` cleared its floor on one machine's examples alone; at step
+    # 3's plan length it read 0 on pass 5. Two machines is twice the chances, and a fee posted at
+    # a two-decimal base is worth asserting on its own account — the cashbook entry it writes
+    # rounds where the 0-dp one cannot.
+    _close_the_fee_loop(db, banking)
     assert_ledger_invariants(db, banking.company_id)
     assert_subledger_invariants(db, banking.company_id)
     assert_bank_invariants(db, banking.company_id)

@@ -158,6 +158,9 @@ def create_partner(
             address=payload.address,
             notes=payload.notes,
             currency_id=payload.currency_id,
+            bank_name=payload.bank_name,
+            bank_account_number=payload.bank_account_number,
+            bank_account_holder=payload.bank_account_holder,
         ),
         actor=auth.user,
         request=request,
@@ -203,12 +206,20 @@ def update_partner(
         currency = None
     elif payload.currency_id is not None:
         currency = payload.currency_id
+    # One flag for all three, because bank details are one fact: a supplier who changed banks
+    # and whose new account number has not arrived yet has no bank details, not a stale bank
+    # name and a blank number — and the instruction file would happily print the pair.
+    bank = {
+        field: None if payload.clear_bank_details else getattr(payload, field) or ...
+        for field in ("bank_name", "bank_account_number", "bank_account_holder")
+    }
     masters.update_partner(
         db,
         partner,
         name=payload.name,
         customer_code=customer_code,
         supplier_code=supplier_code,
+        **bank,
         tin=payload.tin,
         email=payload.email,
         phone=payload.phone,

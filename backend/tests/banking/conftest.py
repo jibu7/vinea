@@ -247,3 +247,94 @@ def key_statement(
         closing_balance=opening + total if closing is None else closing,
         actor=banking.owner,
     )
+
+
+# --- Payment-run helpers (step 3) ----------------------------------------------------------------
+
+
+def ap_supplier(
+    db: Session,
+    banking: Banking,
+    *,
+    name: str,
+    code: str,
+    bank_details: bool = True,
+    terms_code: str | None = None,
+) -> Partner:
+    """A supplier with, or deliberately without, the bank details a run's instruction file
+    reads. `terms_code` is a seeded `payment_terms` row — `2/10N30` is the discount window the
+    tape's S2 pays inside."""
+    from app.models.partner import PaymentTerms
+
+    partner = partner_masters.create_partner(
+        db,
+        banking.company_id,
+        partner_masters.PartnerInput(name=name, supplier_code=code),
+        actor=banking.owner,
+    )
+    terms_id = None
+    if terms_code is not None:
+        terms_id = db.scalars(
+            select(PaymentTerms).where(
+                PaymentTerms.company_id == banking.company_id,
+                PaymentTerms.code == terms_code,
+            )
+        ).one().id
+    partner_masters.upsert_role_settings(
+        db,
+        banking.company_id,
+        partner,
+        PartnerRole.AP,
+        partner_masters.RoleSettingsInput(
+            default_gl_account_id=banking.ledger.acct("6990"),
+            tax_mode=TaxMode.EXCLUSIVE,
+            payment_terms_id=terms_id,
+        ),
+        actor=banking.owner,
+    )
+    if bank_details:
+        partner_masters.update_partner(
+            db,
+            partner,
+            bank_name="Bank of Kigali",
+            bank_account_number=f"00040-{code}-01",
+            bank_account_holder=name,
+            actor=banking.owner,
+        )
+    db.flush()
+    return partner
+
+
+def ap_invoice(
+    db: Session,
+    banking: Banking,
+    partner: Partner,
+    *,
+    amount: Decimal,
+    on: date,
+    currency: str = "RWF",
+):  # noqa: ANN201
+    """A posted supplier invoice, through P4 — the only way one exists."""
+    from app.models.subledger import DocumentKind
+    from app.subledger import documents as documents_service
+
+    document, _ = documents_service.post_document(
+        db,
+        banking.company_id,
+        PartnerRole.AP,
+        documents_service.DocumentInput(
+            kind=DocumentKind.INVOICE,
+            partner_id=partner.id,
+            document_date=on,
+            description=f"Supplies from {partner.name}",
+            currency_id=banking.ledger.cur(currency),
+            lines=(
+                documents_service.LineInput(
+                    unit_price=amount, gl_account_id=banking.ledger.acct("6990")
+                ),
+            ),
+        ),
+        actor=banking.owner,
+    )
+    db.flush()
+    return document

@@ -61,6 +61,13 @@ class PartnerInput:
     address: dict | None = None
     notes: str | None = None
     currency_id: int | None = None
+    # --- P8 decision 7: where a payment run sends the money -----------------------------
+    #: On `partners` rather than on the AP role settings, because a partner who is both a
+    #: customer and a supplier banks at one bank — and a refund to a customer will want the
+    #: same three fields when one is ever built.
+    bank_name: str | None = None
+    bank_account_number: str | None = None
+    bank_account_holder: str | None = None
 
 
 def list_partners(
@@ -147,6 +154,9 @@ def create_partner(
         address=data.address,
         notes=data.notes,
         currency_id=data.currency_id,
+        bank_name=data.bank_name,
+        bank_account_number=data.bank_account_number,
+        bank_account_holder=data.bank_account_holder,
         is_active=True,
     )
     db.add(partner)
@@ -181,6 +191,9 @@ def update_partner(
     address: dict | None = None,
     notes: str | None = None,
     currency_id: int | None | object = ...,
+    bank_name: str | None | object = ...,
+    bank_account_number: str | None | object = ...,
+    bank_account_holder: str | None | object = ...,
     is_active: bool | None = None,
     actor: User,
     request: Request | None = None,
@@ -220,6 +233,15 @@ def update_partner(
         partner.notes = notes
     if currency_id is not ...:
         partner.currency_id = currency_id  # type: ignore[assignment]
+    # Sentinel rather than `None`, like the codes above: clearing a supplier's bank details is
+    # a thing an editor does on purpose, and `None`-means-leave-alone would make it impossible.
+    for field, value in (
+        ("bank_name", bank_name),
+        ("bank_account_number", bank_account_number),
+        ("bank_account_holder", bank_account_holder),
+    ):
+        if value is not ...:
+            setattr(partner, field, value)
     if is_active is not None:
         partner.is_active = is_active
     db.flush()

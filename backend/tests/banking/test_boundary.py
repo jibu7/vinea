@@ -176,7 +176,9 @@ def test_the_scan_actually_reaches_the_banking_package() -> None:
         "accounts.py",
         "formats.py",
         "matching.py",
+        "payment_runs.py",
         "reconciliation.py",
+        "remittance.py",
         "statements.py",
     } <= found, f"the boundary scan is not reading the banking package: {sorted(found)}"
 

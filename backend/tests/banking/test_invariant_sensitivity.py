@@ -14,9 +14,9 @@ Two conventions, both from P7 step 9 §C:
 * **Restore inside the test.** Every case runs in a transaction that is rolled back, or drops a
   trigger inside a `try/finally`. Nothing here leaves the schema changed.
 
-Clause 8 is the payment-run clause and is not yet written; it lands with the runs at step 3,
-and `test_clause_8_is_not_written_yet` says so out loud so the gap is a fact a reader meets
-rather than one they have to notice.
+Clause 8, the payment-run clause, arrived at step 3 with the runs themselves and is broken
+below like the rest. Between step 2 and step 3 a `test_clause_8_is_not_written_yet` stood in its
+place, so the gap was a fact a reader met rather than one they had to notice.
 """
 
 from datetime import date
@@ -34,7 +34,14 @@ from app.models.banking import (
     BankMatchRule,
     BankStatementLine,
 )
-from tests.banking.conftest import Banking, bank_line_of, cashbook, key_statement
+from tests.banking.conftest import (
+    Banking,
+    ap_invoice,
+    ap_supplier,
+    bank_line_of,
+    cashbook,
+    key_statement,
+)
 from tests.banking.invariants import assert_bank_invariants
 from tests.kernel.conftest import YEAR
 
@@ -422,29 +429,114 @@ def test_clause_7_catches_a_cache_on_an_account_with_no_locked_reconciliation(
     db.rollback()
 
 
-# --- 8 --------------------------------------------------------------------------------------------
+# --- 8: a run equals its members ------------------------------------------------------------------
 
 
-def test_clause_8_is_not_written_yet() -> None:
-    """Clause 8 is decision 5's payment-run clause — Σ member settlement totals equals the run
-    total, every member carries the run's number as `reference`, every member's
-    `cash_account_id` is the run's account, and a reversed run has every member reversed.
+def _a_posted_run(db: Session, banking: Banking):  # noqa: ANN202
+    """One supplier, one invoice, one run — the smallest thing clause 8 has an opinion about."""
+    from app.banking import payment_runs as payment_run_service
 
-    It lands at **step 3**, with the runs themselves: there is no `payment_runs` row to assert
-    anything about until then, and a clause over an empty table is the vacuous green this file
-    exists to prevent. Named here so that "the suite has eight clauses and one is missing" is a
-    fact a reader meets rather than one they have to notice.
-    """
-    from tests.banking import invariants
-
-    source = (
-        invariants.assert_bank_invariants.__module__,
-        invariants.__file__,
+    cashbook(db, banking, account_code="1120", amount=Decimal(100000), on=SEP_3)
+    supplier = ap_supplier(db, banking, name="Sensitivity Supplies", code="SENS")
+    invoice = ap_invoice(db, banking, supplier, amount=Decimal(40000), on=SEP_3)
+    db.commit()
+    run = payment_run_service.post_run(
+        db,
+        banking.company_id,
+        bank_account_id=banking.bank("BK-RWF").id,
+        payment_date=SEP_3,
+        lines=[payment_run_service.RunLineInput(document_id=invoice.id)],
+        actor=banking.owner,
     )
-    body = open(source[1], encoding="utf-8").read()  # noqa: SIM115, PTH123
+    db.commit()
+    return run
 
-    assert "_clause_8" not in body, "clause 8 has landed — delete this test and its comment"
-    assert "Clause 8 — payment runs — arrives at step 3" in body
+
+def test_clause_8_catches_a_run_whose_total_is_not_its_members(
+    db: Session, banking: Banking
+) -> None:
+    """The run row says 40 000 and the settlement says 40 000. Move one of them by SQL and the
+    clause is the only thing that notices — the ledger is still balanced and the open items are
+    still right, because a run's `total` is a claim *about* documents rather than a posting."""
+    run = _a_posted_run(db, banking)
+
+    db.execute(
+        text("UPDATE payment_runs SET total = total + 1 WHERE id = :id"), {"id": run.id}
+    )
+    db.flush()
+    db.expire_all()
+
+    with pytest.raises(AssertionError, match="but its settlements total"):
+        assert_bank_invariants(db, banking.company_id)
+    db.rollback()
+
+
+def test_clause_8_catches_a_member_that_lost_the_runs_reference(
+    db: Session, banking: Banking
+) -> None:
+    """The reference is what decision 4's `payment_run` rule matches the bank's single line
+    on. A member that lost it is a payment the reconciliation can never find, and nothing else
+    in the suite would see it."""
+    run = _a_posted_run(db, banking)
+    settlement_id = payment_run_line_settlement(db, run.id)
+
+    db.execute(
+        text("UPDATE partner_documents SET reference = 'PYR-000999' WHERE id = :id"),
+        {"id": settlement_id},
+    )
+    db.flush()
+    db.expire_all()
+
+    with pytest.raises(AssertionError, match="the bank's line would never find it"):
+        assert_bank_invariants(db, banking.company_id)
+    db.rollback()
+
+
+def test_clause_8_catches_a_member_settled_through_another_account(
+    db: Session, banking: Banking
+) -> None:
+    """A settlement that left a different bank account is a different banking act, whatever
+    the run row says about it."""
+    run = _a_posted_run(db, banking)
+    settlement_id = payment_run_line_settlement(db, run.id)
+
+    db.execute(
+        text("UPDATE partner_documents SET cash_account_id = :account WHERE id = :id"),
+        {"account": banking.ledger.acct("1110"), "id": settlement_id},
+    )
+    db.flush()
+    db.expire_all()
+
+    with pytest.raises(AssertionError, match="settled through account"):
+        assert_bank_invariants(db, banking.company_id)
+    db.rollback()
+
+
+def test_clause_8_catches_a_reversed_run_with_a_member_still_standing(
+    db: Session, banking: Banking
+) -> None:
+    """**The half-undone reversal.** `reverse_run` unallocates N allocations and reverses N
+    settlements; this is the state a failure in the middle of that would leave, and the clause
+    is what makes it visible between the legs rather than at the end."""
+    run = _a_posted_run(db, banking)
+
+    db.execute(
+        text("UPDATE payment_runs SET status = 'reversed' WHERE id = :id"), {"id": run.id}
+    )
+    db.flush()
+    db.expire_all()
+
+    with pytest.raises(AssertionError, match="is reversed but"):
+        assert_bank_invariants(db, banking.company_id)
+    db.rollback()
+
+
+def payment_run_line_settlement(db: Session, run_id: int) -> int:
+    from app.models.banking import PaymentRunLine
+
+    return db.scalars(
+        select(PaymentRunLine.settlement_document_id).where(PaymentRunLine.run_id == run_id)
+    ).one()
 
 
 # --- 9: a void statement's lines are void, and a live one's are not -------------------------------
@@ -555,7 +647,7 @@ def test_every_clause_is_reached_by_this_file() -> None:
         if line.startswith("def _clause_")
     }
 
-    assert declared == {"1", "2", "3", "4", "5", "6", "7", "9"}, (
+    assert declared == {"1", "2", "3", "4", "5", "6", "7", "8", "9"}, (
         f"clauses in the suite: {sorted(declared)}. Every one needs a sensitivity test in this "
-        "file, and clause 8 arrives with the payment runs at step 3."
+        "file — a clause added without one is a clause nobody has shown can fail."
     )

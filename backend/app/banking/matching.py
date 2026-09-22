@@ -402,13 +402,7 @@ def unmatch(
     match inside a locked reconciliation is part of a proof somebody signed.
     """
     match = get_match(db, company_id, match_id)
-    if match.reconciliation_id is not None:
-        locked = _reconciliation_number(db, company_id, match.reconciliation_id)
-        raise LedgerStateError(
-            f"This match belongs to {locked}; reopen it first",
-            code="reconciliation_locked",
-            field_errors={"match_id": [f"locked in {locked}"]},
-        )
+    assert_unmatchable(db, company_id, match_id)
     record_audit(
         db,
         company_id=company_id,
@@ -422,6 +416,25 @@ def unmatch(
     )
     db.delete(match)
     db.flush()
+
+
+def assert_unmatchable(db: Session, company_id: int, match_id: int) -> None:
+    """The one refusal `unmatch` raises, asked on its own.
+
+    Separated so a caller that is about to release several matches can hear the refusal
+    **before** it starts writing — which is what a payment-run reversal needs: the run's bank
+    line may sit inside a locked reconciliation, and finding that out after N unallocations
+    would leave the run half undone (decision 7).
+    """
+    match = get_match(db, company_id, match_id)
+    if match.reconciliation_id is None:
+        return
+    locked = _reconciliation_number(db, company_id, match.reconciliation_id)
+    raise LedgerStateError(
+        f"This match belongs to {locked}; reopen it first",
+        code="reconciliation_locked",
+        field_errors={"match_id": [f"locked in {locked}"]},
+    )
 
 
 def _reconciliation_number(db: Session, company_id: int, reconciliation_id: int) -> str:

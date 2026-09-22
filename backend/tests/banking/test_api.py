@@ -648,3 +648,189 @@ def test_unmatching_inside_a_locked_reconciliation_is_refused_over_http(
 
     assert refused.status_code == 409
     assert refused.json()["code"] == "reconciliation_locked"
+
+
+# --- Payment runs (decision 7) -----------------------------------------------------------------
+
+
+def _supplier(client: TestClient, *, name: str, code: str, bank: bool = True) -> dict:
+    created = client.post(
+        "/api/v1/subledger/ap/partners",
+        json={
+            "name": name,
+            "supplier_code": code,
+            **(
+                {
+                    "bank_name": "Bank of Kigali",
+                    "bank_account_number": f"00040-{code}-01",
+                    "bank_account_holder": name,
+                }
+                if bank
+                else {}
+            ),
+        },
+    )
+    assert created.status_code == 201, created.json()
+    return created.json()
+
+
+def _supplier_invoice(client: TestClient, partner: dict, *, amount: str, on: str) -> dict:
+    accounts = {row["code"]: row for row in client.get("/api/v1/gl/accounts").json()}
+    posted = client.post(
+        "/api/v1/subledger/ap/documents",
+        json={
+            "kind": "invoice",
+            "partner_id": partner["id"],
+            "document_date": on,
+            "description": f"supplies from {partner['name']}",
+            "lines": [{"unit_price": amount, "gl_account_id": accounts["6990"]["id"]}],
+        },
+        headers={"Idempotency-Key": f"sin-{partner['supplier_code']}"},
+    )
+    assert posted.status_code in (200, 201), posted.json()
+    return posted.json()
+
+
+def test_the_supplier_screen_keeps_bank_details(client: TestClient) -> None:
+    """The three fields a run's instruction file reads, over the Suppliers screen's own route —
+    written on create, edited, and cleared as one fact rather than three."""
+    _signup(client)
+    supplier = _supplier(client, name="Kigali Timber", code="S1")
+    assert supplier["bank_account_number"] == "00040-S1-01"
+
+    edited = client.patch(
+        f"/api/v1/subledger/ap/partners/{supplier['id']}",
+        json={"bank_account_number": "00040-S1-02"},
+    )
+    assert edited.status_code == 200
+    assert edited.json()["bank_account_number"] == "00040-S1-02"
+    assert edited.json()["bank_name"] == "Bank of Kigali", "the others are left alone"
+
+    cleared = client.patch(
+        f"/api/v1/subledger/ap/partners/{supplier['id']}",
+        json={"clear_bank_details": True},
+    )
+    assert cleared.status_code == 200
+    assert cleared.json()["bank_name"] is None
+    assert cleared.json()["bank_account_number"] is None
+    assert cleared.json()["bank_account_holder"] is None
+
+
+def test_a_payment_run_is_previewed_posted_and_reversed_over_http(
+    client: TestClient,
+) -> None:
+    """Preview → Post → the instruction file → Reverse, the four presses `/ap/payment-runs`
+    will make. The preview writes nothing, which is asserted by there being no run after it."""
+    _signup(client)
+    bank = _bank(client)
+    _cashbook(client, amount="500000", on="2026-09-01", kind="receipt", key="cb-1")
+    s1 = _supplier(client, name="Kigali Timber", code="S1")
+    s3 = _supplier(client, name="Huye Hardware", code="S3", bank=False)
+    sin1 = _supplier_invoice(client, s1, amount="236000", on="2026-09-01")
+    sin3 = _supplier_invoice(client, s3, amount="50000", on="2026-09-01")
+
+    selectable = client.get(
+        "/api/v1/banking/payment-runs/selectable", params={"bank_account_id": bank["id"]}
+    )
+    assert selectable.status_code == 200
+    assert {row["document_id"] for row in selectable.json()} == {sin1["id"], sin3["id"]}
+
+    body = {
+        "bank_account_id": bank["id"],
+        "payment_date": "2026-09-10",
+        "lines": [{"document_id": sin1["id"]}, {"document_id": sin3["id"]}],
+    }
+    preview = client.post("/api/v1/banking/payment-runs/preview", json=body)
+    assert preview.status_code == 200
+    assert Decimal(preview.json()["total"]) == Decimal(286000)
+    warnings = {
+        supplier["partner_id"]: supplier["warnings"]
+        for supplier in preview.json()["suppliers"]
+    }
+    assert "bank_details_missing" in warnings[s3["id"]]
+    assert warnings[s1["id"]] == []
+    assert client.get("/api/v1/banking/payment-runs").json() == [], "a preview writes nothing"
+
+    posted = client.post(
+        "/api/v1/banking/payment-runs", json=body, headers={"Idempotency-Key": "pyr-1"}
+    )
+    assert posted.status_code == 201, posted.json()
+    run = posted.json()
+    assert run["number"] == "PYR-000001"
+    assert run["reference"] == "PYR-000001"
+    assert Decimal(run["total"]) == Decimal(286000)
+    assert len(run["lines"]) == 2
+    assert len(run["remittance_job_ids"]) == 2, "one advice per supplier"
+
+    instruction = client.get(f"/api/v1/banking/payment-runs/{run['id']}/instruction.csv")
+    assert instruction.status_code == 200
+    assert instruction.headers["content-type"].startswith("text/csv")
+    rows = instruction.text.strip().split("\r\n")
+    assert rows[0] == "beneficiary,bank,account number,amount,currency,reference,supplier code"
+    assert len(rows) == 3
+    assert ",,,50000,RWF,PYR-000001,S3" in instruction.text, "S3's account fields are empty"
+
+    reversed_run = client.post(
+        f"/api/v1/banking/payment-runs/{run['id']}/reverse",
+        json={"reason": "the transfer was recalled"},
+    )
+    assert reversed_run.status_code == 200
+    assert reversed_run.json()["status"] == "reversed"
+    assert (
+        Decimal(
+            client.get(f"/api/v1/subledger/ap/documents/{sin1['id']}").json()["open_amount"]
+        )
+        == Decimal(236000)
+    )
+
+
+def test_paying_more_than_is_open_is_refused_over_http(client: TestClient) -> None:
+    """The refusal reaches the screen as `{code, message, field_errors}` with the line named,
+    which is what lets the selection grid mark the row rather than the form."""
+    _signup(client)
+    bank = _bank(client)
+    _cashbook(client, amount="500000", on="2026-09-01", kind="receipt", key="cb-1")
+    s1 = _supplier(client, name="Kigali Timber", code="S1")
+    sin1 = _supplier_invoice(client, s1, amount="236000", on="2026-09-01")
+
+    refused = client.post(
+        "/api/v1/banking/payment-runs",
+        json={
+            "bank_account_id": bank["id"],
+            "payment_date": "2026-09-10",
+            "lines": [{"document_id": sin1["id"], "amount": "300000"}],
+        },
+        headers={"Idempotency-Key": "pyr-over"},
+    )
+    assert refused.status_code == 409
+    assert refused.json()["code"] == "payment_exceeds_open"
+    assert "lines.0.amount" in refused.json()["field_errors"]
+    assert client.get("/api/v1/banking/payment-runs").json() == [], "no number was claimed"
+
+
+def test_reversing_a_member_settlement_over_http_is_refused(client: TestClient) -> None:
+    """What `/ap/documents/{id}` reads before it shows its Reverse button."""
+    _signup(client)
+    bank = _bank(client)
+    _cashbook(client, amount="500000", on="2026-09-01", kind="receipt", key="cb-1")
+    s1 = _supplier(client, name="Kigali Timber", code="S1")
+    sin1 = _supplier_invoice(client, s1, amount="236000", on="2026-09-01")
+    posted = client.post(
+        "/api/v1/banking/payment-runs",
+        json={
+            "bank_account_id": bank["id"],
+            "payment_date": "2026-09-10",
+            "lines": [{"document_id": sin1["id"]}],
+        },
+        headers={"Idempotency-Key": "pyr-1"},
+    )
+    assert posted.status_code == 201
+    settlement_id = posted.json()["lines"][0]["settlement_document_id"]
+
+    refused = client.post(
+        f"/api/v1/subledger/ap/documents/{settlement_id}/reverse",
+        json={"on_date": "2026-09-10", "reason": "wrong beneficiary"},
+    )
+    assert refused.status_code == 409
+    assert refused.json()["code"] == "payment_run_member"
+    assert "PYR-000001" in refused.json()["message"]
