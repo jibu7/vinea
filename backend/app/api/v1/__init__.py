@@ -2,6 +2,7 @@ from fastapi import APIRouter
 
 from app.api.v1 import (
     auth,
+    banking,
     company,
     fiscal,
     gl,
@@ -21,6 +22,7 @@ api_router.include_router(invitations.router)
 api_router.include_router(memberships.router)
 api_router.include_router(operator.router)
 api_router.include_router(gl.router)
+api_router.include_router(banking.router)
 api_router.include_router(subledger.router)
 api_router.include_router(inventory.router)
 api_router.include_router(order_entry.router)

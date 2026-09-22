@@ -26,6 +26,17 @@ SQLSTATE_STOCK_IMMUTABLE = "VN010"
 # revenue authority's signature over a sale and a filed VAT return is a declaration; neither
 # is a row anybody gets to edit, and a convention that says so is not an enforcement.
 SQLSTATE_FISCAL_IMMUTABLE = "VN011"
+# P8: the bank side, and the same division of labour the engine and the triggers have had
+# since P2 — the engine refuses first so the screen gets a field error, and the trigger is
+# what makes the refusal a guarantee rather than a convention.
+#: A line in the wrong currency on a foreign-currency bank account (decision 2's one-sided
+#: rule). One-sided: a **base**-currency bank account may legitimately carry a USD receipt,
+#: because that is how a customer's USD invoice gets paid through a Rwandan bank.
+SQLSTATE_BANK_CURRENCY = "VN012"
+#: An edit to, or a delete of, an imported bank statement line. A statement is the bank's
+#: record of what happened; a mistaken import is **voided as a whole**, never corrected line
+#: by line, so there is no legitimate UPDATE to exempt (decision 3).
+SQLSTATE_STATEMENT_IMMUTABLE = "VN013"
 
 _SQLSTATE_CODES = {
     SQLSTATE_IMMUTABLE: "posted_entry_immutable",
@@ -39,6 +50,8 @@ _SQLSTATE_CODES = {
     SQLSTATE_STOCK_WRITER: "stock_write_forbidden",
     SQLSTATE_STOCK_IMMUTABLE: "stock_move_immutable",
     SQLSTATE_FISCAL_IMMUTABLE: "fiscal_record_immutable",
+    SQLSTATE_BANK_CURRENCY: "bank_account_currency_mismatch",
+    SQLSTATE_STATEMENT_IMMUTABLE: "statement_line_immutable",
 }
 
 

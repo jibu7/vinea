@@ -47,6 +47,7 @@ from app.kernel.money import (
 )
 from app.kernel.periods import get_fiscal_year, lock_period_for_posting, periods_of
 from app.kernel.sequences import claim_number
+from app.models.banking import BankAccount
 from app.models.company import Branch
 from app.models.currency import Currency
 from app.models.fiscal import AccountingPeriod
@@ -206,6 +207,16 @@ class ResolvedLine:
     is_rounding_line: bool = False
 
 
+@dataclass(frozen=True)
+class _BankCurrencyRule:
+    """What decision 2's one-sided rule needs to know about one GL account: the currency its
+    lines must be in, and the two codes a refusal names."""
+
+    currency_id: int
+    currency_code: str
+    bank_account_code: str
+
+
 class _Context:
     """Per-posting lookups (one query per referenced table, then dict access)."""
 
@@ -219,6 +230,46 @@ class _Context:
         self._projects: dict[int, Project] = {}
         self._main_branch: Branch | None = None
         self._control_modules: dict[ControlType, frozenset[str]] | None = None
+        self._bank_currencies: dict[int, _BankCurrencyRule] | None = None
+
+    def bank_currency_rule(self, account_id: int) -> "_BankCurrencyRule | None":
+        """The currency a line on this GL account **must** be in, and the two codes a refusal
+        needs to name.
+
+        `None` where there is no rule, which is every account but a *foreign-currency* bank or
+        cash account — decision 2's rule is one-sided. A base-currency bank account may carry
+        a line in any currency, because a USD receipt into a Rwandan RWF account is how a
+        customer's USD invoice gets paid and P4 already values it at the keyed rate.
+
+        Read from `bank_accounts` directly rather than through `app.banking`: the kernel does
+        not import the banking package (P5's rule about `events.py` importing upward), and a
+        model plus one query costs no dependency. One query per posting, cached — and it
+        carries the currency **code** rather than looking it up again, so an account held in a
+        currency somebody later deactivated still refuses with the mismatch a screen can act
+        on rather than with `currency_not_found`.
+        """
+        if self._bank_currencies is None:
+            self._bank_currencies = {
+                row.gl_account_id: _BankCurrencyRule(
+                    currency_id=row.currency_id,
+                    currency_code=row.currency_code,
+                    bank_account_code=row.code,
+                )
+                for row in self.db.execute(
+                    select(
+                        BankAccount.gl_account_id,
+                        BankAccount.currency_id,
+                        BankAccount.code,
+                        Currency.code.label("currency_code"),
+                    )
+                    .join(Currency, Currency.id == BankAccount.currency_id)
+                    .where(
+                        BankAccount.company_id == self.company_id,
+                        BankAccount.currency_id != self.base.id,
+                    )
+                )
+            }
+        return self._bank_currencies.get(account_id)
 
     def modules_for(self, control_type: ControlType | None) -> frozenset[str] | None:
         """`None` means the account is not module-owned (bank/cash, or a plain account)."""
@@ -356,6 +407,29 @@ def _check_account(
         )
 
 
+def _check_bank_account_currency(ctx: "_Context", account: GLAccount, currency: Currency) -> None:
+    """P8 decision 2, the engine half. The `VN012` trigger is the other, and each is proven
+    sensitive on its own: disable this and the trigger still refuses; disable the trigger and
+    this still does. The engine exists for the field error a screen can show; the trigger
+    exists because a guarantee that only application code makes is not a guarantee.
+
+    Deliberately **not** exempted for reversals. A reversal of an entry that predates the
+    account's currency being set would mirror a line the rule now forbids — but that entry
+    cannot exist: `currency_id` may only be changed while the GL account has no journal line
+    at all (`bank_account_has_lines`), so every line the rule could ever see was written
+    under it.
+    """
+    rule = ctx.bank_currency_rule(account.id)
+    if rule is None or currency.id == rule.currency_id:
+        return
+    raise PostingError(
+        f"Bank account {rule.bank_account_code} ({account.code}) is held in "
+        f"{rule.currency_code}; a {currency.code} line cannot sit on it",
+        code="bank_account_currency_mismatch",
+        field_errors={"currency_id": [f"must be {rule.currency_code}"]},
+    )
+
+
 def _check_required_dimensions(account: GLAccount, spec: LineSpec) -> None:
     """Dimensions demanded by the account: subledger controls need their partner/item so the
     control-account invariant (Σ open documents == control balance) is checkable."""
@@ -435,6 +509,7 @@ def _resolve_lines(
             if spec.project_id is not None:
                 ctx.project(spec.project_id)
             currency = ctx.currency(spec.currency_id)
+            _check_bank_account_currency(ctx, account, currency)
             if spec.tax_code_id is not None:
                 resolve_tax_code(ctx.db, ctx.company_id, spec.tax_code_id, event.entry_date)
 

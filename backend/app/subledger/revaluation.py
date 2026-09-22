@@ -54,13 +54,30 @@ from app.services.jobs import handler
 #: `journal_entries.source_doc_type`, so the GL entry drills back to the run.
 FX_REVALUATION_SOURCE = "fx_revaluation"
 
-#: Which roles a run covers. `both` is one run and one entry over AR and AP together, which is
-#: the ordinary month end.
+#: Which **partner** roles a run covers. `both` is one run and one entry over AR and AP
+#: together, which is the ordinary month end.
+#:
+#: P8 decision 8 adds `bank` and `all` to `FxRevaluationRole` — the enum and the Postgres type
+#: are rebuilt at P8 step 1 so the column can hold them — and the bank *scope* is built at P8
+#: step 4. Until then the two new roles are refused by name rather than falling off the end of
+#: this map as a `KeyError`: an enum value the API accepts and the service cannot compute is a
+#: 500 waiting for whoever tries it first, and "not built yet" is a thing a refusal can say.
 _ROLES: dict[FxRevaluationRole, tuple[PartnerRole, ...]] = {
     FxRevaluationRole.AR: (PartnerRole.AR,),
     FxRevaluationRole.AP: (PartnerRole.AP,),
     FxRevaluationRole.BOTH: (PartnerRole.AR, PartnerRole.AP),
 }
+
+
+def _partner_roles(role: FxRevaluationRole) -> tuple[PartnerRole, ...]:
+    covered = _ROLES.get(role)
+    if covered is None:
+        raise LedgerStateError(
+            f"Revaluing {role.value} balances is not built yet; use ar, ap or both",
+            code="fx_revaluation_role_unsupported",
+            field_errors={"role": ["not available yet"]},
+        )
+    return covered
 
 
 @dataclass(frozen=True)
@@ -133,7 +150,7 @@ def preview(
         )
         .where(
             PartnerDocument.company_id == company_id,
-            PartnerDocument.role.in_(_ROLES[role]),
+            PartnerDocument.role.in_(_partner_roles(role)),
             PartnerDocument.status == DocumentStatus.POSTED,
             PartnerDocument.open_amount != ZERO,
             PartnerDocument.currency_id != base.id,
@@ -509,7 +526,7 @@ def _refuse_a_second_run(
     a role-specific one clashes with it — otherwise the same exposure would be revalued twice
     and the second adjustment would sit on top of the first.
     """
-    covered = set(_ROLES[role])
+    covered = set(_partner_roles(role))
     standing = db.scalars(
         select(FxRevaluation).where(
             FxRevaluation.company_id == company_id,
@@ -518,7 +535,7 @@ def _refuse_a_second_run(
         )
     )
     for run in standing:
-        if covered & set(_ROLES[run.role]):
+        if covered & set(_partner_roles(run.role)):
             raise LedgerStateError(
                 f"{run.number} already revalued {run.role.value} at "
                 f"{revaluation_date.isoformat()}. Reverse it first.",

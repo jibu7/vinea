@@ -453,3 +453,25 @@ def test_each_currency_gets_its_own_pair_of_lines(db: Session, subledger: Subled
         )
     ).all()
     assert len(lines) == 4
+
+
+def test_the_bank_and_all_scopes_are_refused_by_name_until_p8_step_4(
+    db: Session, subledger: Subledger
+) -> None:
+    """P8 step 1 rebuilds `fx_revaluation_role` with `bank` and `all` so the column can hold
+    them; decision 8's bank scope is built at P8 step 4.
+
+    Between those two points the API accepts an enum value the service cannot compute, and the
+    honest answer is a named refusal rather than the `KeyError` that a bare lookup would raise
+    — which reaches the caller as a 500 with nothing in it to act on.
+    """
+    for role in (FxRevaluationRole.BANK, FxRevaluationRole.ALL):
+        with pytest.raises(LedgerStateError) as excinfo:
+            revaluation.preview(
+                db,
+                subledger.company_id,
+                revaluation_date=date(YEAR, 9, 30),
+                role=role,
+            )
+        assert excinfo.value.code == "fx_revaluation_role_unsupported"
+        assert excinfo.value.field_errors == {"role": ["not available yet"]}

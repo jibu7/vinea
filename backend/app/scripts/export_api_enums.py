@@ -19,6 +19,18 @@ import enum
 import os
 from pathlib import Path
 
+from app.models.banking import (
+    BankAccountKind,
+    BankMatchKind,
+    BankMatchRule,
+    PaymentRunStatus,
+    ReconciliationStatus,
+    StatementAmountMode,
+    StatementFormatPreset,
+    StatementSignConvention,
+    StatementSource,
+    StatementStatus,
+)
 from app.models.company import CompanyStatus
 from app.models.fiscal import PeriodStatus
 from app.models.fiscalization import (
@@ -116,6 +128,19 @@ EXPORTED: tuple[type[enum.StrEnum], ...] = (
     VatReturnStatus,
     FxRevaluationStatus,
     FxRevaluationRole,
+    # Banking (P8). Every one is rendered as a chip, a filter or a picker on the bank
+    # screens — the format enums on the mapping editor, the rest on the statement listing,
+    # the workspace and the payment-run detail — and every one is a value the server decides.
+    BankAccountKind,
+    StatementSource,
+    StatementStatus,
+    StatementFormatPreset,
+    StatementAmountMode,
+    StatementSignConvention,
+    BankMatchKind,
+    BankMatchRule,
+    ReconciliationStatus,
+    PaymentRunStatus,
 )
 
 # `REPO_ROOT` first, then the path relative to this file — the same convention
