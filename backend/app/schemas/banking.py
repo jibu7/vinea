@@ -13,7 +13,14 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.models.banking import BankAccountKind, StatementSource, StatementStatus
+from app.models.banking import (
+    BankAccountKind,
+    BankMatchKind,
+    BankMatchRule,
+    ReconciliationStatus,
+    StatementSource,
+    StatementStatus,
+)
 
 
 class BankAccountRead(BaseModel):
@@ -203,3 +210,168 @@ class ManualStatementWrite(BaseModel):
 
 class StatementVoid(BaseModel):
     reason: str | None = Field(default=None, max_length=500)
+
+
+# --- Matching (P8 decision 4) ------------------------------------------------------------
+
+
+class MatchCandidateRead(BaseModel):
+    journal_line_id: int
+    entry_id: int
+    entry_number: str
+    entry_date: date
+    doc_type: str
+    description: str | None = None
+    reference: str | None = None
+    #: The **reconciled** amount — `amount` on a foreign-currency account, `base_amount` on a
+    #: base-currency one. Never the raw `amount`, which on a base-currency account can be a
+    #: figure the bank never showed.
+    amount: Decimal
+    rule: BankMatchRule
+
+
+class MatchRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    bank_account_id: int
+    kind: BankMatchKind
+    rule: BankMatchRule
+    reconciliation_id: int | None = None
+    matched_at: datetime
+    note: str | None = None
+    statement_line_ids: list[int] = []
+    journal_line_ids: list[int] = []
+
+
+class MatchWrite(BaseModel):
+    bank_account_id: int
+    statement_line_ids: list[int] = []
+    journal_line_ids: list[int] = Field(min_length=1)
+    note: str | None = Field(default=None, max_length=500)
+
+
+class TickWrite(BaseModel):
+    bank_account_id: int
+    journal_line_ids: list[int] = Field(min_length=1)
+    note: str | None = Field(default=None, max_length=500)
+
+
+class AutoMatchResultRead(BaseModel):
+    matched: list[MatchRead]
+    #: statement line id → the candidates that tied. Ambiguity is not a match: the workspace
+    #: shows these and a person chooses.
+    ambiguous: dict[int, list[MatchCandidateRead]]
+
+
+class PrefillRead(BaseModel):
+    rule_id: int | None = None
+    gl_account_id: int | None = None
+    tax_code_id: int | None = None
+    partner_type: str | None = None
+    partner_id: int | None = None
+    description: str
+    kind: str
+
+
+class PostCashbookFromLine(BaseModel):
+    gl_account_id: int
+    tax_code_id: int | None = None
+    description: str | None = Field(default=None, max_length=500)
+    reference: str | None = Field(default=None, max_length=500)
+    entry_date: date | None = None
+    branch_id: int | None = None
+    project_id: int | None = None
+
+
+class PostSettlementFromLine(BaseModel):
+    partner_id: int
+    description: str | None = Field(default=None, max_length=500)
+    reference: str | None = Field(default=None, max_length=500)
+    document_date: date | None = None
+    branch_id: int | None = None
+    project_id: int | None = None
+
+
+class PostedFromStatementRead(BaseModel):
+    entry_id: int
+    entry_number: str
+    journal_line_id: int
+    match: MatchRead
+    document_id: int | None = None
+    document_number: str | None = None
+
+
+# --- Reconciliation (P8 decision 5) ------------------------------------------------------
+
+
+class OutstandingLineRead(BaseModel):
+    journal_line_id: int
+    entry_id: int
+    entry_number: str
+    entry_date: date
+    doc_type: str
+    description: str | None = None
+    amount: Decimal
+    #: The `BRC-` number this line is dated inside but was posted after — decision 5's late
+    #: line. `None` on an ordinary outstanding item, and the two call for different actions.
+    dated_inside: str | None = None
+
+
+class FiguresRead(BaseModel):
+    """The strip. Live while the reconciliation is open; on a locked one the report shows the
+    stored figures beside this."""
+
+    reconciliation_date: date
+    statement_balance: Decimal
+    ledger_balance: Decimal
+    outstanding_total: Decimal
+    difference: Decimal
+    adjusted_bank_balance: Decimal
+    outstanding: list[OutstandingLineRead]
+    unmatched_statement: list[StatementLineRead]
+    unmatched_statement_count: int
+
+
+class ReconciliationRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    bank_account_id: int
+    number: str
+    reconciliation_date: date
+    statement_balance: Decimal
+    ledger_balance: Decimal | None = None
+    outstanding_total: Decimal | None = None
+    difference: Decimal | None = None
+    status: ReconciliationStatus
+    high_water_line_id: int | None = None
+    locked_at: datetime | None = None
+    reopened_at: datetime | None = None
+    reopened_reason: str | None = None
+
+
+class ReconciliationDetail(ReconciliationRead):
+    figures: FiguresRead
+    #: On a locked one only: what it *said*, reproduced from the lines that existed at the
+    #: lock, beside the live recomputation above.
+    stored: FiguresRead | None = None
+    #: Lines dated inside a locked reconciliation but posted after it — the report's
+    #: *Posted after lock* section.
+    late_line_ids: list[int] = []
+
+
+class ReconciliationOpen(BaseModel):
+    bank_account_id: int
+    reconciliation_date: date
+    #: Defaulted from the latest statement line's `balance_after` where the format carries one.
+    statement_balance: Decimal | None = None
+
+
+class ReconciliationLock(BaseModel):
+    #: Re-keying it at lock is how the tape's row 9 corrects a wrong balance without reopening.
+    statement_balance: Decimal | None = None
+
+
+class ReconciliationReopen(BaseModel):
+    reason: str = Field(min_length=1, max_length=500)

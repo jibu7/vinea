@@ -1,0 +1,732 @@
+"""The compounding-error property for banking (P8 decision 12).
+
+One Hypothesis machine drives a *random sequence* over three accounts — a base-currency bank
+account, a foreign-currency one and a cash account — and asserts the ledger, subledger **and**
+bank invariant suites after every single step.
+
+The operations are the phase's: cashbook entries and settlements (some in USD against the RWF
+account, which decision 2's one-sided rule allows), statements **generated from the ledger and
+then perturbed**, auto-match, manual n:m matches, ticks, unmatches, opens, locks and reopens.
+Payment runs and revaluation join at steps 3 and 4.
+
+**The perturbations are the point.** A statement that simply mirrored the ledger would
+reconcile on the first try and prove nothing: what this phase has to survive is a bank whose
+record differs from ours in all the ordinary ways at once. So the generator drops lines (they
+become outstanding), adds lines the ledger has never seen (they have to be posted from the
+statement side), shifts value dates across the reconciliation date (deposits in transit), and
+re-imports the same file and an overlapping one.
+
+Checking only the end state hides an error one operation introduces and the next one masks,
+which on a reconciliation is the ordinary case: a figure that is wrong by one match and right
+again after the next lock looks identical to a figure that was never wrong.
+
+It runs at a **0-dp base** (RWF) and a **2-dp base**, because the reconciled-amount rule
+crosses a rounding boundary — a USD receipt into a base-currency account is compared on its
+`base_amount`, and what that rounds to differs at each scale.
+
+Illegal steps are skipped rather than failed: matching what is already matched, locking at a
+difference, reopening what is not the latest. The property under test is the invariant suite,
+not the plumbing.
+
+Carries `@pytest.mark.slow`, which is how the nightly deep workflow selects it.
+"""
+
+import itertools
+from datetime import date, timedelta
+from decimal import Decimal
+
+import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.banking import matching
+from app.banking import reconciliation as reconciliation_service
+from app.banking import statements as statements_service
+from app.banking.formats import ParsedLine
+from app.core.errors import AppError
+from app.kernel import posting
+from app.kernel.errors import LedgerStateError, PostingError
+from app.kernel.events import CashbookEntry, CashbookKind, CashbookLineSpec
+from app.models.banking import (
+    BankMatch,
+    BankMatchKind,
+    BankMatchRule,
+    BankStatementLine,
+    ReconciliationStatus,
+)
+from app.models.journal import JournalEntry, JournalLine
+from tests.banking.conftest import Banking, build_banking
+from tests.banking.invariants import assert_bank_invariants
+from tests.kernel.invariants import assert_ledger_invariants
+from tests.subledger.invariants import assert_subledger_invariants
+
+_EXAMPLE = itertools.count()
+ZERO = Decimal(0)
+
+#: Which refusals the generator actually provoked. **Measured, not assumed** — P6 step 5 watched
+#: three consecutive deep passes come back green with a different refusal at zero each time, and
+#: every one was a generator defect that would have shipped if the number had not been read by
+#: hand.
+_REFUSALS: dict[str, int] = {}
+#: How far the machine got towards the operations whose interesting case is a *conjunction*
+#: rather than a single draw. A census that counted only the refusal cannot tell "the guard
+#: held" from "the machine never got near it", which is exactly the confusion that moved five of
+#: P6's eight floors to targeted properties at P7.
+_REACH: dict[str, int] = {}
+
+
+def _count(counter: dict[str, int], key: str) -> None:
+    counter[key] = counter.get(key, 0) + 1
+
+
+#: The refusals a deep pass must actually provoke, and the floor each must clear.
+#:
+#: **Five of decision 12's seven.** `payment_exceeds_open` and `statement_already_imported` are
+#: the other two: the first needs payment runs, which arrive at step 3, and the second needs the
+#: *file* path — this machine keys its statements line by line, because generating a CSV to
+#: express a date and an amount would make every example a parser test. `statement_already_imported`
+#: is covered by construction in `tests/banking/test_statements.py` and joins this census when
+#: the runs do.
+#:
+#: Three rather than one, because one is indistinguishable from a coincidence: a boundary hit
+#: once in 300 examples is one the next seed may well miss. Three is not a statistical claim —
+#: it is the smallest number that cannot be a single lucky plan.
+REQUIRED_REFUSALS = (
+    "reconciliation_difference",
+    "statement_lines_unmatched",
+    "match_unbalanced",
+    "reconciliation_locked",
+    "bank_account_currency_mismatch",
+)
+CENSUS_FLOOR = 3
+
+#: What the machine has to *reach* before a zero above means anything. Each of these is a
+#: precondition rather than an outcome: `reconciliation_locked` needs a lock to have happened
+#: and a match inside it to be chosen for unmatching, and a zero refusal with a zero reach here
+#: is a coverage gap rather than a regression.
+REQUIRED_REACH = (
+    "lock: attempted",
+    "lock: succeeded",
+    "statement: keyed",
+    "statement: perturbed with a line the ledger lacks",
+    "match: attempted manually",
+    "posted from a statement line",
+)
+REACH_FLOOR = 3
+
+#: Only a run with enough examples can be held to the floors. The per-commit profile draws two
+#: and would fail every one, so it stays silent and the nightly deep profile is where the census
+#: is enforced — the same split the profiles already make everywhere else.
+_FLOORS_FROM_EXAMPLES = 100
+
+
+def _census() -> str:
+    return (
+        f"refusals: {dict(sorted(_REFUSALS.items()))}\n"
+        f"reach:    {dict(sorted(_REACH.items()))}"
+    )
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _report_census():  # noqa: ANN202
+    yield
+    if _REFUSALS:
+        print("\n[property] refusals provoked:", dict(sorted(_REFUSALS.items())))
+    if _REACH:
+        print("[property] reach:", dict(sorted(_REACH.items())))
+    if settings.default.max_examples < _FLOORS_FROM_EXAMPLES:
+        return
+
+    short = {
+        name: _REFUSALS.get(name, 0)
+        for name in REQUIRED_REFUSALS
+        if _REFUSALS.get(name, 0) < CENSUS_FLOOR
+    }
+    unreached = {
+        name: _REACH.get(name, 0)
+        for name in REQUIRED_REACH
+        if _REACH.get(name, 0) < REACH_FLOOR
+    }
+    assert not unreached, (
+        f"the deep pass did not reach {unreached} at least {REACH_FLOOR} times each.\n"
+        "These are preconditions, not outcomes: a refusal floor below cannot mean anything "
+        "while the machine is not getting to the state that provokes it. Fix the generator "
+        "before reading the refusal census.\n" + _census()
+    )
+    assert not short, (
+        f"the deep pass did not provoke {short} at least {CENSUS_FLOOR} times each.\n"
+        "A refusal the machine never provokes is a guard this suite does not cover, however "
+        "green it looks. Read the reach counters above first — they say whether the guard held "
+        "or the generator never got near it, and if it is the latter the fix is a targeted "
+        "property that constructs the precondition, not a bigger max_examples (P7's rule).\n"
+        + _census()
+    )
+
+
+# --- The plan --------------------------------------------------------------------------------
+
+
+OPERATIONS = (
+    "cashbook_rwf",
+    "cashbook_usd_into_rwf",
+    "cashbook_on_usd_account",
+    #: Decision 2's refusal: an RWF line aimed at the USD account. Drawn deliberately rather
+    #: than hoped for, because it is the one refusal in this file that no *legal* sequence
+    #: produces — every other one is a state the machine can wander into.
+    "cashbook_wrong_currency",
+    "cashbook_cash",
+    "settlement",
+    "import_statement",
+    "auto_match",
+    "manual_match",
+    "tick",
+    "unmatch",
+    "open_reconciliation",
+    "lock",
+    "reopen",
+)
+
+#: How a generated statement differs from the ledger it was generated from. Weighted towards
+#: `faithful` so that reconciliations reach zero often enough for `lock: succeeded` to clear
+#: its floor — the interesting perturbations still arrive several times per example.
+PERTURBATIONS = ("faithful", "drop_a_line", "add_a_line", "shift_a_date", "faithful")
+
+BASE_DAY = date(2026, 9, 1)
+
+
+@st.composite
+def _plans(draw):  # noqa: ANN001, ANN202
+    return draw(
+        st.lists(
+            st.tuples(
+                st.sampled_from(OPERATIONS),
+                st.integers(min_value=1, max_value=9),  # amount, in thousands
+                st.integers(min_value=0, max_value=40),  # day offset from 1 September
+                st.sampled_from(PERTURBATIONS),
+                st.integers(min_value=0, max_value=6),  # which row a per-row choice lands on
+            ),
+            min_size=6,
+            max_size=22,
+        )
+    )
+
+
+def _skip(error: AppError) -> None:
+    """An illegal step is skipped, and **counted**. The property under test is the invariant
+    suite rather than the plumbing — but a refusal that never happens is a guard nobody is
+    exercising, which is what the census is for."""
+    _count(_REFUSALS, getattr(error, "code", type(error).__name__))
+
+
+# --- The operations ----------------------------------------------------------------------------
+
+
+def _bank_lines(db: Session, banking: Banking, account_code: str) -> list[JournalLine]:
+    return list(
+        db.scalars(
+            select(JournalLine).where(
+                JournalLine.company_id == banking.company_id,
+                JournalLine.gl_account_id == banking.ledger.acct(account_code),
+            )
+        )
+    )
+
+
+def _post_cashbook(
+    db: Session,
+    banking: Banking,
+    *,
+    account_code: str,
+    amount: Decimal,
+    on: date,
+    currency: str,
+) -> None:
+    kind = CashbookKind.RECEIPT if amount > ZERO else CashbookKind.PAYMENT
+    posting.post(
+        db,
+        CashbookEntry(
+            entry_date=on,
+            description="property",
+            cash_account_id=banking.ledger.acct(account_code),
+            kind=kind,
+            currency_id=banking.ledger.cur(currency),
+            lines=(
+                CashbookLineSpec(
+                    gl_account_id=banking.ledger.acct("3400"), amount=abs(amount)
+                ),
+            ),
+        ),
+        company_id=banking.company_id,
+        actor=banking.owner,
+    )
+
+
+def _generate_statement(
+    db: Session, banking: Banking, *, perturbation: str, on: date, pick: int
+) -> None:
+    """Build a statement **from the ledger** and then perturb it.
+
+    Generated rather than drawn, because a statement of random figures would never match
+    anything and the machine would spend every example in the same state. What makes it a test
+    is the perturbation: the bank's record differs from ours, and the reconciliation has to say
+    how.
+    """
+    row = banking.bank("BK-RWF")
+    unmatched = list(
+        db.scalars(
+            matching.unmatched_journal_lines(db, banking.company_id, row).order_by(
+                JournalLine.id
+            )
+        )
+    )
+    if not unmatched:
+        return
+    entries = {
+        line.id: db.get(JournalEntry, line.entry_id).entry_date for line in unmatched
+    }
+    base = banking.ledger.cur("RWF")
+    rows: list[tuple[date, str, Decimal]] = [
+        (
+            entries[line.id],
+            f"TRF {line.id}",
+            line.amount if row.currency_id != base else line.base_amount,
+        )
+        for line in unmatched
+    ]
+
+    if perturbation == "drop_a_line" and len(rows) > 1:
+        rows.pop(pick % len(rows))
+        _count(_REACH, "statement: perturbed by dropping a line")
+    elif perturbation == "add_a_line":
+        # A fee the ledger has never seen. The only way to close the reconciliation afterwards
+        # is to *post* it from the statement side, which is decision 4's whole mechanism.
+        rows.append((on, "MONTHLY ACCOUNT FEE", Decimal(-500)))
+        _count(_REACH, "statement: perturbed with a line the ledger lacks")
+    elif perturbation == "shift_a_date" and rows:
+        index = pick % len(rows)
+        value_date, description, amount = rows[index]
+        rows[index] = (value_date + timedelta(days=5), description, amount)
+        _count(_REACH, "statement: perturbed by shifting a value date")
+
+    if not rows:
+        return
+    parsed = [
+        ParsedLine(
+            row=index,
+            value_date=value_date,
+            booking_date=None,
+            description=description,
+            reference=None,
+            amount=amount,
+            balance_after=None,
+            external_id=None,
+            occurrence=sum(
+                1
+                for earlier in rows[: index - 1]
+                if earlier == (value_date, description, amount)
+            ),
+        )
+        for index, (value_date, description, amount) in enumerate(rows, start=1)
+        if amount != ZERO
+    ]
+    if not parsed:
+        return
+    statements_service.import_manual(
+        db,
+        banking.company_id,
+        bank_account_id=row.id,
+        lines=parsed,
+        opening_balance=ZERO,
+        closing_balance=sum((line.amount for line in parsed), ZERO),
+        actor=banking.owner,
+    )
+    _count(_REACH, "statement: keyed")
+
+
+def _run(db: Session, banking: Banking, plan) -> None:  # noqa: ANN001, C901
+    for operation, magnitude, offset, perturbation, pick in plan:
+        on = BASE_DAY + timedelta(days=offset)
+        amount = Decimal(magnitude * 1000)
+        row = banking.bank("BK-RWF")
+        try:
+            if operation == "cashbook_rwf":
+                _post_cashbook(
+                    db,
+                    banking,
+                    account_code="1120",
+                    amount=amount if magnitude % 2 else -amount,
+                    on=on,
+                    currency="RWF",
+                )
+            elif operation == "cashbook_usd_into_rwf":
+                # Decision 2's one-sided rule: legal, and reconciled on its `base_amount`.
+                _post_cashbook(
+                    db,
+                    banking,
+                    account_code="1120",
+                    amount=Decimal(magnitude),
+                    on=on,
+                    currency="USD",
+                )
+                _count(_REACH, "usd line on the base-currency account")
+            elif operation == "cashbook_on_usd_account":
+                _post_cashbook(
+                    db,
+                    banking,
+                    account_code="1121",
+                    amount=Decimal(magnitude),
+                    on=on,
+                    currency="USD",
+                )
+            elif operation == "cashbook_wrong_currency":
+                _count(_REACH, "currency rule: attempted")
+                _post_cashbook(
+                    db,
+                    banking,
+                    account_code="1121",
+                    amount=amount,
+                    on=on,
+                    currency="RWF",
+                )
+            elif operation == "cashbook_cash":
+                _post_cashbook(
+                    db,
+                    banking,
+                    account_code="1110",
+                    amount=amount,
+                    on=on,
+                    currency="RWF",
+                )
+            elif operation == "settlement":
+                _settlement(db, banking, amount=amount, on=on)
+            elif operation == "import_statement":
+                _generate_statement(
+                    db, banking, perturbation=perturbation, on=on, pick=pick
+                )
+            elif operation == "auto_match":
+                result = matching.auto_match(
+                    db, banking.company_id, row.id, actor=banking.owner
+                )
+                _count(_REACH, "auto-match: run")
+                if result.matched:
+                    _count(_REACH, "auto-match: matched something")
+                if result.ambiguous:
+                    _count(_REACH, "auto-match: found a tie and declined")
+            elif operation == "manual_match":
+                _manual_match(db, banking, pick=pick)
+            elif operation == "tick":
+                _tick(db, banking, pick=pick)
+            elif operation == "unmatch":
+                _unmatch(db, banking, pick=pick)
+            elif operation == "open_reconciliation":
+                reconciliation_service.open_reconciliation(
+                    db,
+                    banking.company_id,
+                    bank_account_id=row.id,
+                    reconciliation_date=on,
+                    statement_balance=amount,
+                    actor=banking.owner,
+                )
+                _count(_REACH, "reconciliation: opened")
+            elif operation == "lock":
+                _lock(db, banking)
+            elif operation == "reopen":
+                _reopen(db, banking)
+            db.flush()
+        except (LedgerStateError, PostingError) as error:
+            db.rollback()
+            _skip(error)
+            continue
+        except AppError as error:
+            db.rollback()
+            _skip(error)
+            continue
+
+        assert_ledger_invariants(db, banking.company_id)
+        assert_subledger_invariants(db, banking.company_id)
+        assert_bank_invariants(db, banking.company_id)
+
+
+def _settlement(db: Session, banking: Banking, *, amount: Decimal, on: date) -> None:
+    from app.models.partner import PartnerRole
+    from app.models.subledger import DocumentKind, InstrumentType
+    from app.subledger import documents as documents_service
+
+    documents_service.post_document(
+        db,
+        banking.company_id,
+        PartnerRole.AR,
+        documents_service.DocumentInput(
+            kind=DocumentKind.SETTLEMENT,
+            partner_id=banking.customer.id,
+            document_date=on,
+            description="property receipt",
+            amount=amount,
+            cash_account_id=banking.ledger.acct("1120"),
+            instrument_type=InstrumentType.BANK,
+        ),
+        actor=banking.owner,
+    )
+    _count(_REACH, "settlement: posted")
+
+
+def _manual_match(db: Session, banking: Banking, *, pick: int) -> None:
+    """Take one unmatched statement line and one unmatched ledger line and assert they are the
+    same event — **without** checking first that they balance.
+
+    Deliberately not clamped. P6's machine used to clamp every match to the remaining quantity,
+    which meant the boundary refusal could not be drawn at all and the suite looked as though it
+    covered something it never reached. Here the pair is drawn blind, so `match_unbalanced` is
+    provoked by the ordinary case rather than by a special one.
+    """
+    row = banking.bank("BK-RWF")
+    statement_lines = list(
+        db.scalars(
+            matching.unmatched_statement_lines(db, banking.company_id, row).order_by(
+                BankStatementLine.id
+            )
+        )
+    )
+    journal_lines = list(
+        db.scalars(
+            matching.unmatched_journal_lines(db, banking.company_id, row).order_by(
+                JournalLine.id
+            )
+        )
+    )
+    if not statement_lines or not journal_lines:
+        return
+    _count(_REACH, "match: attempted manually")
+    matching.create_match(
+        db,
+        banking.company_id,
+        bank_account_id=row.id,
+        statement_line_ids=[statement_lines[pick % len(statement_lines)].id],
+        journal_line_ids=[journal_lines[pick % len(journal_lines)].id],
+        kind=BankMatchKind.MANUAL,
+        rule=BankMatchRule.MANUAL,
+        actor=banking.owner,
+    )
+    _count(_REACH, "match: made manually")
+
+
+def _tick(db: Session, banking: Banking, *, pick: int) -> None:
+    row = banking.bank("BK-RWF")
+    journal_lines = list(
+        db.scalars(
+            matching.unmatched_journal_lines(db, banking.company_id, row).order_by(
+                JournalLine.id
+            )
+        )
+    )
+    if not journal_lines:
+        return
+    matching.tick(
+        db,
+        banking.company_id,
+        bank_account_id=row.id,
+        journal_line_ids=[journal_lines[pick % len(journal_lines)].id],
+        actor=banking.owner,
+    )
+    _count(_REACH, "tick: made")
+
+
+def _unmatch(db: Session, banking: Banking, *, pick: int) -> None:
+    """Unmatch a match drawn blind — including, when there is one, a match inside a locked
+    reconciliation. That is what provokes `reconciliation_locked`, and it is a conjunction
+    (a lock, then a match inside it, then that match drawn) which is why `lock: succeeded` is a
+    reach floor of its own."""
+    matches = list(
+        db.scalars(
+            select(BankMatch)
+            .where(
+                BankMatch.company_id == banking.company_id,
+                BankMatch.bank_account_id == banking.bank("BK-RWF").id,
+            )
+            .order_by(BankMatch.id)
+        )
+    )
+    if not matches:
+        return
+    chosen = matches[pick % len(matches)]
+    if chosen.reconciliation_id is not None:
+        _count(_REACH, "unmatch: attempted inside a locked reconciliation")
+    matching.unmatch(db, banking.company_id, chosen.id, actor=banking.owner)
+    _count(_REACH, "unmatch: succeeded")
+
+
+def _lock(db: Session, banking: Banking) -> None:
+    standing = reconciliation_service.open_for(
+        db, banking.company_id, banking.bank("BK-RWF").id
+    )
+    if standing is None:
+        return
+    _count(_REACH, "lock: attempted")
+    # Key the balance the reconciliation would need to close. Most of the time it *will* close
+    # — which is the point: `lock: succeeded` has to clear its floor for `reconciliation_locked`
+    # below to be reachable at all — and where a statement line is still unmatched it is refused
+    # on that first, whatever the figure says.
+    live = reconciliation_service.live_figures(db, banking.company_id, standing)
+    reconciliation_service.lock(
+        db,
+        banking.company_id,
+        standing.id,
+        statement_balance=live.ledger_balance - live.outstanding_total,
+        actor=banking.owner,
+    )
+    _count(_REACH, "lock: succeeded")
+
+
+def _reopen(db: Session, banking: Banking) -> None:
+    latest = reconciliation_service.latest_locked(
+        db, banking.company_id, banking.bank("BK-RWF").id
+    )
+    if latest is None:
+        return
+    reconciliation_service.reopen(
+        db, banking.company_id, latest.id, reason="property", actor=banking.owner
+    )
+    _count(_REACH, "reopen: succeeded")
+
+
+def _post_from_a_statement_line(db: Session, banking: Banking) -> None:
+    """Close the loop the `add_a_line` perturbation opens: a statement line the ledger lacks is
+    posted through the kernel, and the posted line joins the match in the same transaction."""
+    row = banking.bank("BK-RWF")
+    line = db.scalars(
+        matching.unmatched_statement_lines(db, banking.company_id, row)
+        .where(BankStatementLine.description == "MONTHLY ACCOUNT FEE")
+        .order_by(BankStatementLine.id)
+    ).first()
+    if line is None:
+        return
+    matching.post_cashbook_from_line(
+        db,
+        banking.company_id,
+        line.id,
+        gl_account_id=banking.ledger.acct("6700"),
+        actor=banking.owner,
+    )
+    _count(_REACH, "posted from a statement line")
+
+
+# --- The machines ------------------------------------------------------------------------------
+
+
+@pytest.mark.slow
+@given(plan=_plans())
+@settings(deadline=None)
+def test_the_invariants_hold_over_any_sequence_at_a_zero_decimal_base(
+    db: Session, plan
+) -> None:  # noqa: ANN001
+    """RWF: no minor unit, so a USD receipt into the base-currency account rounds to whole
+    francs and the reconciled amount the statement side compares is that rounded figure."""
+    banking = build_banking(
+        db,
+        company_name=f"Property Bank {next(_EXAMPLE)} Ltd",
+        email=f"property.bank.{next(_EXAMPLE)}@example.test",
+    )
+    _run(db, banking, plan)
+    # After the plan, close the loop the `add_a_line` perturbation opens — otherwise the fee it
+    # invents is only ever an unmatched line, and `posted from a statement line` never reaches
+    # its floor.
+    try:
+        _post_from_a_statement_line(db, banking)
+        db.flush()
+    except AppError as error:
+        db.rollback()
+        _skip(error)
+    assert_ledger_invariants(db, banking.company_id)
+    assert_subledger_invariants(db, banking.company_id)
+    assert_bank_invariants(db, banking.company_id)
+
+
+@pytest.mark.slow
+@given(plan=_plans())
+@settings(deadline=None)
+def test_the_invariants_hold_over_any_sequence_at_a_two_decimal_base(
+    db: Session, plan
+) -> None:  # noqa: ANN001
+    """The same machine at a two-decimal base.
+
+    The reconciled-amount rule crosses a rounding boundary here that it cannot at 0 dp: a USD
+    receipt into the base-currency account is compared on its `base_amount`, and what that
+    rounds to — and therefore whether a match balances to the cent — differs at each scale.
+    """
+    banking = build_banking(
+        db,
+        company_name=f"Property Cent {next(_EXAMPLE)} Ltd",
+        email=f"property.cent.{next(_EXAMPLE)}@example.test",
+    )
+    base = banking.ledger.base
+    base.decimal_places = 2
+    db.flush()
+    _run(db, banking, plan)
+    assert_ledger_invariants(db, banking.company_id)
+    assert_subledger_invariants(db, banking.company_id)
+    assert_bank_invariants(db, banking.company_id)
+
+
+@pytest.mark.slow
+def test_a_locked_reconciliation_survives_everything_posted_after_it(
+    db: Session,
+) -> None:
+    """A targeted property rather than a drawn one, for the reason P7's report gives: the
+    interesting case is a **conjunction** — a lock, then postings dated inside it, then a
+    recomputation — and a machine that had to stumble into all three would reach it by luck.
+
+    The claim is decision 5's in one line: whatever is posted afterwards, a locked
+    reconciliation's stored figures reproduce exactly.
+    """
+    banking = build_banking(
+        db, company_name="Late Lines Ltd", email="late.lines@example.test"
+    )
+    row = banking.bank("BK-RWF")
+    _post_cashbook(
+        db, banking, account_code="1120", amount=Decimal(1000), on=BASE_DAY, currency="RWF"
+    )
+    db.flush()
+    line = _bank_lines(db, banking, "1120")[0]
+    matching.tick(
+        db,
+        banking.company_id,
+        bank_account_id=row.id,
+        journal_line_ids=[line.id],
+        actor=banking.owner,
+    )
+    reconciliation = reconciliation_service.open_reconciliation(
+        db,
+        banking.company_id,
+        bank_account_id=row.id,
+        reconciliation_date=BASE_DAY + timedelta(days=29),
+        statement_balance=Decimal(1000),
+        actor=banking.owner,
+    )
+    db.flush()
+    reconciliation_service.lock(
+        db, banking.company_id, reconciliation.id, actor=banking.owner
+    )
+    db.flush()
+    stored = (reconciliation.ledger_balance, reconciliation.outstanding_total)
+
+    # Everything a month-end clerk might do afterwards, all of it dated inside the locked
+    # period, and none of it allowed to move a signed figure.
+    for offset, amount in ((3, Decimal(-200)), (10, Decimal(450)), (20, Decimal(-75))):
+        _post_cashbook(
+            db,
+            banking,
+            account_code="1120",
+            amount=amount,
+            on=BASE_DAY + timedelta(days=offset),
+            currency="RWF",
+        )
+        db.flush()
+        assert (reconciliation.ledger_balance, reconciliation.outstanding_total) == stored
+        assert_bank_invariants(db, banking.company_id)
+
+    late = reconciliation_service.late_lines(db, banking.company_id, reconciliation)
+    assert len(late) == 3
+    assert all(line_id > reconciliation.high_water_line_id for line_id in late)
+    assert reconciliation.status == ReconciliationStatus.LOCKED

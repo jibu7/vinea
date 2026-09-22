@@ -11,6 +11,8 @@ The multipart upload in particular has no other cover: the service-level tests c
 `Decimal` parsing of the two keyed balances are exercised is here.
 """
 
+from decimal import Decimal
+
 from fastapi.testclient import TestClient
 
 from tests.banking.conftest import sample
@@ -363,3 +365,286 @@ def test_the_defaults_screen_can_move_the_bank_revaluation_account(client: TestC
     )
     assert moved.status_code == 200
     assert moved.json()["bank_charges_account_id"] == accounts["6990"]["id"]
+
+
+# --- The workspace, over HTTP (P8 step 2) -------------------------------------------------
+#
+# Nine endpoints the reconciliation screen will drive at step 7. Until then these are what
+# stands in for it, for the reason the register exists: an endpoint nobody has driven is a
+# capability the product does not have.
+
+
+def _bank(client: TestClient) -> dict:
+    return next(
+        row for row in client.get("/api/v1/banking/accounts").json() if row["code"] == "1120"
+    )
+
+
+def _cashbook(client: TestClient, *, amount: str, on: str, kind: str, key: str) -> dict:
+    accounts = {row["code"]: row for row in client.get("/api/v1/gl/accounts").json()}
+    posted = client.post(
+        "/api/v1/gl/cashbook-entries",
+        json={
+            "entry_date": on,
+            "description": "opening",
+            "cash_account_id": accounts["1120"]["id"],
+            "kind": kind,
+            "lines": [{"gl_account_id": accounts["3400"]["id"], "amount": amount}],
+        },
+        headers={"Idempotency-Key": key},
+    )
+    assert posted.status_code in (200, 201), posted.json()
+    return posted.json()
+
+
+def _bank_line_id(entry: dict, gl_account_id: int) -> int:
+    return next(
+        line["id"] for line in entry["lines"] if line["gl_account_id"] == gl_account_id
+    )
+
+
+def test_the_workspace_ticks_locks_and_reopens_over_http(client: TestClient) -> None:
+    """Paper mode end to end: post, tick, open, lock at zero, reopen. The figures come back on
+    every call, which is what the strip renders."""
+    _signup(client)
+    bank = _bank(client)
+    entry = _cashbook(client, amount="1000", on="2026-09-03", kind="receipt", key="cb-1")
+    line_id = _bank_line_id(entry, bank["gl_account_id"])
+
+    ticked = client.post(
+        "/api/v1/banking/matches/tick",
+        json={"bank_account_id": bank["id"], "journal_line_ids": [line_id]},
+    )
+    assert ticked.status_code == 201
+    assert ticked.json()["rule"] == "tick"
+    assert ticked.json()["journal_line_ids"] == [line_id]
+
+    opened = client.post(
+        "/api/v1/banking/reconciliations",
+        json={
+            "bank_account_id": bank["id"],
+            "reconciliation_date": "2026-09-30",
+            "statement_balance": "1000",
+        },
+        headers={"Idempotency-Key": "brc-1"},
+    )
+    assert opened.status_code == 201
+    figures = opened.json()["figures"]
+    # `ledger_balance` is summed out of `NUMERIC(20,6)` columns and carries their scale; the
+    # other two are computed from it, and an empty sum is plain `Decimal(0)`. The scale on the
+    # wire is not the presentation — `formatMoney` renders to the currency's own decimals — so
+    # the assertions below are on the *values*, spelled as each one actually arrives.
+    assert figures["ledger_balance"] == "1000.000000"
+    assert Decimal(figures["outstanding_total"]) == Decimal(0)
+    assert Decimal(figures["difference"]) == Decimal(0)
+
+    locked = client.post(
+        f"/api/v1/banking/reconciliations/{opened.json()['id']}/lock",
+        json={},
+        headers={"Idempotency-Key": "lock-1"},
+    )
+    assert locked.status_code == 200
+    assert locked.json()["status"] == "locked"
+    assert locked.json()["number"] == "BRC-000001"
+    # A locked one carries both figure sets: what it said, and what today computes.
+    assert locked.json()["stored"]["ledger_balance"] == "1000.000000"
+
+    reopened = client.post(
+        f"/api/v1/banking/reconciliations/{opened.json()['id']}/reopen",
+        json={"reason": "the bank restated a fee"},
+    )
+    assert reopened.status_code == 200
+    assert reopened.json()["status"] == "open"
+    assert reopened.json()["stored"] is None
+
+
+def test_a_lock_is_refused_over_http_with_the_figure_in_the_envelope(
+    client: TestClient,
+) -> None:
+    """Both refusals reach the screen as `{code, message, field_errors}` with their figure in
+    them — which is what lets the workspace show them *before* the button."""
+    _signup(client)
+    bank = _bank(client)
+    _cashbook(client, amount="1000", on="2026-09-03", kind="receipt", key="cb-1")
+
+    opened = client.post(
+        "/api/v1/banking/reconciliations",
+        json={
+            "bank_account_id": bank["id"],
+            "reconciliation_date": "2026-09-30",
+            "statement_balance": "1000",
+        },
+        headers={"Idempotency-Key": "brc-1"},
+    ).json()
+
+    refused = client.post(
+        f"/api/v1/banking/reconciliations/{opened['id']}/lock",
+        json={},
+        headers={"Idempotency-Key": "lock-1"},
+    )
+
+    assert refused.status_code == 409
+    assert refused.json()["code"] == "reconciliation_difference"
+    assert "+1000" in refused.json()["field_errors"]["statement_balance"][0]
+
+
+def test_auto_match_and_the_candidate_listing_over_http(client: TestClient) -> None:
+    _signup(client)
+    bank = _bank(client)
+    entry = _cashbook(client, amount="59000", on="2026-09-03", kind="receipt", key="cb-1")
+    line_id = _bank_line_id(entry, bank["gl_account_id"])
+    client.post(
+        "/api/v1/banking/statements/manual",
+        json={
+            "bank_account_id": bank["id"],
+            "opening_balance": "0",
+            "closing_balance": "59000",
+            "lines": [
+                {
+                    "value_date": "2026-09-05",
+                    "description": "MOMO DEPOSIT 0788",
+                    "amount": "59000",
+                }
+            ],
+        },
+        headers={"Idempotency-Key": "manual-1"},
+    )
+    unmatched = client.get(
+        f"/api/v1/banking/accounts/{bank['id']}/unmatched-statement-lines"
+    ).json()
+    assert len(unmatched) == 1
+
+    candidates = client.get(
+        f"/api/v1/banking/statement-lines/{unmatched[0]['id']}/candidates"
+    ).json()
+    assert [candidate["rule"] for candidate in candidates] == ["amount_date"]
+    assert candidates[0]["amount"] == "59000.000000"
+
+    result = client.post(f"/api/v1/banking/accounts/{bank['id']}/auto-match")
+    assert result.status_code == 200
+    assert len(result.json()["matched"]) == 1
+    assert result.json()["matched"][0]["journal_line_ids"] == [line_id]
+    assert result.json()["ambiguous"] == {}
+
+    assert client.get(
+        f"/api/v1/banking/accounts/{bank['id']}/unmatched-statement-lines"
+    ).json() == []
+
+
+def test_an_unbalanced_manual_match_is_refused_over_http(client: TestClient) -> None:
+    _signup(client)
+    bank = _bank(client)
+    entry = _cashbook(client, amount="1000", on="2026-09-03", kind="receipt", key="cb-1")
+    line_id = _bank_line_id(entry, bank["gl_account_id"])
+    client.post(
+        "/api/v1/banking/statements/manual",
+        json={
+            "bank_account_id": bank["id"],
+            "opening_balance": "0",
+            "closing_balance": "900",
+            "lines": [
+                {"value_date": "2026-09-03", "description": "A DEPOSIT", "amount": "900"}
+            ],
+        },
+        headers={"Idempotency-Key": "manual-1"},
+    )
+    unmatched = client.get(
+        f"/api/v1/banking/accounts/{bank['id']}/unmatched-statement-lines"
+    ).json()
+
+    refused = client.post(
+        "/api/v1/banking/matches",
+        json={
+            "bank_account_id": bank["id"],
+            "statement_line_ids": [unmatched[0]["id"]],
+            "journal_line_ids": [line_id],
+        },
+    )
+
+    assert refused.status_code == 409
+    assert refused.json()["code"] == "match_unbalanced"
+    assert "-100" in refused.json()["field_errors"]["lines"][0]
+
+
+def test_posting_a_fee_from_its_line_over_http(client: TestClient) -> None:
+    """The drawer, with its prefill read first — which is how the screen fills it in."""
+    _signup(client)
+    bank = _bank(client)
+    accounts = {row["code"]: row for row in client.get("/api/v1/gl/accounts").json()}
+    client.post(
+        f"/api/v1/banking/accounts/{bank['id']}/rules",
+        json={
+            "pattern": "ACCOUNT FEE",
+            "gl_account_id": accounts["6700"]["id"],
+            "description": "Monthly account fee",
+        },
+    )
+    client.post(
+        "/api/v1/banking/statements/manual",
+        json={
+            "bank_account_id": bank["id"],
+            "opening_balance": "0",
+            "closing_balance": "-2500",
+            "lines": [
+                {
+                    "value_date": "2026-09-12",
+                    "description": "MONTHLY ACCOUNT FEE",
+                    "amount": "-2500",
+                }
+            ],
+        },
+        headers={"Idempotency-Key": "manual-1"},
+    )
+    line = client.get(
+        f"/api/v1/banking/accounts/{bank['id']}/unmatched-statement-lines"
+    ).json()[0]
+
+    prefill = client.get(f"/api/v1/banking/statement-lines/{line['id']}/prefill").json()
+    assert prefill["gl_account_id"] == accounts["6700"]["id"]
+    assert prefill["kind"] == "payment"
+    assert prefill["description"] == "Monthly account fee"
+
+    posted = client.post(
+        f"/api/v1/banking/statement-lines/{line['id']}/post-cashbook",
+        json={"gl_account_id": prefill["gl_account_id"]},
+        headers={"Idempotency-Key": "post-1"},
+    )
+
+    assert posted.status_code == 201
+    assert posted.json()["entry_number"].startswith("CB-")
+    assert posted.json()["match"]["rule"] == "posted_from_statement"
+    assert client.get(
+        f"/api/v1/banking/accounts/{bank['id']}/unmatched-statement-lines"
+    ).json() == []
+
+
+def test_unmatching_inside_a_locked_reconciliation_is_refused_over_http(
+    client: TestClient,
+) -> None:
+    _signup(client)
+    bank = _bank(client)
+    entry = _cashbook(client, amount="1000", on="2026-09-03", kind="receipt", key="cb-1")
+    line_id = _bank_line_id(entry, bank["gl_account_id"])
+    match = client.post(
+        "/api/v1/banking/matches/tick",
+        json={"bank_account_id": bank["id"], "journal_line_ids": [line_id]},
+    ).json()
+    opened = client.post(
+        "/api/v1/banking/reconciliations",
+        json={
+            "bank_account_id": bank["id"],
+            "reconciliation_date": "2026-09-30",
+            "statement_balance": "1000",
+        },
+        headers={"Idempotency-Key": "brc-1"},
+    ).json()
+    client.post(
+        f"/api/v1/banking/reconciliations/{opened['id']}/lock",
+        json={},
+        headers={"Idempotency-Key": "lock-1"},
+    )
+
+    refused = client.delete(f"/api/v1/banking/matches/{match['id']}")
+
+    assert refused.status_code == 409
+    assert refused.json()["code"] == "reconciliation_locked"

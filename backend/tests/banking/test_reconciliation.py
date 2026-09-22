@@ -656,3 +656,44 @@ def test_an_open_reconciliation_cannot_be_reopened(db: Session, banking: Banking
 
     assert excinfo.value.code == "reconciliation_not_locked"
     db.rollback()
+
+
+def test_an_account_with_no_lines_locks_with_a_high_water_mark_of_zero(
+    db: Session, banking: Banking
+) -> None:
+    """Found by the property machine (P8 step 2), not by review.
+
+    A bank account opened and reconciled before its first transaction is an ordinary thing to
+    do: the ledger is zero, the bank says zero, and it locks at a zero difference. `max()` over
+    no lines is NULL, and NULL in `high_water_line_id` means *unknown* — which would be a lie,
+    since what is known about an empty account is that no line existed.
+
+    The consequence is not cosmetic. `late_lines` and the workspace's "dated inside BRC-n" both
+    skip a NULL mark, so such a reconciliation would never flag a late line again however many
+    were posted into its period; and clause 4 could not reproduce its figures, because nothing
+    said which lines it was struck over.
+    """
+    reconciliation = _open(db, banking, on=SEP_30, balance=Decimal(0))
+    db.commit()
+
+    reconciliation_service.lock(
+        db, banking.company_id, reconciliation.id, actor=banking.owner
+    )
+    db.commit()
+
+    assert reconciliation.high_water_line_id == 0
+    assert_bank_invariants(db, banking.company_id)
+
+    # And a line posted afterwards, dated inside the locked period, is properly late.
+    late = cashbook(db, banking, account_code="1120", amount=Decimal(-200), on=SEP_28)
+    db.commit()
+    late_line = bank_line_of(db, banking, late, "1120")
+
+    assert reconciliation_service.late_lines(db, banking.company_id, reconciliation) == [
+        late_line.id
+    ]
+    following = _open(db, banking, on=OCT_31, balance=Decimal(0))
+    db.commit()
+    figures = reconciliation_service.live_figures(db, banking.company_id, following)
+    assert {item.dated_inside for item in figures.outstanding} == {reconciliation.number}
+    assert_bank_invariants(db, banking.company_id)

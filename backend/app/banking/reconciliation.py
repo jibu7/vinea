@@ -517,8 +517,18 @@ def lock(
             field_errors={"statement_balance": [f"difference {current.difference:+f}"]},
         )
 
+    # **Zero, not NULL, on an account with no lines.** `max()` over nothing is NULL, and NULL
+    # in this column means "unknown" — which would be a lie: what is known about an empty
+    # account is that *no* line existed, and the mark for that is 0. The difference is not
+    # cosmetic. `late_lines` and the workspace's "dated inside BRC-n" both skip a NULL mark, so
+    # a reconciliation locked before the account's first posting would never flag a late line
+    # again, however many were posted into its period afterwards — and invariant clause 4 could
+    # not reproduce it either, because nothing said which lines it was struck over.
+    #
+    # Found by the property machine rather than by review: a bank account opened and reconciled
+    # before its first transaction is an ordinary thing to do, and no hand-written test did it.
     high_water = db.scalar(
-        select(func.max(JournalLine.id)).where(
+        select(func.coalesce(func.max(JournalLine.id), 0)).where(
             JournalLine.company_id == company_id,
             JournalLine.gl_account_id == row.gl_account_id,
         )

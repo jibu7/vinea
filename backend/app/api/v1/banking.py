@@ -12,32 +12,67 @@ BOM, line endings all survive one path and not the other), and `file_sha256` —
 that catches the same export twice — has to be over the bytes the bank produced.
 """
 
+from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+    status,
+)
 from sqlalchemy.orm import Session
 
 from app.api.deps import AuthContext
 from app.api.idempotency import IdempotencyKey
 from app.banking import accounts as accounts_service
+from app.banking import matching
+from app.banking import reconciliation as reconciliation_service
 from app.banking import statements as statements_service
 from app.banking.formats import ParsedLine, normalise
 from app.core import permissions
 from app.db import get_db
+from app.models.banking import (
+    BankMatchKind,
+    BankMatchRule,
+    BankStatementLine,
+    ReconciliationStatus,
+)
 from app.schemas.banking import (
+    AutoMatchResultRead,
     BankAccountRead,
     BankAccountRegister,
     BankAccountUpdate,
     BankRuleRead,
     BankRuleWrite,
+    FiguresRead,
     ManualStatementWrite,
+    MatchCandidateRead,
+    MatchRead,
+    MatchWrite,
+    OutstandingLineRead,
+    PostCashbookFromLine,
+    PostedFromStatementRead,
+    PostSettlementFromLine,
+    PrefillRead,
+    ReconciliationDetail,
+    ReconciliationLock,
+    ReconciliationOpen,
+    ReconciliationRead,
+    ReconciliationReopen,
     StatementDetail,
     StatementImportResult,
     StatementLineRead,
     StatementPreviewRead,
     StatementRead,
     StatementVoid,
+    TickWrite,
     UnregisteredAccountRead,
 )
 
@@ -407,3 +442,365 @@ def void_statement(
     )
     db.commit()
     return StatementRead.model_validate(statement)
+
+
+# --- The workspace: matching (P8 decision 4) ------------------------------------------------
+#
+# Every route below is the reconciliation workspace seen from the server. It arrives as a
+# screen at **step 7**, so each mutating one carries a `GAP (P8, step 7)` line in the register.
+
+
+def _match_read(db: Session, company_id: int, match) -> MatchRead:  # noqa: ANN001
+    statement_lines, journal_lines = matching.members_of(db, company_id, match.id)
+    read = MatchRead.model_validate(match)
+    read.statement_line_ids = statement_lines
+    read.journal_line_ids = journal_lines
+    return read
+
+
+@router.get("/accounts/{bank_account_id}/unmatched-statement-lines")
+def list_unmatched_statement_lines(
+    bank_account_id: int,
+    on_or_before: date | None = Query(default=None),
+    auth: AuthContext = permissions.require(permissions.BANK_REPORTS_VIEW),
+    db: Session = Depends(get_db),
+) -> list[StatementLineRead]:
+    """The workspace's left pane. Void lines are already gone: a voided statement leaves every
+    listing and every count (decision 3)."""
+    row = accounts_service.get(db, auth.company_id, bank_account_id)
+    return [
+        StatementLineRead.model_validate(line)
+        for line in db.scalars(
+            matching.unmatched_statement_lines(
+                db, auth.company_id, row, on_or_before=on_or_before
+            ).order_by(BankStatementLine.value_date, BankStatementLine.id)
+        )
+    ]
+
+
+@router.get("/statement-lines/{statement_line_id}/candidates")
+def list_candidates(
+    statement_line_id: int,
+    auth: AuthContext = permissions.require(permissions.BANK_RECONCILE),
+    db: Session = Depends(get_db),
+) -> list[MatchCandidateRead]:
+    """What this line could be, by the first rule that has anything to say. Where it returns
+    more than one the workspace shows the choice rather than guessing."""
+    line = matching.get_statement_line(db, auth.company_id, statement_line_id)
+    row = accounts_service.get(db, auth.company_id, line.bank_account_id)
+    return [
+        MatchCandidateRead(**vars(candidate))
+        for candidate in matching.candidates_for(db, auth.company_id, row, line)
+    ]
+
+
+@router.get("/statement-lines/{statement_line_id}/prefill")
+def read_prefill(
+    statement_line_id: int,
+    auth: AuthContext = permissions.require(permissions.BANK_RECONCILE),
+    db: Session = Depends(get_db),
+) -> PrefillRead:
+    """What the post-from-a-statement-line drawer opens with. A suggestion: a `bank_rules` row
+    never posts, and the engine's own control-account refusals are what stop one aiming
+    somewhere it should not."""
+    line = matching.get_statement_line(db, auth.company_id, statement_line_id)
+    return PrefillRead(**matching.prefill_for(db, auth.company_id, line).as_dict())
+
+
+@router.post("/matches", status_code=status.HTTP_201_CREATED)
+def create_match(
+    payload: MatchWrite,
+    request: Request,
+    auth: AuthContext = permissions.require(permissions.BANK_RECONCILE),
+    db: Session = Depends(get_db),
+) -> MatchRead:
+    """A manual n:m match. Refused unless it balances, with the difference named — the
+    workspace shows that figure beside the button before it is pressed."""
+    match = matching.create_match(
+        db,
+        auth.company_id,
+        bank_account_id=payload.bank_account_id,
+        statement_line_ids=payload.statement_line_ids,
+        journal_line_ids=payload.journal_line_ids,
+        kind=BankMatchKind.MANUAL,
+        rule=BankMatchRule.MANUAL,
+        note=payload.note,
+        actor=auth.user,
+        request=request,
+    )
+    db.commit()
+    return _match_read(db, auth.company_id, match)
+
+
+@router.post("/matches/tick", status_code=status.HTTP_201_CREATED)
+def tick_lines(
+    payload: TickWrite,
+    request: Request,
+    auth: AuthContext = permissions.require(permissions.BANK_RECONCILE),
+    db: Session = Depends(get_db),
+) -> MatchRead:
+    """Paper mode: the ledger line is ticked against a statement nobody imported."""
+    match = matching.tick(
+        db,
+        auth.company_id,
+        bank_account_id=payload.bank_account_id,
+        journal_line_ids=payload.journal_line_ids,
+        note=payload.note,
+        actor=auth.user,
+        request=request,
+    )
+    db.commit()
+    return _match_read(db, auth.company_id, match)
+
+
+@router.post("/accounts/{bank_account_id}/auto-match")
+def run_auto_match(
+    bank_account_id: int,
+    request: Request,
+    auth: AuthContext = permissions.require(permissions.BANK_RECONCILE),
+    db: Session = Depends(get_db),
+) -> AutoMatchResultRead:
+    result = matching.auto_match(
+        db, auth.company_id, bank_account_id, actor=auth.user, request=request
+    )
+    db.commit()
+    return AutoMatchResultRead(
+        matched=[_match_read(db, auth.company_id, match) for match in result.matched],
+        ambiguous={
+            line_id: [MatchCandidateRead(**vars(candidate)) for candidate in candidates]
+            for line_id, candidates in result.ambiguous.items()
+        },
+    )
+
+
+@router.delete("/matches/{match_id}", status_code=status.HTTP_204_NO_CONTENT)
+def remove_match(
+    match_id: int,
+    request: Request,
+    auth: AuthContext = permissions.require(permissions.BANK_RECONCILE),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Withdraw the assertion. Refused once it belongs to a locked reconciliation — reopen
+    first."""
+    matching.unmatch(db, auth.company_id, match_id, actor=auth.user, request=request)
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/statement-lines/{statement_line_id}/post-cashbook", status_code=201)
+def post_cashbook_from_statement_line(
+    statement_line_id: int,
+    payload: PostCashbookFromLine,
+    request: Request,
+    auth: AuthContext = permissions.require(
+        permissions.BANK_RECONCILE, permissions.GL_JOURNAL_POST
+    ),
+    db: Session = Depends(get_db),
+    idempotency_key: str = IdempotencyKey,
+) -> PostedFromStatementRead:
+    """The fee, the interest, the movement the ledger lacks — posted through the kernel and
+    matched in the same transaction.
+
+    **Two permissions**, deliberately (decision 11): working the match is `bank:reconcile`, and
+    writing the ledger is `gl:journal_post`. A reconciler who may tick cannot quietly post.
+    """
+    posted = matching.post_cashbook_from_line(
+        db,
+        auth.company_id,
+        statement_line_id,
+        gl_account_id=payload.gl_account_id,
+        tax_code_id=payload.tax_code_id,
+        description=payload.description,
+        reference=payload.reference,
+        entry_date=payload.entry_date,
+        branch_id=payload.branch_id,
+        project_id=payload.project_id,
+        actor=auth.user,
+        idempotency_key=idempotency_key,
+        request=request,
+    )
+    db.commit()
+    return PostedFromStatementRead(
+        entry_id=posted.entry_id,
+        entry_number=posted.entry_number,
+        journal_line_id=posted.journal_line_id,
+        match=_match_read(db, auth.company_id, posted.match),
+    )
+
+
+@router.post("/statement-lines/{statement_line_id}/post-settlement", status_code=201)
+def post_settlement_from_statement_line(
+    statement_line_id: int,
+    payload: PostSettlementFromLine,
+    request: Request,
+    auth: AuthContext = permissions.require(permissions.BANK_RECONCILE),
+    db: Session = Depends(get_db),
+    idempotency_key: str = IdempotencyKey,
+) -> PostedFromStatementRead:
+    """The customer receipt or supplier payment the bank is showing, posted through P4 and
+    matched in the same transaction — **unallocated**, because which invoices it pays is the
+    allocation screen's decision and not a bank statement's.
+
+    The role follows the line's sign, so the permission the posting needs does too:
+    `ar:transactions_post` on a credit, `ap:transactions_post` on a debit. Passed to
+    `post_document` as the caller's granted set rather than declared here, because which one is
+    required is not known until the line is read.
+    """
+    posted = matching.post_settlement_from_line(
+        db,
+        auth.company_id,
+        statement_line_id,
+        partner_id=payload.partner_id,
+        description=payload.description,
+        reference=payload.reference,
+        document_date=payload.document_date,
+        branch_id=payload.branch_id,
+        project_id=payload.project_id,
+        actor=auth.user,
+        permissions=set(auth.permissions),
+        idempotency_key=idempotency_key,
+        request=request,
+    )
+    db.commit()
+    return PostedFromStatementRead(
+        entry_id=posted.entry_id,
+        entry_number=posted.entry_number,
+        journal_line_id=posted.journal_line_id,
+        match=_match_read(db, auth.company_id, posted.match),
+        document_id=posted.document_id,
+        document_number=posted.document_number,
+    )
+
+
+# --- The workspace: reconciliation (P8 decision 5) -------------------------------------------
+
+
+def _figures_read(figures) -> FiguresRead:  # noqa: ANN001
+    return FiguresRead(
+        reconciliation_date=figures.reconciliation_date,
+        statement_balance=figures.statement_balance,
+        ledger_balance=figures.ledger_balance,
+        outstanding_total=figures.outstanding_total,
+        difference=figures.difference,
+        adjusted_bank_balance=figures.adjusted_bank_balance,
+        outstanding=[OutstandingLineRead(**vars(item)) for item in figures.outstanding],
+        unmatched_statement=[
+            StatementLineRead.model_validate(line) for line in figures.unmatched_statement
+        ],
+        unmatched_statement_count=figures.unmatched_statement_count,
+    )
+
+
+@router.get("/reconciliations")
+def list_reconciliations(
+    bank_account_id: int | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    auth: AuthContext = permissions.require(permissions.BANK_REPORTS_VIEW),
+    db: Session = Depends(get_db),
+) -> list[ReconciliationRead]:
+    return [
+        ReconciliationRead.model_validate(row)
+        for row in reconciliation_service.list_reconciliations(
+            db, auth.company_id, bank_account_id=bank_account_id, limit=limit
+        )
+    ]
+
+
+@router.get("/reconciliations/{reconciliation_id}")
+def read_reconciliation(
+    reconciliation_id: int,
+    auth: AuthContext = permissions.require(permissions.BANK_REPORTS_VIEW),
+    db: Session = Depends(get_db),
+) -> ReconciliationDetail:
+    """The workspace, and the report. A locked one carries **both** figure sets: what it said,
+    reproduced from the lines that existed at the lock, and what the same date computes now —
+    with the late lines that account for any difference between them."""
+    reconciliation = reconciliation_service.get(db, auth.company_id, reconciliation_id)
+    locked = reconciliation.status == ReconciliationStatus.LOCKED
+    # Built rather than `model_validate`-then-assigned: `figures` is computed, not a column, so
+    # validating the ORM row against a model that requires it fails before anything is filled
+    # in. Constructing it says which parts are stored and which are derived.
+    return ReconciliationDetail(
+        **ReconciliationRead.model_validate(reconciliation).model_dump(),
+        figures=_figures_read(
+            reconciliation_service.live_figures(db, auth.company_id, reconciliation)
+        ),
+        stored=_figures_read(
+            reconciliation_service.stored_figures(db, auth.company_id, reconciliation)
+        )
+        if locked
+        else None,
+        late_line_ids=(
+            reconciliation_service.late_lines(db, auth.company_id, reconciliation)
+            if locked
+            else []
+        ),
+    )
+
+
+@router.post("/reconciliations", status_code=status.HTTP_201_CREATED)
+def open_reconciliation(
+    payload: ReconciliationOpen,
+    request: Request,
+    auth: AuthContext = permissions.require(permissions.BANK_RECONCILE_LOCK),
+    db: Session = Depends(get_db),
+    idempotency_key: str = IdempotencyKey,
+) -> ReconciliationDetail:
+    reconciliation = reconciliation_service.open_reconciliation(
+        db,
+        auth.company_id,
+        bank_account_id=payload.bank_account_id,
+        reconciliation_date=payload.reconciliation_date,
+        statement_balance=payload.statement_balance,
+        actor=auth.user,
+        idempotency_key=idempotency_key,
+        request=request,
+    )
+    db.commit()
+    return read_reconciliation(reconciliation.id, auth=auth, db=db)
+
+
+@router.post("/reconciliations/{reconciliation_id}/lock")
+def lock_reconciliation(
+    reconciliation_id: int,
+    payload: ReconciliationLock,
+    request: Request,
+    auth: AuthContext = permissions.require(permissions.BANK_RECONCILE_LOCK),
+    db: Session = Depends(get_db),
+    idempotency_key: str = IdempotencyKey,
+) -> ReconciliationDetail:
+    """Sign it off — at a zero difference with every statement line explained, and at nothing
+    else. Both refusals name their figure, so the workspace can show them before the button."""
+    reconciliation_service.lock(
+        db,
+        auth.company_id,
+        reconciliation_id,
+        statement_balance=payload.statement_balance,
+        actor=auth.user,
+        idempotency_key=idempotency_key,
+        request=request,
+    )
+    db.commit()
+    return read_reconciliation(reconciliation_id, auth=auth, db=db)
+
+
+@router.post("/reconciliations/{reconciliation_id}/reopen")
+def reopen_reconciliation(
+    reconciliation_id: int,
+    payload: ReconciliationReopen,
+    request: Request,
+    auth: AuthContext = permissions.require(permissions.BANK_RECONCILE_LOCK),
+    db: Session = Depends(get_db),
+) -> ReconciliationDetail:
+    """Withdraw the signature on the account's latest locked reconciliation. The matches stand;
+    what is withdrawn is the sign-off."""
+    reconciliation_service.reopen(
+        db,
+        auth.company_id,
+        reconciliation_id,
+        reason=payload.reason,
+        actor=auth.user,
+        request=request,
+    )
+    db.commit()
+    return read_reconciliation(reconciliation_id, auth=auth, db=db)
