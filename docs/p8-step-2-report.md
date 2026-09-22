@@ -485,7 +485,9 @@ $ git status --short
 $ git log @{u}..
 ```
 
-<!-- BRANCH -->
+Both empty. `git diff --stat main...HEAD`: **15 files, 7 350 insertions, 2 deletions** — the
+seven new files (two modules, the invariant suite and four test files), this report, and two
+deletions where the defects above were fixed in place.
 
 ## What step 3 inherits
 
