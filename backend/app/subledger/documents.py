@@ -1556,6 +1556,35 @@ def _check_credit_limit(
 # --- Reversal and maturity --------------------------------------------------------------------
 
 
+def _refuse_a_payment_run_member(db: Session, document: PartnerDocument) -> None:
+    """`payment_run_member`: this `PMT-` belongs to a posted run, so the run is what reverses.
+
+    Named in the refusal, because "reverse the run" is useless advice without the run's number.
+    """
+    from app.models.banking import PaymentRun, PaymentRunLine, PaymentRunStatus
+
+    number = db.scalar(
+        select(PaymentRun.number)
+        .join(
+            PaymentRunLine,
+            (PaymentRunLine.run_id == PaymentRun.id)
+            & (PaymentRunLine.company_id == PaymentRun.company_id),
+        )
+        .where(
+            PaymentRun.company_id == document.company_id,
+            PaymentRun.status == PaymentRunStatus.POSTED,
+            PaymentRunLine.settlement_document_id == document.id,
+        )
+    )
+    if number is None:
+        return
+    raise LedgerStateError(
+        f"{document.number} was paid in {number}; reverse the run",
+        code="payment_run_member",
+        field_errors={"document_id": [f"paid in {number}"]},
+    )
+
+
 def reverse_document(
     db: Session,
     document: PartnerDocument,
@@ -1564,6 +1593,7 @@ def reverse_document(
     reason: str,
     actor: User,
     refund_reason: str | None = None,
+    in_payment_run: bool = False,
     idempotency_key: str | None = None,
     idempotency_hash: str | None = None,
     request: Request | None = None,
@@ -1593,6 +1623,22 @@ def reverse_document(
         raise LedgerStateError(
             f"{document.number} was already reversed", code="document_already_reversed"
         )
+    # **The document path's half of P8 decision 7.** A settlement a payment run posted is not
+    # reversible on its own: a bulk transfer is one banking act, the bank shows one line either
+    # way, and reversing one beneficiary out of it would leave a run whose total no longer
+    # equals its members. The run's own reversal passes `in_payment_run=True`, which is the
+    # only way past this — and it is a keyword rather than a state test because the run flips
+    # to `reversed` last, after the settlements it is reversing.
+    #
+    # It goes **above** `document_allocated` because every member of a posted run is
+    # allocated — underneath it the generic refusal would always win and the advice that
+    # actually helps would never be said.
+    #
+    # Read from `app.models.banking` rather than from `app.banking`: the question is "is there
+    # a row" and a service import here would tie the subledger to the banking package for a
+    # single `SELECT`.
+    if not in_payment_run:
+        _refuse_a_payment_run_member(db, document)
     if document.open_amount != document.total_amount:
         raise LedgerStateError(
             f"{document.number} is allocated; unallocate it before reversing",
