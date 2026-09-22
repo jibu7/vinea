@@ -51,13 +51,21 @@ from app.banking import payment_runs as payment_run_service
 from app.banking import reconciliation as reconciliation_service
 from app.banking import reports as reports_service
 from app.banking import statements as statements_service
+from app.banking.formats import ParsedLine
 from app.core.errors import AppError
 from app.kernel import accounts as kernel_accounts
 from app.kernel import periods as kernel_periods
 from app.kernel import posting
 from app.kernel.errors import PostingError
 from app.kernel.events import CashbookEntry, CashbookKind, CashbookLineSpec
-from app.models.banking import BankAccount, BankMatchKind, BankMatchRule, PaymentRun
+from app.models.banking import (
+    BankAccount,
+    BankMatchKind,
+    BankMatchRule,
+    BankStatement,
+    BankStatementLine,
+    PaymentRun,
+)
 from app.models.currency import Currency, ExchangeRate
 from app.models.fiscal import AccountingPeriod, FiscalYear, PeriodStatus
 from app.models.fiscalization import FxRevaluationRole
@@ -1789,3 +1797,209 @@ def test_the_acceptance_tape(db: Session, tape: Tape) -> None:  # noqa: PLR0915
     _expect("17", "BRC-4 number again", "BRC-000004", brc4.number)
     _expect("17", "BRC-4 difference", Decimal(0), brc4.difference)
     _after_every_row(db, tape, "17")
+
+    # --- Row 18: the refusals no earlier row reached --------------------------------------------
+    #
+    # Six of them, each the last unexercised guard of its decision. They come last because every
+    # one needs the state the tape has built: a second open reconciliation needs a locked one
+    # behind it, a date-order refusal needs `BRC-4` at 31 October, and the cross-account match
+    # needs two accounts with live lines on both.
+
+    # (i) A format whose `date_format` disagrees with the file: row 1 fails and nothing is
+    #     imported — a parse error is not a partial import.
+    from app.banking.formats import GENERIC_PRESET
+
+    day_first = GENERIC_PRESET.model_copy(update={"date_format": "%d/%m/%Y"})
+    bank_accounts.update(
+        db,
+        tape.bank("BK-RWF"),
+        statement_format=day_first.model_dump(mode="json"),
+        actor=tape.owner,
+    )
+    db.flush()
+    statements_before = db.scalar(
+        select(func.count()).select_from(BankStatement).where(
+            BankStatement.company_id == tape.company_id
+        )
+    )
+    # Fresh content, never imported: the **file-hash** refusal is checked before the parse, so
+    # re-offering a committed sample here would be refused `statement_already_imported` and the
+    # parse would never run. The first draft did exactly that.
+    iso_rows = (
+        "Date,Description,Reference,Debit,Credit,Balance\r\n"
+        f"{TAPE_YEAR}-11-04,A NOVEMBER DEPOSIT,,,5000,1005500\r\n"
+    ).encode()
+    parse_error = _refuses(
+        db,
+        "18",
+        "date_format against ISO dates",
+        "statement_parse_error",
+        lambda: statements_service.import_statement(
+            db,
+            tape.company_id,
+            bank_account_id=tape.bank("BK-RWF").id,
+            content=iso_rows,
+            file_name="wrong-format.csv",
+            actor=tape.owner,
+        ),
+    )
+    _expect("18", "parse error names row 1", True, "1" in str(parse_error.field_errors))
+    _expect(
+        "18",
+        "nothing imported",
+        statements_before,
+        db.scalar(
+            select(func.count()).select_from(BankStatement).where(
+                BankStatement.company_id == tape.company_id
+            )
+        ),
+    )
+    bank_accounts.update(
+        db,
+        tape.bank("BK-RWF"),
+        statement_format=GENERIC_PRESET.model_dump(mode="json"),
+        actor=tape.owner,
+    )
+    db.flush()
+
+    # (ii) A rule aiming at the AR control account. The refusal is **P4's
+    #      `control_account_modules` registry** — `cb` is not among the modules paired with `ar`
+    #      — not the engine's `control_account_manual_posting`, which is a `ManualJournal`-only
+    #      branch and can never fire for a `CashbookEntry`. The prompt said the latter when it was
+    #      frozen and was corrected at the step-2 gate; this row is the corrected literal.
+    # **Its own statement line, keyed here.** The first draft hunted for an unmatched
+    # `CASH DEPOSIT` line and found none — by row 18 every line on the account is matched or
+    # voided — so the probe was skipped by an `if` and the refusal went unexercised while the row
+    # still read green. A probe that can silently vanish is worse than no probe, so this one
+    # builds the state it needs.
+    control_statement = statements_service.import_manual(
+        db,
+        tape.company_id,
+        bank_account_id=tape.bank("BK-RWF").id,
+        lines=[
+            ParsedLine(
+                row=1,
+                value_date=date(TAPE_YEAR, 11, 4),
+                booking_date=None,
+                description="A CONTROL ACCOUNT ATTEMPT",
+                reference=None,
+                amount=Decimal(-1500),
+                balance_after=None,
+                external_id=None,
+                occurrence=0,
+            )
+        ],
+        opening_balance=Decimal(1000500),
+        closing_balance=Decimal(999000),
+        actor=tape.owner,
+    )
+    db.flush()
+    control_line = statements_service.lines_of(
+        db, tape.company_id, control_statement.statement.id
+    )[0]
+    matches_before = len(matching.matches_of(db, tape.company_id, tape.bank("BK-RWF").id))
+    _refuses(
+        db,
+        "18",
+        "a rule aiming at 1200",
+        "control_account_direct_posting",
+        lambda: matching.post_cashbook_from_line(
+            db,
+            tape.company_id,
+            control_line.id,
+            gl_account_id=tape.acct("1200"),
+            actor=tape.owner,
+        ),
+    )
+    _expect(
+        "18",
+        "no match written",
+        matches_before,
+        len(matching.matches_of(db, tape.company_id, tape.bank("BK-RWF").id)),
+    )
+
+    # (iii) A manual match across two bank accounts.
+    usd_statement_line = db.scalars(
+        select(BankStatementLine).where(
+            BankStatementLine.company_id == tape.company_id,
+            BankStatementLine.bank_account_id == tape.bank("BK-USD").id,
+        )
+    ).first()
+    rwf_ledger = matching.list_ledger_lines(
+        db, tape.company_id, tape.bank("BK-RWF").id, as_of=OCT_31
+    )
+    _refuses(
+        db,
+        "18",
+        "a match across two accounts",
+        "match_across_accounts",
+        lambda: matching.create_match(
+            db,
+            tape.company_id,
+            bank_account_id=tape.bank("BK-USD").id,
+            statement_line_ids=[usd_statement_line.id],
+            journal_line_ids=[rwf_ledger[0].journal_line_id],
+            kind=BankMatchKind.MANUAL,
+            rule=BankMatchRule.MANUAL,
+            actor=tape.owner,
+        ),
+    )
+
+    # (iv) A reconciliation dated before the latest locked one.
+    _refuses(
+        db,
+        "18",
+        "BRC-5 dated 15 Oct",
+        "reconciliation_date_order",
+        lambda: reconciliation_service.open_reconciliation(
+            db,
+            tape.company_id,
+            bank_account_id=tape.bank("BK-RWF").id,
+            reconciliation_date=OCT_15,
+            statement_balance=Decimal(1000500),
+            actor=tape.owner,
+        ),
+    )
+
+    # (v) A second open reconciliation on one account.
+    standing = reconciliation_service.open_reconciliation(
+        db,
+        tape.company_id,
+        bank_account_id=tape.bank("BK-RWF").id,
+        reconciliation_date=date(TAPE_YEAR, 11, 30),
+        statement_balance=Decimal(1000500),
+        actor=tape.owner,
+    )
+    db.flush()
+    _refuses(
+        db,
+        "18",
+        "a second open BRC",
+        "reconciliation_open_exists",
+        lambda: reconciliation_service.open_reconciliation(
+            db,
+            tape.company_id,
+            bank_account_id=tape.bank("BK-RWF").id,
+            reconciliation_date=date(TAPE_YEAR, 11, 30),
+            statement_balance=Decimal(1000500),
+            actor=tape.owner,
+        ),
+    )
+    _expect("18", "the standing one is BRC-000005", "BRC-000005", standing.number)
+
+    # (vi) A reconciliation on the till. A cash account is counted, not reconciled.
+    _refuses(
+        db,
+        "18",
+        "a reconciliation on CASH",
+        "reconciliation_needs_bank",
+        lambda: reconciliation_service.open_reconciliation(
+            db,
+            tape.company_id,
+            bank_account_id=tape.bank("CASH").id,
+            reconciliation_date=date(TAPE_YEAR, 11, 30),
+            statement_balance=Decimal(50000),
+            actor=tape.owner,
+        ),
+    )
+    _after_every_row(db, tape, "18")
