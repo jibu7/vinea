@@ -6,10 +6,10 @@ the way `assert_ledger_invariants` and `assert_subledger_invariants` are. The po
 like this is that it is cheap enough to run *constantly*: a compounding error is one that each
 operation leaves a little worse and no single end-state check can see.
 
-Clauses 1-7 and 9 land at step 2. **Clause 8 is the payment-run clause and arrives with the
-runs at step 3** — it is declared here, named and raising, rather than silently absent, so that
-"the suite has eight clauses and one is not written yet" is a fact the reader meets rather than
-one they have to notice.
+Clauses 1-7 and 9 landed at step 2; **clause 8, the payment-run clause, landed at step 3** with
+the runs themselves. Between those two points it was declared here by name and by comment rather
+than silently absent, so that "the suite has nine clauses and one is not written yet" was a fact
+the reader met rather than one they had to notice.
 
 The hardest clause is 4, and it is the one the whole phase turns on: a locked reconciliation's
 stored figures must be **reproducible** from the lines that existed when it locked. Not
@@ -34,11 +34,15 @@ from app.models.banking import (
     BankReconciliation,
     BankStatement,
     BankStatementLine,
+    PaymentRun,
+    PaymentRunLine,
+    PaymentRunStatus,
     ReconciliationStatus,
     StatementStatus,
 )
 from app.models.gl import CASHBOOK_CONTROL_TYPES, GLAccount
 from app.models.journal import JournalEntry, JournalLine
+from app.models.subledger import DocumentStatus, PartnerDocument
 
 ZERO = Decimal(0)
 
@@ -56,7 +60,7 @@ def assert_bank_invariants(db: Session, company_id: int) -> None:
     _clause_5_a_foreign_account_holds_only_its_currency(db, company_id, accounts, base)
     _clause_6_every_flagged_account_has_exactly_one_row(db, company_id, accounts)
     _clause_7_the_cache_equals_the_latest_locked_row(db, company_id, accounts)
-    # Clause 8 — payment runs — arrives at step 3 with the runs themselves.
+    _clause_8_a_run_equals_its_members(db, company_id)
     _clause_9_a_void_statements_lines_are_void_and_unmatched(db, company_id)
 
 
@@ -391,6 +395,82 @@ def _clause_7_the_cache_equals_the_latest_locked_row(
             f"{row.code} caches a balance of {row.last_reconciled_balance} but "
             f"{latest.number} locked at {latest.statement_balance}"
         )
+
+
+# --- 8 ------------------------------------------------------------------------------------------
+
+
+def _clause_8_a_run_equals_its_members(db: Session, company_id: int) -> None:
+    """A payment run **is** its settlements, and nothing else.
+
+    The run row stores a total, a reference and an account, and every one of those is a claim
+    about documents P4 owns. The clause says the claims hold: Σ of the members' totals is the
+    run's total, every member quotes the run's number as its `reference` (which is what
+    decision 4's `payment_run` rule matches the bank's single line on — a member that lost it
+    would make the run unmatchable), every member's `cash_account_id` is the run's bank account
+    (a settlement that went out of a different account is a different banking act), and a
+    reversed run has every member reversed.
+
+    The last of those is the one that catches a half-undone reversal: `reverse_run` unallocates
+    N allocations and reverses N settlements, and a failure in the middle of that — or a future
+    caller that reversed some other way — would leave a run marked `reversed` over settlements
+    still standing in the ledger. This is checked after every step of the machine, so it is
+    checked *between* those legs too.
+    """
+    runs = list(db.scalars(select(PaymentRun).where(PaymentRun.company_id == company_id)))
+    for run in runs:
+        lines = list(
+            db.scalars(
+                select(PaymentRunLine).where(
+                    PaymentRunLine.company_id == company_id,
+                    PaymentRunLine.run_id == run.id,
+                )
+            )
+        )
+        assert lines, f"{run.number} has no lines; a run is its members"
+        settlement_ids = {
+            line.settlement_document_id
+            for line in lines
+            if line.settlement_document_id is not None
+        }
+        settlements = list(
+            db.scalars(
+                select(PartnerDocument).where(
+                    PartnerDocument.company_id == company_id,
+                    PartnerDocument.id.in_(settlement_ids or {0}),
+                )
+            )
+        )
+        assert len(settlements) == len(settlement_ids), (
+            f"{run.number} points at {len(settlement_ids)} settlements but "
+            f"{len(settlements)} exist"
+        )
+        row = db.get(BankAccount, run.bank_account_id)
+        assert row is not None
+
+        if run.status == PaymentRunStatus.POSTED:
+            total = sum((document.total_amount for document in settlements), ZERO)
+            assert total == run.total, (
+                f"{run.number} says {run.total} but its settlements total {total}"
+            )
+            for document in settlements:
+                assert document.status == DocumentStatus.POSTED, (
+                    f"{run.number} is posted but {document.number} is {document.status.value}"
+                )
+                assert document.reference == run.number, (
+                    f"{document.number} carries reference {document.reference!r}, not "
+                    f"{run.number!r} — the bank's line would never find it"
+                )
+                assert document.cash_account_id == row.gl_account_id, (
+                    f"{document.number} settled through account {document.cash_account_id}, "
+                    f"not {run.number}'s {row.gl_account_id}"
+                )
+        else:
+            for document in settlements:
+                assert document.status == DocumentStatus.REVERSED, (
+                    f"{run.number} is reversed but {document.number} is still "
+                    f"{document.status.value}"
+                )
 
 
 # --- 9 ------------------------------------------------------------------------------------------
