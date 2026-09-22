@@ -60,6 +60,7 @@ from app.kernel.events import CashbookEntry, CashbookKind, CashbookLineSpec
 from app.models.banking import BankAccount, BankMatchKind, BankMatchRule
 from app.models.currency import Currency, ExchangeRate
 from app.models.fiscal import AccountingPeriod, FiscalYear, PeriodStatus
+from app.models.fiscalization import FxRevaluationRole
 from app.models.gl import AccountClass, ControlType, GLAccount
 from app.models.job import Job
 from app.models.journal import JournalEntry, JournalLine, JournalStatus
@@ -69,6 +70,7 @@ from app.models.user import User
 from app.subledger import allocations as allocation_service
 from app.subledger import documents as documents_service
 from app.subledger import masters as partner_masters
+from app.subledger import revaluation as revaluation_service
 from app.subledger.openitems import recompute_open_amount
 from tests.banking.conftest import sample
 from tests.banking.invariants import assert_bank_invariants
@@ -1338,3 +1340,134 @@ def test_the_acceptance_tape(db: Session, tape: Tape) -> None:  # noqa: PLR0915
     tape.documents["BRC-3"] = brc3
     _expect("11", "BRC-3 number", "BRC-000003", brc3.number)
     _after_every_row(db, tape, "11")
+
+    # --- Row 12: FX revaluation, role `all`, 30 Sep at 1 350 ------------------------------------
+    view = revaluation_service.preview(
+        db, tape.company_id, revaluation_date=SEP_30, role=FxRevaluationRole.ALL
+    )
+    by_scope: dict[str, list] = {}
+    for line in view.lines:
+        by_scope.setdefault(line.scope, []).append(line)
+    _expect("12", "AR lines", 0, len(by_scope.get("ar", [])))
+
+    bank_line = by_scope["bank"][0]
+    _expect("12", "bank line account", "BK-USD", bank_line.bank_account_code)
+    _expect("12", "bank open_amount", Decimal("495.00"), bank_line.open_amount)
+    # 660 000 − 6 600
+    _expect("12", "bank carrying_base", Decimal(653400), bank_line.carrying_base)
+    # 495.00 x 1 350
+    _expect("12", "bank revalued_base", Decimal(668250), bank_line.revalued_base)
+    _expect("12", "bank gain", Decimal(14850), bank_line.difference)
+
+    ap_line = by_scope["ap"][0]
+    _expect("12", "AP open", Decimal("-100.00"), ap_line.open_amount)
+    _expect("12", "AP carrying", Decimal(-132000), ap_line.carrying_base)
+    _expect("12", "AP revalued", Decimal(-135000), ap_line.revalued_base)
+    _expect("12", "AP loss", Decimal(-3000), ap_line.difference)
+
+    fxr1 = revaluation_service.post_revaluation(
+        db,
+        tape.company_id,
+        revaluation_date=SEP_30,
+        role=FxRevaluationRole.ALL,
+        actor=tape.owner,
+    )
+    db.flush()
+    tape.documents["FXR-1"] = fxr1
+    posted = {
+        code: amount
+        for code, amount in db.execute(
+            select(GLAccount.code, JournalLine.base_amount)
+            .join(
+                JournalLine,
+                (JournalLine.gl_account_id == GLAccount.id)
+                & (JournalLine.company_id == GLAccount.company_id),
+            )
+            .where(JournalLine.entry_id == fxr1.journal_entry_id)
+        ).all()
+    }
+    _expect("12", "FXR-1 Dr 1130", Decimal(14850), posted["1130"])
+    _expect("12", "FXR-1 Cr 4410", Decimal(-14850), posted["4410"])
+    _expect("12", "FXR-1 Dr 6955", Decimal(3000), posted["6955"])
+    _expect("12", "FXR-1 Cr 2190", Decimal(-3000), posted["2190"])
+    _expect("12", "FXR-1 accounts", 4, len(posted))
+    _expect("12", "FXR-2 mirror exists", True, fxr1.mirror_entry_id is not None)
+    mirror = db.get(JournalEntry, fxr1.mirror_entry_id)
+    _expect("12", "FXR-2 date", OCT_1, mirror.entry_date)
+
+    # **Never the bank account itself.** 1121 is where row 5 and row 11 left it.
+    _expect("12", "1121 unchanged", Decimal(653400), _balance(db, tape, "1121", as_of=SEP_30))
+    _expect("12", "1121 after mirror", Decimal(653400), _balance(db, tape, "1121", as_of=OCT_1))
+    # The balance sheet reads the pair: 1121 + 1130 = 495 x 1 350.
+    pair = _balance(db, tape, "1121", as_of=SEP_30) + _balance(db, tape, "1130", as_of=SEP_30)
+    _expect("12", "1121 + 1130", Decimal(668250), pair)
+    _expect("12", "= 495 x 1350", Decimal("495.00") * MONTH_END_RATE, pair)
+
+    # A second run whose scope intersects: `bank` is inside `all`.
+    _refuses(
+        db,
+        "12",
+        "second run, role bank",
+        "fx_revaluation_exists",
+        lambda: revaluation_service.post_revaluation(
+            db,
+            tape.company_id,
+            revaluation_date=SEP_30,
+            role=FxRevaluationRole.BANK,
+            actor=tape.owner,
+        ),
+    )
+    _after_every_row(db, tape, "12")
+
+    # --- Row 13: PMT-5 dated 26 Sep, posted 2 Oct — the late line -------------------------------
+    stored_before = (brc2.ledger_balance, brc2.outstanding_total)
+    pmt5 = _settlement(
+        db, tape, role=PartnerRole.AP, partner="S1", amount=Decimal(20000), on=SEP_26,
+        account_code="1120", instrument=InstrumentType.CHEQUE, reference="CHQ 102",
+    )
+    db.flush()
+    tape.documents["PMT-5"] = pmt5
+    # **The locked figures do not move**, however the cheque is dated.
+    _expect("13", "BRC-2 stored ledger", Decimal(1020500), brc2.ledger_balance)
+    _expect("13", "BRC-2 stored outstanding", Decimal(-70000), brc2.outstanding_total)
+    _expect(
+        "13",
+        "BRC-2 stored unchanged",
+        stored_before,
+        (brc2.ledger_balance, brc2.outstanding_total),
+    )
+
+    report = reports_service.reconciliation_report(db, tape.company_id, brc2.id)
+    _expect("13", "Posted after lock count", 1, len(report.posted_after_lock))
+    late = report.posted_after_lock[0]
+    _expect("13", "late line amount", Decimal(-20000), late.amount)
+    _expect("13", "late line is PMT-5", "PMT-000005", late.entry_number)
+    # Live: the cheque is in the ledger now, and outstanding with PMT-4.
+    _expect("13", "live ledger", Decimal(1000500), report.live.ledger_balance)
+    _expect("13", "live outstanding", Decimal(-90000), report.live.outstanding_total)
+    _expect("13", "live difference", Decimal(0), report.live.difference)
+
+    detail = reports_service.cashbook_detail(
+        db,
+        tape.company_id,
+        bank_account_id=tape.bank("BK-RWF").id,
+        date_from=SEP_1,
+        date_to=SEP_30,
+    )
+    _expect("13", "Cashbooks opening", Decimal(1000000), detail.opening_balance)
+    # 118 000 + 59 000 + 260 000 + 40 000
+    _expect("13", "Cashbooks receipts", Decimal(477000), detail.receipts_total)
+    # 384 000 + 70 000 + 2 500 + 20 000
+    _expect("13", "Cashbooks payments", Decimal(476500), detail.payments_total)
+    _expect("13", "Cashbooks closing", Decimal(1000500), detail.closing_balance)
+    _expect(
+        "13",
+        "closing ties to the trial balance",
+        True,
+        reports_service.base_closing_ties(db, tape.company_id, detail),
+    )
+    reconciled = {row.entry_number: row.reconciled for row in detail.rows}
+    _expect("13", "PMT-4 Reconciled blank", None, reconciled["PMT-000004"])
+    _expect("13", "PMT-5 Reconciled blank", None, reconciled["PMT-000005"])
+    _expect("13", "RCT-1 Reconciled", "BRC-000002", reconciled[tape.documents["RCT-1"].number])
+    _after_every_row(db, tape, "13")
