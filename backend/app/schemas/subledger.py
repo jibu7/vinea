@@ -32,6 +32,10 @@ class PartnerCreate(BaseModel):
     address: dict | None = None
     notes: str | None = None
     currency_id: int | None = None
+    # --- P8 decision 7: the Suppliers screen's *Bank details* section ------------------
+    bank_name: str | None = Field(default=None, max_length=200)
+    bank_account_number: str | None = Field(default=None, max_length=50)
+    bank_account_holder: str | None = Field(default=None, max_length=200)
 
     @model_validator(mode="after")
     def _has_a_role(self) -> "PartnerCreate":
@@ -53,6 +57,12 @@ class PartnerUpdate(BaseModel):
     notes: str | None = None
     currency_id: int | None = None
     clear_currency: bool = False
+    #: `None` leaves the field alone; the `clear_` flag beside it empties it, the same shape
+    #: the codes and the currency already use.
+    bank_name: str | None = Field(default=None, max_length=200)
+    bank_account_number: str | None = Field(default=None, max_length=50)
+    bank_account_holder: str | None = Field(default=None, max_length=200)
+    clear_bank_details: bool = False
     is_active: bool | None = None
 
 
@@ -69,6 +79,9 @@ class PartnerRead(ApiModel):
     address: dict | None
     notes: str | None
     currency_id: int | None
+    bank_name: str | None
+    bank_account_number: str | None
+    bank_account_holder: str | None
     is_active: bool
 
 
