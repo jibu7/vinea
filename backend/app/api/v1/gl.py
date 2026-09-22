@@ -26,6 +26,7 @@ from app.kernel.events import (
     ManualJournal,
 )
 from app.models.audit import AuditLog
+from app.models.banking import BankAccount as BankAccountModel
 from app.models.currency import Currency, ExchangeRate
 from app.models.fiscal import AccountingPeriod, FiscalYear, PeriodStatus
 from app.models.fiscalization import FxRevaluation, FxRevaluationRole, VatReturn
@@ -1372,11 +1373,14 @@ def update_project(
 
 def _revaluation_line(line: revaluation_service.RevaluationLine) -> FxRevaluationLineRead:
     return FxRevaluationLineRead(
+        scope=line.scope,
         document_id=line.document_id,
         document_number=line.document_number,
-        role=str(line.role),
+        role=str(line.role) if line.role is not None else None,
         partner_id=line.partner_id,
         partner_name=line.partner_name,
+        bank_account_id=line.bank_account_id,
+        bank_account_code=line.bank_account_code,
         currency_id=line.currency_id,
         currency_code=line.currency_code,
         open_amount=line.open_amount,
@@ -1426,6 +1430,41 @@ def list_fx_revaluations(
     return [FxRevaluationRead.model_validate(row) for row in rows]
 
 
+def _stored_revaluation_line(  # noqa: ANN202
+    line,  # noqa: ANN001
+    documents: dict,
+    partners: dict,
+    currencies: dict,
+    bank_rows: dict,
+) -> FxRevaluationLineRead:
+    """A stored line, document or bank, with the names its screen drills through.
+
+    One function rather than two branches inline, because the difference between the two kinds is
+    exactly which half of the row is null and every other field is shared.
+    """
+    document = documents.get(line.document_id) if line.document_id is not None else None
+    row = bank_rows.get(line.bank_account_id) if line.bank_account_id is not None else None
+    partner = partners.get(document.partner_id) if document is not None else None
+    return FxRevaluationLineRead(
+        scope="bank" if row is not None else str(document.role) if document else "",
+        document_id=line.document_id,
+        document_number=document.number if document else None,
+        role=str(document.role) if document else None,
+        partner_id=document.partner_id if document else None,
+        partner_name=partner.name if partner else None,
+        bank_account_id=line.bank_account_id,
+        bank_account_code=row.code if row else None,
+        currency_id=line.currency_id,
+        currency_code=currencies[line.currency_id].code,
+        open_amount=line.open_amount,
+        booking_rate=line.booking_rate,
+        carrying_base=line.carrying_base,
+        rate_at_date=line.rate_at_date,
+        revalued_base=line.revalued_base,
+        difference=line.difference,
+    )
+
+
 @router.get("/fx-revaluations/{revaluation_id}")
 def read_fx_revaluation(
     revaluation_id: int,
@@ -1445,7 +1484,24 @@ def read_fx_revaluation(
         for document in db.scalars(
             select(PartnerDocument).where(
                 PartnerDocument.company_id == auth.company_id,
-                PartnerDocument.id.in_([line.document_id for line in stored] or [0]),
+                PartnerDocument.id.in_(
+                    [line.document_id for line in stored if line.document_id is not None] or [0]
+                ),
+            )
+        )
+    }
+    # P8 decision 8: a run may carry bank lines, which have no document and no partner. Loaded
+    # here for the same reason the partners are — the report drills to the workspace from a bank
+    # line's code, and an id with no code on it is a cell nobody can follow.
+    bank_rows = {
+        row.id: row
+        for row in db.scalars(
+            select(BankAccountModel).where(
+                BankAccountModel.company_id == auth.company_id,
+                BankAccountModel.id.in_(
+                    [line.bank_account_id for line in stored if line.bank_account_id is not None]
+                    or [0]
+                ),
             )
         )
     }
@@ -1467,21 +1523,7 @@ def read_fx_revaluation(
         )
     }
     lines = [
-        FxRevaluationLineRead(
-            document_id=line.document_id,
-            document_number=documents[line.document_id].number,
-            role=str(documents[line.document_id].role),
-            partner_id=documents[line.document_id].partner_id,
-            partner_name=partners[documents[line.document_id].partner_id].name,
-            currency_id=line.currency_id,
-            currency_code=currencies[line.currency_id].code,
-            open_amount=line.open_amount,
-            booking_rate=line.booking_rate,
-            carrying_base=line.carrying_base,
-            rate_at_date=line.rate_at_date,
-            revalued_base=line.revalued_base,
-            difference=line.difference,
-        )
+        _stored_revaluation_line(line, documents, partners, currencies, bank_rows)
         for line in stored
     ]
     # Built with its lines rather than validated and then filled: `lines` is required, so
