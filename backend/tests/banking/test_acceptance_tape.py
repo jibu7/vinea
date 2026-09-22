@@ -1657,3 +1657,135 @@ def test_the_acceptance_tape(db: Session, tape: Tape) -> None:  # noqa: PLR0915
         ),
     )
     _after_every_row(db, tape, "15")
+
+    # --- Row 16: reopen BRC-2 (refused) and BRC-4 (allowed) --------------------------------------
+    _refuses(
+        db,
+        "16",
+        "reopen BRC-2",
+        "reconciliation_not_latest",
+        lambda: reconciliation_service.reopen(
+            db, tape.company_id, brc2.id, reason="a fee was restated", actor=tape.owner
+        ),
+    )
+
+    brc4_matches = [
+        match
+        for match in matching.matches_of(db, tape.company_id, tape.bank("BK-RWF").id)
+        if match.reconciliation_id == brc4.id
+    ]
+    _expect("16", "BRC-4 matches before reopen", 2, len(brc4_matches))
+
+    reconciliation_service.reopen(
+        db, tape.company_id, brc4.id, reason="the bank restated October", actor=tape.owner
+    )
+    db.flush()
+    _expect("16", "BRC-4 status", "open", brc4.status.value)
+    _expect("16", "BRC-4 snapshot cleared", None, brc4.outstanding_snapshot)
+    # The matches **stand** — withdrawing the proof is not withdrawing the assertions that went
+    # into it — but they lose their reconciliation, so they are free to be unmatched and to join
+    # whatever locks next.
+    still_there = [
+        match
+        for match in matching.matches_of(db, tape.company_id, tape.bank("BK-RWF").id)
+        if match.id in {m.id for m in brc4_matches}
+    ]
+    _expect("16", "BRC-4 matches stand", 2, len(still_there))
+    _expect(
+        "16",
+        "and carry no reconciliation",
+        [None, None],
+        [match.reconciliation_id for match in still_there],
+    )
+    # The cache falls back to BRC-2 — the latest still locked on this account. BRC-3 is
+    # BK-USD's and untouched.
+    _expect("16", "last_reconciled_at", SEP_30, tape.bank("BK-RWF").last_reconciled_at)
+    _expect(
+        "16",
+        "last_reconciled_balance",
+        Decimal(1090500),
+        tape.bank("BK-RWF").last_reconciled_balance,
+    )
+    _expect("16", "BRC-3 untouched", "locked", tape.documents["BRC-3"].status.value)
+    _after_every_row(db, tape, "16")
+
+    # --- Row 17: void BST-3, re-import it, lock BRC-4 -------------------------------------------
+    _refuses(
+        db,
+        "17",
+        "void a matched statement",
+        "statement_has_matches",
+        lambda: statements_service.void(
+            db, tape.company_id, bst3.id, reason="the bank resent it", actor=tape.owner
+        ),
+    )
+
+    for match in still_there:
+        matching.unmatch(db, tape.company_id, match.id, actor=tape.owner)
+    db.flush()
+    statements_service.void(
+        db, tape.company_id, bst3.id, reason="the bank resent it", actor=tape.owner
+    )
+    db.flush()
+    _expect("17", "BST-3 status", "void", bst3.status.value)
+    # Its lines are out of every listing.
+    _expect(
+        "17",
+        "void lines gone from the pane",
+        0,
+        len(
+            [
+                line
+                for line in db.scalars(
+                    matching.unmatched_statement_lines(
+                        db, tape.company_id, tape.bank("BK-RWF")
+                    )
+                )
+                if line.statement_id == bst3.id
+            ]
+        ),
+    )
+
+    # Without the evidence, the two cheques are unpresented again — which is the right answer.
+    figures = reconciliation_service.live_figures(db, tape.company_id, brc4)
+    _expect("17", "BRC-4 outstanding", Decimal(-90000), figures.outstanding_total)
+    _expect("17", "BRC-4 difference", Decimal(-90000), figures.difference)
+    _refuses(
+        db,
+        "17",
+        "lock without the evidence",
+        "reconciliation_difference",
+        lambda: reconciliation_service.lock(db, tape.company_id, brc4.id, actor=tape.owner),
+    )
+
+    # The same file again — and **not** refused: a void statement's hash and fingerprints block
+    # nothing.
+    again = statements_service.import_statement(
+        db,
+        tape.company_id,
+        bank_account_id=tape.bank("BK-RWF").id,
+        content=overlap,
+        file_name="generic-bk-rwf-overlap-oct.csv",
+        actor=tape.owner,
+    )
+    db.flush()
+    _expect("17", "re-import number", "BST-000004", again.statement.number)
+    _expect("17", "re-import new", 2, again.new_count)
+    _expect("17", "re-import skipped", 1, again.skipped_count)
+
+    matching.auto_match(db, tape.company_id, tape.bank("BK-RWF").id, actor=tape.owner)
+    db.flush()
+    states = matching.statement_line_states(db, tape.company_id, again.statement.id)
+    rules = [
+        state.match_rule.value
+        for state in states.values()
+        if state.match_rule is not None
+    ]
+    _expect("17", "both cheques by reference", ["reference", "reference"], sorted(rules))
+
+    reconciliation_service.lock(db, tape.company_id, brc4.id, actor=tape.owner)
+    db.flush()
+    # **The same row, the same number** — a reopen and a re-lock is not a new reconciliation.
+    _expect("17", "BRC-4 number again", "BRC-000004", brc4.number)
+    _expect("17", "BRC-4 difference", Decimal(0), brc4.difference)
+    _after_every_row(db, tape, "17")
