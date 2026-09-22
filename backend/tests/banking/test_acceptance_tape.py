@@ -57,7 +57,7 @@ from app.kernel import periods as kernel_periods
 from app.kernel import posting
 from app.kernel.errors import PostingError
 from app.kernel.events import CashbookEntry, CashbookKind, CashbookLineSpec
-from app.models.banking import BankAccount, BankMatchKind, BankMatchRule
+from app.models.banking import BankAccount, BankMatchKind, BankMatchRule, PaymentRun
 from app.models.currency import Currency, ExchangeRate
 from app.models.fiscal import AccountingPeriod, FiscalYear, PeriodStatus
 from app.models.fiscalization import FxRevaluationRole
@@ -65,7 +65,12 @@ from app.models.gl import AccountClass, ControlType, GLAccount
 from app.models.job import Job
 from app.models.journal import JournalEntry, JournalLine, JournalStatus
 from app.models.partner import Partner, PartnerRole, PaymentTerms, TaxMode
-from app.models.subledger import DocumentKind, InstrumentType, PartnerDocument
+from app.models.subledger import (
+    Allocation,
+    DocumentKind,
+    InstrumentType,
+    PartnerDocument,
+)
 from app.models.user import User
 from app.subledger import allocations as allocation_service
 from app.subledger import documents as documents_service
@@ -1471,3 +1476,184 @@ def test_the_acceptance_tape(db: Session, tape: Tape) -> None:  # noqa: PLR0915
     _expect("13", "PMT-5 Reconciled blank", None, reconciled["PMT-000005"])
     _expect("13", "RCT-1 Reconciled", "BRC-000002", reconciled[tape.documents["RCT-1"].number])
     _after_every_row(db, tape, "13")
+
+    # --- Row 14: the overlapping October export -------------------------------------------------
+    overlap = sample("generic-bk-rwf-overlap-oct.csv")
+    overlap_result = statements_service.import_statement(
+        db,
+        tape.company_id,
+        bank_account_id=tape.bank("BK-RWF").id,
+        content=overlap,
+        file_name="generic-bk-rwf-overlap-oct.csv",
+        actor=tape.owner,
+    )
+    db.flush()
+    bst3 = overlap_result.statement
+    tape.documents["BST-3"] = bst3
+    _expect("14", "BST-3 number", "BST-000003", bst3.number)
+    # The 20 September deposit is already held, by fingerprint — an overlapping export is the
+    # normal case, not an error.
+    _expect("14", "BST-3 new", 2, overlap_result.new_count)
+    _expect("14", "BST-3 skipped", 1, overlap_result.skipped_count)
+
+    matching.auto_match(db, tape.company_id, tape.bank("BK-RWF").id, actor=tape.owner)
+    db.flush()
+    states = matching.statement_line_states(db, tape.company_id, bst3.id)
+    lines3 = statements_service.lines_of(db, tape.company_id, bst3.id)
+    rules = {line.line_no: states[line.id].match_rule for line in lines3}
+    # `CHQ 101` and `CHQ 102` are the cheques' own references — the bank quoting them back.
+    _expect("14", "cheque matches by reference", 2,
+            sum(1 for rule in rules.values() if rule is not None and rule.value == "reference"))
+
+    brc4 = reconciliation_service.open_reconciliation(
+        db,
+        tape.company_id,
+        bank_account_id=tape.bank("BK-RWF").id,
+        reconciliation_date=OCT_31,
+        actor=tape.owner,
+    )
+    db.flush()
+    tape.documents["BRC-4"] = brc4
+    figures = reconciliation_service.live_figures(db, tape.company_id, brc4)
+    _expect("14", "BRC-4 statement", Decimal(1000500), figures.statement_balance)
+    _expect("14", "BRC-4 ledger", Decimal(1000500), figures.ledger_balance)
+    _expect("14", "BRC-4 outstanding", Decimal(0), figures.outstanding_total)
+    _expect("14", "BRC-4 difference", Decimal(0), figures.difference)
+    reconciliation_service.lock(db, tape.company_id, brc4.id, actor=tape.owner)
+    db.flush()
+    _expect("14", "BRC-4 number", "BRC-000004", brc4.number)
+
+    # **The history does not change**: BRC-2 still lists PMT-5 under *Posted after lock*, even
+    # though the cheque is matched and reconciled now.
+    report = reports_service.reconciliation_report(db, tape.company_id, brc2.id)
+    _expect("14", "BRC-2 still lists PMT-5 late", 1, len(report.posted_after_lock))
+    _expect("14", "BRC-2 late line", "PMT-000005", report.posted_after_lock[0].entry_number)
+    _after_every_row(db, tape, "14")
+
+    # --- Row 15: PYR-2 pays SIN-5, then is reversed ---------------------------------------------
+    sin5 = _invoice(
+        db, tape, role=PartnerRole.AP, partner="S2", amount=Decimal(30000), on=NOV_2
+    )
+    tape.documents["SIN-5"] = sin5
+    # **The discount is declined here, and that is the prompt's own reading.** S2's terms are
+    # `2/10 net 30`, `SIN-5` is dated 2 November and `PYR-2` pays it on the 3rd — one day in, so
+    # P4 offers 2 % of 30 000. Row 4 says "with the discount taken" in as many words *because it
+    # is a choice*; row 15 says nothing and gives `PMT-6` as **30 000**, the undiscounted amount.
+    # So the run declines it, which is what the per-line toggle exists for.
+    #
+    # The first draft left the default on and got 29 400 — the same run, correctly discounted,
+    # disagreeing with the prompt by 600. The offer is asserted below so the toggle is shown
+    # doing something rather than silently agreeing with a zero.
+    offer = payment_run_service.plan(
+        db,
+        tape.company_id,
+        bank_account_id=tape.bank("BK-RWF").id,
+        payment_date=NOV_3,
+        lines=[payment_run_service.RunLineInput(document_id=sin5.id)],
+    )
+    _expect("15", "discount on offer", Decimal(600), offer.suppliers[0].lines[0].discount_available)
+
+    run2 = payment_run_service.post_run(
+        db,
+        tape.company_id,
+        bank_account_id=tape.bank("BK-RWF").id,
+        payment_date=NOV_3,
+        lines=[
+            payment_run_service.RunLineInput(document_id=sin5.id, take_discount=False)
+        ],
+        actor=tape.owner,
+    )
+    db.flush()
+    tape.documents["PYR-2"] = run2
+    run2_lines = payment_run_service.lines_of(db, tape.company_id, run2.id)
+    pmt6 = db.get(PartnerDocument, run2_lines[0].settlement_document_id)
+    _expect("15", "PMT-6 number", "PMT-000006", pmt6.number)
+    _expect("15", "PMT-6 amount", Decimal(30000), pmt6.total_amount)
+    # 1 000 500 − 30 000
+    _expect("15", "1120 balance", Decimal(970500), _balance(db, tape, "1120"))
+
+    # Reversing the member on its own is refused — a bulk transfer is one banking act.
+    member_refusal = _refuses(
+        db,
+        "15",
+        "reverse PMT-6 alone",
+        "payment_run_member",
+        lambda: documents_service.reverse_document(
+            db, pmt6, on_date=NOV_3, reason="wrong beneficiary", actor=tape.owner
+        ),
+    )
+    _expect("15", "refusal names the run", True, "PYR-000002" in str(member_refusal))
+
+    payment_run_service.reverse_run(
+        db,
+        tape.company_id,
+        run2.id,
+        reason="the transfer was recalled",
+        on_date=NOV_3,
+        actor=tape.owner,
+    )
+    db.flush()
+    _expect("15", "PYR-2 status", "reversed", run2.status.value)
+    _expect("15", "PMT-6 status", "reversed", pmt6.status.value)
+    _expect("15", "SIN-5 open", Decimal(30000), recompute_open_amount(db, sin5))
+    _expect("15", "1120 back to", Decimal(1000500), _balance(db, tape, "1120"))
+    # ALC-9 mirrors ALC-8: the allocation is reversed, not deleted.
+    reversal = db.scalar(
+        select(Allocation).where(
+            Allocation.company_id == tape.company_id,
+            Allocation.reverses_allocation_id == run2_lines[0].allocation_id,
+        )
+    )
+    _expect("15", "ALC-9 mirrors ALC-8", True, reversal is not None)
+
+    # **These two come after the reversal, and the prompt says so by placement.** It scopes
+    # "before the reversal" to the `payment_run_member` refusal alone and lists these next —
+    # which is the only order that works: while `PYR-2` still stands `SIN-5` is fully paid, so a
+    # run over it is refused `document_not_open` rather than `payment_exceeds_open`. The first
+    # draft probed them early and got exactly that. Now `SIN-5` is open 30 000 again, and 40 000
+    # exceeds it.
+    _refuses(
+        db,
+        "15",
+        "PYR-3 over the open amount",
+        "payment_exceeds_open",
+        lambda: payment_run_service.post_run(
+            db,
+            tape.company_id,
+            bank_account_id=tape.bank("BK-RWF").id,
+            payment_date=NOV_3,
+            lines=[
+                payment_run_service.RunLineInput(
+                    document_id=sin5.id, amount=Decimal(40000)
+                )
+            ],
+            actor=tape.owner,
+        ),
+    )
+    # No number was claimed: the next run to post takes PYR-000003.
+    _expect(
+        "15",
+        "PYR- run unbroken",
+        2,
+        db.scalar(
+            select(func.count()).select_from(PaymentRun).where(
+                PaymentRun.company_id == tape.company_id
+            )
+        ),
+    )
+    # A run from the till: a payment run moves money through a bank.
+    _refuses(
+        db,
+        "15",
+        "a run from CASH",
+        "payment_run_needs_bank",
+        lambda: payment_run_service.post_run(
+            db,
+            tape.company_id,
+            bank_account_id=tape.bank("CASH").id,
+            payment_date=NOV_3,
+            lines=[payment_run_service.RunLineInput(document_id=sin5.id)],
+            actor=tape.owner,
+        ),
+    )
+    _after_every_row(db, tape, "15")
