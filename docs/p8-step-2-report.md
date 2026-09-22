@@ -164,14 +164,24 @@ is there because if one ever did, matching one of them would silently leave the 
 outstanding forever — a defect with no symptom at the moment it is introduced. It is a refusal
 against a future event rather than a current one, which is why it has no test.
 
-One correction to the prompt's wording, recorded where it is asserted. Decision 4 says the
-engine's `not_a_cash_account` and `control_account_manual_posting` refusals are what stop a
-rule targeting a control account. The refusal that actually fires is
-**`control_account_direct_posting`**: `manual_posting` is the `ManualJournal`-only branch, and
-what a drawer posts is a `CashbookEntry`, so what refuses it is P4's `control_account_modules`
-registry — `cb` is not among the modules paired with `ar`. That is the stronger of the two (it
-is `VN007` in the database as well), so the guard decision 4 reached for is there and then
-some.
+**One correction to the phase plan, carried out in this PR.** Decision 4 and tape row 18 both
+said the engine's `control_account_manual_posting` refusal is what stops a rule targeting a
+control account. It cannot be: `manual_posting` is a **`ManualJournal`-only** branch of
+`_check_account`, and what a rule's drawer posts is a `CashbookEntry`. What actually fires is
+P4's `control_account_modules` registry — `cb` is not among the modules paired with `ar` —
+which is the stronger of the two and is `VN007` in the database as well, so the guard decision
+4 reached for holds and then some.
+
+Corrected on the owner's direction at this gate, in
+`.github/prompts/phase-8-banking.prompt.md`, with a note pointing at the approvals row — the
+way P7 corrected its rows 5 and 6 at the step-5 gate and P5 its row 9 at step 2. **The tape
+literal changes now rather than at step 5**, so the row 18 expectation step 5 writes is already
+the right one. The preconditions' own use of `control_account_manual_posting` (about a manual
+journal) stays, because there it is correct.
+
+That prompt was **absent from `.github/prompts/` until this PR**, where P1–P7's all were; it is
+added here with the two corrections applied, which is also how the correction gets somewhere
+step 5 will actually read it.
 
 ## The invariant suite
 
