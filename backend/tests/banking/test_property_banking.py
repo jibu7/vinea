@@ -162,6 +162,10 @@ REQUIRED_REACH = (
     # `payment_exceeds_open` means nothing until these two are healthy.
     "payment run: attempted",
     "payment run: posted",
+    # A reversal needs a posted run, so this is two preconditions deep and the one most worth
+    # gating: it is the path that unallocates N allocations and reverses N settlements, and a
+    # zero here would mean the invariant suite never saw the state between those legs.
+    "run reversal: succeeded",
     "statement: imported from a file",
 )
 REACH_FLOOR = 3
@@ -660,18 +664,40 @@ def _payment_run(
     if state["paid"] and pick % 3 == 0:
         chosen.insert(0, state["paid"][pick % len(state["paid"])])
     over = Decimal(magnitude * 1000) if pick % 3 == 0 else None
+    # **Dated at or after the latest invoice it pays**, three draws in four.
+    #
+    # This is the generator following the product rather than fighting it: the screen defaults
+    # the payment date to today and the invoices are already raised, so a run dated before one
+    # of them is the unusual case, not the usual one. The first version drew the date blind from
+    # the plan's offset, and `payment_run_before_invoice` then refused 40 of 134 attempts —
+    # **eight** runs posted out of 134, which starved `document_not_open` (it needs a posted run
+    # to have closed an invoice) and meant `reverse_run` never ran once in 300 examples. A
+    # generator that cannot post the thing cannot exercise anything downstream of it.
+    #
+    # The remaining draw in four is deliberately backdated, so the refusal stays in the census
+    # rather than going quiet the moment it stopped being an accident.
+    chosen = list(dict.fromkeys(chosen))
+    latest = max(
+        (
+            document.document_date
+            for document in (db.get(PartnerDocument, document_id) for document_id in chosen)
+            if document is not None
+        ),
+        default=on,
+    )
+    payment_date = on if pick % 4 == 0 else max(on, latest)
     _count(_REACH, "payment run: attempted")
     run = payment_run_service.post_run(
         db,
         banking.company_id,
         bank_account_id=banking.bank("BK-RWF").id,
-        payment_date=on,
+        payment_date=payment_date,
         lines=[
             payment_run_service.RunLineInput(
                 document_id=document_id,
                 amount=None if over is None else _open_of(db, document_id) + over,
             )
-            for document_id in dict.fromkeys(chosen)
+            for document_id in chosen
         ],
         actor=banking.owner,
     )
