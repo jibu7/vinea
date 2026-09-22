@@ -37,6 +37,7 @@ from app.banking import matching
 from app.banking import payment_runs as payment_run_service
 from app.banking import reconciliation as reconciliation_service
 from app.banking import remittance as remittance_service  # noqa: F401 - registers the job
+from app.banking import reports as reports_service
 from app.banking import statements as statements_service
 from app.banking.formats import ParsedLine, normalise
 from app.core import permissions
@@ -51,11 +52,15 @@ from app.models.banking import (
 from app.models.job import JobStatus
 from app.schemas.banking import (
     AutoMatchResultRead,
+    BankAccountEnquiryRead,
     BankAccountRead,
     BankAccountRegister,
     BankAccountUpdate,
     BankRuleRead,
     BankRuleWrite,
+    CashbookDetailRead,
+    CashbookRowRead,
+    CashbookSummaryRowRead,
     FiguresRead,
     ManualStatementWrite,
     MatchCandidateRead,
@@ -79,6 +84,7 @@ from app.schemas.banking import (
     ReconciliationOpen,
     ReconciliationRead,
     ReconciliationReopen,
+    ReconciliationReportRead,
     SelectableDocumentRead,
     StatementDetail,
     StatementImportResult,
@@ -1079,3 +1085,110 @@ def _remittance_jobs(db: Session, company_id: int, run_id: int):  # noqa: ANN202
         )
         if (job.params or {}).get("run_id") == run_id
     ]
+
+
+# --- Cashbooks, the reconciliation report and the enquiry (decisions 6 and 10) -------------------
+#
+# All **GETs**, so the rule-14 register has no opinion about them — but the screens still arrive at
+# step 8 (Reports → General Ledger → Cashbooks and Bank reconciliation, Enquiries → General Ledger
+# → Bank account enquiry), and these are what `tests/banking/test_reports.py` and step 8's e2e
+# drive in the meantime. Every one is a read over `journal_lines`: nothing here stores a figure.
+
+
+def _cashbook_row(row) -> CashbookRowRead:  # noqa: ANN001
+    return CashbookRowRead(**vars(row))
+
+
+@router.get("/reports/cashbook")
+def read_cashbook(
+    bank_account_id: int = Query(...),
+    date_from: date = Query(...),
+    date_to: date = Query(...),
+    auth: AuthContext = permissions.require(permissions.BANK_REPORTS_VIEW),
+    db: Session = Depends(get_db),
+) -> CashbookDetailRead:
+    """Decision 6's detail: the opening balance, every line in the range in the account's own
+    currency with its *Reconciled* column, and the closing balance that ties to the trial
+    balance."""
+    detail = reports_service.cashbook_detail(
+        db,
+        auth.company_id,
+        bank_account_id=bank_account_id,
+        date_from=date_from,
+        date_to=date_to,
+    )
+    return CashbookDetailRead(
+        bank_account_id=detail.bank_account_id,
+        code=detail.code,
+        name=detail.name,
+        currency_id=detail.currency_id,
+        currency_code=detail.currency_code,
+        date_from=detail.date_from,
+        date_to=detail.date_to,
+        opening_balance=detail.opening_balance,
+        opening_base=detail.opening_base,
+        receipts_total=detail.receipts_total,
+        payments_total=detail.payments_total,
+        closing_balance=detail.closing_balance,
+        closing_base=detail.closing_base,
+        rows=[_cashbook_row(row) for row in detail.rows],
+    )
+
+
+@router.get("/reports/cashbook-summary")
+def read_cashbook_summary(
+    date_from: date = Query(...),
+    date_to: date = Query(...),
+    auth: AuthContext = permissions.require(permissions.BANK_REPORTS_VIEW),
+    db: Session = Depends(get_db),
+) -> list[CashbookSummaryRowRead]:
+    """One row per account. Built from the detail per account, so it cannot disagree with the
+    page a user opens from it."""
+    return [
+        CashbookSummaryRowRead(**vars(row))
+        for row in reports_service.cashbook_summary(
+            db, auth.company_id, date_from=date_from, date_to=date_to
+        )
+    ]
+
+
+@router.get("/reports/reconciliation/{reconciliation_id}")
+def read_reconciliation_report(
+    reconciliation_id: int,
+    auth: AuthContext = permissions.require(permissions.BANK_REPORTS_VIEW),
+    db: Session = Depends(get_db),
+) -> ReconciliationReportRead:
+    """The statement an accountant signs, with what the reconciliation said beside what its date
+    computes now and the late lines that account for the difference."""
+    report = reports_service.reconciliation_report(db, auth.company_id, reconciliation_id)
+    return ReconciliationReportRead(
+        reconciliation_id=report.reconciliation_id,
+        number=report.number,
+        bank_account_id=report.bank_account_id,
+        bank_account_code=report.bank_account_code,
+        currency_code=report.currency_code,
+        reconciliation_date=report.reconciliation_date,
+        status=ReconciliationStatus(report.status),
+        live=_figures_read(report.live),
+        stored=_figures_read(report.stored) if report.stored is not None else None,
+        posted_after_lock=[
+            OutstandingLineRead(**vars(line)) for line in report.posted_after_lock
+        ],
+    )
+
+
+@router.get("/enquiries/bank-account/{bank_account_id}")
+def read_bank_account_enquiry(
+    bank_account_id: int,
+    as_of: date | None = Query(default=None),
+    auth: AuthContext = permissions.require(permissions.BANK_REPORTS_VIEW),
+    db: Session = Depends(get_db),
+) -> BankAccountEnquiryRead:
+    """Decision 10, per account. Every figure a link's worth of data for the screen at step 8."""
+    return BankAccountEnquiryRead(
+        **vars(
+            reports_service.bank_account_enquiry(
+                db, auth.company_id, bank_account_id, as_of=as_of
+            )
+        )
+    )

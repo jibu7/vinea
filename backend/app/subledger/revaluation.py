@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
 
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 from starlette.requests import Request
 
@@ -36,6 +36,7 @@ from app.kernel.events import FxRevalued, LineSpec, ReversalRequested
 from app.kernel.money import ZERO, base_currency, rate_on, round_amount
 from app.kernel.periods import assert_period_open, find_period
 from app.kernel.sequences import DocType, claim_number
+from app.models.banking import BankAccount
 from app.models.currency import Currency
 from app.models.fiscalization import (
     FxRevaluation,
@@ -44,7 +45,7 @@ from app.models.fiscalization import (
     FxRevaluationStatus,
 )
 from app.models.job import Job
-from app.models.journal import JournalLine
+from app.models.journal import JournalEntry, JournalLine, JournalStatus
 from app.models.partner import Partner, PartnerRole
 from app.models.subledger import DocumentStatus, PartnerDocument
 from app.models.user import User
@@ -57,53 +58,101 @@ FX_REVALUATION_SOURCE = "fx_revaluation"
 #: Which **partner** roles a run covers. `both` is one run and one entry over AR and AP
 #: together, which is the ordinary month end.
 #:
-#: P8 decision 8 adds `bank` and `all` to `FxRevaluationRole` — the enum and the Postgres type
-#: are rebuilt at P8 step 1 so the column can hold them — and the bank *scope* is built at P8
-#: step 4. Until then the two new roles are refused by name rather than falling off the end of
-#: this map as a `KeyError`: an enum value the API accepts and the service cannot compute is a
-#: 500 waiting for whoever tries it first, and "not built yet" is a thing a refusal can say.
-_ROLES: dict[FxRevaluationRole, tuple[PartnerRole, ...]] = {
-    FxRevaluationRole.AR: (PartnerRole.AR,),
-    FxRevaluationRole.AP: (PartnerRole.AP,),
-    FxRevaluationRole.BOTH: (PartnerRole.AR, PartnerRole.AP),
+#: **What each role covers, as a set** (P8 decision 8). This replaces the P7 map from
+#: `FxRevaluationRole` to partner roles, and the change of shape is the point: `bank` covers
+#: something that is not a partner role at all, so a map whose values were `PartnerRole`s could
+#: not express it.
+#:
+#: The sets are what `fx_revaluation_exists` now tests. P7 compared roles for equality through a
+#: partner-role tuple, which happened to give the right answer for `ar`/`ap`/`both` because those
+#: three are exactly the subsets of `{ar, ap}`. With `bank` in the picture equality is not enough:
+#: `bank` after `all` must be refused and `bank` after `ar` must not, and only an intersection
+#: says both.
+SCOPE_AR = "ar"
+SCOPE_AP = "ap"
+SCOPE_BANK = "bank"
+
+_SCOPES: dict[FxRevaluationRole, frozenset[str]] = {
+    FxRevaluationRole.AR: frozenset({SCOPE_AR}),
+    FxRevaluationRole.AP: frozenset({SCOPE_AP}),
+    FxRevaluationRole.BOTH: frozenset({SCOPE_AR, SCOPE_AP}),
+    FxRevaluationRole.BANK: frozenset({SCOPE_BANK}),
+    FxRevaluationRole.ALL: frozenset({SCOPE_AR, SCOPE_AP, SCOPE_BANK}),
+}
+
+#: Which partner role each subledger scope reads. `bank` has no entry, which is what makes
+#: `_partner_roles` return nothing for a `bank`-only run rather than needing a special case.
+_PARTNER_ROLE_OF: dict[str, PartnerRole] = {
+    SCOPE_AR: PartnerRole.AR,
+    SCOPE_AP: PartnerRole.AP,
 }
 
 
+def scopes_of(role: FxRevaluationRole) -> frozenset[str]:
+    """Every role is covered, so there is no refusal here any more.
+
+    P7 raised `fx_revaluation_role_unsupported` for `bank` and `all` — a scaffold step 1 put in
+    deliberately, so that an enum value the API accepted and the service could not compute said
+    so instead of falling off a map as a `KeyError`. Step 4 builds the scope, so the scaffold and
+    its test go; `_SCOPES` is total over the enum and `test_every_role_has_a_scope` holds it that
+    way, which is the guard that replaces the refusal.
+    """
+    return _SCOPES[role]
+
+
 def _partner_roles(role: FxRevaluationRole) -> tuple[PartnerRole, ...]:
-    covered = _ROLES.get(role)
-    if covered is None:
-        raise LedgerStateError(
-            f"Revaluing {role.value} balances is not built yet; use ar, ap or both",
-            code="fx_revaluation_role_unsupported",
-            field_errors={"role": ["not available yet"]},
-        )
-    return covered
+    """The partner roles a run reads — empty for a `bank`-only run, which is legitimate."""
+    return tuple(
+        _PARTNER_ROLE_OF[scope]
+        for scope in (SCOPE_AR, SCOPE_AP)
+        if scope in scopes_of(role)
+    )
+
+
+def _covers_bank(role: FxRevaluationRole) -> bool:
+    return SCOPE_BANK in scopes_of(role)
 
 
 @dataclass(frozen=True)
 class RevaluationLine:
-    """One open document at the revaluation date.
+    """One open document, **or one bank account's balance**, at the revaluation date.
 
     Every figure is kept rather than recomputed later: the rate used is the rate that stood on
     the day, and a correction to `exchange_rates` afterwards must not silently restate a posted
     revaluation.
+
+    P8 decision 8 widened this from documents to both. The document fields are optional on a bank
+    line and `bank_account_id` is set instead — exactly one of the two, which the table's own
+    CHECK enforces at rest. `scope` is what the posting map groups on, and it is derived here
+    rather than inferred later so there is one answer to "what kind of line is this".
     """
 
-    document_id: int
-    document_number: str
-    role: PartnerRole
-    partner_id: int
-    partner_name: str
     currency_id: int
     currency_code: str
-    #: Signed by the control account's side, so an AR invoice is positive and an AP invoice
-    #: negative — the same sense the ledger holds them in.
+    #: On an AR/AP line, signed by the control account's side, so an AR invoice is positive and
+    #: an AP invoice negative — the same sense the ledger holds them in. On a bank line it is the
+    #: account's book balance in its own currency, which is positive for an account in funds.
     open_amount: Decimal
-    booking_rate: Decimal
     carrying_base: Decimal
     rate_at_date: Decimal
     revalued_base: Decimal
     difference: Decimal
+    #: `ar`, `ap` or `bank`.
+    scope: str
+    # --- a document line ----------------------------------------------------------------
+    document_id: int | None = None
+    document_number: str | None = None
+    role: PartnerRole | None = None
+    partner_id: int | None = None
+    partner_name: str | None = None
+    # --- a bank line (decision 8) -------------------------------------------------------
+    bank_account_id: int | None = None
+    bank_account_code: str | None = None
+    #: `carrying_base / open_amount` where the balance is non-zero, and **None** where it is
+    #: not. On a document it is the rate the document was booked at; on a bank account there is
+    #: no single such rate — a balance is the sum of lines booked at many — so the figure is
+    #: informational, which is why decision 8 allows it to be null and the column is nullable.
+    booking_rate: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -118,11 +167,19 @@ class RevaluationPreview:
     def total_difference(self) -> Decimal:
         return sum((line.difference for line in self.lines), ZERO)
 
-    def by_group(self) -> dict[tuple[PartnerRole, int], Decimal]:
-        """The gain or loss per (role, currency) — one posting group each (decision 13)."""
-        groups: dict[tuple[PartnerRole, int], Decimal] = {}
+    def by_group(self) -> dict[tuple[str, int, int | None], Decimal]:
+        """The gain or loss per posting group — two ledger lines each (decision 13, widened by
+        P8 decision 8).
+
+        The key is `(scope, currency_id, bank_account_id)`: AR and AP group per currency as they
+        always have, with `bank_account_id` None; a **bank** group is per *account*, because
+        decision 8 puts the other side on `1130` per bank account. Two accounts in one currency
+        are two groups, and a USD account gaining while a EUR account loses gives two P&L lines
+        rather than a net — the same rule AR and AP already follow across currencies.
+        """
+        groups: dict[tuple[str, int, int | None], Decimal] = {}
         for line in self.lines:
-            key = (line.role, line.currency_id)
+            key = (line.scope, line.currency_id, line.bank_account_id)
             groups[key] = groups.get(key, ZERO) + line.difference
         return groups
 
@@ -134,8 +191,50 @@ def preview(
 
     Deliberately permissive: a preview of a date that could not be posted is still worth
     reading, and the refusals belong at the moment of posting where they can be acted on.
+
+    Subledger lines first, then the bank lines a `bank` or `all` run adds (decision 8). The order
+    is the one the screen reads top to bottom, and `by_group` does not depend on it.
     """
     base = base_currency(db, company_id)
+    lines: list[RevaluationLine] = []
+    rate_cache: dict[int, Decimal] = {}
+    if _partner_roles(role):
+        lines.extend(
+            _document_lines(
+                db,
+                company_id,
+                revaluation_date=revaluation_date,
+                role=role,
+                base=base,
+                rate_cache=rate_cache,
+            )
+        )
+    if _covers_bank(role):
+        lines.extend(
+            _bank_lines(
+                db,
+                company_id,
+                revaluation_date=revaluation_date,
+                base=base,
+                rate_cache=rate_cache,
+            )
+        )
+    return RevaluationPreview(
+        revaluation_date=revaluation_date, role=role, lines=tuple(lines)
+    )
+
+
+def _document_lines(
+    db: Session,
+    company_id: int,
+    *,
+    revaluation_date: date,
+    role: FxRevaluationRole,
+    base: Currency,
+    rate_cache: dict[int, Decimal],
+) -> list[RevaluationLine]:
+    """P7's own query and arithmetic, unchanged — lifted out of `preview` so the bank half sits
+    beside it rather than inside it."""
     rows = db.execute(
         select(PartnerDocument, Partner.name, Currency)
         .join(
@@ -159,7 +258,6 @@ def preview(
         .order_by(PartnerDocument.id)
     )
 
-    rate_cache: dict[int, Decimal] = {}
     lines: list[RevaluationLine] = []
     for document, partner_name, currency in rows:
         if currency.id not in rate_cache:
@@ -175,6 +273,7 @@ def preview(
                 document_id=document.id,
                 document_number=document.number,
                 role=document.role,
+                scope=SCOPE_AR if document.role is PartnerRole.AR else SCOPE_AP,
                 partner_id=document.partner_id,
                 partner_name=partner_name,
                 currency_id=currency.id,
@@ -187,9 +286,94 @@ def preview(
                 difference=revalued - carrying,
             )
         )
-    return RevaluationPreview(
-        revaluation_date=revaluation_date, role=role, lines=tuple(lines)
-    )
+    return lines
+
+
+def _bank_lines(
+    db: Session,
+    company_id: int,
+    *,
+    revaluation_date: date,
+    base: Currency,
+    rate_cache: dict[int, Decimal],
+) -> list[RevaluationLine]:
+    """One line per active foreign-currency bank account (P8 decision 8).
+
+    **What a bank line revalues is a balance, not a document**, and that is the whole difference
+    from the subledger half. `open_amount` is the account's book balance in its own currency
+    (Σ `amount` over its ledger lines on or before the date) and `carrying_base` is Σ
+    `base_amount` over the same lines — so the difference is what the ledger is carrying versus
+    what the balance is worth at the day's rate.
+
+    The two sums are taken over the **same** set of lines in one pass, which matters: summing
+    them from separate queries would let a line dated on the boundary fall into one and not the
+    other, and the difference would be wrong by that line's whole value rather than by a rate.
+
+    A zero-balance account is skipped — there is nothing to revalue, and `booking_rate` would be
+    a division by zero. An account whose currency *is* the base is skipped too: it has no
+    exposure, however many foreign-currency lines it carries, because its balance is already
+    denominated in base.
+    """
+    rows = db.execute(
+        select(
+            BankAccount,
+            func.coalesce(func.sum(JournalLine.amount), ZERO),
+            func.coalesce(func.sum(JournalLine.base_amount), ZERO),
+            Currency,
+        )
+        .join(
+            Currency,
+            (Currency.id == BankAccount.currency_id)
+            & (Currency.company_id == BankAccount.company_id),
+        )
+        .outerjoin(
+            JournalLine,
+            (JournalLine.gl_account_id == BankAccount.gl_account_id)
+            & (JournalLine.company_id == BankAccount.company_id)
+            & JournalLine.entry_id.in_(
+                select(JournalEntry.id).where(
+                    JournalEntry.company_id == company_id,
+                    JournalEntry.status == JournalStatus.POSTED,
+                    JournalEntry.entry_date <= revaluation_date,
+                )
+            ),
+        )
+        .where(
+            BankAccount.company_id == company_id,
+            BankAccount.is_active,
+            BankAccount.currency_id != base.id,
+        )
+        .group_by(BankAccount.id, BankAccount.company_id, Currency.id, Currency.company_id)
+        .order_by(BankAccount.code)
+    ).all()
+
+    lines: list[RevaluationLine] = []
+    for row, balance, carrying, currency in rows:
+        if balance == ZERO:
+            continue
+        if currency.id not in rate_cache:
+            rate_cache[currency.id] = rate_on(db, currency, revaluation_date)
+        rate_at_date = rate_cache[currency.id]
+        revalued = round_amount(balance * rate_at_date, base.decimal_places)
+        lines.append(
+            RevaluationLine(
+                bank_account_id=row.id,
+                bank_account_code=row.code,
+                scope=SCOPE_BANK,
+                currency_id=currency.id,
+                currency_code=currency.code,
+                open_amount=balance,
+                # Informational, and null where the balance is zero — which cannot be reached
+                # here because such an account is skipped above, but the column is nullable for
+                # the reason the docstring on the dataclass gives.
+                booking_rate=carrying / balance,
+                carrying_base=carrying,
+                rate_at_date=rate_at_date,
+                revalued_base=revalued,
+                difference=revalued - carrying,
+            )
+        )
+    return lines
 
 
 def post_revaluation(
@@ -289,6 +473,10 @@ def post_revaluation(
                 company_id=company_id,
                 revaluation_id=run.id,
                 document_id=line.document_id,
+                # Exactly one of the two is set, which the table's own CHECK enforces at rest —
+                # so a future path that forgot to fill either is refused by the database rather
+                # than storing a line about nothing.
+                bank_account_id=line.bank_account_id,
                 currency_id=line.currency_id,
                 open_amount=line.open_amount,
                 booking_rate=line.booking_rate,
@@ -419,27 +607,48 @@ def lines_of(db: Session, company_id: int, revaluation_id: int) -> Sequence[FxRe
     )
 
 
+#: Which `gl_settings` key holds the contra for each scope, and the label a missing one is
+#: reported under. `1130` for the bank side (decision 8) — never the bank account itself.
+_REVALUATION_ACCOUNT_OF: dict[str, tuple[str, str]] = {
+    SCOPE_AR: ("ar_revaluation_account_id", "AR revaluation account"),
+    SCOPE_AP: ("ap_revaluation_account_id", "AP revaluation account"),
+    SCOPE_BANK: ("bank_revaluation_account_id", "bank revaluation account"),
+}
+
+
 def _entry_lines(
     db: Session, company_id: int, view: RevaluationPreview
 ) -> list[LineSpec]:
-    """Two lines per (role, currency): the revaluation account, and the gain or loss.
+    """Two lines per group: the revaluation account, and the gain or loss.
 
     The difference is in ledger sense already, so the revaluation account takes it as it stands
-    and the P&L takes its negative. That one turn is what makes the map role-agnostic: an AR
+    and the P&L takes its negative. That one turn is what makes the map scope-agnostic: an AR
     exposure that grew is a debit to `1290` and a credit to gain; an AP exposure that grew is a
-    credit to `2190` and a debit to loss, and neither needs a rule of its own.
+    credit to `2190` and a debit to loss; a bank balance worth more is a debit to `1130` and a
+    credit to gain. None of the three needs a rule of its own.
+
+    **P8 decision 8 widened the group, not the map.** AR and AP group per currency as they always
+    have; a **bank** group is per *account*, because `1130`'s other side is per account. So two
+    bank accounts in one currency post two pairs of lines, and a USD account gaining while a EUR
+    account loses gives two P&L lines rather than a net — which is what AR and AP already do
+    across currencies, and the reason this function was widened rather than a second pass written
+    beside it. A second pass could drift from this one; a wider group key cannot.
+
+    **Never the bank account itself.** `1130` takes the other side because a base-only line on a
+    bank account — zero `amount`, non-zero `base_amount` — would be a ledger line the statement
+    can never show, and the reconciliation would carry it as outstanding forever. The balance
+    sheet reads `1121 + 1130` exactly as it reads `1200 + 1290`.
     """
     settings = posting.gl_settings_for(db, company_id)
     lines: list[LineSpec] = []
-    for (role, currency_id), difference in sorted(
-        view.by_group().items(), key=lambda item: (str(item[0][0]), item[0][1])
+    for (scope, currency_id, bank_account_id), difference in sorted(
+        view.by_group().items(),
+        key=lambda item: (item[0][0], item[0][1], item[0][2] or 0),
     ):
         if difference == ZERO:
             continue
         revaluation_account = _required(
-            settings,
-            "ar_revaluation_account_id" if role is PartnerRole.AR else "ap_revaluation_account_id",
-            "AR revaluation account" if role is PartnerRole.AR else "AP revaluation account",
+            settings, *_REVALUATION_ACCOUNT_OF[scope]
         )
         pnl_amount = -difference
         pnl_account = _required(
@@ -452,9 +661,17 @@ def _entry_lines(
         group = [
             line
             for line in view.lines
-            if line.role is role and line.currency_id == currency_id
+            if line.scope == scope
+            and line.currency_id == currency_id
+            and line.bank_account_id == bank_account_id
         ]
-        label = f"{group[0].currency_code} {role.value.upper()} revaluation"
+        # A bank group names its account, because two accounts in one currency would otherwise
+        # post two identically-labelled pairs and the entry would be unreadable.
+        label = (
+            f"{group[0].currency_code} {group[0].bank_account_code} revaluation"
+            if scope == SCOPE_BANK
+            else f"{group[0].currency_code} {scope.upper()} revaluation"
+        )
         lines.append(
             LineSpec(
                 amount=difference,
@@ -520,13 +737,19 @@ def _required(settings: object, attribute: str, label: str) -> int:
 def _refuse_a_second_run(
     db: Session, company_id: int, *, revaluation_date: date, role: FxRevaluationRole
 ) -> None:
-    """One standing run per (role, date).
+    """One standing run per *scope*, per date (P8 decision 8).
 
-    A `both` run covers AR and AP, so it clashes with a role-specific run on the same date and
-    a role-specific one clashes with it — otherwise the same exposure would be revalued twice
-    and the second adjustment would sit on top of the first.
+    A `both` run covers AR and AP, so it clashes with a role-specific run on the same date and a
+    role-specific one clashes with it — otherwise the same exposure would be revalued twice and
+    the second adjustment would sit on top of the first.
+
+    **The test is an intersection of the scope sets**, not equality of roles. P7 compared through
+    a partner-role tuple, which gave the right answer while every role was a subset of
+    `{ar, ap}`; with `bank` in the picture it would not. `bank` after `all` intersects and is
+    refused; `bank` after `ar` does not and is allowed, which is the point of having scopes at all
+    — an accountant who revalued the subledgers on the 30th can still revalue the bank.
     """
-    covered = set(_partner_roles(role))
+    covered = scopes_of(role)
     standing = db.scalars(
         select(FxRevaluation).where(
             FxRevaluation.company_id == company_id,
@@ -535,7 +758,7 @@ def _refuse_a_second_run(
         )
     )
     for run in standing:
-        if covered & set(_partner_roles(run.role)):
+        if covered & scopes_of(run.role):
             raise LedgerStateError(
                 f"{run.number} already revalued {run.role.value} at "
                 f"{revaluation_date.isoformat()}. Reverse it first.",

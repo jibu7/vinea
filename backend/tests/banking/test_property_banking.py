@@ -7,8 +7,9 @@ bank invariant suites after every single step.
 The operations are the phase's: cashbook entries and settlements (some in USD against the RWF
 account, which decision 2's one-sided rule allows), statements **generated from the ledger and
 then perturbed** — keyed line by line, and sometimes written out as a CSV and imported through
-the file path — auto-match, manual n:m matches, ticks, unmatches, opens, locks, reopens, and
-supplier payment runs with their reversals. Revaluation joins at step 4.
+the file path — auto-match, manual n:m matches, ticks, unmatches, opens, locks, reopens,
+supplier payment runs with their reversals, and month-end FX revaluation across all five of its
+scopes with the mirror and the reversal.
 
 **The perturbations are the point.** A statement that simply mirrored the ledger would
 reconcile on the first try and prove nothing: what this phase has to survive is a bank whose
@@ -60,6 +61,7 @@ from app.models.banking import (
 )
 from app.models.journal import JournalEntry, JournalLine
 from app.models.subledger import PartnerDocument
+from app.subledger import revaluation as revaluation_service
 from tests.banking.conftest import Banking, ap_invoice, build_banking
 from tests.banking.invariants import assert_bank_invariants
 from tests.kernel.invariants import assert_ledger_invariants
@@ -180,6 +182,9 @@ REQUIRED_REACH = (
     # more than the machine checks even when it does get there.
     "run reversal: succeeded",
     "statement: imported from a file",
+    # Step 4's. A revaluation needs a period end *and* a non-zero foreign balance on the USD
+    # account, so it is a conjunction the generator has to be aimed at rather than left to find.
+    "revaluation: posted",
 )
 REACH_FLOOR = 3
 
@@ -259,6 +264,12 @@ OPERATIONS = (
     "open_reconciliation",
     "lock",
     "reopen",
+    #: P8 decision 8, step 4. A revaluation is the one operation here that touches the bank
+    #: account's *neighbour* rather than the account — `1130` — so the invariant it is drawn for
+    #: is clause 4's: whatever a revaluation posts, a locked reconciliation's figures must not
+    #: move, and the bank account's own balance must not change at all.
+    "revalue",
+    "reverse_revaluation",
 )
 
 #: How a generated statement differs from the ledger it was generated from. Weighted towards
@@ -493,7 +504,7 @@ def _run(db: Session, banking: Banking, plan) -> None:  # noqa: ANN001, C901, PL
     #: What the plan has built so far and may refer back to. Payment runs need it: an invoice a
     #: previous run closed is the only way `document_not_open` happens, and a *closed* invoice
     #: is exactly the thing a "list the open ones" helper would hide.
-    state: dict = {"invoices": [], "runs": [], "paid": []}
+    state: dict = {"invoices": [], "runs": [], "paid": [], "revaluations": []}
     for operation, magnitude, offset, perturbation, pick, key_it_wrong in plan:
         on = BASE_DAY + timedelta(days=offset)
         amount = Decimal(magnitude * 1000)
@@ -608,6 +619,10 @@ def _run(db: Session, banking: Banking, plan) -> None:  # noqa: ANN001, C901, PL
                 )
             elif operation == "reopen":
                 _reopen(db, banking)
+            elif operation == "revalue":
+                _revalue(db, banking, state, pick=pick)
+            elif operation == "reverse_revaluation":
+                _reverse_revaluation(db, banking, state, pick=pick)
             db.flush()
         except (LedgerStateError, PostingError) as error:
             db.rollback()
@@ -646,6 +661,32 @@ def _settlement(db: Session, banking: Banking, *, amount: Decimal, on: date) -> 
     _count(_REACH, "settlement: posted")
 
 
+def _prune(db: Session, state: dict) -> None:
+    """Drop every id the session rollback took away, across **all four** lists.
+
+    An illegal step rolls the session back to the last commit, which un-posts rows these lists
+    still name. Step 3 pruned `invoices` only and took `not_found` from 24 to zero; step 4's
+    revaluations and the `paid` list brought it back to **118** of ~680 attempts, which is the
+    same defect wearing two more hats. One helper over every list, so the next list added is
+    pruned by construction rather than by remembering.
+
+    A screen only ever offers rows that exist, so this makes the generator more like the product
+    and not less.
+    """
+    from app.models.banking import PaymentRun
+    from app.models.fiscalization import FxRevaluation
+
+    for key, model in (
+        ("invoices", PartnerDocument),
+        ("paid", PartnerDocument),
+        ("runs", PaymentRun),
+        ("revaluations", FxRevaluation),
+    ):
+        state[key] = [
+            row_id for row_id in state[key] if db.get(model, row_id) is not None
+        ]
+
+
 def _supplier_invoice(
     db: Session, banking: Banking, state: dict, *, amount: Decimal, on: date
 ) -> None:
@@ -673,15 +714,7 @@ def _payment_run(
     phase learning to distrust. One draw in three also asks for more than the invoice has open,
     which is `payment_exceeds_open` arriving from the ordinary case rather than a special one.
     """
-    # **Ids the rollback took away are dropped first.** An illegal step rolls the session back
-    # to the last commit, which un-posts invoices this list still names; pass 3 lost 24 of 70 run
-    # attempts to `not_found` that way. A screen only ever offers documents that exist, so
-    # filtering here makes the generator more like the product and not less.
-    state["invoices"] = [
-        document_id
-        for document_id in state["invoices"]
-        if db.get(PartnerDocument, document_id) is not None
-    ]
+    _prune(db, state)
     invoices = state["invoices"]
     if not invoices:
         return
@@ -751,6 +784,7 @@ def _open_of(db: Session, document_id: int) -> Decimal:
 def _reverse_run(db: Session, banking: Banking, state: dict, *, pick: int) -> None:
     """Reverse a run drawn blind — including one already reversed, and one whose bank line is
     inside a locked reconciliation. Both are refusals the census counts."""
+    _prune(db, state)
     runs = state["runs"]
     if not runs:
         return
@@ -763,6 +797,51 @@ def _reverse_run(db: Session, banking: Banking, state: dict, *, pick: int) -> No
         actor=banking.owner,
     )
     _count(_REACH, "run reversal: succeeded")
+
+
+def _revalue(db: Session, banking: Banking, state: dict, *, pick: int) -> None:
+    """Revalue at a **period end**, which is the only date P7 allows.
+
+    Aimed rather than drawn: `fx_revaluation_not_period_end` refuses every other date, so a plan
+    drawing its offset freely would spend every attempt on that refusal and never reach the
+    posting — the mistake step 3's payment-run date made and its census caught. The date comes
+    from the tenant's own periods, and the role is drawn across all five so the scope-overlap
+    refusal is reachable too.
+    """
+    from app.models.fiscalization import FxRevaluationRole
+
+    ends = [period.end_date for period in banking.ledger.periods]
+    if not ends:
+        return
+    on = ends[pick % len(ends)]
+    role = list(FxRevaluationRole)[pick % len(FxRevaluationRole)]
+    _count(_REACH, "revaluation: attempted")
+    run = revaluation_service.post_revaluation(
+        db,
+        banking.company_id,
+        revaluation_date=on,
+        role=role,
+        actor=banking.owner,
+    )
+    state["revaluations"].append(run.id)
+    _count(_REACH, "revaluation: posted")
+
+
+def _reverse_revaluation(db: Session, banking: Banking, state: dict, *, pick: int) -> None:
+    """Reverse one drawn blind — including one already reversed, which `fx_revaluation_reversed`
+    refuses."""
+    _prune(db, state)
+    runs = state["revaluations"]
+    if not runs:
+        return
+    revaluation_service.reverse_revaluation(
+        db,
+        banking.company_id,
+        runs[pick % len(runs)],
+        reason="property",
+        actor=banking.owner,
+    )
+    _count(_REACH, "revaluation: reversed")
 
 
 def _manual_match(db: Session, banking: Banking, *, pick: int) -> None:

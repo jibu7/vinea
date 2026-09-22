@@ -511,23 +511,35 @@ class AccountAuditRead(ApiModel):
 
 
 class FxRevaluationLineRead(BaseModel):
-    """One open document in a run. Every figure is the one the run used, not a recomputation:
-    a later correction to `exchange_rates` must not restate a posted revaluation."""
+    """One open document, **or one bank account's balance**, in a run. Every figure is the one
+    the run used, not a recomputation: a later correction to `exchange_rates` must not restate a
+    posted revaluation.
 
-    document_id: int
-    document_number: str
-    role: str
-    partner_id: int
-    partner_name: str
+    P8 decision 8 widened this. The document fields are null on a bank line and the bank fields
+    are null on a document line — exactly one side is filled, and `scope` says which without the
+    reader having to test for nulls.
+    """
+
+    #: `ar`, `ap` or `bank`.
+    scope: str
     currency_id: int
     currency_code: str
-    #: Signed by the control account's side — an AR invoice positive, an AP invoice negative.
+    #: Signed by the control account's side on a document — an AR invoice positive, an AP invoice
+    #: negative. On a bank line, the account's book balance in its own currency.
     open_amount: Decimal
-    booking_rate: Decimal
     carrying_base: Decimal
     rate_at_date: Decimal
     revalued_base: Decimal
     difference: Decimal
+    #: Null on a bank line, whose balance has no single booking rate.
+    booking_rate: Decimal | None = None
+    document_id: int | None = None
+    document_number: str | None = None
+    role: str | None = None
+    partner_id: int | None = None
+    partner_name: str | None = None
+    bank_account_id: int | None = None
+    bank_account_code: str | None = None
 
 
 class FxRevaluationPreview(BaseModel):
