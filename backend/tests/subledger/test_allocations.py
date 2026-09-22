@@ -323,3 +323,139 @@ def test_full_settlement_leaves_no_base_residual_in_the_control_account(
     ) == Decimal(0), "the residual is still sitting in the AR control account"
     assert_ledger_invariants(db, subledger.company_id)
     assert_subledger_invariants(db, subledger.company_id)
+
+
+# --- An allocation is dated no earlier than the documents it joins -------------------------------
+#
+# **A deposit stays legal.** A customer who pays in February for an invoice raised in March has
+# done nothing wrong, and P4 posts that settlement happily — these tests do it. What is refused is
+# *allocating* the two on a date the invoice did not yet exist, because that is what makes the
+# control account and the open items disagree in between.
+#
+# Found by P8's banking property machine, which drew a payment run dated before an invoice it
+# paid. The reproduction below is the same state with no banking code in it at all, which is how
+# the defect was shown to be P4's rather than the banking phase's.
+
+
+def test_an_allocation_dated_before_its_invoice_is_refused(
+    db: Session, subledger: Subledger
+) -> None:
+    """`allocation_before_document`, with the invariant it protects asserted underneath it.
+
+    The **sensitivity half is the second assertion**: with the guard removed, the allocation
+    succeeds and `assert_subledger_invariants` fails with
+
+        AP control account … is 1000.000000 as of <february> but open items total 0
+
+    so this test is not merely checking that a refusal fires — it is pinned to the reason the
+    refusal exists. Both halves are needed: a refusal nobody can tie to a consequence is a rule
+    that gets relaxed the first time it is inconvenient.
+    """
+    february = MARCH - timedelta(days=28)
+    invoice, _ = post_invoice(
+        db, subledger, role=PartnerRole.AP, amount=Decimal(1000), on=MARCH
+    )
+    # Posted in February, for an invoice raised in March. Legal, and it stays legal.
+    deposit = post_settlement(
+        db, subledger, role=PartnerRole.AP, amount=Decimal(1000), on=february
+    )
+    db.flush()
+    assert_subledger_invariants(db, subledger.company_id)
+
+    with pytest.raises(LedgerStateError) as error:
+        _allocate(
+            db,
+            subledger,
+            debit=deposit,
+            credit=invoice,
+            amount=Decimal(1000),
+            on=february,
+            role=PartnerRole.AP,
+        )
+    assert error.value.code == "allocation_before_document"
+    assert invoice.number in str(error.value)
+    assert error.value.field_errors is not None
+    assert "allocation_date" in error.value.field_errors
+
+    # And the legal thing is still legal: allocate them on the invoice's own date.
+    db.rollback()
+    invoice, _ = post_invoice(
+        db, subledger, role=PartnerRole.AP, amount=Decimal(1000), on=MARCH
+    )
+    deposit = post_settlement(
+        db, subledger, role=PartnerRole.AP, amount=Decimal(1000), on=february
+    )
+    db.flush()
+    _allocate(
+        db,
+        subledger,
+        debit=deposit,
+        credit=invoice,
+        amount=Decimal(1000),
+        on=MARCH,
+        role=PartnerRole.AP,
+    )
+    db.flush()
+    assert_ledger_invariants(db, subledger.company_id)
+    assert_subledger_invariants(db, subledger.company_id)
+
+
+def test_the_guard_looks_at_both_sides_of_the_pair(
+    db: Session, subledger: Subledger
+) -> None:
+    """Either document may be the later one, so the check is over both rather than over the
+    invoice. Here the *settlement* is the one dated after the allocation."""
+    invoice, _ = post_invoice(db, subledger, amount=Decimal(1000), on=MARCH)
+    later = post_settlement(db, subledger, amount=Decimal(1000), on=MARCH + timedelta(days=10))
+    db.flush()
+
+    with pytest.raises(LedgerStateError) as error:
+        _allocate(db, subledger, debit=invoice, credit=later, amount=Decimal(1000), on=MARCH)
+    assert error.value.code == "allocation_before_document"
+    assert later.number in str(error.value)
+
+
+def test_the_auto_path_never_builds_a_pair_this_refuses(
+    db: Session, subledger: Subledger
+) -> None:
+    """The second allocate path, held to the same rule.
+
+    `auto_allocate_pairs` filters `document_date <= allocation_date` and so cannot propose a pair
+    the guard would refuse — today. This asserts the two paths agree rather than trusting that
+    filter to stay: the documents it must skip are present and open, and what it returns is
+    allocatable on the date it was asked about.
+    """
+    february = MARCH - timedelta(days=28)
+    post_invoice(db, subledger, amount=Decimal(1000), on=MARCH)
+    post_settlement(db, subledger, amount=Decimal(1000), on=february)
+    db.flush()
+
+    pairs = allocations_service.auto_allocate_pairs(
+        db,
+        subledger.company_id,
+        PartnerRole.AR,
+        partner_id=subledger.customer.id,
+        allocation_date=february,
+    )
+    assert pairs == [], "the March invoice is not on offer in February"
+
+    # On the invoice's own date it is, and what comes back allocates without tripping the guard.
+    pairs = allocations_service.auto_allocate_pairs(
+        db,
+        subledger.company_id,
+        PartnerRole.AR,
+        partner_id=subledger.customer.id,
+        allocation_date=MARCH,
+    )
+    assert pairs, "both documents are open and dated on or before March"
+    allocations_service.allocate(
+        db,
+        subledger.company_id,
+        PartnerRole.AR,
+        partner_id=subledger.customer.id,
+        allocation_date=MARCH,
+        pairs=pairs,
+        actor=subledger.ledger.owner,
+    )
+    db.flush()
+    assert_subledger_invariants(db, subledger.company_id)
