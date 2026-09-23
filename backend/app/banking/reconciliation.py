@@ -629,6 +629,7 @@ def reopen(
     *,
     reason: str,
     actor: User,
+    idempotency_key: str | None = None,
     request: Request | None = None,
 ) -> BankReconciliation:
     """Withdraw the signature on the account's **latest** locked reconciliation.
@@ -643,6 +644,10 @@ def reopen(
     """
     reconciliation = get(db, company_id, reconciliation_id)
     if reconciliation.status != ReconciliationStatus.LOCKED:
+        # The replay: the key this row was reopened under, sent again. `lock` keeps the same
+        # column the same way, so the row carries the key of whichever of the two came last.
+        if idempotency_key and reconciliation.idempotency_key == idempotency_key:
+            return reconciliation
         raise LedgerStateError(
             f"{reconciliation.number} is not locked", code="reconciliation_not_locked"
         )
@@ -703,6 +708,8 @@ def reopen(
     reconciliation.reopened_by = actor.id
     reconciliation.reopened_at = datetime.now(UTC)
     reconciliation.reopened_reason = reason
+    if idempotency_key:
+        reconciliation.idempotency_key = idempotency_key
 
     # **Flush before asking what is now the latest locked one.** The session is
     # `autoflush=False` (it has to be — the posting engine depends on it), so without this the

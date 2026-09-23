@@ -660,10 +660,130 @@ def test_the_workspace_ticks_locks_and_reopens_over_http(client: TestClient) -> 
     reopened = client.post(
         f"/api/v1/banking/reconciliations/{opened.json()['id']}/reopen",
         json={"reason": "the bank restated a fee"},
+        headers={"Idempotency-Key": "reopen-1"},
     )
     assert reopened.status_code == 200
     assert reopened.json()["status"] == "open"
     assert reopened.json()["stored"] is None
+
+    # The replay after a dropped response returns the reopened row, rather than refusing
+    # `reconciliation_not_locked` over the reopen it is a copy of. A different key is a new
+    # request, and that one is refused.
+    replayed = client.post(
+        f"/api/v1/banking/reconciliations/{opened.json()['id']}/reopen",
+        json={"reason": "the bank restated a fee"},
+        headers={"Idempotency-Key": "reopen-1"},
+    )
+    assert replayed.status_code == 200
+    assert replayed.json()["status"] == "open"
+    fresh = client.post(
+        f"/api/v1/banking/reconciliations/{opened.json()['id']}/reopen",
+        json={"reason": "the bank restated a fee"},
+        headers={"Idempotency-Key": "reopen-2"},
+    )
+    assert fresh.status_code == 409
+    assert fresh.json()["code"] == "reconciliation_not_locked"
+
+
+def test_reopen_needs_an_idempotency_key(client: TestClient) -> None:
+    """Decision 11 names reopen among the calls that carry one; open and lock always did."""
+    _signup(client)
+    refused = client.post(
+        "/api/v1/banking/reconciliations/1/reopen", json={"reason": "no key"}
+    )
+    assert refused.status_code == 422
+
+
+def test_the_left_pane_lists_unmatched_lines_first_with_their_match(
+    client: TestClient,
+) -> None:
+    """The workspace's statement pane: every live line on the account, what is left to do
+    first, and a matched line carrying its match. A voided statement's lines are gone."""
+    _signup(client)
+    bank = _bank(client)
+    entry = _cashbook(client, amount="59000", on="2026-09-03", kind="receipt", key="cb-1")
+    line_id = _bank_line_id(entry, bank["gl_account_id"])
+    keyed = client.post(
+        "/api/v1/banking/statements/manual",
+        json={
+            "bank_account_id": bank["id"],
+            "opening_balance": "0",
+            "closing_balance": "56500",
+            "lines": [
+                {
+                    "value_date": "2026-09-05",
+                    "description": "MOMO DEPOSIT 0788",
+                    "amount": "59000",
+                    "balance_after": "59000",
+                },
+                {
+                    "value_date": "2026-09-06",
+                    "description": "MONTHLY ACCOUNT FEE",
+                    "amount": "-2500",
+                    "balance_after": "56500",
+                },
+                {
+                    "value_date": "2026-10-02",
+                    "description": "AFTER THE DATE",
+                    "amount": "-100",
+                    "balance_after": "56400",
+                },
+            ],
+        },
+        headers={"Idempotency-Key": "manual-1"},
+    )
+    assert keyed.status_code == 201, keyed.json()
+    first = client.get(
+        f"/api/v1/banking/accounts/{bank['id']}/statement-lines",
+        params={"on_or_before": "2026-09-30"},
+    ).json()
+    momo = next(line for line in first if line["description"] == "MOMO DEPOSIT 0788")
+    matched = client.post(
+        "/api/v1/banking/matches",
+        json={
+            "bank_account_id": bank["id"],
+            "statement_line_ids": [momo["id"]],
+            "journal_line_ids": [line_id],
+        },
+    )
+    assert matched.status_code == 201
+
+    pane = client.get(
+        f"/api/v1/banking/accounts/{bank['id']}/statement-lines",
+        params={"on_or_before": "2026-09-30"},
+    ).json()
+    # The October line is after the date and not in the pane; the fee is unmatched and first.
+    assert [line["description"] for line in pane] == ["MONTHLY ACCOUNT FEE", "MOMO DEPOSIT 0788"]
+    assert pane[0]["state"]["match_id"] is None
+    assert pane[1]["state"]["match_id"] == matched.json()["id"]
+    assert pane[1]["state"]["match_rule"] == "manual"
+    assert pane[1]["state"]["journal_line_count"] == 1
+    assert len(client.get(f"/api/v1/banking/accounts/{bank['id']}/statement-lines").json()) == 3
+
+
+def test_the_new_dialog_reads_the_balance_an_empty_field_would_get(client: TestClient) -> None:
+    """The default *New reconciliation* shows is `open_reconciliation`'s own fallback."""
+    _signup(client)
+    bank = _bank(client)
+    url = f"/api/v1/banking/accounts/{bank['id']}/default-statement-balance"
+    assert client.get(url, params={"on": "2026-09-30"}).json() == {"statement_balance": None}
+    client.post(
+        "/api/v1/banking/statements/manual",
+        json={
+            "bank_account_id": bank["id"],
+            "opening_balance": "0",
+            "closing_balance": "900",
+            "lines": [
+                {"value_date": "2026-09-05", "description": "IN", "amount": "1000",
+                 "balance_after": "1000"},
+                {"value_date": "2026-10-05", "description": "OUT", "amount": "-100",
+                 "balance_after": "900"},
+            ],
+        },
+        headers={"Idempotency-Key": "manual-1"},
+    )
+    assert Decimal(client.get(url, params={"on": "2026-09-30"}).json()["statement_balance"]) == 1000
+    assert Decimal(client.get(url, params={"on": "2026-10-31"}).json()["statement_balance"]) == 900
 
 
 def test_a_lock_is_refused_over_http_with_the_figure_in_the_envelope(

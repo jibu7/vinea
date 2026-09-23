@@ -1309,6 +1309,37 @@ def statement_line_states(
     screen renders every line and the per-line version was a hundred round trips for a
     hundred-line export.
     """
+    return _line_states(db, company_id, BankStatementLine.statement_id == statement_id)
+
+
+def account_statement_lines(
+    db: Session, company_id: int, row: BankAccount, *, on_or_before: date | None = None
+) -> list[tuple[BankStatementLine, StatementLineState]]:
+    """The workspace's **left pane**: the account's live statement lines with their match
+    state, **unmatched first**, then matched, each group in value-date order.
+
+    The same ordering argument as `list_ledger_lines`: the pane is worked down, so what still
+    needs a person comes first. Void lines are not here — a voided statement leaves every
+    listing (decision 3).
+    """
+    condition = (
+        (BankStatementLine.bank_account_id == row.id)
+        & BankStatementLine.is_void.is_(False)
+    )
+    if on_or_before is not None:
+        condition = condition & (BankStatementLine.value_date <= on_or_before)
+    states = _line_states(db, company_id, condition)
+    lines = db.scalars(
+        select(BankStatementLine)
+        .where(BankStatementLine.company_id == company_id, condition)
+        .order_by(BankStatementLine.value_date, BankStatementLine.id)
+    ).all()
+    paired = [(line, states[line.id]) for line in lines]
+    # Stable: `sorted` keeps the date order within each group.
+    return sorted(paired, key=lambda pair: pair[1].match_id is not None)
+
+
+def _line_states(db: Session, company_id: int, condition: Any) -> dict[int, StatementLineState]:
     rows = db.execute(
         select(
             BankStatementLine.id,
@@ -1327,10 +1358,7 @@ def statement_line_states(
             (BankMatch.id == BankMatchStatementLine.match_id)
             & (BankMatch.company_id == BankMatchStatementLine.company_id),
         )
-        .where(
-            BankStatementLine.company_id == company_id,
-            BankStatementLine.statement_id == statement_id,
-        )
+        .where(BankStatementLine.company_id == company_id, condition)
     ).all()
     states: dict[int, StatementLineState] = {}
     for line_id, match_id, kind, rule, reconciliation_id in rows:

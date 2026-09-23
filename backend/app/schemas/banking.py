@@ -430,6 +430,11 @@ class ReconciliationOpen(BaseModel):
     statement_balance: Decimal | None = None
 
 
+class DefaultStatementBalanceRead(BaseModel):
+    #: `None` where no live statement line with a balance reaches the date — the user keys it.
+    statement_balance: Decimal | None = None
+
+
 class ReconciliationLock(BaseModel):
     #: Re-keying it at lock is how the tape's row 9 corrects a wrong balance without reopening.
     statement_balance: Decimal | None = None

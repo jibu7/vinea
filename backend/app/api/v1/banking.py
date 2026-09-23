@@ -63,6 +63,7 @@ from app.schemas.banking import (
     CashbookDetailRead,
     CashbookRowRead,
     CashbookSummaryRowRead,
+    DefaultStatementBalanceRead,
     FiguresRead,
     LedgerLineRead,
     ManualStatementWrite,
@@ -355,21 +356,64 @@ def read_statement(
     detail = StatementDetail.model_validate(statement)
     states = matching.statement_line_states(db, auth.company_id, statement_id)
     detail.lines = [
-        StatementLineDetailRead(
-            **StatementLineRead.model_validate(line).model_dump(),
-            state=StatementLineStateRead(
-                **{
-                    key: value
-                    for key, value in vars(states[line.id]).items()
-                    if key != "statement_line_id"
-                }
-            )
-            if line.id in states
-            else StatementLineStateRead(),
-        )
+        _line_detail(line, states.get(line.id))
         for line in statements_service.lines_of(db, auth.company_id, statement_id)
     ]
     return detail
+
+
+def _line_detail(
+    line: BankStatementLine, state: matching.StatementLineState | None
+) -> StatementLineDetailRead:
+    return StatementLineDetailRead(
+        **StatementLineRead.model_validate(line).model_dump(),
+        state=StatementLineStateRead(
+            **{key: value for key, value in vars(state).items() if key != "statement_line_id"}
+        )
+        if state is not None
+        else StatementLineStateRead(),
+    )
+
+
+@router.get("/accounts/{bank_account_id}/statement-lines")
+def list_account_statement_lines(
+    bank_account_id: int,
+    on_or_before: date | None = Query(default=None),
+    auth: AuthContext = permissions.require(permissions.BANK_REPORTS_VIEW),
+    db: Session = Depends(get_db),
+) -> list[StatementLineDetailRead]:
+    """The reconciliation workspace's **left pane**: every live statement line on the account
+    with its match state, unmatched first.
+
+    `unmatched-statement-lines` answers half of it — what is left to do — and a pane that showed
+    only that could not say what a matched line was matched *to*, which is the question a
+    reconciler asks of a line before trusting the figures built on it (P8 step 7).
+    """
+    row = accounts_service.get(db, auth.company_id, bank_account_id)
+    return [
+        _line_detail(line, state)
+        for line, state in matching.account_statement_lines(
+            db, auth.company_id, row, on_or_before=on_or_before
+        )
+    ]
+
+
+@router.get("/accounts/{bank_account_id}/default-statement-balance")
+def read_default_statement_balance(
+    bank_account_id: int,
+    on: date = Query(),
+    auth: AuthContext = permissions.require(permissions.BANK_REPORTS_VIEW),
+    db: Session = Depends(get_db),
+) -> DefaultStatementBalanceRead:
+    """What *New reconciliation* fills the statement balance with: the latest live statement
+    line's `balance_after` on or before the date — the same function `open_reconciliation`
+    falls back to, so the figure the dialog shows is the figure an empty field would get."""
+    row = accounts_service.get(db, auth.company_id, bank_account_id)
+    return DefaultStatementBalanceRead(
+        statement_balance=reconciliation_service.default_statement_balance(
+            db, auth.company_id, row, on
+        )
+    )
 
 
 @router.get("/accounts/{bank_account_id}/ledger-lines")
@@ -901,15 +945,20 @@ def reopen_reconciliation(
     request: Request,
     auth: AuthContext = permissions.require(permissions.BANK_RECONCILE_LOCK),
     db: Session = Depends(get_db),
+    idempotency_key: str = IdempotencyKey,
 ) -> ReconciliationDetail:
     """Withdraw the signature on the account's latest locked reconciliation. The matches stand;
-    what is withdrawn is the sign-off."""
+    what is withdrawn is the sign-off.
+
+    Under `Idempotency-Key` like open and lock (decision 11): a reopen replayed after a dropped
+    response must return the reopened row, not refuse `reconciliation_not_locked` over it."""
     reconciliation_service.reopen(
         db,
         auth.company_id,
         reconciliation_id,
         reason=payload.reason,
         actor=auth.user,
+        idempotency_key=idempotency_key,
         request=request,
     )
     db.commit()
