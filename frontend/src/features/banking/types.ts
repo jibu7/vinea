@@ -449,6 +449,7 @@ export interface PaymentRunLine {
   supplier_code: string | null;
   document_id: number;
   document_number: string;
+  /** The **cash** paid on this line. The invoice was settled by `amount + discount_amount`. */
   amount: string;
   discount_amount: string;
   settlement_document_id: number | null;

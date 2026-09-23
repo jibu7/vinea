@@ -525,6 +525,8 @@ class PaymentRunLineRead(BaseModel):
     document_id: int
     #: The invoice paid, the `PMT-` and the `ALC-` — the three links the run's detail draws.
     document_number: str
+    #: The **cash** paid on this line — what the preview called `cash_amount`. The invoice was
+    #: settled by `amount + discount_amount`.
     amount: Decimal
     discount_amount: Decimal
     settlement_document_id: int | None = None

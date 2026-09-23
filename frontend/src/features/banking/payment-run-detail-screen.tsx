@@ -99,7 +99,8 @@ export function PaymentRunDetailScreen({ runId }: { runId: number }) {
   }
 
   const blocked = reverseBlockedReason();
-  const cashTotal = data.lines.reduce((sum, line) => sum + Number(line.amount) - Number(line.discount_amount), 0);
+  /** `amount` is the cash paid on the line; the invoice was settled by it *plus* the discount. */
+  const cashTotal = data.lines.reduce((sum, line) => sum + Number(line.amount), 0);
 
   return (
     <ReportPage
@@ -227,13 +228,13 @@ export function PaymentRunDetailScreen({ runId }: { runId: number }) {
                     tc("emptyValue")
                   )}
                 </TD>
-                <TD className="text-right font-mono text-xs tabular-nums whitespace-nowrap">{money(line.amount)}</TD>
+                <TD className="text-right font-mono text-xs tabular-nums whitespace-nowrap">
+                  {money(Number(line.amount) + Number(line.discount_amount))}
+                </TD>
                 <TD className="text-right font-mono text-xs tabular-nums whitespace-nowrap">
                   {Number(line.discount_amount) === 0 ? tc("emptyValue") : money(line.discount_amount)}
                 </TD>
-                <TD className="text-right font-mono text-xs tabular-nums whitespace-nowrap">
-                  {money(Number(line.amount) - Number(line.discount_amount))}
-                </TD>
+                <TD className="text-right font-mono text-xs tabular-nums whitespace-nowrap">{money(line.amount)}</TD>
               </TR>
             ))}
             <TR>
