@@ -163,28 +163,20 @@ NO_UI: dict[str, str] = {
     # Every one deleted by a screen a person can open and press, and pressed by
     # `e2e/p8-transactions.spec.ts` — not by a hook written to satisfy the matcher.
     #
-    # --- GAP: P8 step 3's payment runs, which are step 7's third screen --------------------------
+    # --- P8 step 7b carried three lines. It carries none, and the register no P8 line. ------
     #
-    # **Still here after step 7a, deliberately.** Step 7 was split in two sessions; the payment-run
-    # screens are its second half, and these three lines are what that half deletes.
+    # Transactions → Accounts Payable → **Payment runs** (`/ap/payment-runs`, Appendix C.1.15):
+    # **Preview** on `/ap/payment-runs/new` (`POST …/payment-runs/preview` — it writes nothing,
+    # but a preview nobody can reach is a run posted blind), **Post payment run** on the same
+    # screen (`POST …/payment-runs`), and **Reverse the run** in the reason dialog on
+    # `/ap/payment-runs/{id}` (`POST …/{run_id}/reverse`). The instruction file and the remittance
+    # advices are GETs and arrive with the same screen. Step 8's endpoints — Cashbooks, the
+    # reconciliation report and the bank account enquiry — are all GETs, so the phase closes with
+    # nothing here.
     #
-    # Transactions → Accounts Payable → **Payment runs** (`/ap/payment-runs`): the selection
-    # grid with its preview, Post, and Reverse on the run's detail. There are no draft runs, so
-    # the preview and the post are two calls of one press — which is why the preview is on this
-    # list even though it writes nothing: a preview nobody can reach is a run posted blind.
+    # Every one deleted by a screen a person can open and press, and pressed by
+    # `e2e/p8-payment-runs.spec.ts` — not by a hook written to satisfy the matcher.
     #
-    # The instruction file and the remittance advices are **GETs** and so are not the
-    # register's business, but they are the same screen's buttons and arrive with it.
-    "POST /api/v1/banking/payment-runs/preview": (
-        "GAP (P8, step 7) — *Preview* on `/ap/payment-runs/new`: the per-supplier totals, "
-        "`discount_available` per line and the warnings, before Post."
-    ),
-    "POST /api/v1/banking/payment-runs": (
-        "GAP (P8, step 7) — *Post* on the same screen."
-    ),
-    "POST /api/v1/banking/payment-runs/{run_id}/reverse": (
-        "GAP (P8, step 7) — *Reverse* on `/ap/payment-runs/{id}`, with the reason dialog."
-    ),
     # --- GAP: the operator console, planned but unscheduled ------------------------------------
     "POST /api/v1/operator/tenants/{company_id}/activate": (
         "GAP (SaaS admin, Appendix C.2) — the operator console has no screens in any phase yet. "

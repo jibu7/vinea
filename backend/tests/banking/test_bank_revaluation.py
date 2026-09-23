@@ -177,6 +177,7 @@ def test_the_bank_line_states_the_arithmetic_of_a_balance(
     line = view.lines[0]
     assert line.scope == "bank"
     assert line.bank_account_code == "BK-USD"
+    assert line.bank_account_name == "Bank of Kigali USD account", "where a partner would sit"
     assert line.document_id is None and line.partner_id is None, "a balance has no partner"
     assert line.open_amount == USD_BALANCE
     assert line.carrying_base == USD_CARRYING

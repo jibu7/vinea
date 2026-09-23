@@ -24,7 +24,7 @@ import {
 import { CisReceiptLayout } from "@/features/fiscal/receipt-layout";
 import { useAccounts, useCompanyDetails, useCurrencies } from "@/features/gl/hooks";
 import { byId } from "@/features/gl/lookups";
-import { DocumentKind, DocumentStatus, FiscalOutboxStatus } from "@/lib/api-enums";
+import { DocumentKind, DocumentStatus, FiscalOutboxStatus, PaymentRunStatus } from "@/lib/api-enums";
 import { ApiError } from "@/lib/api";
 import { newDraftId } from "@/lib/drafts";
 import { dotted, formatDate, formatMoney, formatQuantity, todayIso } from "@/lib/format";
@@ -134,6 +134,13 @@ export function PartnerDocumentDetailScreen({
     if (!canPost) return t("noReversePermission");
     if (!data) return null;
     if (isReversed) return t("alreadyReversed");
+    // P8 decision 7: a `PMT-` a payment run posted is one leg of one banking act — the bank shows
+    // the run as a single line — so the run is what reverses. Said before "Unallocate first",
+    // because a run's settlement is always allocated and that advice would send the person to
+    // undo the allocation the run owns.
+    if (data.payment_run_status === PaymentRunStatus.POSTED && data.payment_run_number) {
+      return t("paymentRunMember", { number: data.payment_run_number });
+    }
     if (Number(data.open_amount) !== Number(data.total_amount)) return t("mustUnallocateFirst");
     if (data.matured_entry_id !== null) return t("instrumentMatured");
     // P7 decision 7, said **before** the button rather than after it. A refund of a refund is
@@ -365,6 +372,18 @@ export function PartnerDocumentDetailScreen({
             {dotted(t("reference"), data.reference)}
           </p>
         )}
+        {data.payment_run_id !== null && data.payment_run_number && (
+          <p className="pt-2 text-xs text-[var(--vinea-ink-muted)]" data-testid="document-payment-run">
+            {t("paidInRun")}{" "}
+            <Link
+              href={`/ap/payment-runs/${data.payment_run_id}`}
+              className="whitespace-nowrap font-mono font-semibold text-[var(--vinea-brand)] underline"
+            >
+              {data.payment_run_number}
+            </Link>
+            {data.payment_run_status === PaymentRunStatus.REVERSED ? ` · ${t("runReversed")}` : null}
+          </p>
+        )}
         {isReversed && (
           <p className="pt-2 text-xs text-[var(--vinea-ink-muted)]" data-testid="document-reversed">
             {data.reversed_on
@@ -510,9 +529,16 @@ export function PartnerDocumentDetailScreen({
 
       <div className="flex justify-end print:hidden">
         {reverseBlocked !== null ? (
-          <Button variant="danger" disabled title={reverseBlocked} data-testid="reverse-blocked">
-            {t("reverse")}
-          </Button>
+          <div className="flex items-center gap-3">
+            {data.payment_run_status === PaymentRunStatus.POSTED && (
+              <p className="text-xs text-[var(--vinea-ink-muted)]" data-testid="reverse-blocked-reason">
+                {reverseBlocked}
+              </p>
+            )}
+            <Button variant="danger" disabled title={reverseBlocked} data-testid="reverse-blocked">
+              {t("reverse")}
+            </Button>
+          </div>
         ) : (
           <Dialog open={reverseOpen} onOpenChange={setReverseOpen}>
             <DialogTrigger asChild>

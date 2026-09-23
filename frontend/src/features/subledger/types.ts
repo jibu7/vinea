@@ -4,7 +4,7 @@
  * screens, never a second set of types. */
 
 import { PaymentMethod as PaymentMethodValues } from "@/lib/api-enums";
-import type { PaymentMethod } from "@/lib/api-enums";
+import type { PaymentMethod, PaymentRunStatus } from "@/lib/api-enums";
 
 export type { PaymentMethod };
 
@@ -417,6 +417,12 @@ export interface PartnerDocumentDetail extends PartnerDocument {
   /** The receipt RRA signed for this document, once its queue row has been sent. `null` while
    * the row is still in flight — which is what the print refusal reads. */
   fiscal_receipt_id: number | null;
+  // --- P8 payment runs -----------------------------------------------------------------------
+  /** The run that posted this `PMT-`, when a run did — "Paid in run PYR-n". While the run is
+   * `posted` the settlement does not reverse on its own (`payment_run_member`): the run does. */
+  payment_run_id: number | null;
+  payment_run_number: string | null;
+  payment_run_status: PaymentRunStatus | null;
   lines: PartnerDocumentLine[];
 }
 

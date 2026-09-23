@@ -49,6 +49,7 @@ from app.models.banking import (
     BankMatchKind,
     BankMatchRule,
     BankStatementLine,
+    PaymentRunStatus,
     ReconciliationStatus,
 )
 from app.models.job import JobStatus
@@ -1043,11 +1044,15 @@ def list_payment_runs(
     auth: AuthContext = permissions.require(permissions.BANK_REPORTS_VIEW),
     db: Session = Depends(get_db),
 ) -> list[PaymentRunRead]:
+    runs = payment_run_service.list_runs(
+        db, auth.company_id, bank_account_id=bank_account_id, limit=limit
+    )
+    counts = payment_run_service.supplier_counts(db, auth.company_id, [run.id for run in runs])
     return [
-        PaymentRunRead.model_validate(run)
-        for run in payment_run_service.list_runs(
-            db, auth.company_id, bank_account_id=bank_account_id, limit=limit
+        PaymentRunRead.model_validate(run).model_copy(
+            update={"supplier_count": counts.get(run.id, 0)}
         )
+        for run in runs
     ]
 
 
@@ -1058,15 +1063,19 @@ def read_payment_run(
     db: Session = Depends(get_db),
 ) -> PaymentRunDetail:
     run = payment_run_service.get(db, auth.company_id, run_id)
+    lines = payment_run_service.line_views(db, auth.company_id, run_id)
     return PaymentRunDetail(
-        **PaymentRunRead.model_validate(run).model_dump(),
-        lines=[
-            PaymentRunLineRead.model_validate(line)
-            for line in payment_run_service.lines_of(db, auth.company_id, run_id)
-        ],
+        **PaymentRunRead.model_validate(run).model_dump(exclude={"supplier_count"}),
+        supplier_count=len({line.partner_id for line in lines}),
+        lines=[PaymentRunLineRead.model_validate(line) for line in lines],
         remittance_job_ids=[
             job.id for job in _remittance_jobs(db, auth.company_id, run_id)
         ],
+        reconciliation_locked=(
+            payment_run_service.locked_in(db, auth.company_id, run)
+            if run.status == PaymentRunStatus.POSTED
+            else None
+        ),
     )
 
 

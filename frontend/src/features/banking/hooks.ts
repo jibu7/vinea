@@ -12,12 +12,18 @@ import type {
   LedgerLine,
   ManualStatementPayload,
   Match,
+  PaymentRun,
+  PaymentRunDetail,
+  PaymentRunPayload,
+  PaymentRunPreview,
   PostCashbookFromLinePayload,
   PostedFromStatement,
   PostSettlementFromLinePayload,
   Prefill,
   Reconciliation,
   ReconciliationDetail,
+  RemittanceJob,
+  SelectableDocument,
   Statement,
   StatementDetail,
   StatementFormat,
@@ -415,5 +421,91 @@ export function usePostSettlementFromLine() {
         { "Idempotency-Key": idempotencyKey },
       ),
     onSuccess: invalidate,
+  });
+}
+
+// --- Payment runs (P8 decision 7, step 7b) -----------------------------------------------------
+
+export function usePaymentRuns(bankAccountId: number | null) {
+  return useQuery({
+    queryKey: [ROOT, "payment-runs", bankAccountId],
+    queryFn: () =>
+      api.get<PaymentRun[]>(`/banking/payment-runs?bank_account_id=${bankAccountId}&limit=200`),
+    enabled: bankAccountId !== null,
+  });
+}
+
+export function usePaymentRun(runId: number) {
+  return useQuery({
+    queryKey: [ROOT, "payment-run", runId],
+    queryFn: () => api.get<PaymentRunDetail>(`/banking/payment-runs/${runId}`),
+  });
+}
+
+/** The selection grid's rows. `on` is the payment date, because `discount_available` is P4's
+ * figure *at* that date — the same invoice offers a discount on the 10th and none on the 20th. */
+export function useSelectableDocuments(
+  bankAccountId: number | null,
+  { dueBy, on }: { dueBy: string; on: string },
+) {
+  return useQuery({
+    queryKey: [ROOT, "payment-runs", "selectable", bankAccountId, dueBy, on],
+    queryFn: () => {
+      const params = new URLSearchParams({ bank_account_id: String(bankAccountId), on });
+      if (dueBy) params.set("due_by", dueBy);
+      return api.get<SelectableDocument[]>(`/banking/payment-runs/selectable?${params}`);
+    },
+    enabled: bankAccountId !== null && on !== "",
+  });
+}
+
+/** **Preview**: every refusal the post would raise, and nothing written. A mutation because the
+ * endpoint is a POST (it takes the selection), not because it changes anything. */
+export function usePreviewPaymentRun() {
+  return useMutation({
+    mutationFn: (payload: PaymentRunPayload) =>
+      api.post<PaymentRunPreview>("/banking/payment-runs/preview", payload),
+  });
+}
+
+/** **Post**: one settlement and one allocation per supplier, in one transaction, under the
+ * draft's `Idempotency-Key` — a retried press replays the run it made. */
+export function usePostPaymentRun() {
+  const invalidate = useInvalidatePosting();
+  return useMutation({
+    mutationFn: ({ payload, idempotencyKey }: { payload: PaymentRunPayload; idempotencyKey: string }) =>
+      api.post<PaymentRunDetail>("/banking/payment-runs", payload, {
+        "Idempotency-Key": idempotencyKey,
+      }),
+    onSuccess: invalidate,
+  });
+}
+
+/** **Reverse**: unallocate everything, then reverse everything, and release the bank line's
+ * match. No `Idempotency-Key`: a replayed reversal is refused `payment_run_already_reversed`,
+ * which is the answer a retry wants. */
+export function useReversePaymentRun() {
+  const invalidate = useInvalidatePosting();
+  return useMutation({
+    mutationFn: ({ runId, reason, onDate }: { runId: number; reason: string; onDate: string | null }) =>
+      api.post<PaymentRunDetail>(`/banking/payment-runs/${runId}/reverse`, {
+        reason,
+        on_date: onDate,
+      }),
+    onSuccess: invalidate,
+  });
+}
+
+/** The run's advices. The jobs run after the post's response, so the list is polled while any
+ * of them is still queued or running and left alone once all have an answer. */
+export function useRemittances(runId: number, enabled: boolean) {
+  return useQuery({
+    queryKey: [ROOT, "payment-run", runId, "remittances"],
+    queryFn: () => api.get<RemittanceJob[]>(`/banking/payment-runs/${runId}/remittances`),
+    enabled,
+    refetchInterval: (query) =>
+      (query.state.data ?? []).some((job) => job.status === "queued" || job.status === "running")
+        ? 1500
+        : false,
   });
 }

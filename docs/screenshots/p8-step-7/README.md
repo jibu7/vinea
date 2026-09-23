@@ -34,3 +34,34 @@ fourth row, because it was captured after this folder's run.
 **Looking at them found two defects**, both fixed before these were taken: side by side at this
 width the panes broke amounts over two lines (`FRw` / `1,000,000`), so they stack below 2xl;
 and the *Locked in BRC-000001* chip broke the number itself (`BRC-` / `000001`).
+
+## P8 step 7b — Payment runs, the AP document's "Paid in run", the 1:3 match, FX bank lines
+
+Same size and themes (the New shot at 1440x1700, which holds the grid and the preview; the run's
+detail at 1440x1100; the workspace at 1440x1500), captured on a database reset by
+`make db-reset`, by `frontend/scripts/capture-p8-payment-runs.ts`, with the dev server warmed:
+
+```sh
+make db-reset
+cd frontend
+OUT=../docs/screenshots/p8-step-7 npx tsx scripts/capture-p8-payment-runs.ts
+```
+
+The script makes a bank account of its own with FRw 1,000,000 in it, terms of 2 % 10 days /
+net 30, and three suppliers — *Nyanza Timber Ltd* on those terms, *Huye Cork Supplies* with no
+bank details, *Rubavu Glassworks* with a FRw 20,000 payment on account — each with one invoice
+posted today (100,000, 50,000 and 236,000). It drives the screens through their own buttons:
+the selection, Preview, Post, Import. Then it posts a USD 500.00 receipt on `1121` at 1,320 and
+holds the month's two dated rates (1,320 on the 1st, 1,350 at month end), as the P7 specs do.
+
+| # | Screen | Files |
+|---|---|---|
+| 1 | New payment run: the three invoices selected, `discount_available` FRw 2,000 on the 2/10 invoice with *Take* ticked; the preview — *Bank details missing* on Huye Cork Supplies with what that means, *Open credits not netted: PMT-n* on Rubavu Glassworks, FRw 2,000 taken, run total FRw 384,000, Post offered | `7b-1-new-run-preview-discount-and-warnings-{light,dark}.png` |
+| 2 | The run's page: three lines with their invoice, `PMT-` and `ALC-` links, settled / discount / paid (100,000 − 2,000 = 98,000 on Nyanza), paid from the bank FRw 384,000; *Instruction file*; the three remittance advices *Ready* with their PDFs | `7b-2-run-detail-instruction-file-{light,dark}.png` |
+| 3 | The AP document the run posted for Nyanza Timber: *Paid in run PYR-n* linking to the run, the allocation (98,000 with the 2,000 discount), and Reverse disabled with `payment_run_member` said beside it | `7b-3-ap-document-paid-in-run-{light,dark}.png` |
+| 4 | The workspace after the one-line statement was imported: *BULK PAYMENT PYR-n* matched by the payment run rule to three ledger lines (*Ledger lines: 3*, the three `PMT-`s named), each `PMT-` reading *Matched to BULK PAYMENT PYR-n* — matched by the auto-match Import now chains | `7b-4-workspace-run-matched-one-to-three-{light,dark}.png` |
+| 5 | FX revaluation, *Bank and cash accounts*: `1121 · Bank Account USD` where the document and partner sit, open **$ 500.00** in the account's currency, carrying 660,000, revalued at 1,350 to 675,000, difference 15,000 | `7b-5-fx-preview-bank-line-{light,dark}.png` |
+
+**Looking at them found two defects**, both fixed before these were taken: the FX screen's
+*Side* picker cut "Bank and cash accounts" to "Bank and cash a…", and its rates read
+`1350.0000000000`.

@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import AuthContext, get_tenant_context
 from app.api.idempotency import IdempotencyKey, fingerprint
+from app.banking import payment_runs as payment_run_service
 from app.core import permissions
 from app.core.errors import ConflictError, NotFoundError, PermissionDeniedError
 from app.db import get_db
@@ -637,7 +638,19 @@ def _document_read(db: Session, document: PartnerDocument) -> DocumentRead:
         .options(selectinload(PartnerDocument.lines))
         .where(PartnerDocument.id == document.id)
     )
-    return DocumentRead.model_validate(loaded)
+    read = DocumentRead.model_validate(loaded)
+    if document.kind != DocumentKind.SETTLEMENT:
+        return read
+    run = payment_run_service.run_of_settlement(db, document.company_id, document.id)
+    if run is None:
+        return read
+    return read.model_copy(
+        update={
+            "payment_run_id": run.id,
+            "payment_run_number": run.number,
+            "payment_run_status": run.status.value,
+        }
+    )
 
 
 def _kit_components(line: DocumentLineIn) -> tuple[documents_service.LineInput, ...] | None:

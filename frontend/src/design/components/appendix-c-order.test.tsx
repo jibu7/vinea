@@ -202,6 +202,12 @@ import { navIntents, type IntentLabel } from "@/design/nav-tree";
  * over the same reconciliations; the two share a label and not a screen, as the two "Fiscal
  * receipts" rows do. Payment runs are C.1.15 and arrive with the second half of step 7.
  *
+ * Amended at P8 step 7b with **"Payment runs"** under Transactions → Accounts Payable,
+ * directly after Payment, recorded in the plan as **Appendix C.1.15**. Not in the owner's tree:
+ * a run pays many suppliers from one bank account in one press — an ordinary P4 payment and
+ * allocation per supplier, and one line on the bank's statement for the whole run — so it sits
+ * beside Payment, the one-at-a-time form of the same act, and not under Banking.
+ *
  * Amended before P6 step 1 with **"Documents"** under Transactions → AR and → AP, the other
  * half of that same C.1.7 entry. The appendix already recorded it: "the same hole is open in
  * AR and AP, one phase older and twice over". `POST /{role}/documents/{id}/reverse` and
@@ -268,6 +274,7 @@ const APPENDIX_C: Record<IntentLabel, Array<[string, string, string | null]>> = 
     ["Accounts Payable", "Supplier invoice", null],
     ["Accounts Payable", "Return to supplier", null],
     ["Accounts Payable", "Payment", null],
+    ["Accounts Payable", "Payment runs", null],
     ["Accounts Payable", "Allocate", null],
     ["Accounts Payable", "Post-dated payments", null],
     ["Accounts Payable", "Account payable batches", null],

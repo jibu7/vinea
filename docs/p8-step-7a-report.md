@@ -305,6 +305,14 @@ actually settles it.
    already did. The row therefore carries the key of whichever of the three came last. That is
    enough for the replay of the call that just happened, which is what a dropped response needs.
 
+   *Added at step 7b:* reopen taking an `Idempotency-Key` **supersedes the step-3 reading** in
+   `docs/p8-step-3-report.md` — its decision 3 ("Step 2 shipped `reconciliation.reopen` the same
+   way … unrecorded") and its summary line "No idempotency column for `reverse_run` or
+   `reconciliation.reopen`; state refusals suffice". For reopen that is no longer so. No column
+   was added for it — the key shares the row's existing `idempotency_key`, as above. A payment run's
+   reverse still takes none: a replayed reversal is refused `payment_run_already_reversed`, which
+   is the answer a retry wants.
+
 ## Verification
 
 Backend, in the container:

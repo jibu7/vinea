@@ -225,6 +225,17 @@ export const navIntents: NavIntent[] = [
       { label: "Supplier invoice", module: "Accounts Payable", permission: "ap:transactions_post", href: "/ap/supplier-invoices/new" },
       { label: "Return to supplier", module: "Accounts Payable", permission: "ap:transactions_post", href: "/ap/returns/new" },
       { label: "Payment", module: "Accounts Payable", permission: "ap:transactions_post", href: "/ap/payments/new" },
+      // P8 step 7, Appendix C.1.15 — not in the owner's tree. Many suppliers paid from one bank
+      // account in one press (decision 7): a `PMT-` and an allocation per supplier, one line on
+      // the bank's statement for the run. Directly after Payment, the one-at-a-time form of the
+      // same act. The listing is `bank:reports_view` and the run `bank:payment_run_post`, so
+      // either opens the row, exactly as the API gates it.
+      {
+        label: "Payment runs",
+        module: "Accounts Payable",
+        permission: ["bank:payment_run_post", "bank:reports_view"],
+        href: "/ap/payment-runs",
+      },
       { label: "Allocate", module: "Accounts Payable", permission: "ap:transactions_post", href: "/ap/allocations/new" },
       { label: "Post-dated payments", module: "Accounts Payable", permission: "ap:reports_view", href: "/ap/post-dated" },
       { label: "Account payable batches", module: "Accounts Payable", permission: "ap:transactions_post", href: "/ap/batches/new" },

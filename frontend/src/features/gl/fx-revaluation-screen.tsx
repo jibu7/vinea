@@ -17,7 +17,7 @@ import { useToast } from "@/design/components/toast";
 import { isApiError, useHasPermission } from "@/features/auth/hooks";
 import { FxRevaluationRole, FxRevaluationStatus } from "@/lib/api-enums";
 import { newDraftId } from "@/lib/drafts";
-import { formatDate, formatMoney, todayIso } from "@/lib/format";
+import { DOT, formatDate, formatMoney, formatQuantity, todayIso, trimDecimalString } from "@/lib/format";
 import { useApiErrorToast } from "@/lib/use-api-error-toast";
 import {
   useCompanyDetails,
@@ -28,6 +28,24 @@ import {
   usePostFxRevaluation,
   useReverseFxRevaluation,
 } from "./hooks";
+import type { FxRevaluationLine } from "./types";
+
+/**
+ * A document line is keyed and labelled by its document; a **bank line** (P8 decision 8) has no
+ * document — `document_id` is null on it — and is keyed and labelled by the bank account, whose
+ * code sits where the document number does and whose name sits where the partner does.
+ */
+function lineKey(line: FxRevaluationLine): string {
+  return line.document_id !== null ? `document-${line.document_id}` : `bank-${line.bank_account_id}`;
+}
+
+function lineLabel(line: FxRevaluationLine): string {
+  return (line.document_number ?? line.bank_account_code) ?? "";
+}
+
+function lineName(line: FxRevaluationLine): string {
+  return (line.partner_name ?? line.bank_account_name) ?? "";
+}
 
 /** The last day of the month `today` falls in. The run is refused on any other date
  * (`fx_revaluation_not_period_end`), so offering one is offering the answer. */
@@ -53,6 +71,12 @@ function monthEndOf(today: string): string {
  * **Two entries, one transaction.** The run posts at the revaluation date *and* its mirror the
  * following day, so the balance sheet at the date carries the revaluation and the next period
  * does not. Realized FX at allocation stays P4's and is untouched by this.
+ *
+ * **Bank and cash accounts are a scope of the same run** (P8 decision 8): the `bank` role
+ * revalues every foreign-currency bank account's balance, and `all` is the month-end press —
+ * customers, suppliers and bank together. A bank line has no document and no partner, so it is
+ * keyed by the account and shows the account's code and name in their place; its gain or loss
+ * goes to `1130 Bank Revaluation`, never to the bank account, whose lines are the statement's.
  *
  * The three refusals live on the Post button, not here: the period must be open, the date must
  * be a period end, and a run for that (role, date) must not already stand — reverse it first.
@@ -89,6 +113,17 @@ export function FxRevaluationScreen({ openId }: { openId?: number } = {}) {
     symbol: base?.symbol ?? null,
   };
   const money = (value: string | number) => formatMoney(Number(value), baseLike, { showCode: false });
+  const currencyById = new Map((currencies.data ?? []).map((c) => [c.id, c]));
+  /** The open amount in **the line's own currency** — a USD account's balance reads USD 495.00,
+   * not the raw `NUMERIC(20,6)` the wire carries. */
+  const inCurrency = (value: string, currencyId: number) => {
+    const currency = currencyById.get(currencyId);
+    return formatMoney(Number(value), {
+      code: currency?.code ?? "",
+      decimalPlaces: currency?.decimal_places ?? 2,
+      symbol: currency?.symbol ?? null,
+    });
+  };
 
   const preview = useFxRevaluationPreview(revaluationDate, role);
   const runs = useFxRevaluations();
@@ -139,7 +174,8 @@ export function FxRevaluationScreen({ openId }: { openId?: number } = {}) {
           <Field label={t("revaluationDate")} className="w-44">
             <IsoDatePicker value={revaluationDate} onValueChange={setRevaluationDate} />
           </Field>
-          <Field label={t("role")} className="w-44">
+          {/* Wide enough for "Customers, suppliers and bank", the longest of the five roles. */}
+          <Field label={t("role")} className="w-72">
             <Combobox
               options={Object.values(FxRevaluationRole).map((value) => ({
                 value,
@@ -169,6 +205,10 @@ export function FxRevaluationScreen({ openId }: { openId?: number } = {}) {
           <h2 className="text-xs font-semibold text-[var(--vinea-ink-muted)]">{t("preview")}</h2>
           {preview.data && (
             <p className="text-xs text-[var(--vinea-ink-muted)]">
+              <span data-testid="revaluation-line-count">
+                {t("lineCount", { count: formatQuantity(lines.length, 0) })}
+              </span>
+              {DOT}
               {t("totalDifference")}{" "}
               <span
                 className="font-mono tabular-nums text-[var(--vinea-ink)]"
@@ -186,8 +226,8 @@ export function FxRevaluationScreen({ openId }: { openId?: number } = {}) {
           <Table>
             <THead>
               <TR>
-                <TH className="w-32">{t("document")}</TH>
-                <TH>{t("partner")}</TH>
+                <TH className="w-32">{t("documentOrAccount")}</TH>
+                <TH>{t("partnerOrBank")}</TH>
                 <TH className="w-20">{t("currency")}</TH>
                 <TH className="w-28 text-right">{t("openAmount")}</TH>
                 <TH className="w-28 text-right">{t("bookingRate")}</TH>
@@ -199,26 +239,31 @@ export function FxRevaluationScreen({ openId }: { openId?: number } = {}) {
             </THead>
             <TBody>
               {lines.map((line) => (
-                <TR key={line.document_id}>
-                  <TD className="font-mono text-xs font-semibold">{line.document_number}</TD>
-                  <TD className="text-xs">{line.partner_name}</TD>
+                <TR key={lineKey(line)} data-revaluation-line={lineLabel(line)}>
+                  <TD className="font-mono text-xs font-semibold">{lineLabel(line)}</TD>
+                  <TD className="text-xs">{lineName(line)}</TD>
                   <TD className="font-mono text-xs">{line.currency_code}</TD>
-                  <TD className="text-right font-mono text-xs tabular-nums">{line.open_amount}</TD>
+                  <TD
+                    className="text-right font-mono text-xs tabular-nums whitespace-nowrap"
+                    data-testid={`open-${lineLabel(line)}`}
+                  >
+                    {inCurrency(line.open_amount, line.currency_id)}
+                  </TD>
                   <TD className="text-right font-mono text-xs tabular-nums text-[var(--vinea-ink-muted)]">
-                    {line.booking_rate}
+                    {line.booking_rate !== null ? trimDecimalString(line.booking_rate) : t("emptyValue")}
                   </TD>
                   <TD className="text-right font-mono text-xs tabular-nums">
                     {money(line.carrying_base)}
                   </TD>
                   <TD className="text-right font-mono text-xs tabular-nums text-[var(--vinea-ink-muted)]">
-                    {line.rate_at_date}
+                    {trimDecimalString(line.rate_at_date)}
                   </TD>
                   <TD className="text-right font-mono text-xs tabular-nums">
                     {money(line.revalued_base)}
                   </TD>
                   <TD
                     className="text-right font-mono text-xs tabular-nums"
-                    data-testid={`difference-${line.document_number}`}
+                    data-testid={`difference-${lineLabel(line)}`}
                   >
                     {money(line.difference)}
                   </TD>
@@ -336,16 +381,16 @@ export function FxRevaluationScreen({ openId }: { openId?: number } = {}) {
               <Table>
                 <THead>
                   <TR>
-                    <TH className="w-32">{t("document")}</TH>
-                    <TH>{t("partner")}</TH>
+                    <TH className="w-32">{t("documentOrAccount")}</TH>
+                    <TH>{t("partnerOrBank")}</TH>
                     <TH className="w-32 text-right">{t("difference")}</TH>
                   </TR>
                 </THead>
                 <TBody>
                   {detail.data.lines.map((line) => (
-                    <TR key={line.document_id}>
-                      <TD className="font-mono text-xs">{line.document_number}</TD>
-                      <TD className="text-xs">{line.partner_name}</TD>
+                    <TR key={lineKey(line)}>
+                      <TD className="font-mono text-xs">{lineLabel(line)}</TD>
+                      <TD className="text-xs">{lineName(line)}</TD>
                       <TD
                         className="text-right font-mono text-xs tabular-nums"
                         data-testid="run-difference"

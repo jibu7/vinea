@@ -569,6 +569,9 @@ def test_reversing_the_run_releases_its_match(
     )
     db.flush()
     assert len(matching.matches_of(db, banking.company_id, banking.bank("BK-RWF").id)) == 1
+    assert payment_run_service.locked_in(db, banking.company_id, posted) is None, (
+        "matched is not locked: the reversal releases an open match"
+    )
 
     payment_run_service.reverse_run(
         db, banking.company_id, posted.id, reason="recalled", actor=banking.owner
@@ -623,6 +626,8 @@ def test_a_run_inside_a_locked_reconciliation_is_not_reversible(
         db, banking.company_id, reconciliation.id, actor=banking.owner
     )
     db.flush()
+    # What the run's screen reads before it draws Reverse — the refusal below, asked first.
+    assert payment_run_service.locked_in(db, banking.company_id, posted) == reconciliation.number
 
     with pytest.raises(LedgerStateError) as error:
         payment_run_service.reverse_run(

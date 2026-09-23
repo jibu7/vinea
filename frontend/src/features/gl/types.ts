@@ -360,17 +360,28 @@ export interface CompanyMember {
  * `exchange_rates` must not restate a posted revaluation, so the lines are stored and read
  * back rather than derived on the way to the screen.
  */
+/**
+ * One line of a revaluation: an open partner document, **or one bank account's balance** (P8
+ * decision 8). `scope` says which; exactly one half of the identifying fields is filled — the
+ * document and partner on an `ar` / `ap` line, the bank account on a `bank` one.
+ */
 export interface FxRevaluationLine {
-  document_id: number;
-  document_number: string;
-  role: string;
-  partner_id: number;
-  partner_name: string;
+  scope: "ar" | "ap" | "bank";
+  document_id: number | null;
+  document_number: string | null;
+  role: string | null;
+  partner_id: number | null;
+  partner_name: string | null;
+  bank_account_id: number | null;
+  bank_account_code: string | null;
+  bank_account_name: string | null;
   currency_id: number;
   currency_code: string;
-  /** Signed by the control account's side — an AR invoice positive, an AP invoice negative. */
+  /** Signed by the control account's side — an AR invoice positive, an AP invoice negative. On
+   * a bank line, the account's book balance in its own currency. */
   open_amount: string;
-  booking_rate: string;
+  /** Null on a bank line: a balance has no single booking rate. */
+  booking_rate: string | null;
   carrying_base: string;
   rate_at_date: string;
   revalued_base: string;
