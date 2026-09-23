@@ -192,6 +192,16 @@ import { navIntents, type IntentLabel } from "@/design/nav-tree";
  * already exists (Bank details on Suppliers), three pickers on GL Defaults and a notice on
  * Chart of accounts — none of which is a row.
  *
+ * Amended at P8 step 7 with **"Bank statements"** and **"Bank reconciliation"** under
+ * Transactions → General Ledger, directly after FX revaluation, recorded in the plan as
+ * **Appendix C.1.14**. This is the C.2 promise made good — "bank statement import &
+ * reconciliation workspace as transactions, not just reports": importing a statement, matching
+ * it, posting what the ledger lacks and locking the proof are things a clerk *does*, so they
+ * sit beside Cashbook batches rather than under Reports. The owner's *Bank reconciliation* row
+ * under Reports → General Ledger keeps its place and its P8 tag until step 8 builds the report
+ * over the same reconciliations; the two share a label and not a screen, as the two "Fiscal
+ * receipts" rows do. Payment runs are C.1.15 and arrive with the second half of step 7.
+ *
  * Amended before P6 step 1 with **"Documents"** under Transactions → AR and → AP, the other
  * half of that same C.1.7 entry. The appendix already recorded it: "the same hole is open in
  * AR and AP, one phase older and twice over". `POST /{role}/documents/{id}/reverse` and
@@ -244,6 +254,8 @@ const APPENDIX_C: Record<IntentLabel, Array<[string, string, string | null]>> = 
     ["General Ledger", "Journal batches", null],
     ["General Ledger", "Cashbook batches", null],
     ["General Ledger", "FX revaluation", null],
+    ["General Ledger", "Bank statements", null],
+    ["General Ledger", "Bank reconciliation", null],
     ["Accounts Receivable", "Invoice", null],
     ["Accounts Receivable", "Credit note", null],
     ["Accounts Receivable", "Receipt", null],

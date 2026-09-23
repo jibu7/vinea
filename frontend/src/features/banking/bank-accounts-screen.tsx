@@ -109,8 +109,11 @@ function detailsPayload(form: DetailsForm) {
  *
  * **The currency locks once the account has lines.** Every base amount on the account was
  * frozen at posting under the currency it had (ADR-06); re-denominating it would change what
- * each line "shows on the statement" without touching a posted row. The picker is disabled with
- * the reason beside it, and `bank_account_has_lines` from the server lands on the same field.
+ * each line "shows on the statement" without touching a posted row. The picker becomes the
+ * fixed value with the reason as a neutral hint under it — a fact about the account, not a
+ * fault (P8 step 7 moved it out of the red slot). The error slot stays for a refusal on save:
+ * `bank_account_has_lines` from the server, should the screen's copy of `has_lines` be stale,
+ * lands there and outranks the hint.
  */
 export function BankAccountsScreen() {
   const t = useTranslations("banking.accounts");
@@ -299,7 +302,8 @@ export function BankAccountsScreen() {
         </div>
         <Field
           label={t("heldIn")}
-          error={errors.currency_id?.[0] ?? (currencyLocked ? t("currencyLocked") : undefined)}
+          error={errors.currency_id?.[0]}
+          hint={currencyLocked ? t("currencyLocked") : undefined}
         >
           {currencyLocked ? (
             // Not a disabled combobox: a disabled control reads as "not yet", and this is

@@ -55,14 +55,25 @@ export function FieldError({ children }: { children?: string }) {
   return <p className="mt-1 text-xs text-[var(--vinea-danger)]">{children}</p>;
 }
 
+/**
+ * A labelled control, with two slots under it that must not be confused.
+ *
+ * `error` is a **refusal** — the server said no, or the form cannot be sent — and reads red.
+ * `hint` is a **fact about the field** that is not a fault: the Bank accounts currency picker
+ * that has become a fixed value because the account has postings (P8 step 7). Shown in the
+ * error slot it read as something the user had done wrong. When both are set the error wins:
+ * a refusal on save is the thing to read first.
+ */
 export function Field({
   label,
   error,
+  hint,
   className,
   children,
 }: {
   label: string;
   error?: string;
+  hint?: string;
   className?: string;
   children: ReactNode;
 }) {
@@ -72,6 +83,11 @@ export function Field({
       <Label id={labelId}>{label}</Label>
       <FieldLabelContext.Provider value={labelId}>{children}</FieldLabelContext.Provider>
       <FieldError>{error}</FieldError>
+      {hint && !error ? (
+        <p className="mt-1 text-xs text-[var(--vinea-ink-subtle)]" data-field-hint>
+          {hint}
+        </p>
+      ) : null}
     </div>
   );
 }

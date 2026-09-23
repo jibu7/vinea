@@ -161,6 +161,24 @@ export const navIntents: NavIntent[] = [
         permission: "gl:fx_revalue",
         href: "/gl/fx-revaluations",
       },
+      // P8 step 7, Appendix C.1.14 — the C.2 promise, "bank statement import & reconciliation
+      // workspace as transactions, not just reports". Both listings are `bank:reports_view`;
+      // the writes are `bank:statement_import` and `bank:reconcile` / `bank:reconcile_lock`, so
+      // any of them opens the row, exactly as the API gates it. The owner's own *Bank
+      // reconciliation* row under Reports → General Ledger is the report over the same
+      // reconciliations (step 8), and the intent is half the name, as "Fiscal receipts" is.
+      {
+        label: "Bank statements",
+        module: "General Ledger",
+        permission: ["bank:statement_import", "bank:reports_view"],
+        href: "/bank/statements",
+      },
+      {
+        label: "Bank reconciliation",
+        module: "General Ledger",
+        permission: ["bank:reconcile", "bank:reconcile_lock", "bank:reports_view"],
+        href: "/bank/reconciliations",
+      },
       // Appendix C's AR block, in the owner's order, plus Receipt (the settlement side of
       // the same subledger) and "Account receivable batches" — the spec lists AR batches and
       // both are P4 screens, so they belong in the tree from the start rather than appearing

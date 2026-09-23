@@ -171,9 +171,11 @@ test.describe("P8 step 6 — banking maintenance", () => {
     await openBankAccounts(page);
     const drawer = await openDrawer(page, "1120", "Bank Account");
     await expect(drawer.getByTestId("currency-locked")).toHaveText("RWF · Rwandan Franc");
-    await expect(
-      drawer.getByText("Locked: the account already has postings, and each was valued in this currency."),
-    ).toBeVisible();
+    // The reason is a neutral hint under the field, not the red error slot (P8 step 7): the
+    // lock is a fact about the account, and the error slot is kept for a refusal on save.
+    await expect(drawer.locator("[data-field-hint]")).toHaveText(
+      "Locked: the account already has postings, and each was valued in this currency.",
+    );
     await page.keyboard.press("Escape");
 
     // The account New just made has none, so its picker is still a picker.
