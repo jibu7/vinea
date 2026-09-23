@@ -334,7 +334,8 @@ Frontend:
 | AR/AP settlement form | not reused (decision 5), so no spec |
 
 e2e ran on a database reset by `make db-reset` (with the `docker-compose.e2e.yml` overlay), after
-all 97 nav routes, `/` and `/login` had been warmed with curl (0 non-200):
+100 routes had been warmed with curl — every live nav route including `/`, plus `/login` and the
+two detail routes (0 non-200):
 
 | run | specs | result |
 |---|---|---|
