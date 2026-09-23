@@ -177,6 +177,21 @@ import { navIntents, type IntentLabel } from "@/design/nav-tree";
  * Same footing as C.1.5's additions and C.1.8's two blocks: a change to the contract belongs in
  * the document the contract lives in, which is why the Master Plan carries it too.
  *
+ * Amended at P8 step 6 with **"Bank accounts"** under Maintenance → General Ledger, directly
+ * after Defaults, recorded in the plan as **Appendix C.1.13**. Not in the owner's tree: its
+ * Maintenance → GL block reads "COA, Branches, Transaction types, Defaults, Rename Accounts",
+ * and Evolution keeps its bank accounts inside the cashbook setup rather than as a row of their
+ * own. P8 needs a place for the three facts the chart of accounts cannot hold — the currency an
+ * account is *held* in (`gl_accounts` carry none), what the bank calls it, and how its
+ * statement exports are laid out — plus the rules that prefill a posting from a statement line.
+ * Each is set once and then left alone, which makes it maintenance by the same reading that made
+ * EBM devices (C.1.10) one. The prompt names the position: "Maintenance → General Ledger, after
+ * Defaults". Transactions → GL's Bank statements and Bank reconciliation are step 7's C.1.14.
+ *
+ * Nothing else in the tree moved. The rest of what step 6 built is a section on a screen that
+ * already exists (Bank details on Suppliers), three pickers on GL Defaults and a notice on
+ * Chart of accounts — none of which is a row.
+ *
  * Amended before P6 step 1 with **"Documents"** under Transactions → AR and → AP, the other
  * half of that same C.1.7 entry. The appendix already recorded it: "the same hole is open in
  * AR and AP, one phase older and twice over". `POST /{role}/documents/{id}/reverse` and
@@ -196,6 +211,7 @@ const APPENDIX_C: Record<IntentLabel, Array<[string, string, string | null]>> = 
     ["General Ledger", "Branches", null],
     ["General Ledger", "Transaction types", null],
     ["General Ledger", "Defaults", null],
+    ["General Ledger", "Bank accounts", null],
     ["General Ledger", "Rename account", null],
     ["General Ledger", "Projects", null],
     ["Accounts Receivable", "Customers", null],

@@ -61,6 +61,10 @@ export interface Partner {
   address: Record<string, unknown> | null;
   notes: string | null;
   currency_id: number | null;
+  /** P8: what a payment run's instruction file prints for this supplier. */
+  bank_name: string | null;
+  bank_account_number: string | null;
+  bank_account_holder: string | null;
   is_active: boolean;
 }
 
@@ -92,6 +96,11 @@ export interface PartnerUpdatePayload {
   notes?: string | null;
   currency_id?: number;
   clear_currency?: boolean;
+  bank_name?: string | null;
+  bank_account_number?: string | null;
+  bank_account_holder?: string | null;
+  /** With the three values beside it: replace all three, a blank one included. */
+  clear_bank_details?: boolean;
   is_active?: boolean;
 }
 

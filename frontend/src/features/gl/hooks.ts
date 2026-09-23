@@ -322,7 +322,12 @@ export function useCreateAccount() {
       is_control?: boolean;
       control_type?: string | null;
     }) => api.post<GLAccount>("/gl/accounts", payload),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["gl", "accounts"] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["gl", "accounts"] });
+      // A `bank` / `cash` control account gets its banking master in the same transaction
+      // (P8 decision 2), so the bank-account listings are stale too.
+      queryClient.invalidateQueries({ queryKey: ["banking"] });
+    },
   });
 }
 

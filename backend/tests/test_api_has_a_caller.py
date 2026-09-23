@@ -136,47 +136,28 @@ NO_UI: dict[str, str] = {
     # **Close day** button on the X view, under `fiscal:close_day` and pressed by
     # `e2e/p7-enquiries-reports.spec.ts`. After this step the register carries exactly one P7
     # entry — the drain — and step 9 inherits no surprise.
-    # --- GAP: P8 banking, steps 6 and 7 ---------------------------------------------------------
+    # --- P8 step 6 carried four lines, and a fifth it could close. It carries none. ----------
     #
-    # Twenty lines by the end of step 3 — eight here, nine below, and three for the payment
-    # runs step 3 added.
-    # Eight lines, each naming the step that deletes it. P8 builds its services in steps 1-5 and
-    # its screens in steps 6-8, so between those two points the endpoints exist and nothing
-    # calls them — the shape P6 and P7 each carried and each cleared.
+    # Maintenance → General Ledger → **Bank accounts** (`/maintenance/bank-accounts`) took the
+    # four setup lines: *New bank account* and *Register* (`POST /banking/accounts`), the
+    # drawer's Details and Statement format tabs (`PATCH /banking/accounts/{id}`), and the Rules
+    # tab's New rule and edit (`POST …/rules`, `PATCH /banking/rules/{id}`). It also took
+    # `POST /banking/statements/preview`, which the register had down for step 7: the format
+    # editor's **Test with a file** is that endpoint's first caller — the mapping on the screen,
+    # tried against a real export, writing nothing — and a line saying "no caller" beside a
+    # button that calls it would be the register lying. Step 7's import screen will be its
+    # second.
     #
-    # **Step 6** is Maintenance → General Ledger → **Bank accounts** (`/maintenance/bank-accounts`):
-    # the list, create (which creates the GL account *and* its master row in one call), edit with
-    # the currency locked once the account has lines, the statement-format editor with its
-    # *Test with a file*, and the rules list per account. That screen takes the four setup lines.
+    # Every one deleted by a screen a person can open and press, and pressed by
+    # `e2e/p8-maintenance.spec.ts` — not by a hook written to satisfy the matcher.
     #
-    # **Step 7** is Transactions → General Ledger → **Bank statements** (`/bank/statements`): the
-    # per-account list, Import with its preview → confirm, Void, and the manual keying path. That
-    # screen takes the remaining four.
+    # --- GAP: P8 step 7's Bank statements screen --------------------------------------------------
     #
-    # `POST /banking/statements/preview` is on this list and is **not** a mutation: it parses a
-    # file and stores nothing. It is here because the register goes by HTTP method, correctly —
-    # a register that trusted a docstring about which POSTs are safe would be a register nobody
-    # could check — and because it does need a caller: a preview nobody can reach is an import
-    # with no way to see what it is about to write, which is the defect decision 3 exists to
-    # prevent.
-    "POST /api/v1/banking/accounts": (
-        "GAP (P8, step 6) — Maintenance → General Ledger → Bank accounts. Register, and the "
-        "create that makes the GL account and its master row together."
-    ),
-    "PATCH /api/v1/banking/accounts/{bank_account_id}": (
-        "GAP (P8, step 6) — the same screen's edit: bank details, the currency while the "
-        "account has no lines, and the statement format."
-    ),
-    "POST /api/v1/banking/accounts/{bank_account_id}/rules": (
-        "GAP (P8, step 6) — the rules list on the Bank accounts screen."
-    ),
-    "PATCH /api/v1/banking/rules/{rule_id}": "GAP (P8, step 6) — as above.",
-    "POST /api/v1/banking/statements/preview": (
-        "GAP (P8, step 7) — Transactions → General Ledger → Bank statements: the preview half "
-        "of Import, and *Test with a file* on step 6's format editor."
-    ),
+    # Three lines: **Transactions → General Ledger → Bank statements** (`/bank/statements`) —
+    # the confirm half of Import, the manual keying path, and Void.
     "POST /api/v1/banking/statements": (
-        "GAP (P8, step 7) — the confirm half of Import on the same screen."
+        "GAP (P8, step 7) — Transactions → General Ledger → Bank statements: the confirm half "
+        "of Import. Its preview half is already called, by step 6's *Test with a file*."
     ),
     "POST /api/v1/banking/statements/manual": (
         "GAP (P8, step 7) — keying a paper statement line by line on the same screen."

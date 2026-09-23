@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useTranslations } from "next-intl";
-import { Landmark, Sliders } from "lucide-react";
+import { Banknote, Landmark, Sliders } from "lucide-react";
 import { Button } from "@/design/components/button";
 import { Combobox } from "@/design/components/combobox";
 import { Field } from "@/design/components/input";
@@ -15,7 +15,7 @@ import { AccountClass } from "@/lib/api-enums";
 import { dotted } from "@/lib/format";
 import { useApiErrorToast } from "@/lib/use-api-error-toast";
 
-/** Every account key this screen writes. The two P2 ones, then P7's five. */
+/** Every account key this screen writes. The two P2 ones, P7's five, then P8's three. */
 type AccountKey =
   | "retained_earnings_account_id"
   | "rounding_difference_account_id"
@@ -23,7 +23,10 @@ type AccountKey =
   | "ar_revaluation_account_id"
   | "ap_revaluation_account_id"
   | "unrealized_fx_gain_account_id"
-  | "unrealized_fx_loss_account_id";
+  | "unrealized_fx_loss_account_id"
+  | "bank_revaluation_account_id"
+  | "bank_charges_account_id"
+  | "bank_interest_account_id";
 
 const ACCOUNT_KEYS: readonly AccountKey[] = [
   "retained_earnings_account_id",
@@ -33,6 +36,9 @@ const ACCOUNT_KEYS: readonly AccountKey[] = [
   "ap_revaluation_account_id",
   "unrealized_fx_gain_account_id",
   "unrealized_fx_loss_account_id",
+  "bank_revaluation_account_id",
+  "bank_charges_account_id",
+  "bank_interest_account_id",
 ];
 
 const EMPTY = Object.fromEntries(ACCOUNT_KEYS.map((key) => [key, ""])) as Record<
@@ -65,6 +71,17 @@ const PROFIT_AND_LOSS = [AccountClass.INCOME, AccountClass.EXPENSE];
  * * **Unrealized gain / loss** offer **income and expense**, and both lists are the same
  *   because an SME that books both to one P&L account is making a legitimate choice — what
  *   they may not do is book an unrealized movement to the balance sheet.
+ *
+ * P8 adds a **Banking** block (decision 9), and its three pickers follow the same rule:
+ *
+ * * **Bank revaluation** offers **assets** — `1130 Bank Revaluation`, the other side of a
+ *   bank account's unrealized FX. Never the bank account itself: a base-only line on a bank
+ *   account is a ledger line the statement can never show, and the reconciliation would carry
+ *   it forever (decision 8). The bank accounts are control accounts, so they are not offered.
+ * * **Bank charges** and **bank interest** offer **income and expense**, both of them. They
+ *   are the *Post from line* drawer's default counterpart for a fee and for interest, and a
+ *   bank refunding charges or charging a penalty is the other class — the server allows both
+ *   (`_SETTING_ACCOUNT_RULES` in `app/api/v1/gl.py`), so the picker does too.
  *
  * **No control account is offered anywhere on this screen**, and `_postable_account` refuses
  * one server-side along with anything of the wrong class (`invalid_gl_setting_account`,
@@ -206,6 +223,19 @@ export default function DefaultsPage() {
         <p className="pt-2 text-xs text-[var(--vinea-ink-subtle)]">
           {t("defaultPurchaseClassNote")}
         </p>
+      </MaintenanceCard>
+
+      <MaintenanceCard icon={<Banknote className="size-4" />} title={t("bankDefaults")}>
+        <div className="space-y-3">
+          {picker(
+            "bank_revaluation_account_id",
+            t("bankRevaluationAccount"),
+            inClass([AccountClass.ASSET]),
+          )}
+          {picker("bank_charges_account_id", t("bankChargesAccount"), inClass(PROFIT_AND_LOSS))}
+          {picker("bank_interest_account_id", t("bankInterestAccount"), inClass(PROFIT_AND_LOSS))}
+        </div>
+        <p className="pt-3 text-xs text-[var(--vinea-ink-subtle)]">{t("bankDefaultsNote")}</p>
       </MaintenanceCard>
     </MaintenancePage>
   );

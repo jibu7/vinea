@@ -1,9 +1,9 @@
 """The banking API (P8).
 
-The screens arrive at **steps 6 and 7** — Maintenance → General Ledger → Bank accounts, and
-Transactions → General Ledger → Bank statements — so every mutating endpoint here carries a
-`GAP (P8, step 6)` or `GAP (P8, step 7)` line in `tests/test_api_has_a_caller.py` naming the
-step that deletes it. None survives step 9.
+The screens arrive at **steps 6 and 7**. Step 6's Maintenance → General Ledger → Bank
+accounts calls the account, rule and preview endpoints; every other mutating endpoint here
+carries a `GAP (P8, step 7)` line in `tests/test_api_has_a_caller.py` naming the screen that
+deletes it. None survives step 9.
 
 The import endpoint takes a **file upload**, not a JSON body, which is the one place this
 module departs from the rest of the API's shape. A bank export is a file the user picked; a
