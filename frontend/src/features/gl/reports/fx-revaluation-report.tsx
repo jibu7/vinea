@@ -123,7 +123,7 @@ export function FxRevaluationReport() {
                 value: String(row.id),
                 label: t("runOption", {
                   number: row.number,
-                  date: row.revaluation_date,
+                  date: formatDate(row.revaluation_date),
                   role: tf(`roleLabel.${row.role}`),
                 }),
               }))}

@@ -201,6 +201,20 @@ def _reconciled_label(db: Session, company_id: int, journal_line_id: int) -> str
     )
 
 
+def _description(line: JournalLine, entry: JournalEntry) -> str | None:
+    """Decision 6's *description* column.
+
+    The kernel stamps a cashbook entry's bank line with the entry's **reference** (so the
+    statement matcher has the token on the line it matches), which would put the reference in
+    both of this report's columns and the entry's own words in neither. Where the line says only
+    what the Reference column already says, the entry's description is read instead; a line with
+    a description of its own keeps it.
+    """
+    if line.description and line.description != entry.reference:
+        return line.description
+    return entry.description
+
+
 def cashbook_detail(
     db: Session,
     company_id: int,
@@ -274,7 +288,7 @@ def cashbook_detail(
                 doc_type=entry.doc_type,
                 module=entry.module,
                 reference=entry.reference,
-                description=line.description or entry.description,
+                description=_description(line, entry),
                 partner_name=partner_name,
                 receipt=amount if amount > ZERO else ZERO,
                 payment=-amount if amount < ZERO else ZERO,

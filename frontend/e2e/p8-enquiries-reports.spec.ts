@@ -291,6 +291,9 @@ test.describe("P8 step 8 — the bank enquiry and reports", () => {
     await expect(cashbookLine(page, state.entries.payment.number).getByTestId("cashbook-reconciled")).toHaveText("");
     await expect(cashbookLine(page, state.entries.late.number).getByTestId("cashbook-reconciled")).toHaveText("");
     await expect(cashbookLine(page, state.entries.payment.number)).toContainText(rwf(80_000));
+    // The entry's own words, not its reference twice: the kernel stamps the reference on the
+    // bank line, and the report has a Reference column of its own.
+    await expect(cashbookLine(page, state.entries.payment.number)).toContainText("Cheque to a supplier");
     await expect(page.locator("tr[data-cashbook-line]")).toHaveCount(5);
     await expect(page.getByText(`Totals over ${formatQuantity(5, 0)} lines`, { exact: true })).toBeVisible();
     await expect(page.getByTestId("cashbook-receipts")).toHaveText(rwf(1_370_000));
