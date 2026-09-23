@@ -17,7 +17,7 @@ import { useToast } from "@/design/components/toast";
 import { isApiError, useHasPermission } from "@/features/auth/hooks";
 import { FxRevaluationRole, FxRevaluationStatus } from "@/lib/api-enums";
 import { newDraftId } from "@/lib/drafts";
-import { formatDate, formatMoney, formatQuantity, todayIso } from "@/lib/format";
+import { DOT, formatDate, formatMoney, formatQuantity, todayIso, trimDecimalString } from "@/lib/format";
 import { useApiErrorToast } from "@/lib/use-api-error-toast";
 import {
   useCompanyDetails,
@@ -174,7 +174,8 @@ export function FxRevaluationScreen({ openId }: { openId?: number } = {}) {
           <Field label={t("revaluationDate")} className="w-44">
             <IsoDatePicker value={revaluationDate} onValueChange={setRevaluationDate} />
           </Field>
-          <Field label={t("role")} className="w-44">
+          {/* Wide enough for "Customers, suppliers and bank", the longest of the five roles. */}
+          <Field label={t("role")} className="w-72">
             <Combobox
               options={Object.values(FxRevaluationRole).map((value) => ({
                 value,
@@ -207,7 +208,7 @@ export function FxRevaluationScreen({ openId }: { openId?: number } = {}) {
               <span data-testid="revaluation-line-count">
                 {t("lineCount", { count: formatQuantity(lines.length, 0) })}
               </span>
-              {" · "}
+              {DOT}
               {t("totalDifference")}{" "}
               <span
                 className="font-mono tabular-nums text-[var(--vinea-ink)]"
@@ -249,13 +250,13 @@ export function FxRevaluationScreen({ openId }: { openId?: number } = {}) {
                     {inCurrency(line.open_amount, line.currency_id)}
                   </TD>
                   <TD className="text-right font-mono text-xs tabular-nums text-[var(--vinea-ink-muted)]">
-                    {line.booking_rate ?? t("emptyValue")}
+                    {line.booking_rate !== null ? trimDecimalString(line.booking_rate) : t("emptyValue")}
                   </TD>
                   <TD className="text-right font-mono text-xs tabular-nums">
                     {money(line.carrying_base)}
                   </TD>
                   <TD className="text-right font-mono text-xs tabular-nums text-[var(--vinea-ink-muted)]">
-                    {line.rate_at_date}
+                    {trimDecimalString(line.rate_at_date)}
                   </TD>
                   <TD className="text-right font-mono text-xs tabular-nums">
                     {money(line.revalued_base)}
