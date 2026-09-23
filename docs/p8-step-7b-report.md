@@ -382,8 +382,8 @@ fixed and the shots re-taken.
 * Nothing from step 7. Step 8 builds the Cashbooks and Bank reconciliation reports and the Bank
   account enquiry on GETs that already exist.
 * The FX revaluation **report** (P7 step 8's screen) is untouched here, as the prompt directed.
-  Decision 8 names it alongside the screen, so its role labels and bank lines are still owed. The
-  prompt does not say which step owes them.
+  Its bank lines are **step 8's**: the prompt's step-8 paragraph says "The **FX revaluation
+  report** (P7 step 8) gains the bank lines."
 
 ```
 $ git status --short
