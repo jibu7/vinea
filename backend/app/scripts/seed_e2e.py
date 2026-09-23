@@ -152,6 +152,10 @@ POSTER_ROLE_NAME = "Accountant"
 SUPPLIER_CODE = "E2ESUP001"
 SUPPLIER_NAME = "Musanze Packaging Ltd"
 
+# P8 decision 9 — the foreign-currency bank account, on the primary company only.
+USD_BANK_CODE = "1121"
+USD_BANK_NAME = "Bank Account USD"
+
 # One customer carrying two *aged* invoices, so the age analysis is a report with figures in
 # it rather than a table of zeroes (P4 step 8, shot 9).
 #
@@ -359,6 +363,56 @@ def _ensure_partners(db, *, company: Company, actor: User) -> str | None:
     return supplier.supplier_code
 
 
+def _ensure_usd_bank_account(db, *, company: Company, actor: User) -> str:
+    """P8 decision 9: Rugari Wines E2E holds a second bank account, `1121 Bank Account USD`,
+    beside `1120`; Kivu Traders holds only the seeded pair. One company with a foreign-currency
+    bank account and one without, so every banking screen is exercised both ways.
+
+    Through `register` with a new GL account — the call the Bank accounts screen's *New* makes
+    — so the chart row and its master are written together, and the master is in USD from its
+    first moment rather than registered in RWF and moved. Deferred here from P8 step 1, which
+    had no screen that read it.
+    """
+    from app.banking import accounts as bank_accounts
+    from app.db import set_tenant
+    from app.models.banking import BankAccountKind
+    from app.models.currency import Currency
+    from app.models.gl import GLAccount
+
+    set_tenant(db, company.id)
+    existing = db.scalar(
+        select(GLAccount).where(
+            GLAccount.company_id == company.id, GLAccount.code == USD_BANK_CODE
+        )
+    )
+    if existing is None:
+        parent = db.scalar(
+            select(GLAccount).where(GLAccount.company_id == company.id, GLAccount.code == "1100")
+        )
+        usd = db.scalar(
+            select(Currency).where(Currency.company_id == company.id, Currency.code == "USD")
+        )
+        bank_accounts.register(
+            db,
+            company.id,
+            bank_accounts.BankAccountInput(
+                new_account=bank_accounts.NewGLAccount(
+                    code=USD_BANK_CODE,
+                    name=USD_BANK_NAME,
+                    kind=BankAccountKind.BANK,
+                    parent_id=parent.id if parent is not None else None,
+                ),
+                currency_id=usd.id,
+                bank_name="Bank of Kigali",
+                account_number="00040-0000999-11",
+                account_holder=PRIMARY_COMPANY,
+            ),
+            actor=actor,
+        )
+        db.commit()
+    return USD_BANK_CODE
+
+
 def _ensure_open_period(db, *, company: Company, on: date) -> None:
     """The aged invoices are dated months back, which can fall outside the fiscal year the
     company was provisioned with (`seed_fiscal_year` creates the calendar year it was signed
@@ -527,6 +581,7 @@ def main() -> None:
             password=password,
         )
         supplier_code = _ensure_partners(db, company=primary_company, actor=primary_user)
+        usd_bank_code = _ensure_usd_bank_account(db, company=primary_company, actor=primary_user)
         aged_customer_code = _ensure_aged_invoices(
             db, company=primary_company, actor=primary_user
         )
@@ -544,6 +599,7 @@ def main() -> None:
                     "poster_email": POSTER_EMAIL,
                     "poster_role": POSTER_ROLE_NAME,
                     "supplier_code": supplier_code,
+                    "usd_bank_code": usd_bank_code,
                     "aged_customer_code": aged_customer_code,
                     # **Which of the two sources it came from**, never the value itself: the
                     # reader already has that wherever it lives, and a credential in a log is a

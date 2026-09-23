@@ -12,6 +12,7 @@ BOM, line endings all survive one path and not the other), and `file_sha256` —
 that catches the same export twice — has to be over the bytes the bank produced.
 """
 
+import json
 from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import Annotated
@@ -39,11 +40,12 @@ from app.banking import reconciliation as reconciliation_service
 from app.banking import remittance as remittance_service  # noqa: F401 - registers the job
 from app.banking import reports as reports_service
 from app.banking import statements as statements_service
-from app.banking.formats import ParsedLine, normalise
+from app.banking.formats import ParsedLine, StatementFormatError, normalise
 from app.core import permissions
-from app.core.errors import ConflictError, NotFoundError
+from app.core.errors import ConflictError, NotFoundError, PermissionDeniedError
 from app.db import get_db
 from app.models.banking import (
+    BankAccount,
     BankMatchKind,
     BankMatchRule,
     BankStatementLine,
@@ -126,14 +128,21 @@ def _form_amount(raw: str | None, field: str) -> Decimal | None:
 # --- Bank accounts ------------------------------------------------------------------------
 
 
+def _account_read(row: BankAccount, with_lines: set[int]) -> BankAccountRead:
+    return BankAccountRead.model_validate(row).model_copy(
+        update={"has_lines": row.gl_account_id in with_lines}
+    )
+
+
 @router.get("/accounts")
 def list_bank_accounts(
     include_inactive: bool = Query(default=False),
     auth: AuthContext = permissions.require(permissions.BANK_REPORTS_VIEW),
     db: Session = Depends(get_db),
 ) -> list[BankAccountRead]:
+    with_lines = accounts_service.accounts_with_lines(db, auth.company_id)
     return [
-        BankAccountRead.model_validate(row)
+        _account_read(row, with_lines)
         for row in accounts_service.list_accounts(
             db, auth.company_id, include_inactive=include_inactive
         )
@@ -157,8 +166,9 @@ def read_bank_account(
     auth: AuthContext = permissions.require(permissions.BANK_REPORTS_VIEW),
     db: Session = Depends(get_db),
 ) -> BankAccountRead:
-    return BankAccountRead.model_validate(
-        accounts_service.get(db, auth.company_id, bank_account_id)
+    return _account_read(
+        accounts_service.get(db, auth.company_id, bank_account_id),
+        accounts_service.accounts_with_lines(db, auth.company_id),
     )
 
 
@@ -169,11 +179,26 @@ def register_bank_account(
     auth: AuthContext = permissions.require(permissions.BANK_SETUP_MANAGE),
     db: Session = Depends(get_db),
 ) -> BankAccountRead:
+    new_account = None
+    if payload.new_account is not None:
+        # Creating the pair makes a chart-of-accounts row, so it takes the chart's permission
+        # as well as the banking one. The seeded roles never split the two (Administrator
+        # holds both, nobody else holds `bank:setup_manage`), but a custom role could — and
+        # this call must not become a way round `gl:setup_manage`.
+        if permissions.GL_SETUP_MANAGE not in auth.permissions:
+            raise PermissionDeniedError("Creating the GL account needs gl:setup_manage as well")
+        new_account = accounts_service.NewGLAccount(
+            code=payload.new_account.code,
+            name=payload.new_account.name,
+            kind=payload.new_account.kind,
+            parent_id=payload.new_account.parent_id,
+        )
     row = accounts_service.register(
         db,
         auth.company_id,
         accounts_service.BankAccountInput(
             gl_account_id=payload.gl_account_id,
+            new_account=new_account,
             code=payload.code,
             name=payload.name,
             currency_id=payload.currency_id,
@@ -188,7 +213,7 @@ def register_bank_account(
         request=request,
     )
     db.commit()
-    return BankAccountRead.model_validate(row)
+    return _account_read(row, accounts_service.accounts_with_lines(db, auth.company_id))
 
 
 @router.patch("/accounts/{bank_account_id}")
@@ -218,7 +243,7 @@ def update_bank_account(
         request=request,
     )
     db.commit()
-    return BankAccountRead.model_validate(row)
+    return _account_read(row, accounts_service.accounts_with_lines(db, auth.company_id))
 
 
 # --- Rules --------------------------------------------------------------------------------
@@ -372,6 +397,7 @@ def list_ledger_lines(
 def preview_statement(
     bank_account_id: Annotated[int, Form()],
     file: Annotated[UploadFile, File()],
+    statement_format: Annotated[str | None, Form()] = None,
     auth: AuthContext = permissions.require(permissions.BANK_STATEMENT_IMPORT),
     db: Session = Depends(get_db),
 ) -> StatementPreviewRead:
@@ -380,14 +406,32 @@ def preview_statement(
     A POST because it takes a file, not because it changes anything — which is why it needs no
     `Idempotency-Key`. `test_api_has_a_caller.py` still counts it as mutating (it goes by the
     method, correctly: a register that trusted a docstring would be a register nobody could
-    check), so it carries a `GAP` line until the import screen ships.
+    check); its caller is *Test with a file* on the Bank accounts screen's format editor.
+
+    `statement_format` is that editor's mapping as JSON — the one being edited, not the one
+    stored — so a change is tried against a real file before it is saved onto an account whose
+    next import would otherwise be the first to find out it is wrong. Absent, the account's
+    stored mapping is read, which is what the import screen's preview does.
     """
+    override = None
+    if statement_format is not None and statement_format.strip():
+        try:
+            override = json.loads(statement_format)
+        except json.JSONDecodeError as err:
+            raise StatementFormatError(
+                "The statement format is not valid JSON", code="statement_format_invalid"
+            ) from err
+        if not isinstance(override, dict):
+            raise StatementFormatError(
+                "The statement format must be an object", code="statement_format_invalid"
+            )
     preview = statements_service.preview(
         db,
         auth.company_id,
         bank_account_id=bank_account_id,
         content=file.file.read(),
         file_name=file.filename,
+        override_format=override,
     )
     return StatementPreviewRead.model_validate(preview, from_attributes=True)
 

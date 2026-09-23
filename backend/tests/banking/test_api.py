@@ -233,6 +233,214 @@ def test_a_rule_is_created_and_listed(client: TestClient) -> None:
     assert patched.json()["pattern"] == "MONTHLY ACCOUNT FEE"
 
 
+def _currencies(client: TestClient) -> dict[str, int]:
+    return {row["code"]: row["id"] for row in client.get("/api/v1/gl/currencies").json()}
+
+
+def _gl(client: TestClient) -> dict[str, dict]:
+    return {account["code"]: account for account in client.get("/api/v1/gl/accounts").json()}
+
+
+def test_create_makes_the_gl_account_and_its_master_in_one_call(client: TestClient) -> None:
+    """Step 6's *New bank account*: the pair in one request, the GL half shaped by the kind.
+
+    Asset, postable, flagged `bank` — none of it asked for, because none of it is a choice for
+    a bank account. The master comes back in the currency asked for, not the base currency the
+    hook would have chosen, because the currency is set in the same transaction."""
+    _signup(client)
+    gl = _gl(client)
+
+    created = client.post(
+        "/api/v1/banking/accounts",
+        json={
+            "new_account": {
+                "code": "1121",
+                "name": "Bank Account USD",
+                "kind": "bank",
+                "parent_id": gl["1100"]["id"],
+            },
+            "code": "BK-USD",
+            "currency_id": _currencies(client)["USD"],
+            "bank_name": "Bank of Kigali",
+        },
+    )
+
+    assert created.status_code == 201, created.json()
+    body = created.json()
+    account = _gl(client)["1121"]
+    assert body["gl_account_id"] == account["id"]
+    assert (account["class"], account["control_type"], account["is_postable"]) == (
+        "asset",
+        "bank",
+        True,
+    )
+    assert (body["code"], body["kind"], body["currency_id"]) == (
+        "BK-USD",
+        "bank",
+        _currencies(client)["USD"],
+    )
+    assert body["has_lines"] is False
+    assert client.get("/api/v1/banking/accounts/unregistered").json() == []
+
+
+def test_create_is_all_or_nothing(client: TestClient) -> None:
+    """A refusal on the banking half leaves no GL account behind. `1110` is the cash account's
+    master code, so the master cannot take it — and the `1199` GL account the same call would
+    have made must not survive as an orphan control account with no row."""
+    _signup(client)
+
+    refused = client.post(
+        "/api/v1/banking/accounts",
+        json={
+            "new_account": {"code": "1199", "name": "Second cash box", "kind": "cash"},
+            "code": "1110",
+        },
+    )
+
+    assert refused.status_code == 409
+    assert refused.json()["code"] == "bank_account_code_taken"
+    assert "1199" not in _gl(client)
+
+
+def test_create_needs_exactly_one_target(client: TestClient) -> None:
+    _signup(client)
+    bank = next(
+        row for row in client.get("/api/v1/banking/accounts").json() if row["code"] == "1120"
+    )
+
+    neither = client.post("/api/v1/banking/accounts", json={"code": "X"})
+    both = client.post(
+        "/api/v1/banking/accounts",
+        json={
+            "gl_account_id": bank["gl_account_id"],
+            "new_account": {"code": "1122", "name": "Other", "kind": "bank"},
+        },
+    )
+
+    for response in (neither, both):
+        assert response.status_code == 409
+        assert response.json()["code"] == "bank_account_target_ambiguous"
+
+
+def test_create_needs_the_chart_permission_as_well(client: TestClient, db) -> None:
+    """Creating the pair makes a chart-of-accounts row, so `bank:setup_manage` alone is not
+    enough. No seeded role splits the two — and an owner holds everything — so the signed-up
+    user is made a plain member holding an Administrator role with the chart permission
+    removed, which is the custom role this refusal exists for."""
+    from sqlalchemy import select
+
+    from app.db import set_tenant
+    from app.models.membership import CompanyMembership, Role
+
+    _signup(client)
+    company_id = client.get("/api/v1/auth/me").json()["company"]["id"]
+    set_tenant(db, company_id)
+    admin = db.scalar(
+        select(Role).where(Role.company_id == company_id, Role.name == "Administrator")
+    )
+    admin.permissions = [p for p in admin.permissions if p != "gl:setup_manage"]
+    assert "bank:setup_manage" in admin.permissions
+    membership = db.scalar(
+        select(CompanyMembership).where(CompanyMembership.company_id == company_id)
+    )
+    membership.is_owner = False
+    membership.roles = [admin]
+    db.commit()
+
+    refused = client.post(
+        "/api/v1/banking/accounts",
+        json={"new_account": {"code": "1122", "name": "Other bank", "kind": "bank"}},
+    )
+
+    assert refused.status_code == 403
+    assert "1122" not in _gl(client)
+
+
+def test_the_currency_locks_once_the_account_has_lines(client: TestClient) -> None:
+    """`has_lines` is what the screen reads to lock the picker; `bank_account_has_lines` is the
+    refusal it is locking against. Both, over HTTP, before and after the first posting."""
+    _signup(client)
+    gl = _gl(client)
+    bank = next(
+        row for row in client.get("/api/v1/banking/accounts").json() if row["code"] == "1120"
+    )
+    assert bank["has_lines"] is False
+
+    posted = client.post(
+        "/api/v1/gl/cashbook-entries",
+        json={
+            "entry_date": "2026-09-15",
+            "description": "opening",
+            "cash_account_id": gl["1120"]["id"],
+            "kind": "receipt",
+            "lines": [{"gl_account_id": gl["3400"]["id"], "amount": "1000"}],
+        },
+        headers={"Idempotency-Key": "cb-lock-1"},
+    )
+    assert posted.status_code == 201, posted.json()
+
+    after = client.get(f"/api/v1/banking/accounts/{bank['id']}").json()
+    assert after["has_lines"] is True
+    refused = client.patch(
+        f"/api/v1/banking/accounts/{bank['id']}",
+        json={"currency_id": _currencies(client)["USD"]},
+    )
+    assert refused.status_code == 409
+    assert refused.json()["code"] == "bank_account_has_lines"
+    assert "currency_id" in refused.json()["field_errors"]
+
+
+def test_test_with_a_file_previews_under_the_mapping_being_edited(client: TestClient) -> None:
+    """The format editor's *Test with a file*: the mapping on the form, not the one stored.
+
+    The September sample is ISO-dated. Read under a `DD/MM/YYYY` mapping every data row fails,
+    each with its own row number counted over the file; read under the stored (generic) one,
+    nothing does. The account's stored format is unchanged either way — a preview writes
+    nothing, including the mapping it was asked to try."""
+    _signup(client)
+    bank = next(
+        row for row in client.get("/api/v1/banking/accounts").json() if row["code"] == "1120"
+    )
+    content = sample(SEPTEMBER)
+
+    tried = client.post(
+        "/api/v1/banking/statements/preview",
+        data={
+            "bank_account_id": bank["id"],
+            "statement_format": '{"preset": "custom", "date_format": "%d/%m/%Y"}',
+        },
+        files={"file": (SEPTEMBER, content, "text/csv")},
+    )
+    assert tried.status_code == 200, tried.json()
+    errors = tried.json()["errors"]
+    assert [error["row"] for error in errors] == [2, 3, 4, 5, 6, 7]
+    assert {error["column"] for error in errors} == {"date_column"}
+
+    stored = client.post(
+        "/api/v1/banking/statements/preview",
+        data={"bank_account_id": bank["id"]},
+        files={"file": (SEPTEMBER, content, "text/csv")},
+    )
+    assert stored.json()["errors"] == []
+    assert client.get(f"/api/v1/banking/accounts/{bank['id']}").json()["statement_format"] is None
+
+
+def test_a_half_written_mapping_comes_back_as_a_refusal_not_a_500(client: TestClient) -> None:
+    _signup(client)
+    bank = next(
+        row for row in client.get("/api/v1/banking/accounts").json() if row["code"] == "1120"
+    )
+
+    for mapping in ('{"amount_mode": "signed"}', "{not json", '["a list"]'):
+        refused = client.post(
+            "/api/v1/banking/statements/preview",
+            data={"bank_account_id": bank["id"], "statement_format": mapping},
+            files={"file": (SEPTEMBER, sample(SEPTEMBER), "text/csv")},
+        )
+        assert refused.status_code == 422, mapping
+        assert refused.json()["code"] == "statement_format_invalid"
+
+
 def test_the_upload_previews_then_imports_then_refuses_the_same_file(
     client: TestClient,
 ) -> None:

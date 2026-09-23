@@ -37,10 +37,11 @@ from starlette.requests import Request
 
 from app.banking.formats import validate_format
 from app.core.errors import ConflictError, NotFoundError
+from app.kernel import accounts as kernel_accounts
 from app.kernel.errors import LedgerStateError
 from app.kernel.money import base_currency
 from app.models.banking import BankAccount, BankAccountKind, BankRule
-from app.models.gl import CASHBOOK_CONTROL_TYPES, ControlType, GLAccount
+from app.models.gl import CASHBOOK_CONTROL_TYPES, AccountClass, ControlType, GLAccount
 from app.models.journal import JournalLine
 from app.models.user import User
 from app.services.audit import record_audit
@@ -51,6 +52,7 @@ KIND_FOR_CONTROL_TYPE = {
     ControlType.BANK: BankAccountKind.BANK,
     ControlType.CASH: BankAccountKind.CASH,
 }
+CONTROL_TYPE_FOR_KIND = {kind: control for control, kind in KIND_FOR_CONTROL_TYPE.items()}
 
 
 def ensure_row(db: Session, account: GLAccount) -> BankAccount | None:
@@ -131,8 +133,23 @@ def list_accounts(
 
 
 @dataclass(frozen=True, kw_only=True)
+class NewGLAccount:
+    """The GL half of *create* on the Bank accounts screen: the account the master sits over,
+    made in the same call. Class and control type are not asked for — a bank or cash account
+    is an asset, postable, and flagged by its kind, and a form that offered a choice would be
+    offering the one answer the chart of accounts would then have to refuse."""
+
+    code: str
+    name: str
+    kind: BankAccountKind
+    parent_id: int | None = None
+
+
+@dataclass(frozen=True, kw_only=True)
 class BankAccountInput:
-    gl_account_id: int
+    #: An existing flagged GL account (*Register*), or `None` with `new_account` set (*create*).
+    gl_account_id: int | None = None
+    new_account: NewGLAccount | None = None
     code: str | None = None
     name: str | None = None
     currency_id: int | None = None
@@ -159,9 +176,37 @@ def register(
     screen creates a GL account and its master in one call, and how an account registered in
     the base currency gets its real currency and bank details.
     """
-    account = db.get(GLAccount, data.gl_account_id)
-    if account is None or account.company_id != company_id:
-        raise NotFoundError("GL account not found")
+    if (data.gl_account_id is None) == (data.new_account is None):
+        raise LedgerStateError(
+            "Name an existing bank/cash account to register, or the account to create — "
+            "one of the two",
+            code="bank_account_target_ambiguous",
+            field_errors={"gl_account_id": ["give an account, or the new account's details"]},
+        )
+    if data.new_account is not None:
+        # **The pair in one transaction.** The GL account is created through the kernel's own
+        # service — the chart of accounts' rules (unique code, parent class, a control account
+        # is postable) are its, not restated here — and the `ensure_row` below finds the row
+        # the hook would have made. Nothing is committed until the caller commits, so a refusal
+        # on the banking side (a code another bank account holds) leaves no orphan GL account.
+        account = kernel_accounts.create_account(
+            db,
+            company_id,
+            kernel_accounts.AccountInput(
+                code=data.new_account.code,
+                name=data.new_account.name,
+                class_=AccountClass.ASSET,
+                parent_id=data.new_account.parent_id,
+                is_postable=True,
+                control_type=CONTROL_TYPE_FOR_KIND[data.new_account.kind],
+            ),
+            actor=actor,
+            request=request,
+        )
+    else:
+        account = db.get(GLAccount, data.gl_account_id)
+        if account is None or account.company_id != company_id:
+            raise NotFoundError("GL account not found")
     kind = KIND_FOR_CONTROL_TYPE.get(account.control_type) if account.control_type else None
     if kind is None:
         raise LedgerStateError(
@@ -301,6 +346,26 @@ def _snapshot(row: BankAccount) -> dict[str, Any]:
         "statement_format": row.statement_format,
         "is_active": row.is_active,
     }
+
+
+def accounts_with_lines(db: Session, company_id: int) -> set[int]:
+    """The GL account ids, among the company's bank/cash masters, that carry any journal line.
+
+    One query for a listing, rather than `_has_lines` per row: it is what the Bank accounts
+    screen reads to lock the currency picker *before* an edit is attempted, so the refusal
+    (`bank_account_has_lines`) is something an operator sees on the field rather than hits.
+    """
+    return set(
+        db.scalars(
+            select(BankAccount.gl_account_id).where(
+                BankAccount.company_id == company_id,
+                exists().where(
+                    JournalLine.company_id == company_id,
+                    JournalLine.gl_account_id == BankAccount.gl_account_id,
+                ),
+            )
+        )
+    )
 
 
 def _has_lines(db: Session, row: BankAccount) -> bool:
