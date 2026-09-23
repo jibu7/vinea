@@ -39,8 +39,9 @@ import { useCompanyDetails, useCurrencies, useFxRevaluation, useFxRevaluations }
  * balances as well as documents, and a bank line has no document and no partner: it is keyed by
  * the bank account and shows the account's code and name where a document line shows its number
  * and partner — the run screen's treatment at step 7b, from the same helpers. Its open amount is
- * the balance in the account's own currency, its booking rate is blank (a balance is the sum of
- * lines booked at many rates), and it drills to the account's Cashbooks detail at the run date.
+ * the balance in the account's own currency, its "booked at" is the server's carrying ÷ balance
+ * (a balance is the sum of lines booked at many rates, so there is no one rate to read), and it
+ * drills to the account's Cashbooks detail at the run date.
  */
 export function FxRevaluationReport() {
   const t = useTranslations("gl.fxRevaluationReport");
