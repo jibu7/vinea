@@ -1206,8 +1206,10 @@ class LedgerLineRow:
     match_id: int | None
     match_kind: BankMatchKind | None
     match_rule: BankMatchRule | None
-    #: The `BRC-` this line's match was locked into, if it was.
+    #: The `BRC-` this line's match was locked into, if it was — and its id, so a screen can
+    #: link the number to the reconciliation report rather than only print it.
     reconciliation_number: str | None
+    reconciliation_id: int | None
     #: Set where the line was posted *after* a locked reconciliation whose date it falls inside
     #: — decision 5's late line. The pane flags it "dated inside BRC-n", which calls for a
     #: different action from an ordinary outstanding item.
@@ -1225,6 +1227,7 @@ def list_ledger_lines(
     *,
     as_of: date | None = None,
     outstanding_first: bool = True,
+    entry_id: int | None = None,
 ) -> list[LedgerLineRow]:
     """The workspace's right pane: every ledger line on the account, with its match state.
 
@@ -1232,6 +1235,10 @@ def list_ledger_lines(
     merely a nicety: the pane exists to be worked down, and a reconciler scrolling past forty
     matched lines to reach the two that are not is the reason a reconciliation gets abandoned
     half done. Matched lines follow in date order so the pane still reads as a statement.
+
+    `entry_id` narrows it to one entry's lines on the account — the GL entry page's reading
+    (decision 10), which is this function rather than a second one so a line cannot say
+    *outstanding* on the page and `BRC-n` in the workspace.
     """
     row = accounts_service.get(db, company_id, bank_account_id)
     base = base_currency(db, company_id).id
@@ -1254,6 +1261,8 @@ def list_ledger_lines(
     )
     if as_of is not None:
         statement = statement.where(JournalEntry.entry_date <= as_of)
+    if entry_id is not None:
+        statement = statement.where(JournalEntry.id == entry_id)
 
     rows: list[LedgerLineRow] = []
     for line, entry, amount in db.execute(statement).all():
@@ -1277,6 +1286,7 @@ def list_ledger_lines(
                 match_kind=match.kind if match is not None else None,
                 match_rule=match.rule if match is not None else None,
                 reconciliation_number=number,
+                reconciliation_id=match.reconciliation_id if match is not None else None,
                 dated_inside=late.get(line.id),
             )
         )
@@ -1284,6 +1294,48 @@ def list_ledger_lines(
         # Stable: `sorted` keeps the date order above within each group.
         rows.sort(key=lambda item: not item.is_outstanding)
     return rows
+
+
+@dataclass(frozen=True)
+class EntryBankLine:
+    """One line of a journal entry that sits on a bank account, with its reconciliation state."""
+
+    bank_account_id: int
+    bank_account_code: str
+    bank_account_name: str
+    line: LedgerLineRow
+
+
+def entry_bank_lines(db: Session, company_id: int, entry_id: int) -> list[EntryBankLine]:
+    """Every line of one entry that sits on a bank or cash account, with its match, the `BRC-`
+    it was locked in, or nothing — outstanding (decision 10's GL entry page).
+
+    An entry touches a bank account on one line as a rule and two on a transfer; each is read
+    through `list_ledger_lines` for its account, which is the workspace's own reading.
+    """
+    accounts = db.scalars(
+        select(BankAccount)
+        .join(JournalLine, JournalLine.gl_account_id == BankAccount.gl_account_id)
+        .where(
+            BankAccount.company_id == company_id,
+            JournalLine.company_id == company_id,
+            JournalLine.entry_id == entry_id,
+        )
+        .distinct()
+        .order_by(BankAccount.code)
+    ).all()
+    return [
+        EntryBankLine(
+            bank_account_id=row.id,
+            bank_account_code=row.code,
+            bank_account_name=row.name,
+            line=line,
+        )
+        for row in accounts
+        for line in list_ledger_lines(
+            db, company_id, row.id, outstanding_first=False, entry_id=entry_id
+        )
+    ]
 
 
 @dataclass(frozen=True)

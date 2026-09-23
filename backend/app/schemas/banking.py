@@ -238,9 +238,19 @@ class LedgerLineRead(BaseModel):
     match_kind: BankMatchKind | None = None
     match_rule: BankMatchRule | None = None
     reconciliation_number: str | None = None
+    reconciliation_id: int | None = None
     #: "dated inside BRC-n" — posted after that reconciliation locked, dated before its date.
     dated_inside: str | None = None
     is_outstanding: bool
+
+
+class EntryBankLineRead(LedgerLineRead):
+    """One line of a journal entry on a bank account, as the GL entry page shows it (decision
+    10): its match, the `BRC-` it was locked in, or outstanding."""
+
+    bank_account_id: int
+    bank_account_code: str
+    bank_account_name: str
 
 
 class StatementImportResult(BaseModel):
@@ -625,6 +635,8 @@ class CashbookSummaryRowRead(BaseModel):
     closing_base: Decimal
     last_reconciled_at: date | None = None
     last_reconciled_balance: Decimal | None = None
+    #: The latest locked reconciliation, so the summary's date links to its report.
+    last_reconciliation_id: int | None = None
     unmatched_statement_lines: int
     outstanding_lines: int
 
@@ -637,6 +649,7 @@ class ReconciliationReportRead(BaseModel):
     number: str
     bank_account_id: int
     bank_account_code: str
+    bank_account_name: str
     currency_code: str
     reconciliation_date: date
     status: ReconciliationStatus

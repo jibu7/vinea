@@ -350,6 +350,7 @@ class CashbookSummaryRow:
     closing_base: Decimal
     last_reconciled_at: date | None
     last_reconciled_balance: Decimal | None
+    last_reconciliation_id: int | None
     unmatched_statement_lines: int
     outstanding_lines: int
 
@@ -391,11 +392,17 @@ def cashbook_summary(
                 closing_base=detail.closing_base,
                 last_reconciled_at=row.last_reconciled_at,
                 last_reconciled_balance=row.last_reconciled_balance,
+                last_reconciliation_id=_latest_locked_id(db, company_id, row.id),
                 unmatched_statement_lines=_unmatched_statement_count(db, company_id, row),
                 outstanding_lines=_outstanding_count(db, company_id, row, as_of=date_to),
             )
         )
     return rows
+
+
+def _latest_locked_id(db: Session, company_id: int, bank_account_id: int) -> int | None:
+    latest = reconciliation_service.latest_locked(db, company_id, bank_account_id)
+    return latest.id if latest is not None else None
 
 
 def _unmatched_statement_count(db: Session, company_id: int, row: BankAccount) -> int:
@@ -446,6 +453,7 @@ class ReconciliationReport:
     number: str
     bank_account_id: int
     bank_account_code: str
+    bank_account_name: str
     currency_code: str
     reconciliation_date: date
     status: str
@@ -481,6 +489,7 @@ def reconciliation_report(
         number=reconciliation.number,
         bank_account_id=row.id,
         bank_account_code=row.code,
+        bank_account_name=row.name,
         currency_code=currency.code,
         reconciliation_date=reconciliation.reconciliation_date,
         status=reconciliation.status.value,
