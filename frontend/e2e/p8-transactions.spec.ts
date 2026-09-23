@@ -22,10 +22,13 @@ import { todayIso } from "../src/lib/format";
  * The walk, in the order the prompt gives it:
  *
  * 1. import previewed with one bad row → refused before the button; the fixed file imported,
- *    "5 new, 0 skipped", and the same file again refused as already imported;
- * 2. the statement's detail, every line unmatched;
+ *    "5 new, 0 skipped, 1 matched" — Import chains the account's auto-match (step 7b), which
+ *    finds the opening deposit by amount and date — and the same file again refused as already
+ *    imported;
+ * 2. the statement's detail, the one line matched and the rest unmatched;
  * 3. New reconciliation, its balance defaulted from the balance column; a receipt the ledger
- *    lacked is posted, then *Auto-match* reads two matches off the panes; a Tick, and its Unmatch;
+ *    lacked is posted **after** the import, so *Auto-match* on demand has something the import's
+ *    own pass could not have found, and reads it off the panes; a Tick, and its Unmatch;
  * 4. a manual n:m match — refused while it does not balance, the figure inline; accepted at two
  *    ledger lines to one bank line;
  * 5. the fee posted from its line, prefilled by the account's rule; the receipt posted from its
@@ -221,7 +224,9 @@ test.describe("P8 step 7a — bank statements and the reconciliation workspace",
     await dialog.getByRole("button", { name: "Import statement", exact: true }).click();
 
     const result = page.getByTestId("import-result");
-    await expect(result).toContainText("5 new, 0 skipped");
+    // The import chains the account's auto-match: the opening deposit is already in the ledger at
+    // the same amount and date, so it is matched as it lands.
+    await expect(result).toContainText("5 new, 0 skipped, 1 matched");
     const statements = (await apiOk(page, `/banking/statements?bank_account_id=${state.bankAccountId}`)) as Array<{
       id: number;
       number: string;
@@ -245,7 +250,7 @@ test.describe("P8 step 7a — bank statements and the reconciliation workspace",
     await page.keyboard.press("Escape");
   });
 
-  // PATH: the statement's detail — five lines, none matched yet.
+  // PATH: the statement's detail — five lines, the one the import's auto-match found matched.
   test("the statement's detail lists its lines with their match state", async ({ page }) => {
     await login(page, PRIMARY_EMAIL);
     await page.goto(`/bank/statements?account=${state.bankAccountId}`);
@@ -253,7 +258,10 @@ test.describe("P8 step 7a — bank statements and the reconciliation workspace",
     await expect(page.getByRole("heading", { name: `Statement ${state.statementNumber}`, exact: true })).toBeVisible();
     await expect(page.getByTestId("statement-closing")).toHaveText("FRw 1,215,500");
     await expect(page.getByTestId("statement-line-count")).toHaveText("5");
-    await expect(page.getByTestId("statement-matched")).toHaveText("0 of 5");
+    await expect(page.getByTestId("statement-matched")).toHaveText("1 of 5");
+    await expect(page.locator("tr[data-statement-line]", { hasText: "OPENING DEPOSIT" })).toContainText(
+      "Matched · amount and date",
+    );
     const fee = page.locator("tr[data-statement-line]", { hasText: "MONTHLY ACCOUNT FEE" });
     await expect(fee).toContainText("FRw -2,500");
     await expect(fee).toContainText("Unmatched");
@@ -284,20 +292,22 @@ test.describe("P8 step 7a — bank statements and the reconciliation workspace",
     state.reconciliationNumber = detail.number;
     await openWorkspace(page);
 
-    // Nothing matched: the whole ledger is outstanding and every statement line is unmatched.
+    // Only the opening deposit is matched (by the import's auto-match): the rest of the ledger
+    // is outstanding — 25,000 + 15,000 − 70,000 — and four statement lines are unmatched.
     await expect(await figure(page, "ledger")).toHaveText("FRw 970,000");
-    await expect(await figure(page, "outstanding")).toHaveText("FRw 970,000");
-    await expect(await figure(page, "unmatched")).toHaveText("5");
-    await expect(await figure(page, "difference")).toHaveText("FRw 1,215,500");
+    await expect(await figure(page, "outstanding")).toHaveText("FRw -30,000");
+    await expect(await figure(page, "unmatched")).toHaveText("4");
+    await expect(await figure(page, "difference")).toHaveText("FRw 215,500");
 
     // The receipt the bank showed on line 2 reaches the ledger after the import — the ordinary
-    // order of things — and Auto-match on demand finds it by its reference.
+    // order of things — so the import's own auto-match could not have found it, and Auto-match
+    // on demand finds it by its reference.
     state.deposit = await cashbook(page, "receipt", "118000", DEPOSIT_REF, "Customer transfer");
     await page.reload();
     await openWorkspace(page);
     await page.getByRole("button", { name: "Auto-match", exact: true }).click();
     await expect(page.getByTestId("auto-match-result")).toHaveText(
-      "Auto-match: 2 matched, 0 left for a person to choose",
+      "Auto-match: 1 matched, 0 left for a person to choose",
     );
     // Read off the panes: which rule made each match, and what it is matched to.
     await expect(statementRow(page, "OPENING DEPOSIT")).toContainText("Matched · amount and date");
