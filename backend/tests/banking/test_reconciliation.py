@@ -729,3 +729,85 @@ def test_reopening_is_refused_while_a_later_reconciliation_is_open(
     db.rollback()
     assert first.status == ReconciliationStatus.LOCKED
     assert_bank_invariants(db, banking.company_id)
+
+
+def test_a_line_reconciled_in_an_earlier_lock_is_not_outstanding_in_a_later_one(
+    db: Session, banking: Banking
+) -> None:
+    """**Clause 4 over two successive locks — the case the acceptance tape found.**
+
+    August's receipt is ticked and locked into `BRC-000001`. September's reconciliation must
+    reproduce its own stored figures, and August's line must not count as outstanding in it: the
+    money cleared the bank in August and `BRC-000001` is the proof.
+
+    `_lines_in_this_reconciliation` used to read only the matches carrying *this* reconciliation's
+    id. `_assign_effective_matches` deliberately leaves an already-assigned match with its earlier
+    reconciliation, so August's match kept `BRC-000001` — and September then reproduced August's
+    balance as outstanding. The stored figure was right and the recomputation was wrong, so
+    clause 4 failed on a correct lock.
+
+    Every step-2 test had a single lock, which is why the narrow reading passed all of them. This
+    is the two-lock case, named so the defect cannot come back as a silent arithmetic change.
+    """
+    august = cashbook(db, banking, account_code="1120", amount=Decimal(1000), on=date(YEAR, 8, 31))
+    db.commit()
+    row = banking.bank("BK-RWF")
+    matching.tick(
+        db,
+        banking.company_id,
+        bank_account_id=row.id,
+        journal_line_ids=[bank_line_of(db, banking, august, "1120").id],
+        actor=banking.owner,
+    )
+    first = reconciliation_service.open_reconciliation(
+        db,
+        banking.company_id,
+        bank_account_id=row.id,
+        reconciliation_date=date(YEAR, 8, 31),
+        statement_balance=Decimal(1000),
+        actor=banking.owner,
+    )
+    db.flush()
+    reconciliation_service.lock(db, banking.company_id, first.id, actor=banking.owner)
+    db.flush()
+
+    # September: a second receipt, ticked and locked. The closing balance is both months'.
+    september = cashbook(
+        db, banking, account_code="1120", amount=Decimal(250), on=date(YEAR, 9, 3)
+    )
+    db.flush()
+    matching.tick(
+        db,
+        banking.company_id,
+        bank_account_id=row.id,
+        journal_line_ids=[bank_line_of(db, banking, september, "1120").id],
+        actor=banking.owner,
+    )
+    second = reconciliation_service.open_reconciliation(
+        db,
+        banking.company_id,
+        bank_account_id=row.id,
+        reconciliation_date=date(YEAR, 9, 30),
+        statement_balance=Decimal(1250),
+        actor=banking.owner,
+    )
+    db.flush()
+    reconciliation_service.lock(db, banking.company_id, second.id, actor=banking.owner)
+    db.flush()
+
+    stored = reconciliation_service.stored_figures(db, banking.company_id, second)
+    assert stored.ledger_balance == Decimal(1250)
+    assert stored.outstanding_total == Decimal(0), (
+        "August's line cleared in August; BRC-000001 proved it, so it is not outstanding here"
+    )
+    assert second.outstanding_total == Decimal(0)
+
+    # August's match still belongs to August — the widening reads earlier reconciliations, it does
+    # not reassign them, and that is what keeps BRC-000001 reproducible from its own membership.
+    august_match = matching.match_by_journal_line(
+        db, banking.company_id, bank_line_of(db, banking, august, "1120").id
+    )
+    assert august_match is not None
+    assert august_match.reconciliation_id == first.id
+
+    assert_bank_invariants(db, banking.company_id)

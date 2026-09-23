@@ -164,23 +164,25 @@ REQUIRED_REACH = (
     # `payment_exceeds_open` means nothing until these two are healthy.
     "payment run: attempted",
     "payment run: posted",
-    # **This one read 0 on its first deep pass and 7 on the next, and the difference was a
-    # generator defect rather than a conjunction.** `run reversal: attempted` was absent from the
-    # table altogether — the operation was never entered, because `state["invoices"]` still named
-    # ids the session rollback had taken away, so most runs were refused `not_found` and only 24
-    # posted. Pruning those ids took posted runs to 41 and reversals to 7.
+    # **`run reversal: succeeded` is not a floor, and the history is why.** Across five deep
+    # passes it read **0, 0, 7, 8, 2**.
     #
-    # That is the case step 2's report warns against reading the other way: a floor at zero is a
-    # question, and the answer here was "the generator cannot post the thing", not "a reversal is
-    # unreachable in one plan". So the floor stays.
+    # The first two zeros were a generator defect — `state["invoices"]` named ids the session
+    # rollback had taken away, so most runs were refused `not_found` and few posted. Pruning them
+    # took it to 7 and the floor was restored at the step-4 gate on that evidence, with a note
+    # that seven against three was a thinner margin than anything else in this list.
     #
-    # Seven against a floor of three is a thinner margin than the rest of this list, and
-    # `test_reversing_a_payment_run_holds_every_invariant` in
-    # `tests/banking/test_property_targeted_refusals.py` is why a dip below it would be a
-    # question about the generator rather than a hole in the coverage: that property constructs
-    # the run and asserts all three invariant suites **between** the reversal's legs, which is
-    # more than the machine checks even when it does get there.
-    "run reversal: succeeded",
+    # The step-5 gate read **2**. That settles it: a run reversal needs a run posted *earlier in
+    # the same plan* and then drawn for reversal, which is a conjunction two deep over eighteen
+    # operations — reachable, but not reliably, and a floor that passes four times in five is a
+    # floor that teaches the reader to re-run the nightly instead of reading it. That failure mode
+    # is the one step 2's report spent a page on and step 3 hit again.
+    #
+    # P7's rule sends it to a targeted property, and it already has one:
+    # `test_reversing_a_payment_run_holds_every_invariant` constructs the run and asserts all
+    # three invariant suites **between** the reversal's legs, which is more than the machine
+    # checks even when it does get there. The counter stays in the reach table as reporting, so a
+    # future reader still sees how often the plan reached it.
     "statement: imported from a file",
     # Step 4's. A revaluation needs a period end *and* a non-zero foreign balance on the USD
     # account, so it is a conjunction the generator has to be aimed at rather than left to find.
