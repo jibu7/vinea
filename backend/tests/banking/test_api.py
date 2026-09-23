@@ -1115,6 +1115,28 @@ def test_a_payment_run_is_previewed_posted_and_reversed_over_http(
     assert Decimal(run["total"]) == Decimal(286000)
     assert len(run["lines"]) == 2
     assert len(run["remittance_job_ids"]) == 2, "one advice per supplier"
+    # The detail's links: the invoice paid, the `PMT-` and the `ALC-` it produced, by number.
+    by_invoice = {line["document_number"]: line for line in run["lines"]}
+    assert set(by_invoice) == {sin1["number"], sin3["number"]}
+    assert by_invoice[sin1["number"]]["partner_name"] == "Kigali Timber"
+    assert by_invoice[sin1["number"]]["settlement_number"].startswith("PMT-")
+    assert by_invoice[sin1["number"]]["settlement_status"] == "posted"
+    assert by_invoice[sin1["number"]]["allocation_number"].startswith("ALC-")
+    assert run["supplier_count"] == 2
+    assert run["reconciliation_locked"] is None
+    listed = client.get("/api/v1/banking/payment-runs").json()
+    assert [(row["number"], row["supplier_count"]) for row in listed] == [("PYR-000001", 2)]
+
+    # The AP document's "Paid in run PYR-n" — on the settlement, and on nothing else.
+    settlement_id = by_invoice[sin1["number"]]["settlement_document_id"]
+    settlement = client.get(f"/api/v1/subledger/ap/documents/{settlement_id}").json()
+    assert (settlement["payment_run_id"], settlement["payment_run_number"]) == (
+        run["id"],
+        "PYR-000001",
+    )
+    assert settlement["payment_run_status"] == "posted"
+    invoice = client.get(f"/api/v1/subledger/ap/documents/{sin1['id']}").json()
+    assert invoice["payment_run_id"] is None, "the invoice was paid by the run, not posted by it"
 
     instruction = client.get(f"/api/v1/banking/payment-runs/{run['id']}/instruction.csv")
     assert instruction.status_code == 200
@@ -1130,6 +1152,13 @@ def test_a_payment_run_is_previewed_posted_and_reversed_over_http(
     )
     assert reversed_run.status_code == 200
     assert reversed_run.json()["status"] == "reversed"
+    assert {line["settlement_status"] for line in reversed_run.json()["lines"]} == {"reversed"}
+    assert (
+        client.get(f"/api/v1/subledger/ap/documents/{settlement_id}").json()[
+            "payment_run_status"
+        ]
+        == "reversed"
+    ), "the link stays; the guard reads the status"
     assert (
         Decimal(
             client.get(f"/api/v1/subledger/ap/documents/{sin1['id']}").json()["open_amount"]

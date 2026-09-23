@@ -473,6 +473,13 @@ class DocumentRead(ApiModel):
     #: The receipt RRA signed for this document, once the queue row has been sent. `None` while
     #: the row is still in flight — which is what the print refusal at step 8 reads.
     fiscal_receipt_id: int | None = None
+    # --- P8 payment runs ---------------------------------------------------------------------
+    #: The run that posted this `PMT-`, when a run did. The document's screen says "Paid in run
+    #: PYR-n" and, while the run stands, draws Reverse disabled with `payment_run_member` —
+    #: the run is what reverses (decision 7). Null on every document no run produced.
+    payment_run_id: int | None = None
+    payment_run_number: str | None = None
+    payment_run_status: str | None = None
     lines: list[DocumentLineRead] = []
 
 

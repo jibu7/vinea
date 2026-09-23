@@ -540,6 +540,8 @@ class FxRevaluationLineRead(BaseModel):
     partner_name: str | None = None
     bank_account_id: int | None = None
     bank_account_code: str | None = None
+    #: Shown where a document line shows its partner — the account is what was revalued.
+    bank_account_name: str | None = None
 
 
 class FxRevaluationPreview(BaseModel):

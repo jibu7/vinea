@@ -520,11 +520,19 @@ class PaymentRunLineRead(BaseModel):
 
     id: int
     partner_id: int
+    partner_name: str
+    supplier_code: str | None = None
     document_id: int
+    #: The invoice paid, the `PMT-` and the `ALC-` — the three links the run's detail draws.
+    document_number: str
     amount: Decimal
     discount_amount: Decimal
     settlement_document_id: int | None = None
+    settlement_number: str | None = None
+    #: `posted`, or `reversed` once the run is.
+    settlement_status: str | None = None
     allocation_id: int | None = None
+    allocation_number: str | None = None
 
 
 class PaymentRunRead(BaseModel):
@@ -541,12 +549,17 @@ class PaymentRunRead(BaseModel):
     posted_at: datetime
     reversed_at: datetime | None = None
     reversal_reason: str | None = None
+    #: How many suppliers the run paid — one `PMT-` each. Filled by the listing and the detail.
+    supplier_count: int = 0
 
 
 class PaymentRunDetail(PaymentRunRead):
     lines: list[PaymentRunLineRead] = []
     #: The `remittance_pdf` jobs this run queued, one per supplier, with their artifacts.
     remittance_job_ids: list[int] = []
+    #: The locked reconciliation holding the run's bank line, or null. Reverse is refused
+    #: `reconciliation_locked` while it is set, and the screen says so before the button.
+    reconciliation_locked: str | None = None
 
 
 class PaymentRunReverse(BaseModel):

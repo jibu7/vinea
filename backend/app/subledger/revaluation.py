@@ -148,6 +148,7 @@ class RevaluationLine:
     # --- a bank line (decision 8) -------------------------------------------------------
     bank_account_id: int | None = None
     bank_account_code: str | None = None
+    bank_account_name: str | None = None
     #: `carrying_base / open_amount` where the balance is non-zero, and **None** where it is
     #: not. On a document it is the rate the document was booked at; on a bank account there is
     #: no single such rate — a balance is the sum of lines booked at many — so the figure is
@@ -359,6 +360,7 @@ def _bank_lines(
             RevaluationLine(
                 bank_account_id=row.id,
                 bank_account_code=row.code,
+                bank_account_name=row.name,
                 scope=SCOPE_BANK,
                 currency_id=currency.id,
                 currency_code=currency.code,

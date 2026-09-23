@@ -37,7 +37,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from starlette.requests import Request
 
@@ -255,6 +255,110 @@ def run_of_settlement(
             PaymentRunLine.settlement_document_id == document_id,
         )
     )
+
+
+@dataclass(frozen=True)
+class LineView:
+    """A run line with the numbers its screen links by — the invoice it paid, the `PMT-` and
+    `ALC-` it produced and the supplier — read here once rather than by the screen fetching every
+    document and allocation the run touched."""
+
+    id: int
+    partner_id: int
+    partner_name: str
+    supplier_code: str | None
+    document_id: int
+    document_number: str
+    amount: Decimal
+    discount_amount: Decimal
+    settlement_document_id: int | None
+    settlement_number: str | None
+    settlement_status: str | None
+    allocation_id: int | None
+    allocation_number: str | None
+
+
+def line_views(db: Session, company_id: int, run_id: int) -> list[LineView]:
+    lines = lines_of(db, company_id, run_id)
+    document_ids = {line.document_id for line in lines} | {
+        line.settlement_document_id for line in lines if line.settlement_document_id is not None
+    }
+    documents = {
+        document.id: document
+        for document in db.scalars(
+            select(PartnerDocument).where(
+                PartnerDocument.company_id == company_id,
+                PartnerDocument.id.in_(document_ids or {0}),
+            )
+        )
+    }
+    partners = {
+        partner.id: partner
+        for partner in db.scalars(
+            select(Partner).where(
+                Partner.company_id == company_id,
+                Partner.id.in_({line.partner_id for line in lines} or {0}),
+            )
+        )
+    }
+    allocation_numbers = dict(
+        db.execute(
+            select(Allocation.id, Allocation.number).where(
+                Allocation.company_id == company_id,
+                Allocation.id.in_(_allocation_ids(lines) or [0]),
+            )
+        ).all()
+    )
+    views: list[LineView] = []
+    for line in lines:
+        settlement = documents.get(line.settlement_document_id or 0)
+        partner = partners[line.partner_id]
+        views.append(
+            LineView(
+                id=line.id,
+                partner_id=line.partner_id,
+                partner_name=partner.name,
+                supplier_code=partner.supplier_code,
+                document_id=line.document_id,
+                document_number=documents[line.document_id].number,
+                amount=line.amount,
+                discount_amount=line.discount_amount,
+                settlement_document_id=line.settlement_document_id,
+                settlement_number=settlement.number if settlement else None,
+                settlement_status=settlement.status.value if settlement else None,
+                allocation_id=line.allocation_id,
+                allocation_number=allocation_numbers.get(line.allocation_id or 0),
+            )
+        )
+    return views
+
+
+def supplier_counts(db: Session, company_id: int, run_ids: list[int]) -> dict[int, int]:
+    """How many suppliers each run paid — the listing's column, one grouped query."""
+    return dict(
+        db.execute(
+            select(PaymentRunLine.run_id, func.count(PaymentRunLine.partner_id.distinct()))
+            .where(
+                PaymentRunLine.company_id == company_id,
+                PaymentRunLine.run_id.in_(run_ids or [0]),
+            )
+            .group_by(PaymentRunLine.run_id)
+        ).all()
+    )
+
+
+def locked_in(db: Session, company_id: int, run: PaymentRun) -> str | None:
+    """The locked reconciliation holding this run's bank line, or `None`.
+
+    What `reverse_run` would refuse with `reconciliation_locked`, asked before the button rather
+    than discovered by pressing it — the same question `matching.assert_unmatchable` answers, for
+    the same matches.
+    """
+    for match_id in _match_ids_of(db, company_id, run, lines_of(db, company_id, run.id)):
+        match = matching.get_match(db, company_id, match_id)
+        if match.reconciliation_id is not None:
+            return matching.reconciliation_number(db, company_id, match.reconciliation_id)
+    return None
 
 
 def selectable_documents(

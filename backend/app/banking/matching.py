@@ -429,7 +429,7 @@ def assert_unmatchable(db: Session, company_id: int, match_id: int) -> None:
     match = get_match(db, company_id, match_id)
     if match.reconciliation_id is None:
         return
-    locked = _reconciliation_number(db, company_id, match.reconciliation_id)
+    locked = reconciliation_number(db, company_id, match.reconciliation_id)
     raise LedgerStateError(
         f"This match belongs to {locked}; reopen it first",
         code="reconciliation_locked",
@@ -437,7 +437,7 @@ def assert_unmatchable(db: Session, company_id: int, match_id: int) -> None:
     )
 
 
-def _reconciliation_number(db: Session, company_id: int, reconciliation_id: int) -> str:
+def reconciliation_number(db: Session, company_id: int, reconciliation_id: int) -> str:
     from app.models.banking import BankReconciliation
 
     number = db.scalar(
@@ -1259,7 +1259,7 @@ def list_ledger_lines(
     for line, entry, amount in db.execute(statement).all():
         match = match_by_journal_line(db, company_id, line.id)
         number = (
-            _reconciliation_number(db, company_id, match.reconciliation_id)
+            reconciliation_number(db, company_id, match.reconciliation_id)
             if match is not None and match.reconciliation_id is not None
             else None
         )
@@ -1368,7 +1368,7 @@ def _line_states(db: Session, company_id: int, condition: Any) -> dict[int, Stat
             match_kind=kind,
             match_rule=rule,
             reconciliation_number=(
-                _reconciliation_number(db, company_id, reconciliation_id)
+                reconciliation_number(db, company_id, reconciliation_id)
                 if reconciliation_id is not None
                 else None
             ),
