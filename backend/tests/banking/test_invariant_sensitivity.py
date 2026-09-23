@@ -312,6 +312,94 @@ def test_clause_4_catches_a_snapshot_that_does_not_foot(
     db.rollback()
 
 
+def test_clause_4_holds_when_a_later_lock_takes_a_line_dated_inside_an_earlier_one(
+    db: Session, banking: Banking
+) -> None:
+    """**The direction the step-5 fix had to not break, and which nothing covered until now.**
+
+    Clause 4's membership is "this reconciliation's matches, or any *earlier* locked one's". The
+    step-5 widening added the second half — a line that cleared in August is not outstanding in
+    September — and the **date bound** is what keeps the first half true: a match belonging to a
+    *later* lock must never count here, or a reconciliation signed in August would be restated by
+    something that happened in September.
+
+    The state is built without a single raw UPDATE, which is why it is a behaviour test rather
+    than one of this file's break-it-underneath cases: the posted-entry trigger refuses to move an
+    entry's date, and it is right to. So the line is *posted* inside August, left unticked when
+    August locks — August therefore stores it as outstanding — and ticked into September's lock
+    afterwards.
+
+    With the date bound, August's recomputation sees that line in no match of its own or of any
+    earlier lock, reports it outstanding, and reproduces the stored −250. **Drop the bound and
+    September's match counts for August**: the line looks reconciled, the recomputation gives 0,
+    and clause 4 fails.
+
+    Verified both ways at the step-5 gate. Reverting the widening failed the two-lock regression
+    test and the acceptance tape; dropping the date bound failed **only the tape** until this test
+    existed. An 18-row tape catching a clause defect is a good outcome and a poor gate — it says
+    "something in the sequence broke" where this says which rule.
+    """
+    cleared = cashbook(
+        db, banking, account_code="1120", amount=Decimal(1000), on=date(YEAR, 8, 3)
+    )
+    # Dated inside August and left unticked: August will store it as outstanding.
+    unpresented = cashbook(
+        db, banking, account_code="1120", amount=Decimal(-250), on=date(YEAR, 8, 30)
+    )
+    db.commit()
+    row = banking.bank("BK-RWF")
+    matching.tick(
+        db,
+        banking.company_id,
+        bank_account_id=row.id,
+        journal_line_ids=[bank_line_of(db, banking, cleared, "1120").id],
+        actor=banking.owner,
+    )
+    august = reconciliation_service.open_reconciliation(
+        db,
+        banking.company_id,
+        bank_account_id=row.id,
+        # 1 000 cleared, 250 not: the bank shows 1 000.
+        reconciliation_date=date(YEAR, 8, 31),
+        statement_balance=Decimal(1000),
+        actor=banking.owner,
+    )
+    db.flush()
+    reconciliation_service.lock(db, banking.company_id, august.id, actor=banking.owner)
+    db.flush()
+    assert august.outstanding_total == Decimal(-250)
+    assert august.ledger_balance == Decimal(750)
+
+    # September presents the cheque and locks. Its match is the *later* one.
+    matching.tick(
+        db,
+        banking.company_id,
+        bank_account_id=row.id,
+        journal_line_ids=[bank_line_of(db, banking, unpresented, "1120").id],
+        actor=banking.owner,
+    )
+    september = reconciliation_service.open_reconciliation(
+        db,
+        banking.company_id,
+        bank_account_id=row.id,
+        reconciliation_date=SEP_30,
+        statement_balance=Decimal(750),
+        actor=banking.owner,
+    )
+    db.flush()
+    reconciliation_service.lock(db, banking.company_id, september.id, actor=banking.owner)
+    db.flush()
+    db.expire_all()
+
+    # August still says what it said. This is the assertion the date bound exists for.
+    stored = reconciliation_service.stored_figures(db, banking.company_id, august)
+    assert stored.outstanding_total == Decimal(-250), (
+        "September's match must not reconcile a line for August"
+    )
+    assert stored.ledger_balance == Decimal(750)
+    assert_bank_invariants(db, banking.company_id)
+
+
 # --- 5: a foreign-currency account holds only its own currency ------------------------------------
 
 
