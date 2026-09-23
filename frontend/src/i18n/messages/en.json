@@ -358,17 +358,19 @@
     "reverseViaModule": "Reverse via {module} document {number}",
     "fxRevaluation": {
       "title": "FX revaluation",
-      "subtitle": "What the open foreign-currency documents are worth at a date",
+      "subtitle": "What the open foreign-currency documents and bank balances are worth at a date",
       "revaluationDate": "Revaluation date",
       "role": "Side",
       "roleLabel": {
         "ar": "Customers",
         "ap": "Suppliers",
-        "both": "Customers and suppliers"
+        "both": "Customers and suppliers",
+        "bank": "Bank and cash accounts",
+        "all": "Customers, suppliers and bank"
       },
       "preview": "What would be posted",
-      "previewNote": "The revaluation moves the revaluation and unrealized gain/loss accounts. It never touches the receivable or payable control accounts, whose balance is the open items at the rates they were booked at.",
-      "nothingToRevalue": "No open foreign-currency document at this date.",
+      "previewNote": "The revaluation moves the revaluation accounts (AR, AP and bank) and the unrealized gain and loss accounts. It never touches the receivable or payable control accounts, whose balance is the open items at the rates they were booked at, nor a bank account itself, whose lines are what the statement shows.",
+      "nothingToRevalue": "Nothing in a foreign currency is open at this date.",
       "totalDifference": "Total difference",
       "document": "Document",
       "partner": "Partner",
@@ -406,7 +408,10 @@
       "reversed": "{number} reversed",
       "reverseFailed": "The run could not be reversed",
       "cancel": "Cancel",
-      "close": "Close"
+      "close": "Close",
+      "documentOrAccount": "Document or account",
+      "partnerOrBank": "Partner or bank account",
+      "emptyValue": "—"
     },
     "fxRevaluationReport": {
       "title": "FX revaluation",
@@ -1324,7 +1329,10 @@
       "noUnallocatePermission": "You do not have permission to unallocate",
       "stockEntry": "Stock entry",
       "fiscalRefundIrreversible": "A refund cannot be refunded. The authority has no such receipt — correct this with a new invoice instead.",
-      "fiscalStatusUnresolved": "The authority has not answered for this document yet. Resolve its queue row first: cancelling a row the authority is holding would leave a sale declared and unrefunded."
+      "fiscalStatusUnresolved": "The authority has not answered for this document yet. Resolve its queue row first: cancelling a row the authority is holding would leave a sale declared and unrefunded.",
+      "paidInRun": "Paid in run",
+      "runReversed": "the run was reversed",
+      "paymentRunMember": "Paid in {number}: a payment run's payment is reversed with its run. Open {number} and reverse the run."
     }
   },
   "lineGrid": {
@@ -3296,7 +3304,9 @@
       "manualTotal": "Lines: {count} · net {total}",
       "saveStatement": "Save statement",
       "keyed": "{number} keyed",
-      "keyFailed": "Couldn't save the statement"
+      "keyFailed": "Couldn't save the statement",
+      "resultCountsMatched": "{fresh} new, {skipped} skipped, {matched} matched",
+      "autoMatchFailed": "The statement is imported, but auto-match could not run. Run it from the reconciliation."
     },
     "statementDetail": {
       "title": "Bank statement",
@@ -3467,6 +3477,107 @@
       "settlementDescription": "Settlement description",
       "postReceipt": "Post receipt",
       "postPayment": "Post payment"
+    },
+    "paymentRuns": {
+      "title": "Payment runs",
+      "subtitle": "Many suppliers paid from one bank account in one press: a payment and an allocation per supplier, and one line on the bank's statement for the whole run.",
+      "new": "New payment run",
+      "empty": "No payment run from this account yet.",
+      "noBankAccount": "There is no bank account to pay from. Add one under Maintenance, Bank accounts.",
+      "number": "Number",
+      "paymentDate": "Payment date",
+      "suppliers": "Suppliers",
+      "total": "Total paid",
+      "reversalReason": "Reversal reason",
+      "statusLabel": {
+        "posted": "Posted",
+        "reversed": "Reversed"
+      },
+      "count": "Runs: {count} · standing: {posted}"
+    },
+    "newPaymentRun": {
+      "title": "New payment run",
+      "subtitle": "Choose the invoices to pay, preview what each supplier is paid, then post the run.",
+      "paymentDate": "Payment date",
+      "dueBy": "Due by",
+      "anyDueDate": "Any due date",
+      "clearDueBy": "Clear due date",
+      "selection": "Open supplier invoices in the account's currency",
+      "selectedCount": "Selected: {selected} of {offered}",
+      "nothingOpen": "No supplier invoice in this account's currency is open and due by this date.",
+      "invoice": "Invoice",
+      "dueDate": "Due",
+      "openAmount": "Open",
+      "discountAvailable": "Discount available",
+      "takeDiscount": "Discount",
+      "take": "Take",
+      "amount": "Amount to pay",
+      "allOpen": "All that is open",
+      "payInvoice": "Pay {number}",
+      "takeDiscountOn": "Take the discount on {number}",
+      "amountOn": "Amount to pay on {number}",
+      "exceedsOpen": "More than is open. The most this invoice takes is {open}.",
+      "chooseAccount": "Choose the bank account to pay from.",
+      "selectFirst": "Select at least one invoice.",
+      "preview": "Preview",
+      "previewFailed": "Couldn't preview the run",
+      "previewTitle": "What the run will pay",
+      "previewCounts": "Suppliers: {suppliers} · invoices: {invoices}",
+      "paying": "Paying",
+      "discountTaken": "Discount taken",
+      "cash": "Leaves the bank",
+      "discountTotal": "Discount taken",
+      "runTotal": "Run total",
+      "bankDetailsMissingChip": "Bank details missing",
+      "bankDetailsMissing": "This supplier has no bank details. The payment still posts, and the instruction file carries the supplier with the account fields empty: key this transfer by hand.",
+      "openCredits": "Open credits not netted: {documents}. The run pays the invoices in full; allocate the credits on the Allocate screen.",
+      "previewFirst": "Preview the selection first.",
+      "selectionChanged": "The selection changed after the preview. Preview again.",
+      "noPermission": "Paying suppliers in a run needs the payment run permission.",
+      "post": "Post payment run",
+      "posted": "{number} posted",
+      "postFailed": "Couldn't post the run"
+    },
+    "paymentRunDetail": {
+      "heading": "Payment run {number}",
+      "notFound": "This payment run was not found.",
+      "reference": "Bank reference",
+      "invoices": "Invoices",
+      "lines": "Invoices paid",
+      "supplier": "Supplier",
+      "invoice": "Invoice",
+      "payment": "Payment",
+      "allocation": "Allocation",
+      "amount": "Settled",
+      "discount": "Discount",
+      "cash": "Paid",
+      "cashTotal": "Paid from the bank",
+      "instructionFile": "Instruction file",
+      "remittances": "Remittance advices",
+      "remittancesNote": "One advice per supplier, listing the invoices paid, the discounts taken and the payment. Each is kept for seven days.",
+      "noRemittances": "No advice has been queued for this run.",
+      "advice": "Advice",
+      "download": "Download",
+      "downloadAdvice": "Download the advice for {supplier}",
+      "downloadFailed": "Couldn't download the file",
+      "jobStatus": {
+        "queued": "Queued",
+        "running": "Rendering",
+        "succeeded": "Ready",
+        "failed": "Failed"
+      },
+      "reverse": "Reverse run",
+      "alreadyReversed": "This run has already been reversed.",
+      "reconciliationLocked": "The bank's line for this run is matched inside {number}, which is locked. Reopen {number} to reverse the run.",
+      "reverseTitle": "Reverse {number}",
+      "reverseDescription": "Every allocation is undone, then every payment is reversed, in one transaction. The bank's line for the run is unmatched again: the reversing entries stay outstanding until the bank returns the money.",
+      "reversalDate": "Reversal date",
+      "reason": "Reason",
+      "reasonPlaceholder": "Why the run is being undone",
+      "confirmReverse": "Reverse the run",
+      "reversed": "{number} reversed",
+      "reverseFailed": "Couldn't reverse the run",
+      "reversedBecause": "Reversed: {reason}"
     }
   }
 }

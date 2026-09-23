@@ -506,7 +506,7 @@ The owner's original menu ordering (software_interface docx) is **adopted as the
 | Maintenance → Order entry / BOM / POS | **Order defaults** / BOM items+defaults / Tills+types+defaults | P6 (live, `/maintenance/order-defaults`) / P12 / P11 |
 | Transactions → GL | Cashbook batches, Journal batches, **FX revaluation** (`/gl/fx-revaluations`, C.1.12), **Bank statements** (`/bank/statements`, C.1.14), **Bank reconciliation** (`/bank/reconciliations`, the workspace, C.1.14) | P2 (banking depth P8) · revaluation P7 · statements and reconciliation P8 |
 | Transactions → AR | Credit note, Invoice, Receipt (C.1.5), AR batches, Documents (C.1.7); Sales order | P4; SO in P6 |
-| Transactions → AP *(mislabeled "Account Receivable" in spec — see C.1)* | **GRV** (`/oe/goods-received`), **Purchase order** (`/oe/purchase-orders`) — both P6, see C.1.5 — Supplier invoice, Return to supplier, Payment, Allocate (C.1.3), Post-dated payments (C.1.6), AP batches, Documents (C.1.7) | P4 · P6 |
+| Transactions → AP *(mislabeled "Account Receivable" in spec — see C.1)* | **GRV** (`/oe/goods-received`), **Purchase order** (`/oe/purchase-orders`) — both P6, see C.1.5 — Supplier invoice, Return to supplier, Payment, **Payment runs** (`/ap/payment-runs`, C.1.15), Allocate (C.1.3), Post-dated payments (C.1.6), AP batches, Documents (C.1.7) | P4 · P6 · payment runs P8 |
 | Transactions → Inventory | Journal batches, Transfers, Adjustments, Counts, Documents (C.1.7) (+ CN/GRV/Invoice/RTS stock impacts) | P5 (impacts via P4/P6 events) |
 | Transactions → OE | **Sales order** (`/oe/sales-orders`), **Breakup** (`/oe/breakup`), **Landed cost** (`/oe/landed-costs`) | P6 — all three live |
 | Transactions → Tax *(C.1.11 — not in the owner's tree)* | **Fiscal queue** (`/fiscal/queue`), **EBM purchases** (`/fiscal/purchases`), **Import declarations** (`/fiscal/imports`), **VAT return** (`/tax/vat-returns`) | P7 — all four live |
@@ -668,7 +668,9 @@ The owner's original menu ordering (software_interface docx) is **adopted as the
    **Bank statements** lists an account's statements (number, dates, opening and closing, lines,
    skipped, status) and brings new ones in two ways: **Import** — the file previewed under the
    account's mapping (the parsed rows, the derived opening and closing, how many lines are already
-   held, every error by row) and written only on confirm, the result reading "N new, M skipped";
+   held, every error by row) and written only on confirm, the result reading "N new, M skipped,
+   K matched" — the screen runs the account's auto-match after the confirm, decision 4's "on
+   import", while the import service itself still writes lines and nothing else;
    and **Key a paper statement**, line by line onto the same table. A statement's detail shows
    each line's match state, and **Void** — the only correction a statement has — says
    `statement_has_matches` beside the button while any line is matched.
@@ -686,6 +688,29 @@ The owner's original menu ordering (software_interface docx) is **adopted as the
    held. The listings are `bank:reports_view`; a read-only member sees them and no button.
 
    Payment runs, under Transactions → Accounts Payable, are C.1.15.
+
+15. **Transactions → Accounts Payable gains Payment runs** — `/ap/payment-runs`, directly after
+   Payment (P8 step 7). Not in the owner's tree. A run pays many suppliers from one bank account
+   in one press: an ordinary P4 payment (`PMT-`) and allocation (`ALC-`) per supplier, in one
+   transaction, and one line on the bank's statement for the whole run, which the `payment_run`
+   rule matches to the run's N ledger lines. It sits beside Payment, the one-at-a-time form of
+   the same act.
+
+   The listing is per bank account (number, date, suppliers, total, status). **New** takes the
+   bank account (bank kind only — `payment_run_needs_bank`), the payment date and a due-by
+   filter, and offers the open supplier invoices in the account's currency as a supplier ×
+   invoice grid with `discount_available` at the payment date, a *take discount* toggle and a
+   partial amount per line (`payment_exceeds_open` said on the row). **Preview** shows what each
+   supplier is paid, the discount taken, the run's total and the two warnings — a supplier with
+   no bank details (the payment still posts; the instruction file carries the row with the
+   account fields empty) and a supplier's open credits named, never netted — and **Post** posts
+   the previewed selection under an `Idempotency-Key`. The run's page shows the lines with their
+   `PMT-` and `ALC-` links, the **Instruction file** download, the **Remittance advices** (one
+   PDF job per supplier) and **Reverse** with a reason, refused before the button while the
+   run's bank line is inside a locked reconciliation (`reconciliation_locked`). A settlement a
+   run posted shows "Paid in run PYR-n" on `/ap/documents/{id}`, and its own Reverse says
+   `payment_run_member` before the button: the run is what reverses. The listing is
+   `bank:reports_view`; New, Post, Reverse and both downloads are `bank:payment_run_post`.
 
 ### C.2 Additions layered onto the owner's tree (post-spec decisions)
 

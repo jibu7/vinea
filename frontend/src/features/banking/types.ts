@@ -2,6 +2,7 @@ import type {
   BankAccountKind,
   BankMatchKind,
   BankMatchRule,
+  PaymentRunStatus,
   ReconciliationStatus,
   StatementAmountMode,
   StatementFormatPreset,
@@ -356,4 +357,122 @@ export interface ReconciliationDetail extends Reconciliation {
   /** A locked one only: what it said at the lock. */
   stored: Figures | null;
   late_line_ids: number[];
+}
+
+// --- Payment runs (P8 decision 7, step 7b) -----------------------------------------------------
+
+/** An open supplier invoice the run could pay. `discount_available` is P4's own figure at the
+ * date asked for — the discount is a fact of the payment date. */
+export interface SelectableDocument {
+  document_id: number;
+  number: string;
+  partner_id: number;
+  partner_name: string;
+  supplier_code: string | null;
+  document_date: string;
+  due_date: string | null;
+  currency_id: number;
+  total_amount: string;
+  open_amount: string;
+  discount_available: string;
+}
+
+export interface PaymentRunLinePayload {
+  document_id: number;
+  /** What comes off the invoice's open amount; `null` is "all of it". */
+  amount: string | null;
+  take_discount: boolean;
+}
+
+export interface PaymentRunPayload {
+  bank_account_id: number;
+  payment_date: string;
+  lines: PaymentRunLinePayload[];
+}
+
+export interface PaymentRunPreviewLine {
+  document_id: number;
+  document_number: string;
+  due_date: string | null;
+  open_amount: string;
+  amount: string;
+  discount_available: string;
+  discount_amount: string;
+  /** What leaves the bank for this line: `amount` less the discount taken. */
+  cash_amount: string;
+}
+
+export interface PaymentRunPreviewSupplier {
+  partner_id: number;
+  partner_name: string;
+  supplier_code: string | null;
+  bank_name: string | null;
+  bank_account_number: string | null;
+  bank_account_holder: string | null;
+  lines: PaymentRunPreviewLine[];
+  /** `bank_details_missing`, and `open_credits: PMT-…, RTS-…` naming the documents. */
+  warnings: string[];
+  total: string;
+  discount_total: string;
+}
+
+export interface PaymentRunPreview {
+  bank_account_id: number;
+  bank_account_code: string;
+  payment_date: string;
+  currency_id: number;
+  currency_code: string;
+  suppliers: PaymentRunPreviewSupplier[];
+  total: string;
+  discount_total: string;
+}
+
+export interface PaymentRun {
+  id: number;
+  bank_account_id: number;
+  number: string;
+  payment_date: string;
+  currency_id: number;
+  total: string;
+  reference: string;
+  status: PaymentRunStatus;
+  posted_at: string;
+  reversed_at: string | null;
+  reversal_reason: string | null;
+  supplier_count: number;
+}
+
+export interface PaymentRunLine {
+  id: number;
+  partner_id: number;
+  partner_name: string;
+  supplier_code: string | null;
+  document_id: number;
+  document_number: string;
+  amount: string;
+  discount_amount: string;
+  settlement_document_id: number | null;
+  settlement_number: string | null;
+  settlement_status: string | null;
+  allocation_id: number | null;
+  allocation_number: string | null;
+}
+
+export interface PaymentRunDetail extends PaymentRun {
+  lines: PaymentRunLine[];
+  remittance_job_ids: number[];
+  /** The locked reconciliation holding the run's bank line — Reverse is refused while set. */
+  reconciliation_locked: string | null;
+}
+
+/** A `remittance_pdf` job, one per supplier. `params.partner_id` says whose advice it is. */
+export interface RemittanceJob {
+  id: number;
+  kind: string;
+  status: "queued" | "running" | "succeeded" | "failed";
+  params: { run_id?: number; partner_id?: number } | null;
+  error: string | null;
+  artifact_name: string | null;
+  artifact_size: number | null;
+  expires_at: string | null;
 }
