@@ -500,7 +500,7 @@ The owner's original menu ordering (software_interface docx) is **adopted as the
 | Administration → User | users, roles | P1 backend · P3 UI |
 | Maintenance → Common | Foreign Currency; Company details (Company, Accounting period, General) | P1–P2 backend · P3 UI |
 | Maintenance → Tax | Tax types (18%/18%/Exempt/Zero), **EBM devices** (`/maintenance/ebm-devices`, C.1.10) | P1 seed · P2 kernel · P3 UI · devices P7 |
-| Maintenance → General Ledger | COA, Branches, Transaction types, Defaults, Rename Accounts | P2 · P3 |
+| Maintenance → General Ledger | COA, Branches, Transaction types, Defaults, **Bank accounts** (`/maintenance/bank-accounts`, C.1.13), Rename Accounts | P2 · P3 · bank accounts P8 |
 | Maintenance → AR / AP | Customers, Sales reps, Suppliers, Transaction types, Defaults, Rename | P4 |
 | Maintenance → Inventory | Items, Warehouses, Trans types, Variable barcodes, UoM categories, Defaults, Rename Item Code | P5 |
 | Maintenance → Order entry / BOM / POS | **Order defaults** / BOM items+defaults / Tills+types+defaults | P6 (live, `/maintenance/order-defaults`) / P12 / P11 |
@@ -630,6 +630,30 @@ The owner's original menu ordering (software_interface docx) is **adopted as the
    Both blocks sit after Inventory and before the phase-tagged Bill of Materials and Point of
    Sale rows, which keeps the live modules together and leaves the owner's own tail where it
    is — the same treatment C.1.8's two Order Entry blocks got.
+
+13. **Maintenance → General Ledger gains Bank accounts** — `/maintenance/bank-accounts`,
+   directly after Defaults (P8 step 6). Not in the owner's tree: its Maintenance → GL block
+   reads "COA, Branches, Transaction types, Defaults, Rename Accounts", and Evolution keeps its
+   bank accounts inside the cashbook setup rather than as a row of their own. P8 needs a place
+   for the facts the chart of accounts cannot hold — the currency an account is *held* in
+   (`gl_accounts` carry none), what the bank calls it, how its statement exports are laid out —
+   and for the rules that prefill a posting from a statement line. Each is set once and then
+   left alone, which makes it maintenance by the same reading that made EBM devices (C.1.10)
+   one.
+
+   The screen is the list (code, name, GL account, kind, currency, bank, account number, last
+   reconciled date and balance, active); **New bank account**, which creates the GL account and
+   its master row in one call; **Register** for any bank/cash control account without a row;
+   the drawer's Details (the currency **locked once the account has lines**, shown with the
+   reason rather than refused on save), **Statement format** (preset, the mapping, and *Test
+   with a file*, which runs the import preview under the mapping on the screen and writes
+   nothing) and **Rules**. The listing is `bank:reports_view` and every write
+   `bank:setup_manage`, so a Clerk reads the accounts and an Administrator edits them.
+
+   The rest of what P8 step 6 built is sections on screens the tree already carries and needs
+   no row: **Bank details** on Suppliers, the **Banking** block on GL Defaults, and the notice
+   Chart of accounts shows when a `bank` / `cash` control account it created got its master
+   row. Transactions → GL's Bank statements and Bank reconciliation are step 7's, as C.1.14.
 
 ### C.2 Additions layered onto the owner's tree (post-spec decisions)
 
