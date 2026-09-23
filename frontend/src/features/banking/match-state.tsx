@@ -30,7 +30,8 @@ export function MatchStateChip({
   }
   return (
     <span className="inline-flex flex-wrap items-center gap-1.5">
-      <StatusChip tone={reconciliationNumber ? "neutral" : "success"}>
+      {/* One line: a `BRC-` number broken across two is misread, as step 6's account numbers were. */}
+      <StatusChip tone={reconciliationNumber ? "neutral" : "success"} className="whitespace-nowrap">
         {reconciliationNumber
           ? t("lockedIn", { number: reconciliationNumber })
           : t("matchedBy", { rule: t(`ruleLabel.${rule}`) })}

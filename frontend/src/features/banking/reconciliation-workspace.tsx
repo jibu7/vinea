@@ -502,7 +502,9 @@ export function ReconciliationWorkspace({ reconciliationId }: { reconciliationId
         </ReportPanel>
       ) : null}
 
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+      {/* Stacked below 2xl: side by side at a laptop's width, each pane is too narrow to hold an
+          amount on one line, and a figure broken across two lines is misread. */}
+      <div className="grid grid-cols-1 gap-4 2xl:grid-cols-2">
         <ReportPanel>
           <h2 className="pb-2 text-xs font-semibold text-[var(--vinea-ink-muted)]">
             {t("statementPane", { count: formatQuantity(statements.length, 0) })}
@@ -555,7 +557,7 @@ export function ReconciliationWorkspace({ reconciliationId }: { reconciliationId
                           </p>
                         ) : null}
                       </TD>
-                      <TD className="text-right font-mono text-xs tabular-nums">{money(line.amount)}</TD>
+                      <TD className="whitespace-nowrap text-right font-mono text-xs tabular-nums">{money(line.amount)}</TD>
                       <TD className="text-xs">
                         <div className="flex flex-wrap items-center gap-1.5">
                           <MatchStateChip
@@ -646,7 +648,7 @@ export function ReconciliationWorkspace({ reconciliationId }: { reconciliationId
                           </p>
                         ) : null}
                       </TD>
-                      <TD className="text-right font-mono text-xs tabular-nums">{money(line.amount)}</TD>
+                      <TD className="whitespace-nowrap text-right font-mono text-xs tabular-nums">{money(line.amount)}</TD>
                       <TD className="text-xs">
                         <div className="flex flex-wrap items-center gap-1.5">
                           {matched ? (
