@@ -208,6 +208,15 @@ import { navIntents, type IntentLabel } from "@/design/nav-tree";
  * allocation per supplier, and one line on the bank's statement for the whole run — so it sits
  * beside Payment, the one-at-a-time form of the same act, and not under Banking.
  *
+ * Amended at P8 step 8 with **"Bank account enquiry"** under Enquiries → General Ledger,
+ * directly after Trial balance enquiry, recorded in the plan under **Appendix C.1.14** beside the
+ * workspace it links into. Not in the owner's tree: its Enquiries → GL block is the account and
+ * the trial balance, and a bank account's six questions — the book balance, the last lock, what
+ * each side holds unmatched, the latest statement, the open reconciliation — are answered by
+ * neither. The same step takes the P8 tag off the owner's own **"Bank reconciliation"** and
+ * **"Cashbooks"** under Reports → General Ledger, which go live where they always stood and take
+ * no C.1 entry. Nothing moved.
+ *
  * Amended before P6 step 1 with **"Documents"** under Transactions → AR and → AP, the other
  * half of that same C.1.7 entry. The appendix already recorded it: "the same hole is open in
  * AR and AP, one phase older and twice over". `POST /{role}/documents/{id}/reverse` and
@@ -298,6 +307,7 @@ const APPENDIX_C: Record<IntentLabel, Array<[string, string, string | null]>> = 
   "Enquiries": [
     ["General Ledger", "Account enquiry", null],
     ["General Ledger", "Trial balance enquiry", null],
+    ["General Ledger", "Bank account enquiry", null],
     ["Accounts Receivable", "Customer enquiry", null],
     ["Accounts Payable", "Supplier enquiry", null],
     ["Inventory", "Item enquiry", null],
@@ -311,8 +321,8 @@ const APPENDIX_C: Record<IntentLabel, Array<[string, string, string | null]>> = 
     ["General Ledger", "Trial balance", null],
     ["General Ledger", "Chart of accounts", null],
     ["General Ledger", "FX revaluation", null],
-    ["General Ledger", "Bank reconciliation", "P8"],
-    ["General Ledger", "Cashbooks", "P8"],
+    ["General Ledger", "Bank reconciliation", null],
+    ["General Ledger", "Cashbooks", null],
     ["General Ledger", "Balance sheet", "P10"],
     ["General Ledger", "Income statement", "P10"],
     ["Accounts Receivable", "Age analysis", null],
@@ -358,13 +368,14 @@ describe("the Appendix C navigation contract", () => {
     );
   });
 
-  it("has no P4, P5, P6 or P7 tag left anywhere in the tree", () => {
-    // All four phases are complete in the nav: P4 at its step 9, P5 at step 8, P6 at step 7,
+  it("has no P4, P5, P6, P7 or P8 tag left anywhere in the tree", () => {
+    // All five phases are complete in the nav: P4 at its step 9, P5 at step 8, P6 at step 7,
     // P7 at step 7 — every P7 row it will ever carry is live, and steps 8 and 9 add enquiries
-    // and reports under existing modules rather than tagged placeholders. A tag left on a
-    // screen that exists is a row nobody can reach, which is exactly how such a row goes
+    // and reports under existing modules rather than tagged placeholders — and P8 at step 8,
+    // which took the tag off the owner's Bank reconciliation and Cashbooks rows. A tag left on
+    // a screen that exists is a row nobody can reach, which is exactly how such a row goes
     // unnoticed — the table above would still pass, because it pins the tag it finds.
-    const done = new Set(["P4", "P5", "P6", "P7"]);
+    const done = new Set(["P4", "P5", "P6", "P7", "P8"]);
     const stillTagged = navIntents.flatMap((intent) =>
       intent.items
         .filter((item) => item.phase !== undefined && done.has(item.phase))

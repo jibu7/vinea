@@ -9,6 +9,10 @@ import type {
   BankAccountUpdatePayload,
   BankRule,
   BankRulePayload,
+  BankAccountEnquiry,
+  CashbookDetail,
+  CashbookSummaryRow,
+  EntryBankLine,
   LedgerLine,
   ManualStatementPayload,
   Match,
@@ -22,6 +26,7 @@ import type {
   Prefill,
   Reconciliation,
   ReconciliationDetail,
+  ReconciliationReport,
   RemittanceJob,
   SelectableDocument,
   Statement,
@@ -507,5 +512,62 @@ export function useRemittances(runId: number, enabled: boolean) {
       (query.state.data ?? []).some((job) => job.status === "queued" || job.status === "running")
         ? 1500
         : false,
+  });
+}
+
+// --- Enquiries and reports (P8 step 8) ---------------------------------------------------------
+
+/** Decision 10, per account and date. */
+export function useBankAccountEnquiry(bankAccountId: number | null, asOf: string) {
+  return useQuery({
+    queryKey: [ROOT, "enquiry", bankAccountId, asOf],
+    queryFn: () =>
+      api.get<BankAccountEnquiry>(`/banking/enquiries/bank-account/${bankAccountId}?as_of=${asOf}`),
+    enabled: bankAccountId !== null && asOf !== "",
+  });
+}
+
+export function useCashbook(bankAccountId: number | null, dateFrom: string, dateTo: string) {
+  return useQuery({
+    queryKey: [ROOT, "cashbook", bankAccountId, dateFrom, dateTo],
+    queryFn: () => {
+      const params = new URLSearchParams({
+        bank_account_id: String(bankAccountId),
+        date_from: dateFrom,
+        date_to: dateTo,
+      });
+      return api.get<CashbookDetail>(`/banking/reports/cashbook?${params}`);
+    },
+    enabled: bankAccountId !== null && dateFrom !== "" && dateTo !== "",
+  });
+}
+
+export function useCashbookSummary(dateFrom: string, dateTo: string, enabled = true) {
+  return useQuery({
+    queryKey: [ROOT, "cashbook-summary", dateFrom, dateTo],
+    queryFn: () =>
+      api.get<CashbookSummaryRow[]>(
+        `/banking/reports/cashbook-summary?date_from=${dateFrom}&date_to=${dateTo}`,
+      ),
+    enabled: enabled && dateFrom !== "" && dateTo !== "",
+  });
+}
+
+export function useReconciliationReport(reconciliationId: number | null) {
+  return useQuery({
+    queryKey: [ROOT, "reconciliation-report", reconciliationId],
+    queryFn: () =>
+      api.get<ReconciliationReport>(`/banking/reports/reconciliation/${reconciliationId}`),
+    enabled: reconciliationId !== null,
+  });
+}
+
+/** The GL entry page's bank lines. Off without `bank:reports_view`: the page still renders, and
+ * the column is simply not drawn. */
+export function useEntryBankLines(entryId: number, enabled: boolean) {
+  return useQuery({
+    queryKey: [ROOT, "entry-bank-lines", entryId],
+    queryFn: () => api.get<EntryBankLine[]>(`/banking/journal-entries/${entryId}/bank-lines`),
+    enabled,
   });
 }

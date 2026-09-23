@@ -70,3 +70,28 @@ export function BankAccountFilter({
     </Field>
   );
 }
+
+/**
+ * Money in a currency named by **code** — what the report payloads carry (`currency_code`)
+ * rather than an id. The same rendering as `useAccountMoney`, for screens that list more than
+ * one account and so have no single `BankAccount` to hand it.
+ */
+export function useMoneyIn() {
+  const tc = useTranslations("banking.common");
+  const currencies = useCurrencies();
+  return (value: string | number | null | undefined, code: string) => {
+    const currency = (currencies.data ?? []).find((row) => row.code === code);
+    if (value === null || value === undefined || currency === undefined) return tc("emptyValue");
+    return formatMoney(Number(value), {
+      code: currency.code,
+      symbol: currency.symbol,
+      decimalPlaces: currency.decimal_places,
+    });
+  };
+}
+
+/** The base currency's code, for the figures every report also gives in base. */
+export function useBaseCode(): string {
+  const currencies = useCurrencies();
+  return (currencies.data ?? []).find((row) => row.is_base)?.code ?? "";
+}
