@@ -17,7 +17,7 @@ import { useToast } from "@/design/components/toast";
 import { isApiError, useHasPermission } from "@/features/auth/hooks";
 import { FxRevaluationRole, FxRevaluationStatus } from "@/lib/api-enums";
 import { newDraftId } from "@/lib/drafts";
-import { formatDate, formatMoney, todayIso } from "@/lib/format";
+import { formatDate, formatMoney, formatQuantity, todayIso } from "@/lib/format";
 import { useApiErrorToast } from "@/lib/use-api-error-toast";
 import {
   useCompanyDetails,
@@ -204,6 +204,10 @@ export function FxRevaluationScreen({ openId }: { openId?: number } = {}) {
           <h2 className="text-xs font-semibold text-[var(--vinea-ink-muted)]">{t("preview")}</h2>
           {preview.data && (
             <p className="text-xs text-[var(--vinea-ink-muted)]">
+              <span data-testid="revaluation-line-count">
+                {t("lineCount", { count: formatQuantity(lines.length, 0) })}
+              </span>
+              {" · "}
               {t("totalDifference")}{" "}
               <span
                 className="font-mono tabular-nums text-[var(--vinea-ink)]"

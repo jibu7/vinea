@@ -411,7 +411,8 @@
       "close": "Close",
       "documentOrAccount": "Document or account",
       "partnerOrBank": "Partner or bank account",
-      "emptyValue": "—"
+      "emptyValue": "—",
+      "lineCount": "Lines: {count}"
     },
     "fxRevaluationReport": {
       "title": "FX revaluation",
