@@ -34,9 +34,23 @@ interface DetailsForm {
   phone: string;
   notes: string;
   currencyId: string;
+  bankName: string;
+  bankAccountNumber: string;
+  bankAccountHolder: string;
 }
 
-const BLANK: DetailsForm = { name: "", code: "", tin: "", email: "", phone: "", notes: "", currencyId: "" };
+const BLANK: DetailsForm = {
+  name: "",
+  code: "",
+  tin: "",
+  email: "",
+  phone: "",
+  notes: "",
+  currencyId: "",
+  bankName: "",
+  bankAccountNumber: "",
+  bankAccountHolder: "",
+};
 
 /**
  * **Verify TIN** — the authority's opinion of a taxpayer number, beside the field that holds
@@ -161,6 +175,9 @@ export function PartnersScreen({ role }: { role: PartnerRole }) {
       phone: partner.phone ?? "",
       notes: partner.notes ?? "",
       currencyId: partner.currency_id ? String(partner.currency_id) : "",
+      bankName: partner.bank_name ?? "",
+      bankAccountNumber: partner.bank_account_number ?? "",
+      bankAccountHolder: partner.bank_account_holder ?? "",
     });
   }
 
@@ -199,6 +216,16 @@ export function PartnersScreen({ role }: { role: PartnerRole }) {
           ...(detailsForm.currencyId
             ? { currency_id: Number(detailsForm.currencyId) }
             : { clear_currency: true }),
+          // A supplier's bank details are one fact and are sent as one: the flag with the three
+          // values replaces all three, so a field blanked here is blank on the next read.
+          ...(role === "ap"
+            ? {
+                clear_bank_details: true,
+                bank_name: detailsForm.bankName.trim() || null,
+                bank_account_number: detailsForm.bankAccountNumber.trim() || null,
+                bank_account_holder: detailsForm.bankAccountHolder.trim() || null,
+              }
+            : {}),
         },
       });
       setSelected(updated);
@@ -487,6 +514,51 @@ export function PartnersScreen({ role }: { role: PartnerRole }) {
                     onChange={(e) => setDetailsForm({ ...detailsForm, notes: e.target.value })}
                   />
                 </Field>
+                {role === "ap" ? (
+                  // P8 step 6. What a payment run's instruction file prints for this supplier —
+                  // beneficiary, bank, account number. A supplier with none is still paid; the
+                  // run warns `bank_details_missing` and the file carries the row with the
+                  // fields empty, because the accountant has to know whom to key by hand.
+                  <section
+                    aria-labelledby="supplier-bank-details"
+                    className="space-y-3 border-t border-[var(--vinea-border)] pt-3"
+                  >
+                    <h3
+                      id="supplier-bank-details"
+                      className="text-sm font-semibold text-[var(--vinea-ink)]"
+                    >
+                      {t("bankDetails")}
+                    </h3>
+                    <div className="grid grid-cols-2 gap-3">
+                      <Field label={t("supplierBankName")}>
+                        <Input
+                          value={detailsForm.bankName}
+                          onChange={(e) =>
+                            setDetailsForm({ ...detailsForm, bankName: e.target.value })
+                          }
+                        />
+                      </Field>
+                      <Field label={t("supplierBankAccountNumber")}>
+                        <Input
+                          value={detailsForm.bankAccountNumber}
+                          onChange={(e) =>
+                            setDetailsForm({ ...detailsForm, bankAccountNumber: e.target.value })
+                          }
+                          className="font-mono"
+                        />
+                      </Field>
+                    </div>
+                    <Field label={t("supplierBankAccountHolder")}>
+                      <Input
+                        value={detailsForm.bankAccountHolder}
+                        onChange={(e) =>
+                          setDetailsForm({ ...detailsForm, bankAccountHolder: e.target.value })
+                        }
+                      />
+                    </Field>
+                    <p className="text-xs text-[var(--vinea-ink-subtle)]">{t("bankDetailsNote")}</p>
+                  </section>
+                ) : null}
                 <div className="flex justify-end pt-2">
                   <Button
                     variant="primary"

@@ -86,6 +86,15 @@ export const navIntents: NavIntent[] = [
       { label: "Branches", module: "General Ledger", permission: "common:setup_branches", href: "/maintenance/branches" },
       { label: "Transaction types", module: "General Ledger", permission: "gl:setup_manage", href: "/maintenance/transaction-types" },
       { label: "Defaults", module: "General Ledger", permission: "gl:setup_manage", href: "/maintenance/defaults" },
+      // P8 step 6, Appendix C.1.13 — not in the owner's tree. The listing is `bank:reports_view`
+      // and every write is `bank:setup_manage`, so either opens the row, exactly as the API
+      // gates it: a Clerk reads the accounts, an Administrator edits them.
+      {
+        label: "Bank accounts",
+        module: "General Ledger",
+        permission: ["bank:setup_manage", "bank:reports_view"],
+        href: "/maintenance/bank-accounts",
+      },
       { label: "Rename account", module: "General Ledger", permission: "gl:setup_manage", href: "/maintenance/rename-account" },
       { label: "Projects", module: "General Ledger", permission: "projects:manage", href: "/maintenance/projects" },
       { label: "Customers", module: "Accounts Receivable", permission: "ar:reports_view", href: "/maintenance/customers" },

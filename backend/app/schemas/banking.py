@@ -42,6 +42,10 @@ class BankAccountRead(BaseModel):
     is_active: bool
     last_reconciled_at: date | None = None
     last_reconciled_balance: Decimal | None = None
+    #: Whether the GL account carries any journal line — the one fact that locks `currency_id`
+    #: (`bank_account_has_lines`). Computed by the endpoint, not stored: it is a question about
+    #: the ledger, and a column holding its answer would be a copy of the ledger that could lie.
+    has_lines: bool = False
 
 
 class UnregisteredAccountRead(BaseModel):
@@ -56,8 +60,22 @@ class UnregisteredAccountRead(BaseModel):
     name: str
 
 
+class NewGLAccountWrite(BaseModel):
+    """The GL account *create* makes alongside the master. Asset, postable, flagged by `kind`
+    — none of which is asked, because none of it is a choice for a bank or cash account."""
+
+    code: str = Field(min_length=1, max_length=20)
+    name: str = Field(min_length=1, max_length=200)
+    kind: BankAccountKind
+    parent_id: int | None = None
+
+
 class BankAccountRegister(BaseModel):
-    gl_account_id: int
+    """Exactly one of `gl_account_id` (*Register* an existing flagged account) and
+    `new_account` (*create* the GL account and its master in one call)."""
+
+    gl_account_id: int | None = None
+    new_account: NewGLAccountWrite | None = None
     code: str | None = Field(default=None, max_length=20)
     name: str | None = Field(default=None, max_length=200)
     currency_id: int | None = None

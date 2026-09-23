@@ -278,6 +278,9 @@ export interface GLSettings {
   ap_revaluation_account_id: number | null;
   unrealized_fx_gain_account_id: number | null;
   unrealized_fx_loss_account_id: number | null;
+  bank_revaluation_account_id: number | null;
+  bank_charges_account_id: number | null;
+  bank_interest_account_id: number | null;
   fiscal_default_purchase_class_code: string | null;
 }
 
@@ -292,6 +295,9 @@ export interface GLSettingsPayload {
   ap_revaluation_account_id?: number | null;
   unrealized_fx_gain_account_id?: number | null;
   unrealized_fx_loss_account_id?: number | null;
+  bank_revaluation_account_id?: number | null;
+  bank_charges_account_id?: number | null;
+  bank_interest_account_id?: number | null;
   fiscal_default_purchase_class_code?: string | null;
   clear_fiscal_default_purchase_class_code?: boolean;
 }

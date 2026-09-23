@@ -21,9 +21,13 @@ import { Combobox } from "@/design/components/combobox";
 import { StatusChip } from "@/design/components/status-chip";
 import { ThemeToggle } from "@/design/components/theme-toggle";
 import { useToast } from "@/design/components/toast";
-import { useAccounts, useCreateAccount, useUpdateAccount } from "@/features/gl/hooks";
-import { toOptions } from "@/features/gl/lookups";
+import { useBankAccounts } from "@/features/banking/hooks";
+import { useAccounts, useCreateAccount, useCurrencies, useUpdateAccount } from "@/features/gl/hooks";
+import { byId, toOptions } from "@/features/gl/lookups";
 import { controlTypeLabel, type GLAccount } from "@/features/gl/types";
+import { QueryState } from "@/design/components/query-state";
+import { ControlType } from "@/lib/api-enums";
+import { dotted } from "@/lib/format";
 import { useApiErrorToast } from "@/lib/use-api-error-toast";
 
 interface AccountNode {
@@ -83,6 +87,20 @@ export default function ChartOfAccountsPage() {
   const [isControl, setIsControl] = useState(false);
   const [controlType, setControlType] = useState<string>("");
 
+  /**
+   * The bank/cash control account just created, whose banking master row the same request made
+   * (P8 decision 2). Shown rather than left implicit: the row is where the account's currency
+   * and bank details are set, and an operator who created `1122 Bank Account EUR` here needs to
+   * see that it is registered in the **base** currency until somebody says otherwise.
+   */
+  const [createdCashAccount, setCreatedCashAccount] = useState<GLAccount | null>(null);
+  const bankAccounts = useBankAccounts({ enabled: createdCashAccount !== null });
+  const currencies = useCurrencies();
+  const currencyById = byId(currencies.data);
+  const createdRow = createdCashAccount
+    ? (bankAccounts.data ?? []).find((row) => row.gl_account_id === createdCashAccount.id)
+    : undefined;
+
   const filteredAccounts = useMemo(() => {
     return (accounts ?? []).filter((acc) => {
       if (selectedClass !== "all" && acc.class !== selectedClass) return false;
@@ -107,7 +125,7 @@ export default function ChartOfAccountsPage() {
 
   async function handleCreateAccount() {
     try {
-      await createAccount.mutateAsync({
+      const created = await createAccount.mutateAsync({
         code,
         name,
         class_: accountClass,
@@ -121,6 +139,11 @@ export default function ChartOfAccountsPage() {
       setName("");
       setParentId("");
       toast.show({ title: t("newAccount"), description: `${code} · ${name}`, tone: "success" });
+      setCreatedCashAccount(
+        created.control_type === ControlType.BANK || created.control_type === ControlType.CASH
+          ? created
+          : null,
+      );
     } catch (err) {
       showApiError(err, t("accountCreateFailed"));
     }
@@ -396,6 +419,56 @@ export default function ChartOfAccountsPage() {
               ))}
             </div>
           </div>
+
+          {createdCashAccount ? (
+            <section
+              aria-labelledby="created-bank-row"
+              data-testid="created-bank-row"
+              className="rounded-[var(--radius-card)] border border-[var(--vinea-info)]/40 bg-[var(--vinea-info-soft)] p-4"
+            >
+              <div className="flex items-start justify-between gap-4">
+                <div className="space-y-1">
+                  <h2 id="created-bank-row" className="text-sm font-semibold text-[var(--vinea-ink)]">
+                    {t("bankRowCreated", {
+                      account: dotted(createdCashAccount.code, createdCashAccount.name),
+                    })}
+                  </h2>
+                  {createdRow ? (
+                    <dl className="grid grid-cols-4 gap-x-6 gap-y-1 text-xs">
+                      <dt className="text-[var(--vinea-ink-subtle)]">{t("bankRowCode")}</dt>
+                      <dt className="text-[var(--vinea-ink-subtle)]">{t("bankRowName")}</dt>
+                      <dt className="text-[var(--vinea-ink-subtle)]">{t("bankRowKind")}</dt>
+                      <dt className="text-[var(--vinea-ink-subtle)]">{t("bankRowCurrency")}</dt>
+                      <dd className="font-mono font-semibold text-[var(--vinea-ink)]">{createdRow.code}</dd>
+                      <dd className="text-[var(--vinea-ink)]">{createdRow.name}</dd>
+                      <dd className="text-[var(--vinea-ink)]">{t(`controlTypes.${createdRow.kind}`)}</dd>
+                      <dd className="font-mono text-[var(--vinea-ink)]">
+                        {currencyById.get(createdRow.currency_id)?.code ?? "—"}
+                      </dd>
+                    </dl>
+                  ) : (
+                    <QueryState query={bankAccounts} isEmpty={false} testId="created-bank-row" className="py-2 text-left" />
+                  )}
+                  <p className="text-xs text-[var(--vinea-ink-muted)]">{t("bankRowNote")}</p>
+                </div>
+                <div className="flex shrink-0 flex-col items-end gap-2">
+                  <Link
+                    href="/maintenance/bank-accounts"
+                    className="text-xs font-medium text-[var(--vinea-brand)] hover:underline"
+                  >
+                    {t("openBankAccounts")}
+                  </Link>
+                  <button
+                    type="button"
+                    onClick={() => setCreatedCashAccount(null)}
+                    className="text-xs text-[var(--vinea-ink-subtle)] hover:text-[var(--vinea-ink)]"
+                  >
+                    {t("dismiss")}
+                  </button>
+                </div>
+              </div>
+            </section>
+          ) : null}
 
           {/* Tree View */}
           {isLoading ? (

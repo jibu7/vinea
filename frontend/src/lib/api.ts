@@ -34,11 +34,14 @@ async function refreshSession(): Promise<boolean> {
 }
 
 async function request<T>(path: string, init: RequestInit = {}, retried = false): Promise<T> {
+  // A `FormData` body sets its own `multipart/form-data` header, boundary included; naming a
+  // content type here would drop the boundary and the server could not read a single field.
+  const json = init.body !== undefined && !(init.body instanceof FormData);
   const res = await fetch(`${API_BASE}${path}`, {
     ...init,
     credentials: "include",
     headers: {
-      ...(init.body ? { "Content-Type": "application/json" } : {}),
+      ...(json ? { "Content-Type": "application/json" } : {}),
       ...init.headers,
     },
   });
@@ -97,10 +100,18 @@ export async function downloadFromApi(path: string, fallbackFilename: string): P
   URL.revokeObjectURL(url);
 }
 
+/** The request body: a file upload goes as it is, anything else as JSON. The bank statement
+ * endpoints take the export as multipart (`app/api/v1/banking.py` says why), and they are
+ * called through `api.post` like everything else, so the caller register can see them. */
+function body(data: unknown): BodyInit | undefined {
+  if (data === undefined) return undefined;
+  return data instanceof FormData ? data : JSON.stringify(data);
+}
+
 export const api = {
   get: <T>(path: string) => request<T>(path),
   post: <T>(path: string, data?: unknown, headers?: HeadersInit) =>
-    request<T>(path, { method: "POST", body: data !== undefined ? JSON.stringify(data) : undefined, headers }),
+    request<T>(path, { method: "POST", body: body(data), headers }),
   patch: <T>(path: string, data?: unknown, headers?: HeadersInit) =>
     request<T>(path, { method: "PATCH", body: data !== undefined ? JSON.stringify(data) : undefined, headers }),
   put: <T>(path: string, data?: unknown, headers?: HeadersInit) =>
