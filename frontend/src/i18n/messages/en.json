@@ -3273,7 +3273,7 @@
       "confirmImport": "Import statement",
       "previewFailed": "Couldn't read the file",
       "previewFirst": "Choose the file and preview it first.",
-      "fixErrorsFirst": "{count} rows cannot be read. Nothing is imported until the file reads cleanly.",
+      "fixErrorsFirst": "Rows that cannot be read: {count}. Nothing is imported until the file reads cleanly.",
       "alreadyImported": "This file is already imported on this account. Void that statement first to import it again.",
       "keyBalances": "Key both balances to import.",
       "imported": "{number} imported",
@@ -3293,7 +3293,7 @@
       "moneyOutAria": "Money out, line {line}",
       "removeLineAria": "Remove line {line}",
       "addLine": "Add line",
-      "manualTotal": "{count} lines · net {total}",
+      "manualTotal": "Lines: {count} · net {total}",
       "saveStatement": "Save statement",
       "keyed": "{number} keyed",
       "keyFailed": "Couldn't save the statement"
@@ -3304,7 +3304,7 @@
       "heading": "Statement {number}",
       "range": "{from} to {to}",
       "alreadyVoid": "This statement is void.",
-      "hasMatches": "{count} lines are in a match. Unmatch them on the reconciliation before voiding.",
+      "hasMatches": "Lines in a match: {count}. Unmatch them on the reconciliation before voiding.",
       "voided": "{number} voided",
       "voidFailed": "Couldn't void the statement",
       "void": "Void statement",
@@ -3333,7 +3333,7 @@
         "manual": "by hand",
         "tick": "ticked"
       },
-      "ledgerLines": "{count} ledger lines"
+      "ledgerLines": "Ledger lines: {count}"
     },
     "reconciliations": {
       "title": "Bank reconciliation",
@@ -3360,7 +3360,7 @@
         "locked": "Locked"
       },
       "liveOnWorkspace": "Live on the workspace",
-      "count": "{count} reconciliations · {locked} locked",
+      "count": "Reconciliations: {count} · locked: {locked}",
       "newTitle": "New reconciliation",
       "newDescription": "The date the reconciliation proves, and the balance the bank's statement shows at that date.",
       "reconciliationDate": "Reconciliation date",
@@ -3371,7 +3371,7 @@
     "workspace": {
       "notFound": "No such reconciliation.",
       "heading": "Reconciliation {number}",
-      "lockUnmatched": "{count} statement lines are in no match.",
+      "lockUnmatched": "Statement lines in no match: {count}.",
       "lockDifference": "The difference is {difference}. A reconciliation locks at zero.",
       "reopenNotLatest": "Only the latest locked reconciliation on this account can be reopened, and that is {number}.",
       "reopenOpenExists": "{number} is open on this account. Lock it before reopening this one.",
@@ -3392,7 +3392,7 @@
       "statementBalance": "Statement balance",
       "ledgerBalance": "Ledger balance",
       "outstanding": "Outstanding",
-      "outstandingCount": "{count} ledger lines",
+      "outstandingCount": "Ledger lines: {count}",
       "adjustedBank": "Adjusted bank balance",
       "unmatchedStatement": "Unmatched statement lines",
       "difference": "Difference",
@@ -3402,14 +3402,14 @@
       "lock": "Lock",
       "reopen": "Reopen",
       "lockedNote": "{number} is locked. Its matches cannot be changed until it is reopened.",
-      "selectedStatement": "Statement: {count} lines, {total}",
-      "selectedLedger": "Ledger: {count} lines, {total}",
+      "selectedStatement": "Statement lines: {count} · {total}",
+      "selectedLedger": "Ledger lines: {count} · {total}",
       "selectionBalances": "Selection balances",
       "selectionOutBy": "Selection is out by {difference}",
       "autoMatch": "Auto-match",
       "match": "Match",
       "autoMatchResult": "Auto-match: {matched} matched, {ambiguous} left for a person to choose",
-      "statementPane": "Statement lines ({count})",
+      "statementPane": "Statement lines · {count}",
       "noStatementLines": "No statement lines on or before this date. Import the bank's statement first.",
       "date": "Date",
       "description": "Description",
@@ -3418,7 +3418,7 @@
       "selectStatementLine": "Select statement line {text}",
       "matchedTo": "Matched to {entries}",
       "unmatch": "Unmatch",
-      "ledgerPane": "Ledger lines ({count})",
+      "ledgerPane": "Ledger lines · {count}",
       "noLedgerLines": "No ledger lines on this account on or before this date.",
       "entry": "Entry",
       "selectLedgerLine": "Select ledger line {entry}",
@@ -3429,7 +3429,8 @@
       "reopenDescription": "The matches stand; what is withdrawn is the sign-off. The account's last reconciled date goes back to the reconciliation before this one.",
       "reopenReason": "Reason for reopening",
       "confirmReopen": "Reopen reconciliation",
-      "postFromLine": "Post from line"
+      "postFromLine": "Post from line",
+      "matchUnbalanced": "Refused: the selection is out by {difference}. A match must balance; the difference is posted from its statement line, never matched."
     },
     "postFromLine": {
       "prefilledByRule": "Prefilled by a bank rule: {account}. Nothing posts until you press Post.",

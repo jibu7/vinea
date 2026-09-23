@@ -19,7 +19,7 @@ import { isApiError, useHasPermission } from "@/features/auth/hooks";
 import { useCompanyDetails } from "@/features/gl/hooks";
 import { ReconciliationStatus } from "@/lib/api-enums";
 import { newDraftId } from "@/lib/drafts";
-import { dotted, formatDate, formatQuantity, todayIso } from "@/lib/format";
+import { dotted, formatDate, formatQuantity, todayIso, trimDecimalString } from "@/lib/format";
 import { useApiErrorToast } from "@/lib/use-api-error-toast";
 import { BankAccountFilter, useAccountMoney, useBankAccountChoice } from "./account-picker";
 import { useDefaultStatementBalance, useOpenReconciliation, useReconciliations } from "./hooks";
@@ -69,7 +69,8 @@ export function ReconciliationsScreen({ requestedAccountId }: { requestedAccount
   // The default follows the date until the person types over it.
   useEffect(() => {
     if (!balanceTouched && defaultBalance.data) {
-      setBalance(defaultBalance.data.statement_balance ?? "");
+      const found = defaultBalance.data.statement_balance;
+      setBalance(found === null ? "" : trimDecimalString(found));
     }
   }, [defaultBalance.data, balanceTouched]);
 

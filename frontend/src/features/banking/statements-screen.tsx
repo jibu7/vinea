@@ -77,10 +77,8 @@ export function StatementsScreen({ requestedAccountId }: { requestedAccountId: n
   const { accounts, banks, selected } = useBankAccountChoice(requestedAccountId);
   const { currency, money } = useAccountMoney(selected);
   const [includeVoid, setIncludeVoid] = useState(false);
-  const statements = useStatements(selected?.id ?? null);
-  const rows = (statements.data ?? []).filter(
-    (row) => includeVoid || row.status !== StatementStatus.VOID,
-  );
+  const statements = useStatements(selected?.id ?? null, includeVoid);
+  const rows = statements.data ?? [];
 
   // --- Import ---------------------------------------------------------------------------------
   const preview = usePreviewStatement();

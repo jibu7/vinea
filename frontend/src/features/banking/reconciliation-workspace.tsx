@@ -211,7 +211,11 @@ export function ReconciliationWorkspace({ reconciliationId }: { reconciliationId
       setSelectedLedger(new Set());
       toast.show({ title: t("matched"), tone: "success" });
     } catch (err) {
-      if (isApiError(err)) setMatchError(err.message);
+      // `match_unbalanced` is said in the screen's own words, with the figure formatted in the
+      // account's currency — the server's message carries it as a raw `NUMERIC(20,6)`.
+      if (isApiError(err) && err.code === "match_unbalanced") {
+        setMatchError(t("matchUnbalanced", { difference: money(selectionBalance) }));
+      } else if (isApiError(err)) setMatchError(err.message);
       else showApiError(err, t("matchFailed"));
     }
   }

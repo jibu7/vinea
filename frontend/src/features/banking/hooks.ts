@@ -129,10 +129,14 @@ export function useUpdateBankRule() {
 
 // --- Statements (P8 step 7) ------------------------------------------------------------------
 
-export function useStatements(bankAccountId: number | null) {
+/** A voided statement leaves every listing (decision 3) — so it is asked for by name. */
+export function useStatements(bankAccountId: number | null, includeVoid = false) {
   return useQuery({
-    queryKey: [ROOT, "statements", bankAccountId],
-    queryFn: () => api.get<Statement[]>(`/banking/statements?bank_account_id=${bankAccountId}&limit=200`),
+    queryKey: [ROOT, "statements", bankAccountId, { includeVoid }],
+    queryFn: () =>
+      api.get<Statement[]>(
+        `/banking/statements?bank_account_id=${bankAccountId}&limit=200${includeVoid ? "&include_void=true" : ""}`,
+      ),
     enabled: bankAccountId !== null,
   });
 }
