@@ -21,6 +21,7 @@ import { formatDate, formatQuantity, todayIso } from "@/lib/format";
 import { useApiErrorToast } from "@/lib/use-api-error-toast";
 import { BankAccountFilter, useAccountMoney, useBankAccountChoice } from "./account-picker";
 import {
+  useAutoMatch,
   useImportStatement,
   useKeyManualStatement,
   usePreviewStatement,
@@ -61,7 +62,9 @@ function signedAmount(line: ManualLine): string {
  * lines it already holds, every error by row — and writes nothing until *Import* is pressed on
  * that preview; **Key a paper statement** takes the lines one by one onto the same table and the
  * same path. Either way the result is "N new, M skipped": an overlapping export is the normal
- * case, not a fault.
+ * case, not a fault. After an import the screen runs the account's **auto-match** (decision 4,
+ * "on import, and on demand" — the on-import half), so the result reads "N new, M skipped,
+ * K matched" for anyone who may reconcile.
  *
  * Nothing on this screen moves money. A statement line becomes a ledger line only by somebody
  * posting it from the reconciliation workspace, through the kernel.
@@ -71,7 +74,9 @@ export function StatementsScreen({ requestedAccountId }: { requestedAccountId: n
   const tc = useTranslations("banking.common");
   const toast = useToast();
   const showApiError = useApiErrorToast();
-  const canImport = useHasPermission()("bank:statement_import");
+  const hasPermission = useHasPermission();
+  const canImport = hasPermission("bank:statement_import");
+  const canReconcile = hasPermission("bank:reconcile");
   const company = useCompanyDetails();
 
   const { accounts, banks, selected } = useBankAccountChoice(requestedAccountId);
@@ -91,6 +96,10 @@ export function StatementsScreen({ requestedAccountId }: { requestedAccountId: n
   const [keyedClosing, setKeyedClosing] = useState("");
   const [importError, setImportError] = useState<string | null>(null);
   const [imported, setImported] = useState<StatementImportResult | null>(null);
+  /** How many lines the auto-match chained to Import matched, or `null` when it did not run —
+   * the importer lacks `bank:reconcile`, or the statement was keyed rather than imported. */
+  const [autoMatched, setAutoMatched] = useState<number | null>(null);
+  const autoMatch = useAutoMatch();
 
   function startImport() {
     setFile(null);
@@ -143,9 +152,24 @@ export function StatementsScreen({ requestedAccountId }: { requestedAccountId: n
         idempotencyKey: importKey,
       });
       setImported(result);
+      setAutoMatched(null);
       setImportOpen(false);
       setImportKey(newDraftId());
       toast.show({ title: t("imported", { number: result.statement.number }), tone: "success" });
+      // Decision 4's "auto-match on import", read as **the screen chaining the account's
+      // auto-match to the confirm** — the import service writes lines and nothing else, and the
+      // tape calls auto-match after each import explicitly. It is the same endpoint the
+      // workspace's Auto-match presses, so it needs `bank:reconcile`; without it the import
+      // stands and the result says "N new, M skipped" as before. A failure here is not the
+      // import's: the statement is in, and the workspace's Auto-match is one press away.
+      if (canReconcile) {
+        try {
+          const matched = await autoMatch.mutateAsync({ bankAccountId: selected.id });
+          setAutoMatched(matched.matched.length);
+        } catch (err) {
+          showApiError(err, t("autoMatchFailed"));
+        }
+      }
     } catch (err) {
       if (isApiError(err)) setImportError(err.message);
       else showApiError(err, t("importFailed"));
@@ -205,6 +229,7 @@ export function StatementsScreen({ requestedAccountId }: { requestedAccountId: n
         idempotencyKey: manualKey,
       });
       setImported(result);
+      setAutoMatched(null);
       setManualOpen(false);
       setManualKey(newDraftId());
       toast.show({ title: t("keyed", { number: result.statement.number }), tone: "success" });
@@ -252,10 +277,16 @@ export function StatementsScreen({ requestedAccountId }: { requestedAccountId: n
           <div className="flex flex-wrap items-center gap-3 text-sm" data-testid="import-result">
             <StatusChip tone="success">{imported.statement.number}</StatusChip>
             <span className="text-[var(--vinea-ink)]">
-              {t("resultCounts", {
-                fresh: formatQuantity(imported.new_count, 0),
-                skipped: formatQuantity(imported.skipped_count, 0),
-              })}
+              {autoMatched === null
+                ? t("resultCounts", {
+                    fresh: formatQuantity(imported.new_count, 0),
+                    skipped: formatQuantity(imported.skipped_count, 0),
+                  })
+                : t("resultCountsMatched", {
+                    fresh: formatQuantity(imported.new_count, 0),
+                    skipped: formatQuantity(imported.skipped_count, 0),
+                    matched: formatQuantity(autoMatched, 0),
+                  })}
             </span>
             <Link
               href={`/bank/statements/${imported.statement.id}`}
