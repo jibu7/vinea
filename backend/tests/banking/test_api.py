@@ -1167,6 +1167,48 @@ def test_a_payment_run_is_previewed_posted_and_reversed_over_http(
     )
 
 
+def test_the_preview_names_a_suppliers_open_credits_and_never_nets_them(
+    client: TestClient,
+) -> None:
+    """Decision 7: a supplier with an unallocated payment on account is **listed with a warning
+    naming it**, and the run pays the invoice in full — netting is P4's Allocate screen's job.
+    `/ap/payment-runs/new` renders the warning from exactly this string."""
+    _signup(client)
+    bank = _bank(client)
+    _cashbook(client, amount="500000", on="2026-09-01", kind="receipt", key="cb-1")
+    s1 = _supplier(client, name="Kigali Timber", code="S1")
+    sin1 = _supplier_invoice(client, s1, amount="236000", on="2026-09-01")
+    accounts = {row["code"]: row for row in client.get("/api/v1/gl/accounts").json()}
+    on_account = client.post(
+        "/api/v1/subledger/ap/documents",
+        headers={"Idempotency-Key": "pmt-on-account"},
+        json={
+            "kind": "settlement",
+            "partner_id": s1["id"],
+            "document_date": "2026-09-05",
+            "description": "Payment on account",
+            "amount": "20000",
+            "cash_account_id": accounts["1120"]["id"],
+            "instrument_type": "bank",
+        },
+    )
+    assert on_account.status_code == 201, on_account.text
+
+    preview = client.post(
+        "/api/v1/banking/payment-runs/preview",
+        json={
+            "bank_account_id": bank["id"],
+            "payment_date": "2026-09-10",
+            "lines": [{"document_id": sin1["id"]}],
+        },
+    )
+
+    assert preview.status_code == 200, preview.json()
+    (supplier,) = preview.json()["suppliers"]
+    assert supplier["warnings"] == [f"open_credits: {on_account.json()['number']}"]
+    assert Decimal(supplier["total"]) == Decimal(236000), "never netted"
+
+
 def test_paying_more_than_is_open_is_refused_over_http(client: TestClient) -> None:
     """The refusal reaches the screen as `{code, message, field_errors}` with the line named,
     which is what lets the selection grid mark the row rather than the form."""
