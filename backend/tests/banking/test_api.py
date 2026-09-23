@@ -924,6 +924,32 @@ def test_the_supplier_screen_keeps_bank_details(client: TestClient) -> None:
     assert cleared.json()["bank_account_holder"] is None
 
 
+def test_the_suppliers_screen_replaces_the_three_as_one_form(client: TestClient) -> None:
+    """The Bank details section sends the flag with the three values: replace, not merge. A
+    holder deleted on the screen stays deleted — without the flag, a blank means "leave it"."""
+    _signup(client)
+    supplier = _supplier(client, name="Kigali Timber", code="S1")
+    assert supplier["bank_account_holder"] is not None
+
+    replaced = client.patch(
+        f"/api/v1/subledger/ap/partners/{supplier['id']}",
+        json={
+            "clear_bank_details": True,
+            "bank_name": "I&M Bank Rwanda",
+            "bank_account_number": "2000-778-01",
+            "bank_account_holder": None,
+        },
+    )
+
+    assert replaced.status_code == 200
+    body = replaced.json()
+    assert (body["bank_name"], body["bank_account_number"], body["bank_account_holder"]) == (
+        "I&M Bank Rwanda",
+        "2000-778-01",
+        None,
+    )
+
+
 def test_a_payment_run_is_previewed_posted_and_reversed_over_http(
     client: TestClient,
 ) -> None:

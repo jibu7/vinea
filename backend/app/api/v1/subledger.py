@@ -209,8 +209,15 @@ def update_partner(
     # One flag for all three, because bank details are one fact: a supplier who changed banks
     # and whose new account number has not arrived yet has no bank details, not a stale bank
     # name and a blank number — and the instruction file would happily print the pair.
+    #
+    # With values beside it, the flag means **replace all three with these**, a blank one
+    # included. That is what the Suppliers screen's Bank details section sends (P8 step 6): it
+    # holds the three fields as one form, and without it a holder name deleted on the screen
+    # would come back on the next read, because a blank alone means "leave it alone".
     bank = {
-        field: None if payload.clear_bank_details else getattr(payload, field) or ...
+        field: (getattr(payload, field) or None)
+        if payload.clear_bank_details
+        else getattr(payload, field) or ...
         for field in ("bank_name", "bank_account_number", "bank_account_holder")
     }
     masters.update_partner(

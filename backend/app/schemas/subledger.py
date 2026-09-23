@@ -58,7 +58,8 @@ class PartnerUpdate(BaseModel):
     currency_id: int | None = None
     clear_currency: bool = False
     #: `None` leaves the field alone; the `clear_` flag beside it empties it, the same shape
-    #: the codes and the currency already use.
+    #: the codes and the currency already use. The flag *with* values replaces all three —
+    #: what the Suppliers screen sends, so one field can be blanked on its own.
     bank_name: str | None = Field(default=None, max_length=200)
     bank_account_number: str | None = Field(default=None, max_length=50)
     bank_account_holder: str | None = Field(default=None, max_length=200)
