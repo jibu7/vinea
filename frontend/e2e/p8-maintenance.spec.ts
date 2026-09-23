@@ -3,6 +3,7 @@ import { expect, test, type Page } from "@playwright/test";
 import {
   PRIMARY_EMAIL,
   READONLY_EMAIL,
+  SECONDARY_COMPANY,
   SECONDARY_EMAIL,
   accountIdByCode,
   login,
@@ -36,8 +37,8 @@ import { todayIso } from "../src/lib/format";
  * reload, not from the form that typed them.
  *
  * **The fixture is put back** where another spec reads it: the Defaults key this file moves
- * is restored in the same test. Everything else it creates is its own, suffixed, and read by
- * nobody else.
+ * and the seeded supplier's bank details are each restored in the same test. Everything else
+ * it creates is its own, suffixed, and read by nobody else.
  */
 
 const SUFFIX = String(Date.now()).slice(-6);
@@ -100,6 +101,11 @@ test.describe("P8 step 6 — banking maintenance", () => {
   // PATH: the other company — the seeded pair and nothing else (decision 9).
   test("Kivu Traders holds only the seeded pair", async ({ page }) => {
     await login(page, SECONDARY_EMAIL);
+    // `SECONDARY_EMAIL` holds two memberships, so the session has no company until one is
+    // chosen — pick Kivu Traders through the header switcher, the way an operator does.
+    await page.locator("header button").first().click();
+    await page.getByRole("button", { name: SECONDARY_COMPANY, exact: true }).click();
+    await expect(page.locator("header button").first()).toHaveText(SECONDARY_COMPANY);
     await openBankAccounts(page);
     await expect(page.locator("tr[data-bank-account]")).toHaveCount(2);
     await expect(page.locator('tr[data-bank-account="1121"]')).toHaveCount(0);
@@ -344,6 +350,24 @@ test.describe("P8 step 6 — banking maintenance", () => {
     drawer = await openSupplier();
     await expect(drawer.getByLabel("Beneficiary name", { exact: true })).toHaveValue("");
     await expect(drawer.getByLabel("Beneficiary bank", { exact: true })).toHaveValue("I&M Bank Rwanda");
+
+    // Put back: the seeded supplier holds no bank details, and step 7's payment run reads
+    // exactly that (`bank_details_missing`).
+    await drawer.getByLabel("Beneficiary bank", { exact: true }).fill("");
+    await drawer.getByLabel("Beneficiary account number", { exact: true }).fill("");
+    await drawer.getByRole("button", { name: "Save details", exact: true }).click();
+    await expect(page.getByText("Supplier saved").first()).toBeVisible();
+    const suppliers = (await pageFetch(page, "/subledger/ap/partners")).json as Array<{
+      name: string;
+      bank_name: string | null;
+      bank_account_number: string | null;
+      bank_account_holder: string | null;
+    }>;
+    expect(suppliers.find((row) => row.name === "Musanze Packaging Ltd")).toMatchObject({
+      bank_name: null,
+      bank_account_number: null,
+      bank_account_holder: null,
+    });
   });
 
   // PATH: a cash control account created on the chart — the master row the same request
@@ -358,7 +382,7 @@ test.describe("P8 step 6 — banking maintenance", () => {
     await page.getByRole("button", { name: "New account", exact: true }).click();
     const dialog = page.getByRole("dialog");
     await dialog.getByLabel("Code", { exact: true }).fill(CASH_GL_CODE);
-    await dialog.getByLabel("Account class", { exact: true }).selectOption("asset");
+    await dialog.getByLabel("Class", { exact: true }).selectOption("asset");
     await dialog.getByLabel("Name", { exact: true }).fill(CASH_GL_NAME);
     await pickCombobox(page, "Parent account", "1100", { within: dialog });
     await dialog.getByLabel("Control account", { exact: true }).check();
