@@ -388,7 +388,7 @@ export function BankAccountsScreen() {
                     <TD className="text-xs text-[var(--vinea-ink)]">
                       {account.bank_name ?? tc("emptyValue")}
                       {account.account_number ? (
-                        <p className="font-mono text-[11px] text-[var(--vinea-ink-subtle)]">
+                        <p className="whitespace-nowrap font-mono text-[11px] text-[var(--vinea-ink-subtle)]">
                           {account.account_number}
                         </p>
                       ) : null}
