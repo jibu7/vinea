@@ -1,8 +1,13 @@
 import type {
   BankAccountKind,
+  BankMatchKind,
+  BankMatchRule,
+  ReconciliationStatus,
   StatementAmountMode,
   StatementFormatPreset,
   StatementSignConvention,
+  StatementSource,
+  StatementStatus,
 } from "@/lib/api-enums";
 
 /**
@@ -141,4 +146,214 @@ export interface BankRulePayload {
   description: string | null;
   priority: number;
   is_active?: boolean;
+}
+
+// --- Statements (P8 decision 3) ------------------------------------------------------------
+
+export interface Statement {
+  id: number;
+  bank_account_id: number;
+  number: string;
+  source: StatementSource;
+  file_name: string | null;
+  from_date: string;
+  to_date: string;
+  opening_balance: string;
+  closing_balance: string;
+  line_count: number;
+  lines_skipped: number;
+  status: StatementStatus;
+  imported_at: string;
+}
+
+export interface StatementLine {
+  id: number;
+  statement_id: number;
+  bank_account_id: number;
+  line_no: number;
+  value_date: string;
+  booking_date: string | null;
+  description: string;
+  reference: string | null;
+  /** Credit positive, as stored. */
+  amount: string;
+  balance_after: string | null;
+  external_id: string | null;
+}
+
+export interface StatementLineState {
+  match_id: number | null;
+  match_kind: BankMatchKind | null;
+  match_rule: BankMatchRule | null;
+  reconciliation_number: string | null;
+  journal_line_count: number;
+}
+
+export interface StatementLineDetail extends StatementLine {
+  state: StatementLineState;
+}
+
+export interface StatementDetail extends Statement {
+  format_snapshot: StatementFormat | null;
+  lines: StatementLineDetail[];
+}
+
+/** "N new, M skipped" — an overlapping export is the normal case, so the counts are the result. */
+export interface StatementImportResult {
+  statement: Statement;
+  new_count: number;
+  skipped_count: number;
+  replayed: boolean;
+}
+
+export interface ManualStatementLinePayload {
+  value_date: string;
+  description: string;
+  reference: string | null;
+  amount: string;
+  balance_after: string | null;
+}
+
+export interface ManualStatementPayload {
+  bank_account_id: number;
+  opening_balance: string;
+  closing_balance: string;
+  lines: ManualStatementLinePayload[];
+}
+
+// --- Matching (P8 decision 4) ----------------------------------------------------------------
+
+/** One ledger line on the account, the workspace's right pane. `amount` is the **reconciled**
+ * amount — the account's own currency — so it is comparable with the statement pane. */
+export interface LedgerLine {
+  journal_line_id: number;
+  entry_id: number;
+  entry_number: string;
+  entry_date: string;
+  doc_type: string;
+  description: string | null;
+  reference: string | null;
+  amount: string;
+  match_id: number | null;
+  match_kind: BankMatchKind | null;
+  match_rule: BankMatchRule | null;
+  reconciliation_number: string | null;
+  /** "dated inside BRC-n": posted after that reconciliation locked, dated before its date. */
+  dated_inside: string | null;
+  is_outstanding: boolean;
+}
+
+export interface Match {
+  id: number;
+  bank_account_id: number;
+  kind: BankMatchKind;
+  rule: BankMatchRule;
+  reconciliation_id: number | null;
+  matched_at: string;
+  note: string | null;
+  statement_line_ids: number[];
+  journal_line_ids: number[];
+}
+
+export interface MatchCandidate {
+  journal_line_id: number;
+  entry_id: number;
+  entry_number: string;
+  entry_date: string;
+  doc_type: string;
+  description: string | null;
+  reference: string | null;
+  amount: string;
+  rule: BankMatchRule;
+}
+
+export interface AutoMatchResult {
+  matched: Match[];
+  /** statement line id → the candidates that tied. */
+  ambiguous: Record<string, MatchCandidate[]>;
+}
+
+export interface Prefill {
+  rule_id: number | null;
+  gl_account_id: number | null;
+  tax_code_id: number | null;
+  partner_type: string | null;
+  partner_id: number | null;
+  description: string;
+  kind: "receipt" | "payment";
+}
+
+export interface PostCashbookFromLinePayload {
+  gl_account_id: number;
+  tax_code_id: number | null;
+  description: string | null;
+  reference: string | null;
+  entry_date: string | null;
+  branch_id: number | null;
+  project_id: number | null;
+}
+
+export interface PostSettlementFromLinePayload {
+  partner_id: number;
+  description: string | null;
+  reference: string | null;
+  document_date: string | null;
+}
+
+export interface PostedFromStatement {
+  entry_id: number;
+  entry_number: string;
+  journal_line_id: number;
+  match: Match;
+  document_id: number | null;
+  document_number: string | null;
+}
+
+// --- Reconciliation (P8 decision 5) ----------------------------------------------------------
+
+export interface OutstandingLine {
+  journal_line_id: number;
+  entry_id: number;
+  entry_number: string;
+  entry_date: string;
+  doc_type: string;
+  description: string | null;
+  amount: string;
+  dated_inside: string | null;
+}
+
+export interface Figures {
+  reconciliation_date: string;
+  statement_balance: string;
+  ledger_balance: string;
+  outstanding_total: string;
+  difference: string;
+  adjusted_bank_balance: string;
+  outstanding: OutstandingLine[];
+  unmatched_statement: StatementLine[];
+  unmatched_statement_count: number;
+}
+
+export interface Reconciliation {
+  id: number;
+  bank_account_id: number;
+  number: string;
+  reconciliation_date: string;
+  statement_balance: string;
+  ledger_balance: string | null;
+  outstanding_total: string | null;
+  difference: string | null;
+  status: ReconciliationStatus;
+  high_water_line_id: number | null;
+  locked_at: string | null;
+  reopened_at: string | null;
+  reopened_reason: string | null;
+}
+
+export interface ReconciliationDetail extends Reconciliation {
+  /** Live: what the date computes now. */
+  figures: Figures;
+  /** A locked one only: what it said at the lock. */
+  stored: Figures | null;
+  late_line_ids: number[];
 }

@@ -151,59 +151,22 @@ NO_UI: dict[str, str] = {
     # Every one deleted by a screen a person can open and press, and pressed by
     # `e2e/p8-maintenance.spec.ts` — not by a hook written to satisfy the matcher.
     #
-    # --- GAP: P8 step 7's Bank statements screen --------------------------------------------------
+    # --- P8 step 7a carried twelve lines. It carries none of them. ---------------------------
     #
-    # Three lines: **Transactions → General Ledger → Bank statements** (`/bank/statements`) —
-    # the confirm half of Import, the manual keying path, and Void.
-    "POST /api/v1/banking/statements": (
-        "GAP (P8, step 7) — Transactions → General Ledger → Bank statements: the confirm half "
-        "of Import. Its preview half is already called, by step 6's *Test with a file*."
-    ),
-    "POST /api/v1/banking/statements/manual": (
-        "GAP (P8, step 7) — keying a paper statement line by line on the same screen."
-    ),
-    "POST /api/v1/banking/statements/{statement_id}/void": (
-        "GAP (P8, step 7) — Void on the statement detail. The only correction a statement has."
-    ),
-    # --- GAP: P8 step 2's workspace, which is step 7's screen -----------------------------------
+    # Three for **Transactions → General Ledger → Bank statements** (`/bank/statements`): the
+    # confirm half of *Import* (`POST /banking/statements`), *Key a paper statement*
+    # (`…/statements/manual`) and *Void* on a statement's detail (`…/{id}/void`). Nine for **Bank
+    # reconciliation** (`/bank/reconciliations`): *New* on the listing, and on the workspace
+    # *Auto-match*, *Match*, *Tick*, *Unmatch*, the two halves of *Post from line* (the cashbook
+    # drawer and the receipt / payment drawer), *Lock* and *Reopen*.
     #
-    # Nine more, all one screen: **Transactions → General Ledger → Bank reconciliation**
-    # (`/bank/reconciliations/{id}`, the workspace). Auto-match, select-on-both-sides → Match,
-    # Unmatch, Tick on a ledger line, the two Post-from-line drawers, and the New / Lock /
-    # Reopen of the reconciliation itself. They exist now because step 2 builds the services
-    # and step 7 builds the screen; the same shape P6 and P7 each carried and each cleared.
-    "POST /api/v1/banking/accounts/{bank_account_id}/auto-match": (
-        "GAP (P8, step 7) — *Auto-match* on the reconciliation workspace."
-    ),
-    "POST /api/v1/banking/matches": (
-        "GAP (P8, step 7) — select on both sides, then *Match*. The balance is shown beside "
-        "the button and `match_unbalanced` renders inline."
-    ),
-    "POST /api/v1/banking/matches/tick": (
-        "GAP (P8, step 7) — *Tick* on a ledger line: paper mode, where there is no statement."
-    ),
-    "DELETE /api/v1/banking/matches/{match_id}": (
-        "GAP (P8, step 7) — *Unmatch*, which the workspace refuses on a locked reconciliation "
-        "before the button rather than after it."
-    ),
-    "POST /api/v1/banking/statement-lines/{statement_line_id}/post-cashbook": (
-        "GAP (P8, step 7) — *Post from line* opening the cashbook-entry drawer, prefilled by "
-        "the account's rules."
-    ),
-    "POST /api/v1/banking/statement-lines/{statement_line_id}/post-settlement": (
-        "GAP (P8, step 7) — the same drawer's receipt / payment half."
-    ),
-    "POST /api/v1/banking/reconciliations": (
-        "GAP (P8, step 7) — *New* on the reconciliation listing: account, date, and the "
-        "statement balance defaulted from the latest imported line."
-    ),
-    "POST /api/v1/banking/reconciliations/{reconciliation_id}/lock": (
-        "GAP (P8, step 7) — *Lock*, with both refusals shown before the button."
-    ),
-    "POST /api/v1/banking/reconciliations/{reconciliation_id}/reopen": (
-        "GAP (P8, step 7) — *Reopen* on the latest locked one, with the reason dialog."
-    ),
+    # Every one deleted by a screen a person can open and press, and pressed by
+    # `e2e/p8-transactions.spec.ts` — not by a hook written to satisfy the matcher.
+    #
     # --- GAP: P8 step 3's payment runs, which are step 7's third screen --------------------------
+    #
+    # **Still here after step 7a, deliberately.** Step 7 was split in two sessions; the payment-run
+    # screens are its second half, and these three lines are what that half deletes.
     #
     # Transactions → Accounts Payable → **Payment runs** (`/ap/payment-runs`): the selection
     # grid with its preview, Post, and Reverse on the run's detail. There are no draft runs, so

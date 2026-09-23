@@ -197,6 +197,12 @@ export interface LineGridProps {
    * stays put. An inventory adjustment is one line by definition (the service refuses
    * more), so its grid must not offer a second. */
   maxRows?: number;
+  /** Cashbook mode: the amount is shown and not taken. The bank reconciliation's *Post from
+   * line* drawer (P8 step 7) posts the statement line's own amount — the server reads it off
+   * the line, not the form — so a cell that accepted a different figure would be offering an
+   * edit that is silently discarded. The tax-inclusive box goes with it: a statement amount is
+   * what left the bank, which is the gross. */
+  fixedAmount?: boolean;
   baseCurrencyId?: string;
   /** Looks up the latest dated rate for a currency, to prefill the rate cell. */
   rateForCurrency?: (currencyId: string) => string | undefined;
@@ -231,6 +237,7 @@ export function LineGrid({
   inventoryColumns,
   itemLines = false,
   maxRows,
+  fixedAmount = false,
   baseCurrencyId,
   rateForCurrency,
   rowDefaults,
@@ -887,6 +894,7 @@ export function LineGrid({
                           onKeyDown={(e) => onCellKeyDown(e, r, COL.amount, "amount")}
                           onFocus={() => startCellEdit(r, COL.amount, "amount", row.amount)}
                           onBlur={() => setActiveCell(null)}
+                          readOnly={fixedAmount}
                           inputMode="decimal"
                           aria-label={`Amount, row ${r + 1}`}
                           className={cn(
@@ -901,6 +909,7 @@ export function LineGrid({
                         <input
                           type="checkbox"
                           checked={row.taxInclusive}
+                          disabled={fixedAmount}
                           onChange={(e) => updateRow(r, { taxInclusive: e.target.checked })}
                           onKeyDown={(e) => onCellKeyDown(e, r, COL.taxInclusive)}
                           aria-label={`Tax inclusive, row ${r + 1}`}

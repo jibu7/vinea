@@ -504,7 +504,7 @@ The owner's original menu ordering (software_interface docx) is **adopted as the
 | Maintenance → AR / AP | Customers, Sales reps, Suppliers, Transaction types, Defaults, Rename | P4 |
 | Maintenance → Inventory | Items, Warehouses, Trans types, Variable barcodes, UoM categories, Defaults, Rename Item Code | P5 |
 | Maintenance → Order entry / BOM / POS | **Order defaults** / BOM items+defaults / Tills+types+defaults | P6 (live, `/maintenance/order-defaults`) / P12 / P11 |
-| Transactions → GL | Cashbook batches, Journal batches, **FX revaluation** (`/gl/fx-revaluations`, C.1.12) | P2 (banking depth P8) · revaluation P7 |
+| Transactions → GL | Cashbook batches, Journal batches, **FX revaluation** (`/gl/fx-revaluations`, C.1.12), **Bank statements** (`/bank/statements`, C.1.14), **Bank reconciliation** (`/bank/reconciliations`, the workspace, C.1.14) | P2 (banking depth P8) · revaluation P7 · statements and reconciliation P8 |
 | Transactions → AR | Credit note, Invoice, Receipt (C.1.5), AR batches, Documents (C.1.7); Sales order | P4; SO in P6 |
 | Transactions → AP *(mislabeled "Account Receivable" in spec — see C.1)* | **GRV** (`/oe/goods-received`), **Purchase order** (`/oe/purchase-orders`) — both P6, see C.1.5 — Supplier invoice, Return to supplier, Payment, Allocate (C.1.3), Post-dated payments (C.1.6), AP batches, Documents (C.1.7) | P4 · P6 |
 | Transactions → Inventory | Journal batches, Transfers, Adjustments, Counts, Documents (C.1.7) (+ CN/GRV/Invoice/RTS stock impacts) | P5 (impacts via P4/P6 events) |
@@ -654,6 +654,38 @@ The owner's original menu ordering (software_interface docx) is **adopted as the
    no row: **Bank details** on Suppliers, the **Banking** block on GL Defaults, and the notice
    Chart of accounts shows when a `bank` / `cash` control account it created got its master
    row. Transactions → GL's Bank statements and Bank reconciliation are step 7's, as C.1.14.
+
+14. **Transactions → General Ledger gains Bank statements and Bank reconciliation** —
+   `/bank/statements` and `/bank/reconciliations`, directly after FX revaluation, in that order
+   (P8 step 7). This is C.2's promise made good: "bank statement import & reconciliation
+   workspace as transactions, not just reports". Importing the bank's record, matching it to the
+   ledger, posting what the ledger lacks and locking the proof are things a clerk *does*, so they
+   sit with Cashbook batches rather than under Reports. The owner's own *Bank reconciliation* row
+   under Reports → General Ledger stays where it is and is the report over the same
+   reconciliations (step 8); the two rows share a label and not a screen, as the two "Fiscal
+   receipts" rows (C.1.11) do.
+
+   **Bank statements** lists an account's statements (number, dates, opening and closing, lines,
+   skipped, status) and brings new ones in two ways: **Import** — the file previewed under the
+   account's mapping (the parsed rows, the derived opening and closing, how many lines are already
+   held, every error by row) and written only on confirm, the result reading "N new, M skipped";
+   and **Key a paper statement**, line by line onto the same table. A statement's detail shows
+   each line's match state, and **Void** — the only correction a statement has — says
+   `statement_has_matches` beside the button while any line is matched.
+
+   **Bank reconciliation** lists an account's reconciliations with their figures, and **New**
+   opens one with the statement balance defaulted from the balance column. The **workspace**
+   (`/bank/reconciliations/{id}`) carries the live figures strip, the statement pane (unmatched
+   first, then matched with what each is matched to), the ledger pane (outstanding first, late
+   lines flagged "dated inside `BRC-n`"), **Auto-match**, select-on-both-sides **Match** with the
+   selection's balance beside the button, **Tick**, **Unmatch** (refused on a locked match before
+   the button), **Post from line** — the P3 cashbook grid, one row, prefilled by the account's
+   rule or the Banking defaults, or a receipt / payment to a chosen partner, unallocated — and
+   **Lock** and **Reopen**, each with its refusals shown before the button. Post from line needs
+   `bank:reconcile` *and* the posting's own permission, and the button is drawn only when both are
+   held. The listings are `bank:reports_view`; a read-only member sees them and no button.
+
+   Payment runs, under Transactions → Accounts Payable, are C.1.15.
 
 ### C.2 Additions layered onto the owner's tree (post-spec decisions)
 
