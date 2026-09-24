@@ -1,7 +1,13 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
-import { PRIMARY_EMAIL, login, pageFetch, pickCombobox } from "./support/fixtures";
+import {
+  PRIMARY_EMAIL,
+  assertNoSeriousViolations,
+  login,
+  pageFetch,
+  pickCombobox,
+} from "./support/fixtures";
 
 /**
  * P7 step 8 — the Tax enquiries, the Tax reports, and the FX report.
@@ -891,6 +897,13 @@ test.describe("the tax enquiries and reports", () => {
       "href",
       /\/gl\/entries\/\d+$/,
     );
+
+    // **Axe, on a filed return.** The settlement panel renders only once a return is filed, and
+    // the a11y sweep runs on a freshly seeded runner where none is — so it never saw the panel's
+    // definition list, which was malformed (a `<p>` inside a `dt`/`dd` group, and a group
+    // holding only a link) until the step-8 report found it on a used database. This is the one
+    // place CI reaches the panel.
+    await assertNoSeriousViolations(page);
 
     // --- the sheet ------------------------------------------------------------------------
     const text = await printedText(page, `test-results/p8-vat-${SUFFIX}.pdf`);
