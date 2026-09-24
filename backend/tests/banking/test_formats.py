@@ -26,6 +26,7 @@ from app.banking.formats import (
 )
 from app.models.banking import (
     StatementAmountMode,
+    StatementEmptyAmount,
     StatementEmptyDescription,
     StatementSignConvention,
 )
@@ -396,6 +397,8 @@ REAL_EXPORTS = {
     "bpr-2026-07.csv": ("bpr", 2, Decimal("230032.00"), Decimal("30012.00")),
     "bpr-2022-09.csv": ("bpr-2022", 21, Decimal("-181940953.28"), Decimal("238769800.00")),
     "bk-2019-10.csv": ("bk", 249, None, None),
+    # 282 rows: 281 lines and the `BALANCE B/FWD` its mapping skips for having no amount.
+    "kcb-2023-12.csv": ("kcb", 281, Decimal("0.00"), Decimal("4867.00")),
 }
 
 
@@ -413,7 +416,7 @@ def _real(name: str, **override: object):  # noqa: ANN202 - a ParsedStatement
     )
 
 
-@pytest.mark.parametrize("mapping", ["bpr", "bpr-2022", "bk"])
+@pytest.mark.parametrize("mapping", ["bpr", "bpr-2022", "bk", "kcb"])
 def test_each_committed_mapping_loads_through_validate_format(mapping: str) -> None:
     """Through the save path, and every key the file sets survives it unchanged — a field the
     model did not know would be dropped silently, and the mapping would read differently."""
@@ -507,3 +510,89 @@ def test_bpr_2022_without_zero_is_empty_refuses_every_row() -> None:
     assert {e.message for e in parsed.errors} == {
         "both the debit and the credit column carry an amount"
     }
+
+
+def test_the_generic_preset_refuses_a_row_with_no_amount() -> None:
+    assert GENERIC_PRESET.empty_amount == StatementEmptyAmount.REFUSE
+
+
+def test_empty_amount_skip_counts_the_row_and_refuses_what_it_cannot_read() -> None:
+    """Skipped means *empty*. A cell holding something unreadable is still refused with its
+    row number — skipping it would drop a movement the bank recorded."""
+    fmt = GENERIC_PRESET.model_copy(update={"empty_amount": StatementEmptyAmount.SKIP})
+    content = (
+        b"Date,Description,Reference,Debit,Credit,Balance\n"
+        b"2026-09-01,BALANCE B/FWD,,,,1000000\n"
+        b"2026-09-03,A DEPOSIT,,,118000,1118000\n"
+        b"2026-09-04,SMUDGED,,1.2.3,,1118000\n"
+    )
+
+    parsed = parse(content, fmt, bank_account_id=ACCOUNT)
+
+    assert [line.amount for line in parsed.lines] == [Decimal("118000")]
+    assert parsed.skipped_no_amount == 1
+    assert {e.row for e in parsed.errors} == {4}
+    assert (parsed.errors[0].column, parsed.errors[0].message) == (
+        "debit_column",
+        "'1.2.3' is not a number",
+    )
+
+
+def test_empty_amount_skip_reads_filler_zeros_in_both_columns_as_empty() -> None:
+    """With `zero_is_empty`, zeros in both columns are the same empty row; without it they are
+    a filled row, refused as carrying both — `empty_amount` does not reinterpret a zero."""
+    content = (
+        b"Date,Description,Reference,Debit,Credit,Balance\n"
+        b"2026-09-01,BALANCE B/FWD,,0.00,0.00,1000000\n"
+        b"2026-09-03,A DEPOSIT,,0.00,118000,1118000\n"
+    )
+    skip = GENERIC_PRESET.model_copy(
+        update={"empty_amount": StatementEmptyAmount.SKIP, "zero_is_empty": True}
+    )
+
+    parsed = parse(content, skip, bank_account_id=ACCOUNT)
+
+    assert (len(parsed.lines), parsed.skipped_no_amount, parsed.errors) == (1, 1, [])
+    literal = parse(
+        content,
+        skip.model_copy(update={"zero_is_empty": False}),
+        bank_account_id=ACCOUNT,
+    )
+    assert literal.skipped_no_amount == 0
+    assert {e.row for e in literal.errors} == {2, 3}
+
+
+def test_empty_amount_skip_applies_to_an_empty_signed_column() -> None:
+    fmt = AWKWARD_FORMAT.model_copy(update={"empty_amount": StatementEmptyAmount.SKIP})
+    content = (
+        b"Value Date;Narrative;Ref;Movement;Running Balance\n"
+        b"01/09/2026;BALANCE B/FWD;;;1 000 000,00\n"
+        b"12/09/2026;ACCOUNT FEE;;2 500,00;997 500,00\n"
+    )
+
+    parsed = parse(content, fmt, bank_account_id=ACCOUNT)
+
+    assert (len(parsed.lines), parsed.skipped_no_amount, parsed.errors) == (1, 1, [])
+    assert parsed.derived_balances() == (Decimal("1000000.00"), Decimal("997500.00"))
+
+
+def test_the_kcb_export_skips_its_brought_forward_row_and_derives_the_same_opening() -> None:
+    """KCB 2023: 282 rows — the `BALANCE B/FWD` (0.00, no amount) and 281 lines, 241 out and
+    40 in. With the row skipped the opening is the first line's balance less its own amount,
+    1,563,147.00 − 1,563,147.00 = 0.00: the figure the B/FWD row printed."""
+    parsed = _real("kcb-2023-12.csv")
+
+    assert (len(parsed.lines), len(parsed.errors), parsed.skipped_no_amount) == (281, 0, 1)
+    assert parsed.lines[0].row == 3  # row 2 of the file is the B/FWD
+    assert parsed.derived_balances()[0] == Decimal("0.00")
+    assert sum(line.amount for line in parsed.lines) == Decimal("4867.00")
+    assert sum(1 for line in parsed.lines if line.amount < 0) == 241
+    assert sum(1 for line in parsed.lines if line.amount > 0) == 40
+
+
+def test_kcb_without_empty_amount_skip_refuses_the_brought_forward_row() -> None:
+    """The sensitivity half: one error, on row 2, and one error refuses the whole file."""
+    parsed = _real("kcb-2023-12.csv", empty_amount="refuse")
+
+    assert parsed.skipped_no_amount == 0
+    assert [(e.row, e.message) for e in parsed.errors] == [(2, "no debit and no credit")]
