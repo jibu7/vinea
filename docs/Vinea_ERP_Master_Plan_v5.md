@@ -362,6 +362,72 @@ the next return.
 Cashbook module proper (bank/cash accounts as flagged GL accounts, receipts/payments feed them — largely exists from P2/P4), **bank statement import** (CSV first; camt/MT940 later), reconciliation workspace (auto-match by amount/ref/date + manual match), reconciliation report, payment runs (batch supplier payments → single bank line). This covers the *Bank reconciliation* and *Cashbooks* reports the client spec listed but v4 never scheduled.
 **DoD:** import a real bank CSV, reach a zero unreconciled difference, lock the reconciliation.
 
+#### P8 as built *(written at step 9; the phase's own record is `docs/p8-final-report.md`)*
+
+The twelve decisions the phase prompt locks were built as written, with three corrected at the
+gates (below). The shapes worth restating in the plan, because later phases will read this rather
+than the prompt:
+
+* **Banking adds no ledger and no second balance.** The cashbook balance is Σ `journal_lines` on
+  the bank account, as it has been since P2. A bank statement is the bank's record of the same
+  money. A match asserts that a statement line and a ledger line are the same event. A
+  reconciliation is the dated proof. Nothing under `app/banking/` writes a journal line
+  (`tests/banking/test_boundary.py`), and the phase adds **no event**. Every posting it causes is
+  a `CashbookEntry`, a `PartnerDocumentPosted`, an `AllocationPosted` or an `FxRevalued`.
+* **`bank_accounts` is a master over the flagged GL accounts, and every bank/cash control account
+  has exactly one row** (`ensure_row`, called by the chart of accounts and the seed; clause 6).
+  `last_reconciled_at/balance` is a cache of a stored row, verified by clause 7, never a balance.
+* **The currency rule is one-sided.** A foreign-currency account holds only its currency (engine
+  and `VN012`); a base-currency account may carry a foreign line at its base amount.
+  `reconciled_amount(line, bank_account)` is the one definition of what the statement sees.
+* **A statement line is immutable** (`VN013`). A mistaken import is voided as a whole, and a void
+  statement's hash and fingerprints block nothing. An overlapping export is the normal case: lines
+  already held are skipped by fingerprint (with an occurrence index, so two identical fees are
+  two lines), and the result says "N new, M skipped".
+* **A match balances, or it is refused with the difference.** The difference is *posted* from the
+  statement line, through the kernel, in the same transaction as the match. It is never stored.
+  Rules prefill; people post.
+* **A reconciliation locks at zero and never changes.** Lock stores the figures, the outstanding
+  snapshot and a `high_water_line_id`. A line dated inside a locked reconciliation but posted after
+  its lock is outstanding in the next one and shown beside the locked one as *Posted after lock*.
+  Only the latest may be reopened.
+* **A payment run is one ordinary P4 payment and allocation per supplier**, reconciled to the
+  bank's one line by the `payment_run` rule, and reversed as a unit with the fallible leg first.
+* **Bank revaluation is a scope of the P7 run**, with the other side to `1130 Bank Revaluation`,
+  never the bank account.
+
+**Corrected at the gates**, each with its approvals row:
+
+1. **Decision 4 / tape row 18 — `control_account_direct_posting`** (step 2). A rule's drawer posts
+   a `CashbookEntry`, so the refusal that fires is P4's `control_account_modules` registry
+   (`VN007`), not the `ManualJournal`-only `control_account_manual_posting`.
+2. **Decision 5, clause 4 — membership** (step 5). A locked reconciliation's outstanding is the
+   lines in no match assigned to it *or to any earlier locked reconciliation on the account*.
+3. **Decision 6 — two ties** (step 5). The base closing ties to the trial balance for every
+   account at any date, and a foreign account's own-currency closing ties to `period_balances` at
+   a period end.
+
+**Deviations from the phase prompt**, each with its reason:
+
+1. **No `Idempotency-Key` on payment-run reverse.** A second press is refused by state
+   (`payment_run_already_reversed`). Reopen *does* take one (step 7a), on the row's existing
+   column.
+2. **The settlement discount is taken only on full settlement of a line**, which is decision 7's
+   reading: a discount buys prompt settlement of the whole.
+3. **Auto-match on import is the Import screen's chain**, not the import transaction. The service
+   writes lines and nothing else.
+4. **Appendix C**: Bank accounts is C.1.13; Bank statements, Bank reconciliation and the Bank
+   account enquiry are C.1.14; Payment runs is C.1.15. The owner's *Cashbooks* and *Bank
+   reconciliation* report rows went live untagged and take no C.1 entry.
+
+**Precondition (d) was held.** Six real exports from BPR, BK and KCB in four layouts
+(`docs/banking/samples/`) forced three mapping options: `empty_description`, `zero_is_empty` and
+`empty_amount` (migration `0029`). The step-9 tape imports each through the screen.
+
+**Deferred out of P8**, with where each lands: camt.053 and MT940 are a parser each behind the
+same interface; cash-till counts and cash-ups are **P11**; bank APIs, open banking and mobile-money
+APIs are unscheduled; a bank-specific instruction-file layout waits on a bank supplying one.
+
 ### P9 — Fixed Assets *(≈2 wk)*
 Asset categories (default GL accounts, method, useful life), asset register (capitalize from an AP invoice line or direct entry, with cost/branch/project dimensions), depreciation methods (straight-line, reducing balance), period **depreciation run** as a job emitting `DepreciationPosted` kernel events, disposals & write-offs (proceeds vs NBV → gain/loss posting), revaluation basic, asset enquiry + register/depreciation/disposal reports. Small module by construction — the Posting Engine and job runner already exist.
 **DoD:** an asset capitalized from a supplier invoice depreciates over three closed periods, is disposed at a gain, and every figure ties to the GL; depreciation into a closed period is impossible.

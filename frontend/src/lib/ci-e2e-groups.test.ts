@@ -5,10 +5,10 @@ import { describe, expect, it } from "vitest";
 /**
  * Every e2e spec file belongs to exactly one CI group.
  *
- * The e2e job is five parallel groups: two heavy files named one by one, and everything else
- * `--shard`ed three ways behind a path filter that excludes those two. That is a **partition
- * kept by a regex**, which is fine until somebody adds a spec file — and the failure mode is
- * the worst kind there is: a file matched by the exclusion but named by no group would be
+ * The e2e job is six parallel groups: the a11y sweeps and two heavy tapes named file by file,
+ * and everything else `--shard`ed three ways behind a path filter that excludes those. That is
+ * a **partition kept by a regex**, which is fine until somebody adds a spec file — and the
+ * failure mode is the worst kind there is: a file matched by the exclusion but named by no group would be
  * collected by nothing and run by nothing, and CI would go green without it. A test that
  * never runs is the rule-14 defect one level up, and this is the test that looks.
  *

@@ -7,11 +7,12 @@ about the operation — a match that passes its own assertion and breaks clause 
 would have reached the tape.
 """
 
-from datetime import date
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
 import pytest
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.banking import matching
@@ -23,6 +24,7 @@ from app.models.banking import (
     BankMatchJournalLine,
     BankMatchKind,
     BankMatchRule,
+    BankMatchStatementLine,
     BankStatementLine,
 )
 from app.models.journal import JournalEntry
@@ -225,6 +227,79 @@ def test_a_line_cannot_be_in_two_matches(db: Session, banking: Banking) -> None:
         )
 
     assert excinfo.value.code == "journal_line_matched"
+    db.rollback()
+
+
+# --- The database half of "at most one match" -------------------------------------------------
+#
+# `_refuse_already_matched` answers first, with a refusal a screen can render, so no test that
+# goes through `create_match` can tell whether the unique constraints behind it exist. These two
+# write the second member row directly, the way a future code path that forgot the service would,
+# and expect Postgres to refuse it. Dropping either constraint from `0027` fails its test and no
+# other (P8 step 9's sensitivity pass found the gap: the whole banking suite passed without them).
+
+
+def _second_match(db: Session, banking: Banking) -> BankMatch:
+    match = BankMatch(
+        company_id=banking.company_id,
+        bank_account_id=banking.bank("BK-RWF").id,
+        kind=BankMatchKind.MANUAL,
+        rule=BankMatchRule.MANUAL,
+        matched_by=banking.owner.id,
+        matched_at=datetime.now(UTC),
+    )
+    db.add(match)
+    db.flush()
+    return match
+
+
+def _matched_pair(db: Session, banking: Banking):  # noqa: ANN202
+    entry = cashbook(db, banking, account_code="1120", amount=Decimal(1000), on=SEP_3)
+    line = bank_line_of(db, banking, entry, "1120")
+    key_statement(db, banking, lines=[(SEP_3, "ONE", Decimal(1000))])
+    db.commit()
+    statement_line = _statement_lines(db, banking)[0]
+    matching.create_match(
+        db,
+        banking.company_id,
+        bank_account_id=banking.bank("BK-RWF").id,
+        statement_line_ids=[statement_line.id],
+        journal_line_ids=[line.id],
+        kind=BankMatchKind.MANUAL,
+        rule=BankMatchRule.MANUAL,
+        actor=banking.owner,
+    )
+    db.commit()
+    return statement_line, line
+
+
+def test_the_database_refuses_a_statement_line_in_a_second_match(
+    db: Session, banking: Banking
+) -> None:
+    statement_line, _ = _matched_pair(db, banking)
+    second = _second_match(db, banking)
+    db.add(
+        BankMatchStatementLine(
+            company_id=banking.company_id, match_id=second.id, statement_line_id=statement_line.id
+        )
+    )
+    with pytest.raises(IntegrityError, match="uq_bank_match_statement_lines_statement_line"):
+        db.flush()
+    db.rollback()
+
+
+def test_the_database_refuses_a_journal_line_in_a_second_match(
+    db: Session, banking: Banking
+) -> None:
+    _, line = _matched_pair(db, banking)
+    second = _second_match(db, banking)
+    db.add(
+        BankMatchJournalLine(
+            company_id=banking.company_id, match_id=second.id, journal_line_id=line.id
+        )
+    )
+    with pytest.raises(IntegrityError, match="uq_bank_match_journal_lines_journal_line"):
+        db.flush()
     db.rollback()
 
 
