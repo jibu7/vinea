@@ -239,9 +239,17 @@ export interface LedgerLine {
   match_kind: BankMatchKind | null;
   match_rule: BankMatchRule | null;
   reconciliation_number: string | null;
+  reconciliation_id: number | null;
   /** "dated inside BRC-n": posted after that reconciliation locked, dated before its date. */
   dated_inside: string | null;
   is_outstanding: boolean;
+}
+
+/** One line of a journal entry on a bank account — the GL entry page's reading (decision 10). */
+export interface EntryBankLine extends LedgerLine {
+  bank_account_id: number;
+  bank_account_code: string;
+  bank_account_name: string;
 }
 
 export interface Match {
@@ -476,4 +484,102 @@ export interface RemittanceJob {
   artifact_name: string | null;
   artifact_size: number | null;
   expires_at: string | null;
+}
+
+// --- Cashbooks, the reconciliation report and the enquiry (P8 decisions 6 and 10, step 8) -----
+
+/** One ledger line on the account, in the account's **own** currency. `reconciled` is decision
+ * 6's column: the `BRC-` its match was locked in, `"matched"` for a match not yet locked, and
+ * null for outstanding. */
+export interface CashbookRow {
+  journal_line_id: number;
+  entry_id: number;
+  entry_date: string;
+  entry_number: string;
+  doc_type: string;
+  module: string;
+  reference: string | null;
+  description: string | null;
+  partner_name: string | null;
+  receipt: string;
+  payment: string;
+  running_balance: string;
+  base_amount: string;
+  reconciled: string | null;
+}
+
+export interface CashbookDetail {
+  bank_account_id: number;
+  code: string;
+  name: string;
+  currency_id: number;
+  currency_code: string;
+  date_from: string;
+  date_to: string;
+  opening_balance: string;
+  opening_base: string;
+  receipts_total: string;
+  payments_total: string;
+  /** In the account's own currency. */
+  closing_balance: string;
+  /** In base — the figure that ties to the trial balance. */
+  closing_base: string;
+  rows: CashbookRow[];
+}
+
+export interface CashbookSummaryRow {
+  bank_account_id: number;
+  code: string;
+  name: string;
+  kind: BankAccountKind;
+  currency_code: string;
+  opening_balance: string;
+  receipts: string;
+  payments: string;
+  closing_balance: string;
+  closing_base: string;
+  last_reconciled_at: string | null;
+  last_reconciled_balance: string | null;
+  last_reconciliation_id: number | null;
+  unmatched_statement_lines: number;
+  outstanding_lines: number;
+}
+
+/** `stored` is what a locked reconciliation said; `live` is what its date computes now. They
+ * differ by exactly `posted_after_lock`. */
+export interface ReconciliationReport {
+  reconciliation_id: number;
+  number: string;
+  bank_account_id: number;
+  bank_account_code: string;
+  bank_account_name: string;
+  currency_code: string;
+  reconciliation_date: string;
+  status: ReconciliationStatus;
+  live: Figures;
+  stored: Figures | null;
+  posted_after_lock: OutstandingLine[];
+}
+
+export interface BankAccountEnquiry {
+  bank_account_id: number;
+  code: string;
+  name: string;
+  kind: BankAccountKind;
+  currency_code: string;
+  book_balance: string;
+  book_balance_base: string;
+  last_reconciliation_id: number | null;
+  last_reconciliation_number: string | null;
+  last_reconciled_at: string | null;
+  last_reconciled_balance: string | null;
+  open_reconciliation_id: number | null;
+  open_reconciliation_number: string | null;
+  unmatched_statement_count: number;
+  unmatched_statement_total: string;
+  outstanding_count: number;
+  outstanding_total: string;
+  latest_statement_id: number | null;
+  latest_statement_number: string | null;
+  latest_statement_to: string | null;
 }

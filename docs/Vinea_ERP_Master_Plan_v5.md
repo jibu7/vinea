@@ -511,7 +511,8 @@ The owner's original menu ordering (software_interface docx) is **adopted as the
 | Transactions → OE | **Sales order** (`/oe/sales-orders`), **Breakup** (`/oe/breakup`), **Landed cost** (`/oe/landed-costs`) | P6 — all three live |
 | Transactions → Tax *(C.1.11 — not in the owner's tree)* | **Fiscal queue** (`/fiscal/queue`), **EBM purchases** (`/fiscal/purchases`), **Import declarations** (`/fiscal/imports`), **VAT return** (`/tax/vat-returns`) | P7 — all four live |
 | Transactions → BOM / POS | Manufacture process, Breakup / Sales, Returns, Transaction | P12 / P11 |
-| Reports → GL | Account transaction (P2), Trial Balance (P2), Chart of account (P3), **FX revaluation** (`/gl/reports/fx-revaluation`, C.1.12), **Bank reconciliation (P8)**, **Cashbooks (P8)**, Balance sheet (P10), Income statement (P10) | as noted · revaluation report P7 |
+| Reports → GL | Account transaction (P2), Trial Balance (P2), Chart of account (P3), **FX revaluation** (`/gl/reports/fx-revaluation`, C.1.12), **Bank reconciliation** (`/gl/reports/bank-reconciliation`), **Cashbooks** (`/gl/reports/cashbooks`, detail and summary), Balance sheet (P10), Income statement (P10) | as noted · revaluation report P7 · bank reconciliation and cashbooks P8 |
+| Enquiries → GL | Account enquiry, Trial balance enquiry (P2), **Bank account enquiry** (`/gl/enquiries/bank-account`, C.1.14) | P2 · bank account enquiry P8 |
 | Reports → AR / AP | Age analyses, Allocation, Listings, Statements, Transaction listing (C.1.4) — each for both modules | P4 |
 | Reports → Inventory | Movement, Count, Transaction, Valuation (P5); Sales analyses, Slow movers (P10) | as noted |
 | Reports → OE *(C.1.8 — not in the owner's tree)* | **Sales orders**, **Purchase orders**, **Goods received**, **Landed cost** | P6 — all four live |
@@ -686,6 +687,16 @@ The owner's original menu ordering (software_interface docx) is **adopted as the
    **Lock** and **Reopen**, each with its refusals shown before the button. Post from line needs
    `bank:reconcile` *and* the posting's own permission, and the button is drawn only when both are
    held. The listings are `bank:reports_view`; a read-only member sees them and no button.
+
+   **Bank account enquiry** (`/gl/enquiries/bank-account`, P8 step 8) joins them here, under
+   Enquiries → General Ledger directly after Trial balance enquiry. Not in the owner's tree, whose
+   GL enquiries are the account and the trial balance. It is the workspace's front door: for one
+   account at a date, the book balance in the account's currency and in base, the last locked
+   reconciliation (number, date, statement balance), the unmatched statement lines and the
+   outstanding ledger lines (each a count and a sum), the latest statement and the open
+   reconciliation — every figure a link into the workspace, the statement or the report. It reads
+   on `bank:reports_view`. The owner's own *Bank reconciliation* and *Cashbooks* rows under
+   Reports → General Ledger went live at the same step, lost their P8 tags, and take no C.1 entry.
 
    Payment runs, under Transactions → Accounts Payable, are C.1.15.
 

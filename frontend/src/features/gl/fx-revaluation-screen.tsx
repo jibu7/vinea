@@ -28,24 +28,7 @@ import {
   usePostFxRevaluation,
   useReverseFxRevaluation,
 } from "./hooks";
-import type { FxRevaluationLine } from "./types";
-
-/**
- * A document line is keyed and labelled by its document; a **bank line** (P8 decision 8) has no
- * document — `document_id` is null on it — and is keyed and labelled by the bank account, whose
- * code sits where the document number does and whose name sits where the partner does.
- */
-function lineKey(line: FxRevaluationLine): string {
-  return line.document_id !== null ? `document-${line.document_id}` : `bank-${line.bank_account_id}`;
-}
-
-function lineLabel(line: FxRevaluationLine): string {
-  return (line.document_number ?? line.bank_account_code) ?? "";
-}
-
-function lineName(line: FxRevaluationLine): string {
-  return (line.partner_name ?? line.bank_account_name) ?? "";
-}
+import { lineKey, lineLabel, lineName } from "./fx-revaluation-lines";
 
 /** The last day of the month `today` falls in. The run is refused on any other date
  * (`fx_revaluation_not_period_end`), so offering one is offering the answer. */

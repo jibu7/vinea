@@ -65,6 +65,7 @@ from app.schemas.banking import (
     CashbookRowRead,
     CashbookSummaryRowRead,
     DefaultStatementBalanceRead,
+    EntryBankLineRead,
     FiguresRead,
     LedgerLineRead,
     ManualStatementWrite,
@@ -1311,6 +1312,7 @@ def read_reconciliation_report(
         number=report.number,
         bank_account_id=report.bank_account_id,
         bank_account_code=report.bank_account_code,
+        bank_account_name=report.bank_account_name,
         currency_code=report.currency_code,
         reconciliation_date=report.reconciliation_date,
         status=ReconciliationStatus(report.status),
@@ -1337,3 +1339,25 @@ def read_bank_account_enquiry(
             )
         )
     )
+
+
+@router.get("/journal-entries/{entry_id}/bank-lines")
+def read_entry_bank_lines(
+    entry_id: int,
+    auth: AuthContext = permissions.require(permissions.BANK_REPORTS_VIEW),
+    db: Session = Depends(get_db),
+) -> list[EntryBankLineRead]:
+    """Decision 10's GL entry page: each line of the entry on a bank account, with its match and
+    the `BRC-` it was locked in, or outstanding. Here rather than on the entry's own read so the
+    GL module learns nothing about banking; an entry with no bank line answers an empty list,
+    and so does one that is not this company's — the entry endpoint is what says 404."""
+    return [
+        EntryBankLineRead(
+            **vars(item.line),
+            is_outstanding=item.line.is_outstanding,
+            bank_account_id=item.bank_account_id,
+            bank_account_code=item.bank_account_code,
+            bank_account_name=item.bank_account_name,
+        )
+        for item in matching.entry_bank_lines(db, auth.company_id, entry_id)
+    ]

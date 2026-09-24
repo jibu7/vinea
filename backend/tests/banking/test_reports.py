@@ -229,6 +229,36 @@ def test_the_reconciled_column_says_brc_matched_or_nothing(
     assert labels[outstanding_entry.id] is None, "blank means outstanding"
 
 
+def test_the_description_column_reads_the_entry_not_the_reference_twice(
+    db: Session, banking: Banking
+) -> None:
+    """A cashbook entry's bank line carries its *reference* as the line description — the kernel
+    puts it there for the statement matcher. The report has a Reference column of its own, so its
+    Description reads the entry's words rather than printing the reference twice."""
+    entry = cashbook(
+        db,
+        banking,
+        account_code="1120",
+        amount=Decimal(-80000),
+        on=SEP_10,
+        reference="CHQ004417",
+        description="Cheque 004417, cleaning contractor",
+    )
+    db.commit()
+    assert bank_line_of(db, banking, entry, "1120").description == "CHQ004417"
+
+    detail = reports.cashbook_detail(
+        db,
+        banking.company_id,
+        bank_account_id=banking.bank("BK-RWF").id,
+        date_from=SEP_1,
+        date_to=SEP_30,
+    )
+    [row] = [row for row in detail.rows if row.entry_id == entry.id]
+    assert row.reference == "CHQ004417"
+    assert row.description == "Cheque 004417, cleaning contractor"
+
+
 # --- The summary --------------------------------------------------------------------------------
 
 

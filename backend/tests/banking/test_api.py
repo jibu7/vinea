@@ -1259,3 +1259,79 @@ def test_reversing_a_member_settlement_over_http_is_refused(client: TestClient) 
     assert refused.status_code == 409
     assert refused.json()["code"] == "payment_run_member"
     assert "PYR-000001" in refused.json()["message"]
+
+
+def test_the_entry_page_reads_each_bank_line_locked_matched_or_outstanding(
+    client: TestClient,
+) -> None:
+    """Decision 10's GL entry page, and the two fields step 8's reports link by.
+
+    Three entries on one account: one ticked and locked into `BRC-000001`, one ticked after the
+    lock (matched, in no reconciliation), one untouched (outstanding). The entry page's reading
+    names each — the same `list_ledger_lines` the workspace pane reads, narrowed to the entry —
+    and an entry with no bank line answers an empty list rather than a 404.
+    """
+    _signup(client)
+    bank = _bank(client)
+    locked = _cashbook(client, amount="1000", on="2026-09-03", kind="receipt", key="ep-1")
+    matched = _cashbook(client, amount="400", on="2026-09-20", kind="payment", key="ep-2")
+    outstanding = _cashbook(client, amount="250", on="2026-09-21", kind="receipt", key="ep-3")
+
+    def tick(entry: dict) -> None:
+        response = client.post(
+            "/api/v1/banking/matches/tick",
+            json={
+                "bank_account_id": bank["id"],
+                "journal_line_ids": [_bank_line_id(entry, bank["gl_account_id"])],
+            },
+        )
+        assert response.status_code == 201
+
+    tick(locked)
+    opened = client.post(
+        "/api/v1/banking/reconciliations",
+        json={
+            "bank_account_id": bank["id"],
+            "reconciliation_date": "2026-09-10",
+            "statement_balance": "1000",
+        },
+        headers={"Idempotency-Key": "ep-brc"},
+    ).json()
+    assert client.post(
+        f"/api/v1/banking/reconciliations/{opened['id']}/lock",
+        json={},
+        headers={"Idempotency-Key": "ep-lock"},
+    ).status_code == 200
+    tick(matched)
+
+    def read(entry: dict) -> list[dict]:
+        response = client.get(f"/api/v1/banking/journal-entries/{entry['id']}/bank-lines")
+        assert response.status_code == 200
+        return response.json()
+
+    [on_locked] = read(locked)
+    assert on_locked["bank_account_code"] == bank["code"]
+    assert on_locked["reconciliation_number"] == "BRC-000001"
+    assert on_locked["reconciliation_id"] == opened["id"]
+    assert on_locked["is_outstanding"] is False
+
+    [on_matched] = read(matched)
+    assert on_matched["match_rule"] == "tick"
+    assert on_matched["reconciliation_number"] is None
+    assert Decimal(on_matched["amount"]) == Decimal(-400)
+
+    [on_outstanding] = read(outstanding)
+    assert on_outstanding["is_outstanding"] is True
+    assert on_outstanding["match_id"] is None
+
+    # Only the bank side: the contra line on 3400 is not a bank line and is not listed.
+    assert len(read(outstanding)) == 1
+
+    report = client.get(f"/api/v1/banking/reports/reconciliation/{opened['id']}").json()
+    assert report["bank_account_name"] == bank["name"]
+    summary = client.get(
+        "/api/v1/banking/reports/cashbook-summary",
+        params={"date_from": "2026-09-01", "date_to": "2026-09-30"},
+    ).json()
+    row = next(item for item in summary if item["bank_account_id"] == bank["id"])
+    assert row["last_reconciliation_id"] == opened["id"]

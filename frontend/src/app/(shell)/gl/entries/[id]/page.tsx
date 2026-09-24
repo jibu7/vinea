@@ -14,6 +14,9 @@ import { Dialog, DialogTrigger, DialogContent } from "@/design/components/dialog
 import { Money } from "@/design/components/money";
 import { ThemeToggle } from "@/design/components/theme-toggle";
 import { useJournalEntry, useReverseEntry } from "@/features/gl/hooks";
+import { useHasPermission } from "@/features/auth/hooks";
+import { EntryBankLineCell } from "@/features/banking/entry-bank-line";
+import { useEntryBankLines } from "@/features/banking/hooks";
 import { useGLLookups, byId } from "@/features/gl/lookups";
 import { useApiErrorToast } from "@/lib/use-api-error-toast";
 import { useToast } from "@/design/components/toast";
@@ -44,6 +47,13 @@ export default function EntryViewPage() {
   const [reverseError, setReverseError] = useState<string | null>(null);
   const [reverseKey] = useState(() => newDraftId());
   const reverseEntry = useReverseEntry();
+  // P8 decision 10: a line on a bank account shows its match and the `BRC-` it was locked in,
+  // or *outstanding*. Read from the banking module, so the GL's entry read learns nothing about
+  // banking; without `bank:reports_view` the column is simply not drawn.
+  const canSeeBank = useHasPermission()("bank:reports_view");
+  const bankLines = useEntryBankLines(entryId, canSeeBank);
+  const bankLineById = new Map((bankLines.data ?? []).map((line) => [line.journal_line_id, line]));
+  const showBank = bankLineById.size > 0;
 
   if (isLoading || !entry) {
     return <div className="flex min-h-screen items-center justify-center text-sm text-[var(--vinea-ink-subtle)]">{tc("loading")}</div>;
@@ -168,6 +178,7 @@ export default function EntryViewPage() {
                 <TH>{t("project")}</TH>
                 <TH className="text-right">{t("debit")}</TH>
                 <TH className="text-right">{t("credit")}</TH>
+                {showBank && <TH>{t("bankReconciliation")}</TH>}
               </TR>
             </THead>
             <TBody>
@@ -201,6 +212,11 @@ export default function EntryViewPage() {
                     <TD className="text-right">
                       {base < 0 && currency && <Money amount={-base} currency={{ code: currency.code, decimalPlaces: currency.decimal_places, symbol: currency.symbol }} />}
                     </TD>
+                    {showBank && (
+                      <TD>
+                        <EntryBankLineCell line={bankLineById.get(line.id) ?? null} />
+                      </TD>
+                    )}
                   </TR>
                 );
               })}

@@ -336,6 +336,15 @@ export const navIntents: NavIntent[] = [
     items: [
       { label: "Account enquiry", module: "General Ledger", permission: "gl:reports_view", href: "/gl/enquiries/account" },
       { label: "Trial balance enquiry", module: "General Ledger", permission: "gl:reports_view", href: "/gl/enquiries/trial-balance" },
+      // P8 step 8, recorded under Appendix C.1.14 — not in the owner's tree, which has no GL
+      // enquiry for a bank account. Decision 10's figures with their links into the workspace
+      // and the reports, so it reads on `bank:reports_view` like both reports it opens.
+      {
+        label: "Bank account enquiry",
+        module: "General Ledger",
+        permission: "bank:reports_view",
+        href: "/gl/enquiries/bank-account",
+      },
       { label: "Customer enquiry", module: "Accounts Receivable", permission: "ar:reports_view", href: "/ar/enquiry" },
       { label: "Supplier enquiry", module: "Accounts Payable", permission: "ap:reports_view", href: "/ap/enquiry" },
       { label: "Item enquiry", module: "Inventory", permission: "inv:reports_view", href: "/inventory/enquiry" },
@@ -387,8 +396,17 @@ export const navIntents: NavIntent[] = [
       // than on `gl:fx_revalue` — reading what a revaluation did is not the authority to post
       // another one.
       { label: "FX revaluation", module: "General Ledger", permission: "gl:reports_view", href: "/gl/reports/fx-revaluation" },
-      { label: "Bank reconciliation", module: "General Ledger", phase: "P8" },
-      { label: "Cashbooks", module: "General Ledger", phase: "P8" },
+      // P8 step 8. The owner's own two rows, tagged P8 since the tree was written and live now:
+      // the report over a reconciliation (Transactions → GL's row of the same name is the
+      // workspace, C.1.14) and the ledger per bank and cash account. No C.1 entry — they were
+      // always in the tree.
+      {
+        label: "Bank reconciliation",
+        module: "General Ledger",
+        permission: "bank:reports_view",
+        href: "/gl/reports/bank-reconciliation",
+      },
+      { label: "Cashbooks", module: "General Ledger", permission: "bank:reports_view", href: "/gl/reports/cashbooks" },
       { label: "Balance sheet", module: "General Ledger", phase: "P10" },
       { label: "Income statement", module: "General Ledger", phase: "P10" },
       // Appendix C's "Reports → AR / AP | Age analyses, Allocation, Listings, Statements" in

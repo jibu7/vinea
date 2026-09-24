@@ -11,7 +11,8 @@ import { StatusChip } from "@/design/components/status-chip";
 import { TBody, TD, TH, THead, TR, Table } from "@/design/components/table";
 import { FxRevaluationStatus } from "@/lib/api-enums";
 import { exportToCsv } from "@/lib/csv";
-import { formatDate, formatMoney, formatQuantity } from "@/lib/format";
+import { formatDate, formatMoney, formatQuantity, trimDecimalString } from "@/lib/format";
+import { lineHref, lineKey, lineLabel, lineName } from "../fx-revaluation-lines";
 import { useCompanyDetails, useCurrencies, useFxRevaluation, useFxRevaluations } from "../hooks";
 
 /**
@@ -33,6 +34,14 @@ import { useCompanyDetails, useCurrencies, useFxRevaluation, useFxRevaluations }
  *
  * The rates are quantities, not money: a rate is `NUMERIC(20,10)` and `formatMoney` would put
  * a currency code on a number that is not an amount of anything.
+ *
+ * **Bank lines** (P8 step 8, decision 8). A `bank` or `all` run revalues foreign-currency bank
+ * balances as well as documents, and a bank line has no document and no partner: it is keyed by
+ * the bank account and shows the account's code and name where a document line shows its number
+ * and partner — the run screen's treatment at step 7b, from the same helpers. Its open amount is
+ * the balance in the account's own currency, its "booked at" is the server's carrying ÷ balance
+ * (a balance is the sum of lines booked at many rates, so there is no one rate to read), and it
+ * drills to the account's Cashbooks detail at the run date.
  */
 export function FxRevaluationReport() {
   const t = useTranslations("gl.fxRevaluationReport");
@@ -55,8 +64,16 @@ export function FxRevaluationReport() {
   };
   const money = (value: string | number) =>
     formatMoney(Number(value), baseLike, { showCode: false });
-  const placesOf = (code: string) =>
-    (currencies.data ?? []).find((c) => c.code === code)?.decimal_places ?? 2;
+  const currencyById = new Map((currencies.data ?? []).map((c) => [c.id, c]));
+  /** The open amount in the line's own currency — `$ 495.00`, not the wire's `495.000000`. */
+  const inCurrency = (value: string, currencyId: number) => {
+    const currency = currencyById.get(currencyId);
+    return formatMoney(Number(value), {
+      code: currency?.code ?? "",
+      decimalPlaces: currency?.decimal_places ?? 2,
+      symbol: currency?.symbol ?? null,
+    });
+  };
 
   const lines = run?.lines ?? [];
   const total = lines.reduce((sum, line) => sum + Number(line.difference), 0);
@@ -77,11 +94,11 @@ export function FxRevaluationReport() {
         t("difference"),
       ],
       lines.map((line) => [
-        line.document_number,
-        line.partner_name,
+        lineLabel(line),
+        lineName(line),
         line.currency_code,
         line.open_amount,
-        line.booking_rate,
+        line.booking_rate ?? "",
         line.carrying_base,
         line.rate_at_date,
         line.revalued_base,
@@ -105,7 +122,11 @@ export function FxRevaluationReport() {
             <Select
               options={(runs.data ?? []).map((row) => ({
                 value: String(row.id),
-                label: t("runLabel", { number: row.number, date: row.revaluation_date }),
+                label: t("runOption", {
+                  number: row.number,
+                  date: formatDate(row.revaluation_date),
+                  role: tf(`roleLabel.${row.role}`),
+                }),
               }))}
               value={String(effective ?? "")}
               onValueChange={(value) => setChosenId(value ? Number(value) : null)}
@@ -232,34 +253,34 @@ export function FxRevaluationReport() {
                 </THead>
                 <TBody>
                   {lines.map((line) => (
-                    <TR key={line.document_id}>
+                    <TR key={lineKey(line)} data-revaluation-line={lineLabel(line)}>
                       <TD>
                         <Link
-                          href={`/${line.role === "ar" ? "ar" : "ap"}/documents/${line.document_id}`}
-                          data-testid="fx-line-document"
+                          href={lineHref(line, run.revaluation_date)}
+                          data-testid={line.document_id !== null ? "fx-line-document" : "fx-line-bank"}
                           className="font-mono text-xs font-semibold text-[var(--vinea-brand)] hover:underline"
                         >
-                          {line.document_number}
+                          {lineLabel(line)}
                         </Link>
                       </TD>
-                      <TD className="text-xs text-[var(--vinea-ink)]">{line.partner_name}</TD>
+                      <TD className="text-xs text-[var(--vinea-ink)]">{lineName(line)}</TD>
                       <TD className="font-mono text-xs text-[var(--vinea-ink-muted)]">
                         {line.currency_code}
                       </TD>
                       <TD
-                        className="text-right font-mono text-xs tabular-nums"
+                        className="text-right font-mono text-xs tabular-nums whitespace-nowrap"
                         data-testid="fx-line-open"
                       >
-                        {formatQuantity(Number(line.open_amount), placesOf(line.currency_code))}
+                        {inCurrency(line.open_amount, line.currency_id)}
                       </TD>
                       <TD className="text-right font-mono text-xs tabular-nums text-[var(--vinea-ink-muted)]">
-                        {formatQuantity(Number(line.booking_rate), 4)}
+                        {line.booking_rate !== null ? trimDecimalString(line.booking_rate) : tf("emptyValue")}
                       </TD>
                       <TD className="text-right font-mono text-xs tabular-nums">
                         {money(line.carrying_base)}
                       </TD>
                       <TD className="text-right font-mono text-xs tabular-nums text-[var(--vinea-ink-muted)]">
-                        {formatQuantity(Number(line.rate_at_date), 4)}
+                        {trimDecimalString(line.rate_at_date)}
                       </TD>
                       <TD
                         className="text-right font-mono text-xs tabular-nums"
