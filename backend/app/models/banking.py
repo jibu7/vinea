@@ -132,6 +132,15 @@ class StatementFormatPreset(enum.StrEnum):
     CUSTOM = "custom"
 
 
+class StatementEmptyDescription(enum.StrEnum):
+    """What a format does with a row whose description column is empty. `refuse` is the
+    generic preset's answer; `reference` is BPR's, whose transfer-fee lines carry a `CHG…`
+    reference and nothing else. A mapping value, not a column: no PG type."""
+
+    REFUSE = "refuse"
+    REFERENCE = "reference"
+
+
 bank_account_kind_type = pg_enum(BankAccountKind, "bank_account_kind")
 statement_source_type = pg_enum(StatementSource, "bank_statement_source")
 statement_status_type = pg_enum(StatementStatus, "bank_statement_status")
