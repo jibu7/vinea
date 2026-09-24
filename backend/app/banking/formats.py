@@ -54,6 +54,8 @@ _AMOUNT_NOISE = re.compile(r"[^0-9.\-+]")
 _NON_ALNUM = re.compile(r"[^A-Z0-9]+")
 #: `1 200,00 CR` — a bank signing a single column with a marker instead of a minus.
 _SIGN_MARKER = re.compile(r"\s*(CR|DR)$", re.IGNORECASE)
+#: A bank's blank: a dash, an en dash or an em dash, alone in the cell.
+_BLANK_MARKERS = frozenset({"-", "\u2013", "\u2014"})
 
 
 class StatementFormatError(AppError):
@@ -445,7 +447,7 @@ def _read_decimal(
     column: str,
     result: ParsedStatement,
 ) -> Decimal | None:
-    if raw is None or not raw.strip():
+    if _is_empty_cell(raw):
         return None
     cleaned = raw.strip()
     # A trailing `CR`/`DR` marker is a bank's way of signing **one** column, and it is dropped
@@ -460,15 +462,22 @@ def _read_decimal(
     if fmt.decimal_separator != ".":
         cleaned = cleaned.replace(fmt.decimal_separator, ".")
     cleaned = _AMOUNT_NOISE.sub("", cleaned)
-    if not cleaned or cleaned in {"-", "+"}:
-        return None
     try:
+        # `abc`, `RWF`, `+` strip to nothing or to a bare sign, and `Decimal` refuses both.
+        # Refused, not read as empty: under `empty_amount: skip` an empty cell drops the row
+        # with only a count to show, and a cell the bank wrote something in is not empty.
         return Decimal(cleaned)
     except InvalidOperation:
         result.errors.append(
             ParseError(row=row_no, column=column, message=f"{raw!r} is not a number")
         )
         return None
+
+
+def _is_empty_cell(raw: str | None) -> bool:
+    """Blank, or a dash alone — the two ways a bank writes "nothing here". Anything else is
+    something the bank wrote, and `_read_decimal` either reads it or refuses it."""
+    return raw is None or not raw.strip() or raw.strip() in _BLANK_MARKERS
 
 
 def _read_amount(
@@ -486,7 +495,7 @@ def _read_amount(
     """
     if fmt.amount_mode == StatementAmountMode.SIGNED:
         raw = resolver.value(row, fmt.amount_column or "")
-        if raw is None or not raw.strip():
+        if _is_empty_cell(raw):
             result.errors.append(
                 ParseError(row=row_no, column="amount_column", message="empty amount")
             )

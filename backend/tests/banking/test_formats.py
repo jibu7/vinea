@@ -538,6 +538,82 @@ def test_empty_amount_skip_counts_the_row_and_refuses_what_it_cannot_read() -> N
     )
 
 
+def test_empty_amount_skip_refuses_a_cell_that_strips_to_nothing() -> None:
+    """`abc` strips to nothing under `_AMOUNT_NOISE`, and before this was read as an empty
+    cell — so `skip` dropped the row with only a count to show."""
+    fmt = GENERIC_PRESET.model_copy(update={"empty_amount": StatementEmptyAmount.SKIP})
+    content = (
+        b"Date,Description,Reference,Debit,Credit,Balance\n"
+        b"2026-09-03,A DEPOSIT,,,118000,1118000\n"
+        b"2026-09-04,SMUDGED,,abc,,1118000\n"
+    )
+
+    parsed = parse(content, fmt, bank_account_id=ACCOUNT)
+
+    assert [line.amount for line in parsed.lines] == [Decimal("118000")]
+    assert parsed.skipped_no_amount == 0
+    assert {e.row for e in parsed.errors} == {3}
+    assert (parsed.errors[0].column, parsed.errors[0].message) == (
+        "debit_column",
+        "'abc' is not a number",
+    )
+
+
+@pytest.mark.parametrize("marker", ["-", "\u2013", "\u2014"])
+def test_empty_amount_skip_reads_a_dash_in_both_columns_as_empty(marker: str) -> None:
+    """A dash alone — hyphen, en dash or em dash — is a bank's blank, not a number it failed
+    to write."""
+    fmt = GENERIC_PRESET.model_copy(update={"empty_amount": StatementEmptyAmount.SKIP})
+    content = (
+        "Date,Description,Reference,Debit,Credit,Balance\n"
+        f"2026-09-01,BALANCE B/FWD,,{marker},{marker},1000000\n"
+        f"2026-09-03,A DEPOSIT,,{marker},118000,1118000\n"
+    ).encode()
+
+    parsed = parse(content, fmt, bank_account_id=ACCOUNT)
+
+    assert (len(parsed.lines), parsed.skipped_no_amount, parsed.errors) == (1, 1, [])
+    assert parsed.lines[0].amount == Decimal("118000")
+
+
+@pytest.mark.parametrize("cell", ["abc", "RWF", "+", "RWF -"])
+def test_an_unreadable_debit_beside_a_credit_is_refused_not_read_on_the_credit(
+    cell: str,
+) -> None:
+    """The default `refuse`, and the gap from before #76: the debit read as empty and the row
+    went in as a credit — a plausible number from a row the bank wrote two things on."""
+    content = (
+        "Date,Description,Reference,Debit,Credit,Balance\n"
+        f"2026-09-03,SMUDGED,,{cell},118000,1118000\n"
+    ).encode()
+
+    parsed = parse(content, GENERIC_PRESET, bank_account_id=ACCOUNT)
+
+    assert parsed.lines == []
+    assert [(e.row, e.column, e.message) for e in parsed.errors] == [
+        (2, "debit_column", f"{cell!r} is not a number")
+    ]
+
+
+def test_a_signed_column_refuses_an_unreadable_cell_and_calls_a_dash_empty() -> None:
+    """In `signed` mode the same two cells used to vanish: `_read_decimal` returned None with
+    no error, `_read_amount` trusted it had recorded one, and the row was dropped unreported
+    even under `refuse`."""
+    content = (
+        b"Value Date;Narrative;Ref;Movement;Running Balance\n"
+        b"12/09/2026;SMUDGED;;abc;997 500,00\n"
+        b"13/09/2026;DASHED;;-;997 500,00\n"
+    )
+
+    parsed = parse(content, AWKWARD_FORMAT, bank_account_id=ACCOUNT)
+
+    assert parsed.lines == []
+    assert [(e.row, e.message) for e in parsed.errors] == [
+        (2, "'abc' is not a number"),
+        (3, "empty amount"),
+    ]
+
+
 def test_empty_amount_skip_reads_filler_zeros_in_both_columns_as_empty() -> None:
     """With `zero_is_empty`, zeros in both columns are the same empty row; without it they are
     a filled row, refused as carrying both — `empty_amount` does not reinterpret a zero."""
