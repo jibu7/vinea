@@ -153,6 +153,7 @@ class StatementPreviewRead(BaseModel):
     line_count: int
     new_count: int
     skipped_count: int
+    lines_skipped_no_amount: int
     from_date: date | None = None
     to_date: date | None = None
     opening_balance: Decimal | None = None
@@ -175,6 +176,7 @@ class StatementRead(BaseModel):
     closing_balance: Decimal
     line_count: int
     lines_skipped: int
+    lines_skipped_no_amount: int
     status: StatementStatus
     imported_at: datetime
 
@@ -260,6 +262,7 @@ class StatementImportResult(BaseModel):
     statement: StatementRead
     new_count: int
     skipped_count: int
+    lines_skipped_no_amount: int = 0
     replayed: bool = False
 
 

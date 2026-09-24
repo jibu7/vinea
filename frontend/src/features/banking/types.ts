@@ -5,6 +5,7 @@ import type {
   PaymentRunStatus,
   ReconciliationStatus,
   StatementAmountMode,
+  StatementEmptyAmount,
   StatementEmptyDescription,
   StatementFormatPreset,
   StatementSignConvention,
@@ -93,6 +94,7 @@ export interface StatementFormat {
   thousands_separator?: string | null;
   empty_description?: StatementEmptyDescription;
   zero_is_empty?: boolean;
+  empty_amount?: StatementEmptyAmount;
 }
 
 export interface ParseError {
@@ -122,6 +124,8 @@ export interface StatementPreview {
   line_count: number;
   new_count: number;
   skipped_count: number;
+  /** Rows `empty_amount: skip` passed over (a `BALANCE B/FWD`) — not lines already held. */
+  lines_skipped_no_amount: number;
   from_date: string | null;
   to_date: string | null;
   opening_balance: string | null;
@@ -166,6 +170,7 @@ export interface Statement {
   closing_balance: string;
   line_count: number;
   lines_skipped: number;
+  lines_skipped_no_amount: number;
   status: StatementStatus;
   imported_at: string;
 }
@@ -207,6 +212,7 @@ export interface StatementImportResult {
   statement: Statement;
   new_count: number;
   skipped_count: number;
+  lines_skipped_no_amount: number;
   replayed: boolean;
 }
 

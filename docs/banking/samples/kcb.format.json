@@ -1,0 +1,23 @@
+{
+  "preset": "custom",
+  "delimiter": ",",
+  "encoding": "utf-8-sig",
+  "header_rows": 1,
+  "date_column": "VALUE DATE",
+  "date_format": "%d %b %Y",
+  "booking_date_column": "TXN DATE",
+  "description_column": "DESCRIPTION",
+  "reference_column": null,
+  "amount_mode": "debit_credit",
+  "debit_column": "MONEY OUT",
+  "credit_column": "MONEY IN",
+  "amount_column": null,
+  "sign_convention": "credit_positive",
+  "balance_column": "LEDGER BALANCE",
+  "external_id_column": null,
+  "decimal_separator": ".",
+  "thousands_separator": ",",
+  "empty_description": "refuse",
+  "zero_is_empty": false,
+  "empty_amount": "skip"
+}

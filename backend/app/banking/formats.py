@@ -40,6 +40,7 @@ from app.core.errors import AppError
 from app.kernel.money import fingerprint_material
 from app.models.banking import (
     StatementAmountMode,
+    StatementEmptyAmount,
     StatementEmptyDescription,
     StatementFormatPreset,
     StatementSignConvention,
@@ -97,6 +98,13 @@ class StatementFormat(BaseModel):
     #: an explicit zero in the debit or credit column reads as empty, so such a row is
     #: one-sided; off, a zero is *filled* and the row is refused as carrying both.
     zero_is_empty: bool = False
+    #: KCB's statement opens with `BALANCE B/FWD`: a date, a description, a balance, and no
+    #: movement in either column. `skip` passes over such a row and counts it
+    #: (`ParsedStatement.skipped_no_amount`) — it is the bank restating the opening balance,
+    #: which the first real line's balance less its amount already derives. `refuse` keeps it
+    #: an error, because in a file that does not print such rows an empty amount is a mapping
+    #: aimed at the wrong columns.
+    empty_amount: StatementEmptyAmount = StatementEmptyAmount.REFUSE
 
     @model_validator(mode="after")
     def _the_mode_has_its_columns(self) -> "StatementFormat":
@@ -164,6 +172,9 @@ class ParsedLine:
 class ParsedStatement:
     lines: list[ParsedLine] = field(default_factory=list)
     errors: list[ParseError] = field(default_factory=list)
+    #: Rows passed over under `empty_amount: skip` — not lines, not errors, and not the
+    #: fingerprint skips an import counts under `lines_skipped`, which are lines already held.
+    skipped_no_amount: int = 0
 
     @property
     def from_date(self) -> date | None:
@@ -334,6 +345,10 @@ def _parse_row(
     result: ParsedStatement,
     seen: dict[tuple[str, str, str, str], int],
 ) -> ParsedLine | None:
+    if fmt.empty_amount == StatementEmptyAmount.SKIP and _has_no_amount(row, resolver, fmt):
+        result.skipped_no_amount += 1
+        return None
+
     before = len(result.errors)
 
     value_date = _read_date(
@@ -531,6 +546,27 @@ def _read_amount(
     if credit is not None:
         return _reject_zero(credit, row_no, "credit_column", result)
     return _reject_zero(-abs(debit), row_no, "debit_column", result)
+
+
+def _has_no_amount(row: list[str], resolver: _Resolver, fmt: StatementFormat) -> bool:
+    """Every amount column empty — or, with `zero_is_empty`, a filler zero. A cell holding
+    something unreadable is **not** empty: that row goes on to be refused with its row number,
+    because skipping it would drop a movement the bank recorded."""
+    if fmt.amount_mode == StatementAmountMode.SIGNED:
+        columns = [fmt.amount_column]
+    else:
+        columns = [fmt.debit_column, fmt.credit_column]
+    for column in columns:
+        scratch = ParsedStatement()
+        value = _read_decimal(resolver.value(row, column or ""), fmt, 0, "", scratch)
+        if scratch.errors:
+            return False
+        if value is None:
+            continue
+        if value == 0 and fmt.zero_is_empty and fmt.amount_mode == StatementAmountMode.DEBIT_CREDIT:
+            continue
+        return False
+    return True
 
 
 def _reject_zero(
