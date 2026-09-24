@@ -298,21 +298,24 @@ export function VatReturnReport() {
                 >
                   {filed.high_water_entry_id}
                 </dd>
-                <p className="pt-1 text-xs text-[var(--vinea-ink-subtle)]">
+                <dd className="pt-1 text-xs text-[var(--vinea-ink-subtle)]">
                   {t("highWaterNote")}
-                </p>
+                </dd>
               </div>
-              <div className="print:hidden">
-                {filed.journal_entry_id !== null && (
-                  <Link
-                    href={`/gl/entries/${filed.journal_entry_id}`}
-                    data-testid="report-settlement-entry"
-                    className="text-xs font-medium text-[var(--vinea-brand)] hover:underline"
-                  >
-                    {t("openEntry")}
-                  </Link>
-                )}
-              </div>
+              {filed.journal_entry_id !== null && (
+                <div className="print:hidden">
+                  <dt className="text-xs text-[var(--vinea-ink-muted)]">{t("entryNumber")}</dt>
+                  <dd>
+                    <Link
+                      href={`/gl/entries/${filed.journal_entry_id}`}
+                      data-testid="report-settlement-entry"
+                      className="text-xs font-medium text-[var(--vinea-brand)] hover:underline"
+                    >
+                      {t("openEntry")}
+                    </Link>
+                  </dd>
+                </div>
+              )}
             </dl>
             <p className="pt-3 text-xs text-[var(--vinea-ink-subtle)]">{t("annexNote")}</p>
           </ReportPanel>
