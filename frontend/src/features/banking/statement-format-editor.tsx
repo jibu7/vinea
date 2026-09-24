@@ -11,6 +11,7 @@ import { isApiError } from "@/features/auth/hooks";
 import type { Currency } from "@/features/gl/types";
 import {
   StatementAmountMode,
+  StatementEmptyAmount,
   StatementEmptyDescription,
   StatementFormatPreset,
   StatementSignConvention,
@@ -48,6 +49,7 @@ const GENERIC: Required<StatementFormat> = {
   thousands_separator: ",",
   empty_description: StatementEmptyDescription.REFUSE,
   zero_is_empty: false,
+  empty_amount: StatementEmptyAmount.REFUSE,
 };
 
 /** Every text field the form holds, as text: `null` on the wire is `""` on the screen. */
@@ -86,6 +88,7 @@ function toFormat(form: FormState): StatementFormat {
     thousands_separator: form.thousands_separator === "" ? null : form.thousands_separator,
     empty_description: form.empty_description as StatementEmptyDescription,
     zero_is_empty: form.zero_is_empty === "true",
+    empty_amount: form.empty_amount as StatementEmptyAmount,
   };
 }
 
@@ -361,9 +364,10 @@ export function StatementFormatEditor({
               />
             </Field>
           </div>
-          {/* The two things real exports taught the parser (`docs/banking/samples/`): BPR's fee
-              lines carry a reference and no description, and BPR's 2022 layout writes `0.00`
-              in the column a row does not use. */}
+          {/* What the real exports taught the parser (`docs/banking/samples/`): BPR's fee lines
+              carry a reference and no description, KCB opens with a `BALANCE B/FWD` row that
+              has no amount, and BPR's 2022 layout writes `0.00` in the column a row does not
+              use. */}
           <div className="grid grid-cols-3 gap-3">
             <Field label={t("emptyDescription")}>
               <Select
@@ -381,8 +385,18 @@ export function StatementFormatEditor({
                 onValueChange={set("empty_description")}
               />
             </Field>
+            <Field label={t("emptyAmount")}>
+              <Select
+                options={[
+                  { value: StatementEmptyAmount.REFUSE, label: t("emptyAmountLabel.refuse") },
+                  { value: StatementEmptyAmount.SKIP, label: t("emptyAmountLabel.skip") },
+                ]}
+                value={form.empty_amount}
+                onValueChange={set("empty_amount")}
+              />
+            </Field>
             {!signed ? (
-              <label className="col-span-2 flex items-center gap-1.5 self-end pb-2 text-xs text-[var(--vinea-ink-muted)]">
+              <label className="flex items-center gap-1.5 self-end pb-2 text-xs text-[var(--vinea-ink-muted)]">
                 <input
                   type="checkbox"
                   checked={form.zero_is_empty === "true"}

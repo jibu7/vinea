@@ -58,6 +58,7 @@ const USD_SAMPLE = path.resolve(
 const REAL_SAMPLES = path.resolve(__dirname, "../../docs/banking/samples");
 const BPR_2025_06 = path.join(REAL_SAMPLES, "bpr-2025-06.csv");
 const BPR_2022_09 = path.join(REAL_SAMPLES, "bpr-2022-09.csv");
+const KCB_2023_12 = path.join(REAL_SAMPLES, "kcb-2023-12.csv");
 
 async function openBankAccounts(page: Page) {
   await page.goto("/maintenance/bank-accounts");
@@ -279,6 +280,49 @@ test.describe("P8 step 6 — banking maintenance", () => {
     await expect(result).toContainText("Read cleanly");
     await expect(result).toContainText("21 lines · 21 new · 0 already held");
     await expect(result).toContainText("238,769,800");
+  });
+
+  // PATH: the third option the real exports needed — KCB's `BALANCE B/FWD` row, which has a
+  // balance and no amount, skipped rather than refused.
+  // CANNOT SEE: an import. The preview reads the mapping on the screen and saves nothing.
+  test("the empty-amount option skips the KCB brought-forward row", async ({ page }) => {
+    await login(page, PRIMARY_EMAIL);
+    await openBankAccounts(page);
+    const drawer = await openDrawer(page, "1120", "Bank Account");
+    await drawer.getByRole("tab", { name: "Statement format", exact: true }).click();
+    await drawer.getByRole("combobox", { name: "Preset", exact: true }).click();
+    await page.getByRole("option", { name: "Custom mapping", exact: true }).click();
+    await drawer.getByLabel("Date column", { exact: true }).fill("VALUE DATE");
+    await drawer.getByRole("combobox", { name: "Date format", exact: true }).click();
+    await page.getByRole("option", { name: "%d %b %Y", exact: true }).click();
+    await drawer.getByLabel("Reference column", { exact: true }).fill("");
+    await drawer.getByLabel("Debit column", { exact: true }).fill("MONEY OUT");
+    await drawer.getByLabel("Credit column", { exact: true }).fill("MONEY IN");
+    await drawer.getByLabel("Balance column", { exact: true }).fill("LEDGER BALANCE");
+    const result = drawer.getByTestId("format-test-result");
+    const testFile = drawer.getByRole("button", { name: "Test with a file", exact: true });
+
+    // Refused: one error, on row 2 — and one error is enough to refuse the whole import.
+    await drawer.getByLabel("Statement file", { exact: true }).setInputFiles(KCB_2023_12);
+    await testFile.click();
+    await expect(result).toContainText("1 errors");
+    const errorRows = result.locator("table").first().locator("tbody tr");
+    await expect(errorRows).toHaveCount(1);
+    await expect(errorRows.first().locator("td").first()).toHaveText("2");
+    await expect(errorRows.first()).toContainText("no debit and no credit");
+
+    await drawer.getByRole("combobox", { name: "Row with no amount", exact: true }).click();
+    await page.getByRole("option", { name: /^Skip it/ }).click();
+    await testFile.click();
+    await expect(result).toContainText("Read cleanly");
+    // The quantity: 281 lines, the B/FWD counted apart from lines already held.
+    await expect(result).toContainText("281 lines · 281 new · 0 already held");
+    await expect(result.getByTestId("format-test-result-no-amount")).toHaveText(
+      "Skipped for no amount: 1",
+    );
+    // The money: 0.00 brought forward, 4,867.00 at the year end — RWF to no decimals.
+    await expect(result.getByTestId("format-test-result-opening")).toContainText(/\b0$/);
+    await expect(result.getByTestId("format-test-result-closing")).toContainText("4,867");
   });
 
   // PATH: the rules list — create, edit, deactivate.
