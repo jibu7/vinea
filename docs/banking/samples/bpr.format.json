@@ -1,0 +1,21 @@
+{
+  "preset": "custom",
+  "delimiter": ",",
+  "encoding": "utf-8-sig",
+  "header_rows": 1,
+  "date_column": "Value Date",
+  "date_format": "%d/%m/%Y",
+  "booking_date_column": "Booking Date",
+  "description_column": "Description",
+  "reference_column": "Reference",
+  "amount_mode": "debit_credit",
+  "debit_column": "Debit",
+  "credit_column": "Credit",
+  "amount_column": null,
+  "sign_convention": "credit_positive",
+  "balance_column": "Balance",
+  "external_id_column": null,
+  "decimal_separator": ".",
+  "thousands_separator": ",",
+  "empty_description": "reference"
+}
