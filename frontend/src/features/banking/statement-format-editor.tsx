@@ -11,6 +11,7 @@ import { isApiError } from "@/features/auth/hooks";
 import type { Currency } from "@/features/gl/types";
 import {
   StatementAmountMode,
+  StatementEmptyDescription,
   StatementFormatPreset,
   StatementSignConvention,
 } from "@/lib/api-enums";
@@ -45,6 +46,8 @@ const GENERIC: Required<StatementFormat> = {
   external_id_column: null,
   decimal_separator: ".",
   thousands_separator: ",",
+  empty_description: StatementEmptyDescription.REFUSE,
+  zero_is_empty: false,
 };
 
 /** Every text field the form holds, as text: `null` on the wire is `""` on the screen. */
@@ -81,12 +84,23 @@ function toFormat(form: FormState): StatementFormat {
     external_id_column: optional(form.external_id_column),
     decimal_separator: form.decimal_separator,
     thousands_separator: form.thousands_separator === "" ? null : form.thousands_separator,
+    empty_description: form.empty_description as StatementEmptyDescription,
+    zero_is_empty: form.zero_is_empty === "true",
   };
 }
 
 /** `strptime` patterns a Rwandan bank export is actually written in. Not inferred from the file:
  * `03/04/2026` is 3 April or 4 March, and guessing moves six months of reconciliation. */
-const DATE_FORMATS = ["%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%d-%m-%Y", "%d.%m.%Y", "%d %b %Y", "%Y/%m/%d"];
+const DATE_FORMATS = [
+  "%Y-%m-%d",
+  "%d/%m/%Y",
+  "%m/%d/%Y",
+  "%d-%m-%Y",
+  "%d.%m.%Y",
+  "%d %b %Y",
+  "%d %b %y",
+  "%Y/%m/%d",
+];
 
 /**
  * The **statement format** tab on the Bank accounts screen: the preset, the column mapping, and
@@ -346,6 +360,38 @@ export function StatementFormatEditor({
                 onValueChange={set("thousands_separator")}
               />
             </Field>
+          </div>
+          {/* The two things real exports taught the parser (`docs/banking/samples/`): BPR's fee
+              lines carry a reference and no description, and BPR's 2022 layout writes `0.00`
+              in the column a row does not use. */}
+          <div className="grid grid-cols-3 gap-3">
+            <Field label={t("emptyDescription")}>
+              <Select
+                options={[
+                  {
+                    value: StatementEmptyDescription.REFUSE,
+                    label: t("emptyDescriptionLabel.refuse"),
+                  },
+                  {
+                    value: StatementEmptyDescription.REFERENCE,
+                    label: t("emptyDescriptionLabel.reference"),
+                  },
+                ]}
+                value={form.empty_description}
+                onValueChange={set("empty_description")}
+              />
+            </Field>
+            {!signed ? (
+              <label className="col-span-2 flex items-center gap-1.5 self-end pb-2 text-xs text-[var(--vinea-ink-muted)]">
+                <input
+                  type="checkbox"
+                  checked={form.zero_is_empty === "true"}
+                  onChange={(e) => set("zero_is_empty")(String(e.target.checked))}
+                  className="size-3.5"
+                />
+                {t("zeroIsEmpty")}
+              </label>
+            ) : null}
           </div>
         </div>
       )}
