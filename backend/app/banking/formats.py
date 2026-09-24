@@ -40,6 +40,7 @@ from app.core.errors import AppError
 from app.kernel.money import fingerprint_material
 from app.models.banking import (
     StatementAmountMode,
+    StatementEmptyDescription,
     StatementFormatPreset,
     StatementSignConvention,
 )
@@ -88,6 +89,14 @@ class StatementFormat(BaseModel):
     external_id_column: str | None = None
     decimal_separator: str = Field(default=".", min_length=1, max_length=1)
     thousands_separator: str | None = Field(default=",", max_length=1)
+    #: BPR's 2025 e-statement writes its RWF 20 transfer-fee lines with a `CHG…` reference and
+    #: an empty Description. `reference` lets the reference stand in for it; a row with
+    #: neither is still refused, because a line nobody can name cannot be matched by a person.
+    empty_description: StatementEmptyDescription = StatementEmptyDescription.REFUSE
+    #: BPR's 2022 e-statement fills the unused column of every row with `0.00`. With this on,
+    #: an explicit zero in the debit or credit column reads as empty, so such a row is
+    #: one-sided; off, a zero is *filled* and the row is refused as carrying both.
+    zero_is_empty: bool = False
 
     @model_validator(mode="after")
     def _the_mode_has_its_columns(self) -> "StatementFormat":
@@ -342,14 +351,16 @@ def _parse_row(
         if fmt.booking_date_column
         else None
     )
+    reference = (
+        resolver.value(row, fmt.reference_column) or None if fmt.reference_column else None
+    )
     description = resolver.value(row, fmt.description_column) or ""
+    if not description and fmt.empty_description == StatementEmptyDescription.REFERENCE:
+        description = reference or ""
     if not description:
         result.errors.append(
             ParseError(row=row_no, column="description_column", message="empty description")
         )
-    reference = (
-        resolver.value(row, fmt.reference_column) or None if fmt.reference_column else None
-    )
     amount = _read_amount(row, resolver, fmt, row_no, result)
     balance_after = (
         _read_decimal(
@@ -490,13 +501,19 @@ def _read_amount(
     # `is None` throughout rather than truthiness: an explicit `0` in a column is *filled*,
     # and a file that writes one is saying the bank recorded a zero movement. That is refused
     # as a zero amount below, naming the row — not reported as "no debit and no credit", which
-    # would send the reader looking at the mapping rather than at the row.
+    # would send the reader looking at the mapping rather than at the row. Unless the format
+    # says `zero_is_empty`, which is the mapping declaring that this bank's zero is filler.
     debit = _read_decimal(
         resolver.value(row, fmt.debit_column or ""), fmt, row_no, "debit_column", result
     )
     credit = _read_decimal(
         resolver.value(row, fmt.credit_column or ""), fmt, row_no, "credit_column", result
     )
+    if fmt.zero_is_empty:
+        # The layout's filler, not a movement: `0.00` in the column this row does not use.
+        # Zero in **both** falls through to "no debit and no credit" — still a refusal.
+        debit = None if debit == 0 else debit
+        credit = None if credit == 0 else credit
     if debit is not None and credit is not None:
         result.errors.append(
             ParseError(

@@ -1,0 +1,22 @@
+{
+  "preset": "custom",
+  "delimiter": ",",
+  "encoding": "utf-8-sig",
+  "header_rows": 1,
+  "date_column": "Value date",
+  "date_format": "%Y-%m-%d",
+  "booking_date_column": "Ledger date",
+  "description_column": "Description",
+  "reference_column": "Record",
+  "amount_mode": "debit_credit",
+  "debit_column": "Debit",
+  "credit_column": "Credit",
+  "amount_column": null,
+  "sign_convention": "credit_positive",
+  "balance_column": null,
+  "external_id_column": null,
+  "decimal_separator": ".",
+  "thousands_separator": ",",
+  "empty_description": "refuse",
+  "zero_is_empty": false
+}

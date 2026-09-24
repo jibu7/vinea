@@ -3199,6 +3199,12 @@
       "balanceColumn": "Balance column",
       "decimalSeparator": "Decimal separator",
       "thousandsSeparator": "Thousands separator",
+      "emptyDescription": "Empty description",
+      "emptyDescriptionLabel": {
+        "refuse": "Refuse the row",
+        "reference": "Use the reference"
+      },
+      "zeroIsEmpty": "A 0.00 in the debit or credit column means empty",
       "separatorLabel": {
         "point": "Point (.)",
         "comma": "Comma (,)",

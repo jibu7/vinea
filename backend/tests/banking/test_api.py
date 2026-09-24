@@ -11,11 +11,13 @@ The multipart upload in particular has no other cover: the service-level tests c
 `Decimal` parsing of the two keyed balances are exercised is here.
 """
 
+import json
 from decimal import Decimal
 
 from fastapi.testclient import TestClient
 
-from tests.banking.conftest import sample
+from app.banking.statements import PREVIEW_ROWS
+from tests.banking.conftest import REAL_SAMPLES, sample
 
 OWNER = {
     "company_name": "Rugari Wines Ltd",
@@ -580,6 +582,41 @@ def test_the_defaults_screen_can_move_the_bank_revaluation_account(client: TestC
 # Nine endpoints the reconciliation screen will drive at step 7. Until then these are what
 # stands in for it, for the reason the register exists: an endpoint nobody has driven is a
 # capability the product does not have.
+
+
+def test_a_real_bpr_export_previews_through_the_mapping_stored_on_its_account(
+    client: TestClient,
+) -> None:
+    """Precondition (d) over HTTP: `bpr.format.json` saved on the account through the same
+    PATCH the format editor sends, then June 2025 previewed with no mapping in the form — so
+    the figures are the stored mapping's, `empty_description: reference` included, and the
+    22 description-less fee lines are rows rather than errors."""
+    _signup(client)
+    bank = _bank(client)
+    mapping = json.loads((REAL_SAMPLES / "bpr.format.json").read_text())
+    saved = client.patch(
+        f"/api/v1/banking/accounts/{bank['id']}", json={"statement_format": mapping}
+    )
+    assert saved.status_code == 200
+
+    preview = client.post(
+        "/api/v1/banking/statements/preview",
+        data={"bank_account_id": bank["id"]},
+        files={
+            "file": ("bpr-2025-06.csv", (REAL_SAMPLES / "bpr-2025-06.csv").read_bytes(), "text/csv")
+        },
+    )
+
+    assert preview.status_code == 200
+    body = preview.json()
+    assert body["errors"] == []
+    assert (body["line_count"], body["new_count"], body["skipped_count"]) == (45, 45, 0)
+    # The rows handed back stop at `PREVIEW_ROWS`; the counts and the balances are the file's.
+    assert len(body["lines"]) == PREVIEW_ROWS
+    assert (Decimal(body["opening_balance"]), Decimal(body["closing_balance"])) == (
+        Decimal("2408456.00"),
+        Decimal("4274862.00"),
+    )
 
 
 def _bank(client: TestClient) -> dict:

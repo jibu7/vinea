@@ -378,6 +378,12 @@ export const StatementSignConvention = {
 } as const;
 export type StatementSignConvention = (typeof StatementSignConvention)[keyof typeof StatementSignConvention];
 
+export const StatementEmptyDescription = {
+  REFUSE: "refuse",
+  REFERENCE: "reference",
+} as const;
+export type StatementEmptyDescription = (typeof StatementEmptyDescription)[keyof typeof StatementEmptyDescription];
+
 export const BankMatchKind = {
   AUTO: "auto",
   MANUAL: "manual",

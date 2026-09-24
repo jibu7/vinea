@@ -5,6 +5,7 @@ import type {
   PaymentRunStatus,
   ReconciliationStatus,
   StatementAmountMode,
+  StatementEmptyDescription,
   StatementFormatPreset,
   StatementSignConvention,
   StatementSource,
@@ -90,6 +91,8 @@ export interface StatementFormat {
   external_id_column?: string | null;
   decimal_separator?: string;
   thousands_separator?: string | null;
+  empty_description?: StatementEmptyDescription;
+  zero_is_empty?: boolean;
 }
 
 export interface ParseError {

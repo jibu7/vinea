@@ -54,6 +54,11 @@ const USD_SAMPLE = path.resolve(
   "../../backend/tests/banking/samples/generic-bk-usd-sep.csv",
 );
 
+/** Two of the owner's real exports (precondition (d)), one per option they needed. */
+const REAL_SAMPLES = path.resolve(__dirname, "../../docs/banking/samples");
+const BPR_2025_06 = path.join(REAL_SAMPLES, "bpr-2025-06.csv");
+const BPR_2022_09 = path.join(REAL_SAMPLES, "bpr-2022-09.csv");
+
 async function openBankAccounts(page: Page) {
   await page.goto("/maintenance/bank-accounts");
   await page.waitForSelector("h1:has-text('Bank accounts')");
@@ -229,6 +234,51 @@ test.describe("P8 step 6 — banking maintenance", () => {
       (row) => row.code === "1121",
     );
     expect(usd?.statement_format?.preset).toBe("generic");
+  });
+
+  // PATH: the two options the owner's real exports needed (`docs/banking/samples/`), each
+  // switched on against the file that needs it and read from errors to a clean preview.
+  // CANNOT SEE: an import, and the saved mapping — the preview reads the mapping on the screen,
+  // and 1120's stored format is left as the other specs expect it.
+  test("the empty-description and zero-is-empty options read the real BPR exports", async ({
+    page,
+  }) => {
+    await login(page, PRIMARY_EMAIL);
+    await openBankAccounts(page);
+    const drawer = await openDrawer(page, "1120", "Bank Account");
+    await drawer.getByRole("tab", { name: "Statement format", exact: true }).click();
+    await drawer.getByRole("combobox", { name: "Preset", exact: true }).click();
+    await page.getByRole("option", { name: "Custom mapping", exact: true }).click();
+    await drawer.getByLabel("Date column", { exact: true }).fill("Value Date");
+    await drawer.getByRole("combobox", { name: "Date format", exact: true }).click();
+    await page.getByRole("option", { name: "%d/%m/%Y", exact: true }).click();
+    const result = drawer.getByTestId("format-test-result");
+    const testFile = drawer.getByRole("button", { name: "Test with a file", exact: true });
+
+    // BPR 2025: every `CHG…` fee line has no description — 22 of June's 45 rows refused.
+    await drawer.getByLabel("Statement file", { exact: true }).setInputFiles(BPR_2025_06);
+    await testFile.click();
+    await expect(result).toContainText("22 errors");
+    await drawer.getByRole("combobox", { name: "Empty description", exact: true }).click();
+    await page.getByRole("option", { name: "Use the reference", exact: true }).click();
+    await testFile.click();
+    await expect(result).toContainText("Read cleanly");
+    await expect(result).toContainText("45 lines · 45 new · 0 already held");
+    // The money: the closing balance off the bank's own running balance, RWF to no decimals.
+    await expect(result).toContainText("4,274,862");
+    await expect(result).not.toContainText("4,274,862.00");
+
+    // BPR 2022: `0.00` in the column a row does not use — every one of its 21 rows refused.
+    await drawer.getByRole("combobox", { name: "Date format", exact: true }).click();
+    await page.getByRole("option", { name: "%d %b %y", exact: true }).click();
+    await drawer.getByLabel("Statement file", { exact: true }).setInputFiles(BPR_2022_09);
+    await testFile.click();
+    await expect(result).toContainText("21 errors");
+    await drawer.getByRole("checkbox", { name: /0\.00 in the debit or credit column/ }).check();
+    await testFile.click();
+    await expect(result).toContainText("Read cleanly");
+    await expect(result).toContainText("21 lines · 21 new · 0 already held");
+    await expect(result).toContainText("238,769,800");
   });
 
   // PATH: the rules list — create, edit, deactivate.

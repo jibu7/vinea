@@ -7,6 +7,7 @@ one is not convenience — "the hook fires on the ordinary create path" is the c
 exists to catch, and a fixture that inserted the row itself would test nothing about it.
 """
 
+import os
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
@@ -35,6 +36,14 @@ from tests.kernel.conftest import Ledger, build_ledger
 from tests.kernel.conftest import ledger as ledger  # noqa: PLC0414
 
 SAMPLES = Path(__file__).parent / "samples"
+#: The owner's real exports and their mappings (precondition (d)). Outside `backend/`, so read
+#: through `REPO_ROOT` inside the container, where the repo is mounted at `/repo`.
+REAL_SAMPLES = (
+    Path(os.environ.get("REPO_ROOT") or Path(__file__).resolve().parents[3])
+    / "docs"
+    / "banking"
+    / "samples"
+)
 
 
 def sample(name: str) -> bytes:
