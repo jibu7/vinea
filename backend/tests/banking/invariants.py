@@ -245,13 +245,15 @@ def _clause_4_locked_figures_reproduce(
 
     This is the clause the phase turns on. It recomputes `ledger_balance` over the account's
     lines with `id <= high_water_line_id` dated on or before the reconciliation date, and
-    `outstanding` over those of them whose match does not carry **this** reconciliation's id —
-    then asserts the stored columns match and that `statement_balance == ledger_balance -
-    outstanding_total`.
+    `outstanding` over those of them in no match assigned to this reconciliation **or to any
+    earlier locked one on the account** — then asserts the stored columns match and that
+    `statement_balance == ledger_balance - outstanding_total`.
 
     Membership is the assignment made at lock, not a date test. A match created afterwards may
     be perfectly effective at the locked date; counting it would restate a figure somebody
-    signed, which is the thing decision 5 forbids in so many words.
+    signed, which is the thing decision 5 forbids in so many words. A match assigned to an
+    *earlier* lock is money that already cleared, and counting it outstanding again is what the
+    narrower reading got wrong (the step-5 correction; `stored_figures` carries the rule).
     """
     for reconciliation in db.scalars(
         select(BankReconciliation).where(
