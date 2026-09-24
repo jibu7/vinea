@@ -517,6 +517,7 @@ def import_statement(
         statement=StatementRead.model_validate(result.statement),
         new_count=result.new_count,
         skipped_count=result.skipped_count,
+        lines_skipped_no_amount=result.lines_skipped_no_amount,
         replayed=result.replayed,
     )
 
@@ -576,6 +577,7 @@ def key_manual_statement(
         statement=StatementRead.model_validate(result.statement),
         new_count=result.new_count,
         skipped_count=result.skipped_count,
+        lines_skipped_no_amount=result.lines_skipped_no_amount,
         replayed=result.replayed,
     )
 
