@@ -123,8 +123,15 @@ const LEDGER = {
  */
 const CAPTURE_DIR = process.env.P8_CAPTURE_DIR;
 
-async function capture(page: Page, name: string): Promise<void> {
+async function capture(page: Page, name: string, { reload = true } = {}): Promise<void> {
   if (!CAPTURE_DIR) return;
+  await page.setViewportSize({ width: 1440, height: 900 });
+  // A success toast sits over the rows it announces. Every state photographed here but the
+  // revaluation preview lives in the URL, so a reload shows it without the notice.
+  if (reload) {
+    await page.reload();
+    await page.waitForLoadState("networkidle");
+  }
   for (const theme of ["light", "dark"] as const) {
     await setTheme(page, theme);
     await page.screenshot({ path: path.join(CAPTURE_DIR, `${name}-${theme}.png`), fullPage: true });
@@ -977,7 +984,7 @@ test.describe("the banking cycle, through the screens, tied to the tape", () => 
     await expect(page.getByTestId(`difference-${state.docs["SIN-4"].number}`)).toHaveText("-3,000");
     // The quantity: the bank line and SIN-4's; AR has nothing open in USD.
     await expect(page.getByTestId("revaluation-line-count")).toHaveText("Lines: 2");
-    await capture(page, "9-5-revaluation-preview-bank-line");
+    await capture(page, "9-5-revaluation-preview-bank-line", { reload: false });
 
     await page.getByTestId("post-revaluation").click();
     await page.getByTestId("confirm-post").click();
