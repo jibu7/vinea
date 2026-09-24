@@ -8,8 +8,11 @@ not a statement the phase is written to — it exists to make the mapping do wor
 should see what it holds without opening a second file.
 """
 
+import json
 from datetime import date
 from decimal import Decimal
+
+import pytest
 
 from app.banking.formats import (
     GENERIC_PRESET,
@@ -23,9 +26,10 @@ from app.banking.formats import (
 )
 from app.models.banking import (
     StatementAmountMode,
+    StatementEmptyDescription,
     StatementSignConvention,
 )
-from tests.banking.conftest import sample
+from tests.banking.conftest import REAL_SAMPLES, sample
 
 ACCOUNT = 7  # any id; it only has to be the same one on both sides of a fingerprint
 
@@ -337,3 +341,169 @@ def test_a_cr_marker_in_a_debit_credit_pair_is_dropped() -> None:
 
     assert parsed.errors == []
     assert parsed.lines[0].amount == Decimal("118000")
+
+
+def test_the_generic_preset_refuses_an_empty_description_and_reads_a_zero_as_filled() -> None:
+    """The two options exist for real exports; the preset the committed samples are in keeps
+    the behaviour every test above was written to."""
+    assert GENERIC_PRESET.empty_description == StatementEmptyDescription.REFUSE
+    assert GENERIC_PRESET.zero_is_empty is False
+
+
+def test_empty_description_reference_still_refuses_a_row_with_neither() -> None:
+    fmt = GENERIC_PRESET.model_copy(
+        update={"empty_description": StatementEmptyDescription.REFERENCE}
+    )
+    content = (
+        b"Date,Description,Reference,Debit,Credit,Balance\n"
+        b"2026-09-12,,CHG 1,20,,999980\n"
+        b"2026-09-12,,,20,,999960\n"
+    )
+
+    parsed = parse(content, fmt, bank_account_id=ACCOUNT)
+
+    assert [(line.row, line.description) for line in parsed.lines] == [(2, "CHG 1")]
+    assert [(e.row, e.column, e.message) for e in parsed.errors] == [
+        (3, "description_column", "empty description")
+    ]
+
+
+def test_zero_is_empty_reads_a_filler_zero_as_empty_but_not_both() -> None:
+    fmt = GENERIC_PRESET.model_copy(update={"zero_is_empty": True})
+    content = (
+        b"Date,Description,Reference,Debit,Credit,Balance\n"
+        b"2026-09-12,A FEE,,2500,0.00,997500\n"
+        b"2026-09-15,A DEPOSIT,,0,40000,1037500\n"
+        b"2026-09-16,NOTHING,,0.00,0,1037500\n"
+    )
+
+    parsed = parse(content, fmt, bank_account_id=ACCOUNT)
+
+    assert [line.amount for line in parsed.lines] == [Decimal("-2500"), Decimal("40000")]
+    assert [(e.row, e.message) for e in parsed.errors] == [(4, "no debit and no credit")]
+
+
+# --- The owner's real exports (`docs/banking/samples/`, precondition (d)) -------------------
+#
+# Five statements from two Rwandan banks in three layouts, each read through the mapping
+# committed beside it. The figures are the README's table; every one is the bank's.
+
+#: file → (mapping, lines, opening, closing). `None` balances: the BK export has no balance
+#: column, and its opening and closing are keyed at import.
+REAL_EXPORTS = {
+    "bpr-2025-05.csv": ("bpr", 32, Decimal("1110776.00"), Decimal("2408456.00")),
+    "bpr-2025-06.csv": ("bpr", 45, Decimal("2408456.00"), Decimal("4274862.00")),
+    "bpr-2026-07.csv": ("bpr", 2, Decimal("230032.00"), Decimal("30012.00")),
+    "bpr-2022-09.csv": ("bpr-2022", 21, Decimal("-181940953.28"), Decimal("238769800.00")),
+    "bk-2019-10.csv": ("bk", 249, None, None),
+}
+
+
+def _real_format(mapping: str, **override: object) -> StatementFormat:
+    raw = json.loads((REAL_SAMPLES / f"{mapping}.format.json").read_text())
+    return validate_format({**raw, **override})
+
+
+def _real(name: str, **override: object):  # noqa: ANN202 - a ParsedStatement
+    mapping = REAL_EXPORTS[name][0]
+    return parse(
+        (REAL_SAMPLES / name).read_bytes(),
+        _real_format(mapping, **override),
+        bank_account_id=ACCOUNT,
+    )
+
+
+@pytest.mark.parametrize("mapping", ["bpr", "bpr-2022", "bk"])
+def test_each_committed_mapping_loads_through_validate_format(mapping: str) -> None:
+    """Through the save path, and every key the file sets survives it unchanged — a field the
+    model did not know would be dropped silently, and the mapping would read differently."""
+    raw = json.loads((REAL_SAMPLES / f"{mapping}.format.json").read_text())
+
+    dumped = validate_format(raw).model_dump(mode="json")
+
+    assert {key: dumped.get(key) for key in raw} == raw
+
+
+@pytest.mark.parametrize("name", list(REAL_EXPORTS))
+def test_each_real_export_parses_through_its_mapping_with_no_errors(name: str) -> None:
+    _, lines, opening, closing = REAL_EXPORTS[name]
+
+    parsed = _real(name)
+
+    assert parsed.errors == []
+    assert len(parsed.lines) == lines
+    assert parsed.derived_balances() == (opening, closing)
+
+
+@pytest.mark.parametrize("name", [name for name, row in REAL_EXPORTS.items() if row[2] is not None])
+def test_each_real_export_with_a_balance_column_ties_opening_to_closing(name: str) -> None:
+    """Row by row, not just end to end: every line's balance is the one before it plus its own
+    amount, so a sign read the wrong way on any line — a negative debit, a filler zero — shows
+    here on the row that did it."""
+    _, _, opening, closing = REAL_EXPORTS[name]
+
+    parsed = _real(name)
+
+    running = opening
+    for line in parsed.lines:
+        running += line.amount
+        assert line.balance_after == running, f"row {line.row}"
+    assert running == closing
+
+
+def test_the_bk_export_sums_to_its_keyed_movement() -> None:
+    """No balance column, so the tie is the README's: 234 debits, 15 credits, net +1,059 —
+    the keyed closing 2,659 less the keyed opening 1,600."""
+    parsed = _real("bk-2019-10.csv")
+
+    assert sum(1 for line in parsed.lines if line.amount < 0) == 234
+    assert sum(1 for line in parsed.lines if line.amount > 0) == 15
+    assert sum(line.amount for line in parsed.lines) == Decimal("1059")
+
+
+def test_a_reused_bpr_reference_is_two_lines_with_two_fingerprints() -> None:
+    """Rows 28–29 of June 2025: one `FT…` reference, one day, one description, RWF 200 and
+    20,000. The reason `external_id_column` is not mapped for BPR — the amount is what tells
+    them apart, and the fingerprint carries it."""
+    parsed = _real("bpr-2025-06.csv")
+    pair = [line for line in parsed.lines if line.row in (28, 29)]
+
+    assert [line.reference for line in pair] == [pair[0].reference] * 2
+    assert pair[0].reference.startswith("FT")
+    assert [line.amount for line in pair] == [Decimal("-200.00"), Decimal("-20000.00")]
+    assert _fingerprint(pair[0]) != _fingerprint(pair[1])
+
+
+def test_four_identical_sme_fees_carry_occurrence_indexes_0_to_3() -> None:
+    parsed = _real("bpr-2022-09.csv")
+    fees = [line for line in parsed.lines if line.description == "SME MANAGEMENT FEE"]
+
+    assert [line.occurrence for line in fees] == [0, 1, 2, 3]
+    assert len({_fingerprint(line) for line in fees}) == 4
+
+
+@pytest.mark.parametrize(
+    ("name", "errors"),
+    [("bpr-2025-05.csv", 16), ("bpr-2025-06.csv", 22), ("bpr-2026-07.csv", 1)],
+)
+def test_bpr_2025_without_empty_description_reference_refuses_every_fee_line(
+    name: str, errors: int
+) -> None:
+    """The sensitivity half: the parser as it stood read these files as 16, 22 and 1 errors —
+    one per `CHG…` fee line — and so imported nothing."""
+    parsed = _real(name, empty_description="refuse")
+
+    assert len(parsed.errors) == errors
+    assert {(e.column, e.message) for e in parsed.errors} == {
+        ("description_column", "empty description")
+    }
+
+
+def test_bpr_2022_without_zero_is_empty_refuses_every_row() -> None:
+    parsed = _real("bpr-2022-09.csv", zero_is_empty=False)
+
+    assert parsed.lines == []
+    assert len(parsed.errors) == 21
+    assert {e.message for e in parsed.errors} == {
+        "both the debit and the credit column carry an amount"
+    }
