@@ -2,7 +2,14 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { API_BASE, pageFetch, pickCombobox, pickDate, waitForHydration } from "./support/fixtures";
+import {
+  API_BASE,
+  pageFetch,
+  pickCombobox,
+  pickDate,
+  setTheme,
+  waitForHydration,
+} from "./support/fixtures";
 
 /**
  * **The phase's tape, through the screens** (P8 step 9).
@@ -102,6 +109,28 @@ const LEDGER = {
   row9: "FRw 1,020,500",
   closingSep: "FRw 1,000,500",
 };
+
+/**
+ * The five screenshots the phase's Definition of Done names, taken **from this tape's company at
+ * the moment each state exists** — a locked reconciliation at zero, a report with an outstanding
+ * item and a late line, the Reconciled column, a run with its instruction file, a revaluation
+ * preview with a bank line. A separate capture script would have to build the same nineteen rows
+ * a second time to reach them, and would drift from the tape it was meant to photograph.
+ *
+ * Off unless `P8_CAPTURE_DIR` is set, so CI never writes a file:
+ *
+ *   P8_CAPTURE_DIR=../docs/screenshots/p8-step-9 npx playwright test e2e/p8-cycle-tape.spec.ts
+ */
+const CAPTURE_DIR = process.env.P8_CAPTURE_DIR;
+
+async function capture(page: Page, name: string): Promise<void> {
+  if (!CAPTURE_DIR) return;
+  for (const theme of ["light", "dark"] as const) {
+    await setTheme(page, theme);
+    await page.screenshot({ path: path.join(CAPTURE_DIR, `${name}-${theme}.png`), fullPage: true });
+  }
+  await setTheme(page, "light");
+}
 
 interface Identified {
   id: number;
@@ -708,6 +737,7 @@ test.describe("the banking cycle, through the screens, tied to the tape", () => 
       timeout: 60_000,
     });
     await expect(page.locator("tr[data-remittance]")).toHaveCount(3);
+    await capture(page, "9-4-payment-run-instruction-file");
     const [pdf] = await Promise.all([
       page.waitForEvent("download"),
       page
@@ -877,6 +907,7 @@ test.describe("the banking cycle, through the screens, tied to the tape", () => 
     await page.getByRole("button", { name: "Lock", exact: true }).click();
     await expect(page.getByText("BRC-000002 locked", { exact: true }).first()).toBeVisible();
     await expect(figure(page, "difference")).toHaveText("FRw 0");
+    await capture(page, "9-1-workspace-locked-at-zero");
 
     // Row 10: unmatching inside a locked reconciliation is refused before the button.
     const unmatch = statementRow(page, "INV-1 C1").getByRole("button", { name: "Unmatch", exact: true });
@@ -946,6 +977,7 @@ test.describe("the banking cycle, through the screens, tied to the tape", () => 
     await expect(page.getByTestId(`difference-${state.docs["SIN-4"].number}`)).toHaveText("-3,000");
     // The quantity: the bank line and SIN-4's; AR has nothing open in USD.
     await expect(page.getByTestId("revaluation-line-count")).toHaveText("Lines: 2");
+    await capture(page, "9-5-revaluation-preview-bank-line");
 
     await page.getByTestId("post-revaluation").click();
     await page.getByTestId("confirm-post").click();
@@ -990,6 +1022,7 @@ test.describe("the banking cycle, through the screens, tied to the tape", () => 
     await expect(late).toHaveAttribute("data-entry", state.entries.pmt5);
     await expect(late).toContainText("Dated inside BRC-000002");
     await expect(late).toContainText("FRw -20,000");
+    await capture(page, "9-2-reconciliation-report-outstanding-and-late");
   });
 
   // PATH: Import generic-bk-rwf-overlap-oct.csv on 1120 → "2 new, 1 skipped" → New BRC-4 at
@@ -1120,6 +1153,7 @@ test.describe("the banking cycle, through the screens, tied to the tape", () => 
     await expect(reconciled(state.entries.pmt5)).toHaveText("Matched");
     const closingBase = (await page.getByTestId("cashbook-closing-base").textContent())!.trim();
     expect(closingBase).toBe(LEDGER.closingSep);
+    await capture(page, "9-3-cashbooks-reconciled-column");
 
     await page.goto(`/gl/enquiries/trial-balance`);
     await expect(page.getByRole("heading", { name: "Trial Balance Enquiry", exact: true })).toBeVisible();
