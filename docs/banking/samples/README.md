@@ -1,6 +1,6 @@
 # Real bank exports — precondition (d)
 
-Five statements from two Rwandan banks in three layouts, supplied by the owner as the banks'
+Six statements from two Rwandan banks in four layouts, supplied by the owner as the banks'
 PDF statements and transcribed to CSV row for row. Every date, amount and running balance is the
 bank's. Where a file carries a running balance it ties from opening to closing; the BK file has
 no balance column, so its opening and closing are keyed at import.
@@ -12,10 +12,13 @@ no balance column, so its opening and closing are keyed at import.
 | `bpr-2026-07.csv` | BPR (2025 e-statement) | 1 Jul – 1 Aug 2026 | 2 | 230,032.00 | 30,012.00 | `bpr.format.json` |
 | `bpr-2022-09.csv` | BPR (2022 e-statement) | 1 Jul – 28 Sep 2022 | 21 | −181,940,953.28 | 238,769,800.00 | `bpr-2022.format.json` |
 | `bk-2019-10.csv` | Bank of Kigali movement history | 1 Oct 2018 – 6 Oct 2019 | 249 | 1,600 (keyed) | 2,659 (keyed) | `bk.format.json` |
+| `kcb-2023-12.csv` | KCB online statement (the same account as the BPR-2025 files, on the KCB system after the merger) | 1 Jan – 31 Dec 2023 | 282 (281 + the B/FWD row) | 0.00 | 4,867.00 | `kcb.format.json` |
 
 The three BPR-2025 files are one RWF current account, consecutive months plus a later one. The
 BPR-2022 file is a different RWF account in overdraft (negative opening balance). The BK file is
-an RWF current account over a year: 234 debits, 15 credits, Σ = +1,059.
+an RWF current account over a year: 234 debits, 15 credits, Σ = +1,059. The KCB file is a full year:
+241 money-out lines, 40 money-in lines, Σ = +4,867.00, and the bank truncates every description at
+a fixed width (`Charge - Capita AA… Withdrawal R` / `eceipt` was one wrapped cell in the PDF).
 
 ## Anonymisation
 
@@ -24,7 +27,10 @@ the rows: mobile-money ids, phone numbers and ATM authorisation codes are sequen
 (one per distinct real value, so a value that recurs still recurs); named counterparties are
 `ACME TRADING LTD`, `BETA COMPANY`, `INSURER ONE`, `CUSTOMER ONE/TWO/THREE`; an account number
 the 2022 layout prints as a reference is `403400000000000-`; the banks' `FT…`/`TT…`/`CHG…`
-references keep their prefix and date part and take a hash-derived tail of the same length, and
+references keep their prefix and date part and take a hash-derived tail of the same length
+(in the KCB file the reference sits inside the description and is treated the same way), the
+KCB file's account numbers, cheque-book account, RTGS/SWIFT/mobile-money ids are sequential
+placeholders, and
 a reference the bank used on several lines is still used on those lines. Loan references
 (`LD…`, `PDLD…`), fee codes (`SMELCY.`), BK record and event numbers, and ATM ids are unchanged.
 The 2022 PDF renders every balance, and one debit, with a stray `.0`/`.00` after the cents
@@ -53,3 +59,12 @@ the CSV carries the clean decimals.
   are keyed at import. Its dates are ISO; Record (the reference) is empty on 34 rows, and Event
   is shared between a withdrawal and its charge, so neither is an `external_id`. It parses on
   the step-1 parser unchanged: 249 lines, 0 errors.
+* **KCB — a balance-brought-forward row with no amount.** The statement opens with
+  `BALANCE B/FWD`, a row carrying a date, a description and a ledger balance and neither a
+  money-out nor a money-in figure. The parser refuses it ("no debit and no credit"), and one
+  error refuses the file: 281 lines, 1 error, nothing imported. So `kcb.format.json` says
+  `empty_amount: skip` — a row with no amount in either column is skipped, not refused. With the
+  row skipped the import derives the opening balance from the first line (1,563,147.00 −
+  1,563,147.00 = 0.00), which is what the B/FWD row said. Its dates are `%d %b %Y`; money out is
+  negative in its own column; there is no reference column — the bank's `FT…` reference is
+  inside the description, where the `reference` auto-rule reads it anyway.

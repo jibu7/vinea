@@ -384,6 +384,12 @@ export const StatementEmptyDescription = {
 } as const;
 export type StatementEmptyDescription = (typeof StatementEmptyDescription)[keyof typeof StatementEmptyDescription];
 
+export const StatementEmptyAmount = {
+  REFUSE: "refuse",
+  SKIP: "skip",
+} as const;
+export type StatementEmptyAmount = (typeof StatementEmptyAmount)[keyof typeof StatementEmptyAmount];
+
 export const BankMatchKind = {
   AUTO: "auto",
   MANUAL: "manual",

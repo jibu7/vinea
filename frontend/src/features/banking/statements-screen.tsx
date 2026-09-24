@@ -288,6 +288,13 @@ export function StatementsScreen({ requestedAccountId }: { requestedAccountId: n
                     matched: formatQuantity(autoMatched, 0),
                   })}
             </span>
+            {imported.lines_skipped_no_amount > 0 ? (
+              <span className="text-xs text-[var(--vinea-ink-muted)]">
+                {t("noAmountSkipped", {
+                  count: formatQuantity(imported.lines_skipped_no_amount, 0),
+                })}
+              </span>
+            ) : null}
             <Link
               href={`/bank/statements/${imported.statement.id}`}
               className="text-xs text-[var(--vinea-brand)] underline"

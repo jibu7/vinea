@@ -619,6 +619,51 @@ def test_a_real_bpr_export_previews_through_the_mapping_stored_on_its_account(
     )
 
 
+def test_the_kcb_brought_forward_row_is_reported_apart_from_lines_already_held(
+    client: TestClient,
+) -> None:
+    """KCB 2023 through the stored `kcb.format.json`: the `BALANCE B/FWD` row is skipped for
+    having no amount and counted as `lines_skipped_no_amount`, never as `skipped_count` — a
+    fingerprint skip means "already held", and this row was never a line. The count is stored
+    on the statement, so the import replayed on its key says the same."""
+    _signup(client)
+    bank = _bank(client)
+    mapping = json.loads((REAL_SAMPLES / "kcb.format.json").read_text())
+    assert (
+        client.patch(
+            f"/api/v1/banking/accounts/{bank['id']}", json={"statement_format": mapping}
+        ).status_code
+        == 200
+    )
+    content = (REAL_SAMPLES / "kcb-2023-12.csv").read_bytes()
+    upload = {"file": ("kcb-2023-12.csv", content, "text/csv")}
+
+    preview = client.post(
+        "/api/v1/banking/statements/preview", data={"bank_account_id": bank["id"]}, files=upload
+    ).json()
+    assert preview["errors"] == []
+    assert (preview["line_count"], preview["skipped_count"]) == (281, 0)
+    assert preview["lines_skipped_no_amount"] == 1
+    assert (Decimal(preview["opening_balance"]), Decimal(preview["closing_balance"])) == (
+        Decimal("0"),
+        Decimal("4867"),
+    )
+
+    for key in ("kcb-1", "kcb-1"):  # the second is the replay: nothing written, same result
+        imported = client.post(
+            "/api/v1/banking/statements",
+            data={"bank_account_id": bank["id"]},
+            files=upload,
+            headers={"Idempotency-Key": key},
+        )
+        assert imported.status_code == 201
+        result = imported.json()
+        assert (result["new_count"], result["skipped_count"]) == (281, 0)
+        assert result["lines_skipped_no_amount"] == 1
+        assert result["statement"]["lines_skipped"] == 0
+        assert result["statement"]["lines_skipped_no_amount"] == 1
+
+
 def _bank(client: TestClient) -> dict:
     return next(
         row for row in client.get("/api/v1/banking/accounts").json() if row["code"] == "1120"

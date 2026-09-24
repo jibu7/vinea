@@ -141,6 +141,15 @@ class StatementEmptyDescription(enum.StrEnum):
     REFERENCE = "reference"
 
 
+class StatementEmptyAmount(enum.StrEnum):
+    """What a format does with a row that has no amount in either column. `refuse` is the
+    generic preset's answer; `skip` is KCB's, whose statement opens with a `BALANCE B/FWD` row
+    carrying a balance and no movement. A mapping value, not a column: no PG type."""
+
+    REFUSE = "refuse"
+    SKIP = "skip"
+
+
 bank_account_kind_type = pg_enum(BankAccountKind, "bank_account_kind")
 statement_source_type = pg_enum(StatementSource, "bank_statement_source")
 statement_status_type = pg_enum(StatementStatus, "bank_statement_status")
@@ -297,6 +306,7 @@ class BankStatement(AuditedMixin, CompanyScopedMixin, Base):
         ),
         CheckConstraint("to_date >= from_date", name="range_is_forward"),
         CheckConstraint("line_count >= 0 AND lines_skipped >= 0", name="counts_not_negative"),
+        CheckConstraint("lines_skipped_no_amount >= 0", name="no_amount_count_not_negative"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
@@ -314,6 +324,11 @@ class BankStatement(AuditedMixin, CompanyScopedMixin, Base):
     closing_balance: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
     line_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     lines_skipped: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    #: Rows the format's `empty_amount: skip` passed over (a `BALANCE B/FWD`). Not lines, and
+    #: not `lines_skipped`, which counts lines this account already held.
+    lines_skipped_no_amount: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
     status: Mapped[StatementStatus] = mapped_column(
         statement_status_type, nullable=False, default=StatementStatus.OPEN
     )

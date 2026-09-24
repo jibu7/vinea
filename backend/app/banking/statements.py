@@ -90,6 +90,9 @@ class StatementPreview:
     line_count: int
     new_count: int
     skipped_count: int
+    #: Rows the mapping's `empty_amount: skip` passed over — a `BALANCE B/FWD`, not a line
+    #: already held. Reported apart from `skipped_count` so the two are never read as one.
+    lines_skipped_no_amount: int
     from_date: date | None
     to_date: date | None
     opening_balance: Decimal | None
@@ -104,6 +107,7 @@ class ImportResult:
     statement: BankStatement
     new_count: int
     skipped_count: int
+    lines_skipped_no_amount: int = 0
     #: True when the key replayed an earlier import: nothing was written this time.
     replayed: bool = False
 
@@ -234,6 +238,7 @@ def preview(
         line_count=len(parsed.lines),
         new_count=len(parsed.lines) - skipped,
         skipped_count=skipped,
+        lines_skipped_no_amount=parsed.skipped_no_amount,
         from_date=parsed.from_date,
         to_date=parsed.to_date,
         opening_balance=opening,
@@ -271,6 +276,7 @@ def import_statement(
             statement=replayed,
             new_count=replayed.line_count,
             skipped_count=replayed.lines_skipped,
+            lines_skipped_no_amount=replayed.lines_skipped_no_amount,
             replayed=True,
         )
 
@@ -321,6 +327,7 @@ def import_statement(
         format_snapshot=fmt.model_dump(mode="json"),
         opening=opening,
         closing=closing,
+        skipped_no_amount=parsed.skipped_no_amount,
         actor=actor,
         idempotency_key=idempotency_key,
         idempotency_hash=idempotency_hash,
@@ -351,6 +358,7 @@ def import_manual(
             statement=replayed,
             new_count=replayed.line_count,
             skipped_count=replayed.lines_skipped,
+            lines_skipped_no_amount=replayed.lines_skipped_no_amount,
             replayed=True,
         )
     if not lines:
@@ -387,6 +395,7 @@ def _write(
     idempotency_key: str | None,
     idempotency_hash: str | None,
     request: Request | None,
+    skipped_no_amount: int = 0,
 ) -> ImportResult:
     held = _held_fingerprints(db, row.id)
     external = _held_external_ids(db, row.id)
@@ -423,6 +432,7 @@ def _write(
         closing_balance=closing,
         line_count=len(kept),
         lines_skipped=skipped,
+        lines_skipped_no_amount=skipped_no_amount,
         status=StatementStatus.OPEN,
         imported_by=actor.id,
         imported_at=datetime.now(UTC),
@@ -462,12 +472,18 @@ def _write(
             "bank_account": row.code,
             "new": len(kept),
             "skipped": skipped,
+            "skipped_no_amount": skipped_no_amount,
         },
         actor_user_id=actor.id,
         actor_email=actor.email,
         request=request,
     )
-    return ImportResult(statement=statement, new_count=len(kept), skipped_count=skipped)
+    return ImportResult(
+        statement=statement,
+        new_count=len(kept),
+        skipped_count=skipped,
+        lines_skipped_no_amount=skipped_no_amount,
+    )
 
 
 def get(db: Session, company_id: int, statement_id: int) -> BankStatement:

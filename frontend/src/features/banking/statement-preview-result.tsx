@@ -51,6 +51,11 @@ export function StatementPreviewResult({
             held: formatQuantity(result.skipped_count, 0),
           })}
         </span>
+        {result.lines_skipped_no_amount > 0 ? (
+          <span className="text-[var(--vinea-ink-muted)]" data-testid={`${testId}-no-amount`}>
+            {t("noAmountSkipped", { count: formatQuantity(result.lines_skipped_no_amount, 0) })}
+          </span>
+        ) : null}
         {result.from_date && result.to_date ? (
           <span className="text-[var(--vinea-ink-muted)]">
             {t("dateRange", {
