@@ -217,3 +217,21 @@ unit, so the brief's "derived opening 0.00" renders as FRw 0.
    until a bank's layout is supplied. The generic CSV stands.
 4. **camt.053 / MT940** stay out of scope. The parser is one interface, so the next format is a
    parser and not a redesign.
+
+---
+
+## Post-P8 queue
+
+1. **An unreadable amount cell produces two errors**, `not a number` and then `no debit and no
+   credit`. `_read_amount` should stop at the first: the second restates the first and sends the
+   reader to the mapping instead of the cell.
+2. **`12x` reads as 12.** `_AMOUNT_NOISE` strips letters anywhere, to tolerate `RWF 1,200`. The
+   rule should allow a currency code only at the start or the end of the cell.
+3. **`-n 8` runs Postgres out of lock-table space.** Raise `max_locks_per_transaction` in the
+   test compose, and migrate one template database that each worker clones instead of running 29
+   migrations per worker.
+4. **e2e against `next build && next start` instead of `next dev`.** That ends the cold-compile
+   warm-ups, and the `document-title` flake on `/gl/reports/chart-of-accounts` (seen once, dark
+   pass, a P3 screen; not diagnosed).
+5. *Owner items* 3 and 4 above (a bank-specific instruction layout, and camt.053 / MT940) stay
+   where they are.
